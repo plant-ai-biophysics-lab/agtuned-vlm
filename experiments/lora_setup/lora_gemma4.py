@@ -116,8 +116,8 @@ def main(args):
             gradient_accumulation_steps = 4,
             max_grad_norm = 0.3,
             warmup_ratio = 0.03,
-            max_steps = 10,
-            # num_train_epochs = 2, # Set this instead of max_steps for full training runs
+            # max_steps = 10,
+            num_train_epochs = 1, # Set this instead of max_steps for full training runs
             learning_rate = 2e-4,
             fp16 = not is_bf16_supported(),
             bf16 = is_bf16_supported(),
