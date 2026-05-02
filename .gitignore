@@ -12,3 +12,6 @@ wheels/
 # Model Checkpoints
 experiments/vision_feats/*.pth
 experiments/vision_feats/outputs/*
+
+# unsloth
+unsloth_compiled_cache
