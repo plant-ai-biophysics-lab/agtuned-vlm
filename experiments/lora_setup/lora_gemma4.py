@@ -2,6 +2,7 @@ from typing import Any, Dict, cast
 import argparse
 
 import agml
+import torch
 from PIL import Image as PILImage
 from unsloth import FastVisionModel, is_bf16_supported, get_chat_template
 from unsloth.trainer import UnslothVisionDataCollator
@@ -105,6 +106,10 @@ def main(args):
     print("Example sample:")
     print(train_ds[0]["messages"])
 
+    # set val rate
+    eval_steps = int(0.2 * len(train_ds))
+    print(f"Using eval steps: {eval_steps}")
+
     trainer = SFTTrainer(
         model = model,
         train_dataset = train_ds,
@@ -123,14 +128,14 @@ def main(args):
             bf16 = is_bf16_supported(),
             logging_steps = 1,
             eval_strategy = "steps",
-            eval_steps = 5,
+            eval_steps = eval_steps,
             save_strategy = "steps",
             optim = "adamw_8bit",
             weight_decay = 0.001,
             lr_scheduler_type = "cosine",
             seed = 3407,
-            output_dir = "outputs",
-            report_to = "none", # For Weights and Biases or others
+            output_dir = args.output_dir if args.output_dir is not None else "outputs",
+            report_to = "trackio", # For Weights and Biases or others
 
             # You MUST put the below items for vision finetuning:
             remove_unused_columns = False,
@@ -142,11 +147,39 @@ def main(args):
 
     trainer_stats = trainer.train()
 
+    # @title Show final memory and time stats
+    used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+    used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
+    used_percentage = round(used_memory / max_memory * 100, 3)
+    lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
+    print(f"{trainer_stats.metrics['train_runtime']} seconds used for training.")
+    print(
+        f"{round(trainer_stats.metrics['train_runtime']/60, 2)} minutes used for training."
+    )
+    print(f"Peak reserved memory = {used_memory} GB.")
+    print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
+    print(f"Peak reserved memory % of max memory = {used_percentage} %.")
+    print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
+
+    # save model
+    model.save_pretrained("gemma_4_lora")  # Local saving
+    processor.save_pretrained("gemma_4_lora")
+    # model.push_to_hub("your_name/gemma_4_lora", token = "YOUR_HF_TOKEN") # Online saving
+    # processor.push_to_hub("your_name/gemma_4_lora", token = "YOUR_HF_TOKEN") # Online saving
+
+    # Select ONLY 1 to save! (Both not needed!)
+
+    # Save locally to 16bit
+    if True: model.save_pretrained_merged("unsloth_finetune", processor,)
+
+    # To export and save to your Hugging Face account
+    if False: model.push_to_hub_merged("YOUR_USERNAME/unsloth_finetune", processor, token = "YOUR_HF_TOKEN")
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="unsloth/gemma-4-E2B-it")
+    parser.add_argument("--output_dir", type=str, default=None)
     args = parser.parse_args()
 
     main(args)
