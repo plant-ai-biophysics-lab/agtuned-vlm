@@ -26,6 +26,10 @@ dependencies = [
     "triton>=3.6.0",
     "trl>=0.24.0",
     "unsloth>=2026.4.8",
-    "unsloth-zoo>=2026.3.6",
+    "unsloth-zoo>=2026.4.8",
     "xformers>=0.0.25",
 ]
+
+[tool.uv.sources]
+unsloth = { git = "https://github.com/unslothai/unsloth.git" }
+unsloth-zoo = { git = "https://github.com/unslothai/unsloth-zoo.git" }
