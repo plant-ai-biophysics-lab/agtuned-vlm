@@ -45,8 +45,8 @@ def main(args):
     llm = LLM(
         model=args.model,
         dtype="bfloat16",
-        max_model_len=1024,
-        gpu_memory_utilization=0.4,
+        max_model_len=2048,
+        gpu_memory_utilization=0.9,
         limit_mm_per_prompt={"image": 1},
     )
 
