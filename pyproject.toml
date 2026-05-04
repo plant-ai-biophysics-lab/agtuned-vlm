@@ -3,7 +3,7 @@ name = "agtuned-vlm"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "agml>=0.7.4",
     "bitsandbytes>=0.45.0",
@@ -12,6 +12,10 @@ dependencies = [
     "hf-transfer>=0.1.9",
     "matplotlib>=3.8.0",
     "numpy>=1.26.0",
+    "nvidia-cudnn-cu13",
+    "nvidia-cusparselt-cu13==0.8.0",
+    "nvidia-nccl-cu13",
+    "nvidia-nvshmem-cu13",
     "peft>=0.10.0",
     "pillow>=10.0.0",
     "protobuf>=3.20.0",
@@ -22,7 +26,7 @@ dependencies = [
     "torchcodec>=0.11.1",
     "torchvision>=0.17.0",
     "trackio>=0.25.1",
-    "transformers==5.5.0",
+    "transformers>=5.5.0",
     "triton>=3.6.0",
     "trl>=0.24.0",
     "unsloth>=2026.4.8",
@@ -30,3 +34,5 @@ dependencies = [
     "xformers>=0.0.25",
 ]
 
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
