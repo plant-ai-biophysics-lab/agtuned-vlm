@@ -1,5 +1,6 @@
 from typing import Any, Dict, cast
 import argparse
+import gc
 
 import agml
 import torch
@@ -27,9 +28,12 @@ def create_model(model_type: str):
 
     assert model_type in GEMMA_4_MODELS
 
+    # 2B bnb-4bit checkpoint from unsloth is broken; 2B fits in bf16 on most GPUs
+    load_in_4bit = "E2B" not in model_type
+
     model, processor = FastVisionModel.from_pretrained(
         model_type,
-        load_in_4bit = True,
+        load_in_4bit = load_in_4bit,
         use_gradient_checkpointing = "unsloth"
     )
 
@@ -117,7 +121,7 @@ def main(args):
     trainer = SFTTrainer(
         model = model,
         train_dataset = train_ds,
-        eval_dataset = val_ds,
+        # eval_dataset = val_ds,
         processing_class = processor,
         data_collator = UnslothVisionDataCollator(model, processor),
         args = SFTConfig(
@@ -125,18 +129,19 @@ def main(args):
             gradient_accumulation_steps = 4,
             max_grad_norm = 0.3,
             warmup_ratio = 0.03,
-            max_steps = 10,
+            max_steps = 1,
             # num_train_epochs = 1, # Set this instead of max_steps for full training runs
             learning_rate = 2e-4,
             fp16 = not is_bf16_supported(),
             bf16 = is_bf16_supported(),
             logging_steps = 1,
-            eval_strategy = "steps",
-            eval_steps = eval_steps,
-            save_strategy = "steps",
-            save_total_limit = 1,
-            load_best_model_at_end = True,
-            metric_for_best_model = "eval_loss",
+            # eval_strategy = "steps",
+            # eval_steps = eval_steps,
+            # save_strategy = "steps",
+            # save_steps = eval_steps,
+            # save_total_limit = 1,
+            # load_best_model_at_end = True,
+            # metric_for_best_model = "eval_loss",
             optim = "adamw_8bit",
             weight_decay = 0.001,
             lr_scheduler_type = "cosine",
@@ -174,13 +179,18 @@ def main(args):
     model.save_pretrained(f"{output_dir}/lora_adapters")
     processor.save_pretrained(f"{output_dir}/lora_adapters")
 
+    # Free optimizer states and gradients before merging to avoid OOM
+    del trainer
+    gc.collect()
+    torch.cuda.empty_cache()
+
     # Save merged 16-bit model for vLLM inference
     model.save_pretrained_merged(f"{output_dir}/vllm_model", processor, save_method="merged_16bit")
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="unsloth/gemma-4-E4B-it")
+    parser.add_argument("--model", type=str, default="unsloth/gemma-4-E2B-it")
     parser.add_argument("--output_dir", type=str, default=None)
     args = parser.parse_args()
 
