@@ -61,7 +61,11 @@ def compute_metrics(
     references: list[str],
     pred_classes: list[str],
 ) -> tuple[dict, str]:
-    rouge_scores = rouge.compute(predictions=predictions, references=references)
+    rouge_raw = rouge.compute(predictions=predictions, references=references)
+    rouge_resolved = rouge.compute(
+        predictions=[p if p is not None else "" for p in pred_classes],
+        references=references,
+    )
     em_scores = exact_match.compute(
         predictions=[p.lower() for p in predictions],
         references=[r.lower() for r in references],
@@ -89,9 +93,12 @@ def compute_metrics(
         "accuracy": round(accuracy, 4),
         "f1_macro": round(f1_macro, 4),
         "f1_weighted": round(f1_weighted, 4),
-        "rouge1": round(rouge_scores["rouge1"], 4),
-        "rouge2": round(rouge_scores["rouge2"], 4),
-        "rougeL": round(rouge_scores["rougeL"], 4),
+        "rouge1_raw": round(rouge_raw["rouge1"], 4),
+        "rouge2_raw": round(rouge_raw["rouge2"], 4),
+        "rougeL_raw": round(rouge_raw["rougeL"], 4),
+        "rouge1_resolved": round(rouge_resolved["rouge1"], 4),
+        "rouge2_resolved": round(rouge_resolved["rouge2"], 4),
+        "rougeL_resolved": round(rouge_resolved["rougeL"], 4),
         "resolvable_samples": resolvable,
     }
     return metrics, report
