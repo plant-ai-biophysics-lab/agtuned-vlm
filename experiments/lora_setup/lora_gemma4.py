@@ -39,7 +39,7 @@ def create_model(model_type: str):
 
     model, processor = FastVisionModel.from_pretrained(
         model_type,
-        load_in_4bit = load_in_4bit,
+        load_in_4bit = False,
         use_gradient_checkpointing = "unsloth"
     )
 
@@ -237,7 +237,7 @@ def main(args):
             max_grad_norm = 0.3,
             warmup_ratio = 0.03,
             # max_steps = 1,
-            num_train_epochs = 3,
+            num_train_epochs = 10,
             learning_rate = 2e-4,
             fp16 = not is_bf16_supported(),
             bf16 = is_bf16_supported(),
@@ -254,7 +254,7 @@ def main(args):
             lr_scheduler_type = "cosine",
             seed = 3407,
             output_dir = args.output_dir if args.output_dir is not None else "outputs",
-            report_to = "none",
+            report_to = "trackio",
 
             # Required for vision finetuning:
             remove_unused_columns = False,
