@@ -175,6 +175,10 @@ def main(args):
     pv_val   = convert_to_multimodal_hf(loader.val_data)
     pv_test  = convert_to_multimodal_hf(loader.test_data)
 
+    if args.pv_downsample < 1.0:
+        n = int(len(pv_train) * args.pv_downsample)
+        pv_train = random.sample(pv_train, n)
+
     train_ds = pv_train
     val_ds   = pv_val
     test_ds  = pv_test
@@ -211,7 +215,7 @@ def main(args):
     trainer = SFTTrainer(
         model = model,
         train_dataset = train_ds,
-        # eval_dataset = val_ds,
+        eval_dataset = val_ds,
         processing_class = processor,
         data_collator = UnslothVisionDataCollator(model, processor),
         args = SFTConfig(
@@ -219,19 +223,19 @@ def main(args):
             gradient_accumulation_steps = 4,
             max_grad_norm = 0.3,
             warmup_ratio = 0.03,
-            max_steps = 1,
-            # num_train_epochs = 1,
+            # max_steps = 1,
+            num_train_epochs = 1,
             learning_rate = 2e-4,
             fp16 = not is_bf16_supported(),
             bf16 = is_bf16_supported(),
             logging_steps = 1,
-            # eval_strategy = "steps",
-            # eval_steps = eval_steps,
-            # save_strategy = "steps",
-            # save_steps = eval_steps,
-            # save_total_limit = 1,
-            # load_best_model_at_end = True,
-            # metric_for_best_model = "eval_loss",
+            eval_strategy = "steps",
+            eval_steps = eval_steps,
+            save_strategy = "steps",
+            save_steps = eval_steps,
+            save_total_limit = 1,
+            load_best_model_at_end = True,
+            metric_for_best_model = "eval_loss",
             optim = "adamw_8bit",
             weight_decay = 0.001,
             lr_scheduler_type = "cosine",
@@ -281,6 +285,8 @@ if __name__ == "__main__":
                         help="Path to digital_green/ dataset root. Omit to train on PlantVillage only.")
     parser.add_argument("--dg_upsample", type=int, default=1,
                         help="Repeat Digital Green train samples this many times to balance with PlantVillage.")
+    parser.add_argument("--pv_downsample", type=float, default=1.0,
+                        help="Fraction of PlantVillage train samples to keep (e.g. 0.1 = 10%%). Val/test unaffected.")
     args = parser.parse_args()
 
     main(args)
