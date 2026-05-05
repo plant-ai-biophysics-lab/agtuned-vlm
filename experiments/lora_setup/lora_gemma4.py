@@ -1,6 +1,9 @@
 from typing import Any, Dict, cast
 import argparse
+import csv
 import gc
+import random
+from pathlib import Path
 
 import agml
 import torch
@@ -21,8 +24,9 @@ GEMMA_4_MODELS = [
     "unsloth/gemma-4-31B",
     "unsloth/gemma-4-26B-A4B",
 ] # More models at https://huggingface.co/unsloth
-PROMPT = "Identify the plant and any disease present in this image."
+PROMPT = "Identify the plant and any disease present in this image. Respond in one sentence: "
 LABEL_TEMPLATE = "This image shows {label_text}."
+
 
 def create_model(model_type: str):
 
@@ -39,60 +43,122 @@ def create_model(model_type: str):
 
     model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers     = True, # False if not finetuning vision layers
-        finetune_language_layers   = True, # False if not finetuning language layers
-        finetune_attention_modules = True, # False if not finetuning attention layers
-        finetune_mlp_modules       = True, # False if not finetuning MLP layers
-
-        r = 32,                           # The larger, the higher the accuracy, but might overfit
-        lora_alpha = 32,                  # Recommended alpha == r at least
+        finetune_vision_layers     = True,
+        finetune_language_layers   = False,
+        finetune_attention_modules = True,
+        finetune_mlp_modules       = True,
+        r = 16,
+        lora_alpha = 16,
         lora_dropout = 0,
         bias = "none",
         random_state = 3407,
-        use_rslora = False,               # We support rank stabilized LoRA
-        loftq_config = None,               # And LoftQ
-        # target_modules = "all-linear",    # Optional now! Can specify a list if needed
+        use_rslora = False,
+        loftq_config = None,
     )
 
     return model, processor
 
-def convert_to_multimodal_hf(loader: Any):
-    contents = cast(Dict[str, Any], loader.export_contents())
-    if contents is None:
-        raise ValueError("Failed to export contents from the AgML loader.")
 
-    paths = list(contents.keys())
-    labels = [contents[p] for p in paths]
-    class_names = cast(list[str], loader.classes)
-
-    formatted_data = []
-    for path, label_idx in zip(paths, labels):
-
-        label_idx = int(cast(Any, label_idx))
-        label_text = class_names[label_idx]
-        cleaned_label = label_text.replace('___', ' ').replace('_', ' ')
-
-        image = PILImage.open(path).convert("RGB")
-
-        messages = [
+def make_sample(image: PILImage.Image, response: str) -> dict:
+    return {
+        "messages": [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": PROMPT},
                     {"type": "image", "image": image},
-                ]
+                ],
             },
             {
                 "role": "assistant",
-                "content": [
-                    {"type": "text", "text": LABEL_TEMPLATE.format(label_text=cleaned_label)}
-                ]
-            }
+                "content": [{"type": "text", "text": response}],
+            },
         ]
+    }
 
-        formatted_data.append({"messages": messages})
+
+def convert_to_multimodal_hf(loader: Any) -> list[dict]:
+    contents = cast(Dict[str, Any], loader.export_contents())
+    if contents is None:
+        raise ValueError("Failed to export contents from the AgML loader.")
+
+    class_names = cast(list[str], loader.classes)
+    formatted_data = []
+    for path, label_idx in contents.items():
+        label_text = class_names[int(cast(Any, label_idx))]
+        parts = label_text.split('___')
+        crop = parts[0].replace('_', ' ')
+        cleaned_label = f"{crop} with {parts[1].replace('_', ' ')}" if len(parts) > 1 else crop
+        image = PILImage.open(path).convert("RGB")
+        formatted_data.append(make_sample(image, LABEL_TEMPLATE.format(label_text=cleaned_label)))
 
     return formatted_data
+
+
+def parse_dg_label(folder_name: str) -> str:
+    """Convert 'tomato__early_blight__thrips' → 'tomato early blight, thrips'."""
+    parts = folder_name.split("__")
+    crop = parts[0].replace("_", " ")
+    if len(parts) == 1:
+        return crop
+    conditions = ", ".join(p.replace("_", " ") for p in parts[1:])
+    return f"{crop} with {conditions}"
+
+
+def load_digital_green(data_dir: str) -> list[dict]:
+    data_dir = Path(data_dir)
+    captions_tsv = data_dir / "captions.tsv"
+    image_dir = data_dir / "digital_green_crop_diagnosis_classification"
+
+    # Build {filename → [caption, ...]} lookup — TSV paths use old Mac paths,
+    # so match by filename only.
+    caption_map: dict[str, list[str]] = {}
+    with open(captions_tsv, newline="") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            filename = Path(row["image_path"]).name
+            caption = row["caption"].strip()
+            if caption:
+                caption_map.setdefault(filename, []).append(caption)
+
+    formatted_data = []
+    for class_dir in sorted(image_dir.iterdir()):
+        if not class_dir.is_dir():
+            continue
+        label = parse_dg_label(class_dir.name)
+
+        for img_path in sorted(class_dir.glob("*.jpg")):
+            image = PILImage.open(img_path).convert("RGB")
+            captions = caption_map.get(img_path.name, [])
+
+            if captions:
+                # One training sample per caption so the model sees all explanations.
+                for caption in captions:
+                    response = f"{LABEL_TEMPLATE.format(label_text=label)} {caption}"
+                    formatted_data.append(make_sample(image, response))
+            else:
+                formatted_data.append(make_sample(image, LABEL_TEMPLATE.format(label_text=label)))
+
+    return formatted_data
+
+
+def split_dataset(data: list[dict], train: float = 0.8, val: float = 0.1) -> tuple[list, list, list]:
+    shuffled = data.copy()
+    random.shuffle(shuffled)
+    n = len(shuffled)
+    train_end = int(n * train)
+    val_end = train_end + int(n * val)
+    return shuffled[:train_end], shuffled[train_end:val_end], shuffled[val_end:]
+
+
+def print_sample(sample: dict, label: str):
+    messages = sample["messages"]
+    user_text = next(c["text"] for c in messages[0]["content"] if c["type"] == "text")
+    assistant_text = messages[1]["content"][0]["text"]
+    print(f"  [{label}]")
+    print(f"  Prompt   : {user_text}")
+    print(f"  Response : {assistant_text}")
+    print()
+
 
 def main(args):
 
@@ -102,21 +168,45 @@ def main(args):
 
     model, processor = create_model(args.model)
 
-    # agml data loading
+    # PlantVillage
     loader = agml.data.AgMLDataLoader("plant_village_classification")
     loader.split(train=0.8, val=0.1, test=0.1)
+    pv_train = convert_to_multimodal_hf(loader.train_data)
+    pv_val   = convert_to_multimodal_hf(loader.val_data)
+    pv_test  = convert_to_multimodal_hf(loader.test_data)
 
-    train_ds = convert_to_multimodal_hf(loader.train_data)
-    val_ds = convert_to_multimodal_hf(loader.val_data)
-    test_ds = convert_to_multimodal_hf(loader.test_data)
+    train_ds = pv_train
+    val_ds   = pv_val
+    test_ds  = pv_test
 
-    print(f"Dataset sizes: Train: {len(train_ds)}, Val: {len(val_ds)}, Test: {len(test_ds)}")
-    print("Example sample:")
-    print(train_ds[0]["messages"])
+    print("=== PlantVillage ===")
+    print(f"  Train: {len(pv_train)}, Val: {len(pv_val)}, Test: {len(pv_test)}")
+    print("  Sample:")
+    print_sample(pv_train[0], "PlantVillage")
+
+    # Digital Green (optional)
+    if args.dg_data_dir:
+        dg_all = load_digital_green(args.dg_data_dir)
+        dg_train, dg_val, dg_test = split_dataset(dg_all)
+
+        print("=== Digital Green ===")
+        print(f"  Total samples (incl. per-caption): {len(dg_all)}")
+        print(f"  Train: {len(dg_train)}, Val: {len(dg_val)}, Test: {len(dg_test)}")
+        print(f"  Upsample factor: {args.dg_upsample}x → {len(dg_train) * args.dg_upsample} train samples")
+        print("  Sample:")
+        print_sample(dg_train[0], "Digital Green")
+
+        train_ds = pv_train + dg_train * args.dg_upsample
+        val_ds   = pv_val + dg_val
+        test_ds  = pv_test + dg_test
+        random.shuffle(train_ds)
+
+    print("=== Combined ===")
+    print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}, Test: {len(test_ds)}")
 
     # set val rate
     eval_steps = int(0.2 * len(train_ds))
-    print(f"Using eval steps: {eval_steps}")
+    print(f"  Eval steps: {eval_steps}")
 
     trainer = SFTTrainer(
         model = model,
@@ -130,7 +220,7 @@ def main(args):
             max_grad_norm = 0.3,
             warmup_ratio = 0.03,
             max_steps = 1,
-            # num_train_epochs = 1, # Set this instead of max_steps for full training runs
+            # num_train_epochs = 1,
             learning_rate = 2e-4,
             fp16 = not is_bf16_supported(),
             bf16 = is_bf16_supported(),
@@ -147,9 +237,9 @@ def main(args):
             lr_scheduler_type = "cosine",
             seed = 3407,
             output_dir = args.output_dir if args.output_dir is not None else "outputs",
-            report_to = "none", # For Weights and Biases or others
+            report_to = "none",
 
-            # You MUST put the below items for vision finetuning:
+            # Required for vision finetuning:
             remove_unused_columns = False,
             dataset_text_field = "",
             dataset_kwargs = {"skip_prepare_dataset": True},
@@ -159,15 +249,12 @@ def main(args):
 
     trainer_stats = trainer.train()
 
-    # @title Show final memory and time stats
     used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
     used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
     used_percentage = round(used_memory / max_memory * 100, 3)
     lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
     print(f"{trainer_stats.metrics['train_runtime']} seconds used for training.")
-    print(
-        f"{round(trainer_stats.metrics['train_runtime']/60, 2)} minutes used for training."
-    )
+    print(f"{round(trainer_stats.metrics['train_runtime']/60, 2)} minutes used for training.")
     print(f"Peak reserved memory = {used_memory} GB.")
     print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
     print(f"Peak reserved memory % of max memory = {used_percentage} %.")
@@ -175,23 +262,25 @@ def main(args):
 
     output_dir = args.output_dir if args.output_dir is not None else "outputs"
 
-    # Save LoRA adapters only (lightweight, useful for resuming training)
     model.save_pretrained(f"{output_dir}/lora_adapters")
     processor.save_pretrained(f"{output_dir}/lora_adapters")
 
-    # Free optimizer states and gradients before merging to avoid OOM
     del trainer
     gc.collect()
     torch.cuda.empty_cache()
 
-    # Save merged 16-bit model for vLLM inference
     model.save_pretrained_merged(f"{output_dir}/vllm_model", processor, save_method="merged_16bit")
+
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="unsloth/gemma-4-E2B-it")
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--dg_data_dir", type=str, default=None,
+                        help="Path to digital_green/ dataset root. Omit to train on PlantVillage only.")
+    parser.add_argument("--dg_upsample", type=int, default=1,
+                        help="Repeat Digital Green train samples this many times to balance with PlantVillage.")
     args = parser.parse_args()
 
     main(args)
