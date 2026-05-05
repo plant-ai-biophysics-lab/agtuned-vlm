@@ -141,6 +141,18 @@ def load_digital_green(data_dir: str) -> list[dict]:
     return formatted_data
 
 
+def stratified_sample(data: list[dict], fraction: float) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for sample in data:
+        label = sample["messages"][1]["content"][0]["text"]
+        groups.setdefault(label, []).append(sample)
+    result = []
+    for samples in groups.values():
+        k = max(1, int(len(samples) * fraction))
+        result.extend(random.sample(samples, k))
+    return result
+
+
 def split_dataset(data: list[dict], train: float = 0.8, val: float = 0.1) -> tuple[list, list, list]:
     shuffled = data.copy()
     random.shuffle(shuffled)
@@ -176,8 +188,7 @@ def main(args):
     pv_test  = convert_to_multimodal_hf(loader.test_data)
 
     if args.pv_downsample < 1.0:
-        n = int(len(pv_train) * args.pv_downsample)
-        pv_train = random.sample(pv_train, n)
+        pv_train = stratified_sample(pv_train, args.pv_downsample)
 
     train_ds = pv_train
     val_ds   = pv_val
