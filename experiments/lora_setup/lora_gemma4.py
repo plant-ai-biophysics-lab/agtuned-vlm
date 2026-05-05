@@ -2,6 +2,8 @@ from typing import Any, Dict, cast
 import argparse
 import csv
 import gc
+import json
+import os
 import random
 from pathlib import Path
 
@@ -268,17 +270,31 @@ def main(args):
     used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
     used_percentage = round(used_memory / max_memory * 100, 3)
     lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
-    print(f"{trainer_stats.metrics['train_runtime']} seconds used for training.")
-    print(f"{round(trainer_stats.metrics['train_runtime']/60, 2)} minutes used for training.")
-    print(f"Peak reserved memory = {used_memory} GB.")
-    print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
-    print(f"Peak reserved memory % of max memory = {used_percentage} %.")
-    print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
+    train_runtime = trainer_stats.metrics["train_runtime"]
+
+    gpu_stats_dict = {
+        "train_runtime_s": round(train_runtime, 2),
+        "train_runtime_min": round(train_runtime / 60, 2),
+        "gpu_name": gpu_stats.name,
+        "gpu_total_memory_gb": max_memory,
+        "peak_reserved_memory_gb": used_memory,
+        "peak_reserved_for_lora_gb": used_memory_for_lora,
+        "peak_reserved_pct": used_percentage,
+        "peak_reserved_for_lora_pct": lora_percentage,
+    }
+
+    for k, v in gpu_stats_dict.items():
+        print(f"  {k}: {v}")
 
     output_dir = args.output_dir if args.output_dir is not None else "outputs"
 
     model.save_pretrained(f"{output_dir}/lora_adapters")
     processor.save_pretrained(f"{output_dir}/lora_adapters")
+
+    os.makedirs(output_dir, exist_ok=True)
+    with open(f"{output_dir}/gpu_stats.json", "w") as f:
+        json.dump(gpu_stats_dict, f, indent=2)
+    print(f"GPU stats saved to {output_dir}/gpu_stats.json")
 
     del trainer
     gc.collect()
