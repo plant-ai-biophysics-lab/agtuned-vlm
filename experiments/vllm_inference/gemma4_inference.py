@@ -31,8 +31,8 @@ def build_prompt(processor, image: PILImage.Image) -> dict:
         {
             "role": "user",
             "content": [
+                {"type": "image"},
                 {"type": "text", "text": PROMPT},
-                {"type": "image", "image": image},
             ],
         }
     ]
