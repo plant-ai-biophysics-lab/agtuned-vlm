@@ -232,8 +232,8 @@ def main(args):
         processing_class = processor,
         data_collator = UnslothVisionDataCollator(model, processor),
         args = SFTConfig(
-            per_device_train_batch_size = 2,
-            gradient_accumulation_steps = 4,
+            per_device_train_batch_size = 12,
+            gradient_accumulation_steps = 1,
             max_grad_norm = 0.3,
             warmup_ratio = 0.03,
             # max_steps = 1,
