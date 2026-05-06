@@ -32,11 +32,19 @@ import os
 from typing import Any, Dict, cast
 
 import agml
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image as PILImage
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, f1_score
+from sklearn.manifold import TSNE
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+)
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoProcessor, AutoModelForImageTextToText
@@ -192,37 +200,165 @@ def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.nd
 
 # ── Logistic regression probe ─────────────────────────────────────────────────
 
-def run_probe(X_train, X_test, y_train, y_test, le, label: str) -> dict:
+def run_probe(X_train, X_test, y_train, y_test, le, label: str) -> tuple[dict, list[str], list[str]]:
     print(f"Training logistic regression [{label}]...")
     clf = LogisticRegression(max_iter=1000, random_state=42, n_jobs=-1)
     clf.fit(X_train, y_train)
 
     y_pred = clf.predict(X_test)
-    y_test_labels = le.inverse_transform(y_test)
-    y_pred_labels = le.inverse_transform(y_pred)
+    y_test_labels = le.inverse_transform(y_test).tolist()
+    y_pred_labels = le.inverse_transform(y_pred).tolist()
 
     accuracy = accuracy_score(y_test, y_pred)
     f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
     f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-    report = classification_report(y_test_labels, y_pred_labels, zero_division=0)
+    report_str = classification_report(y_test_labels, y_pred_labels, zero_division=0)
+    report_dict = classification_report(y_test_labels, y_pred_labels, zero_division=0, output_dict=True)
 
     print(f"  Accuracy    : {accuracy:.4f}")
     print(f"  F1 Macro    : {f1_macro:.4f}")
     print(f"  F1 Weighted : {f1_weighted:.4f}")
 
-    return {
+    metrics = {
         "backbone": label,
         "accuracy": round(accuracy, 4),
         "f1_macro": round(f1_macro, 4),
         "f1_weighted": round(f1_weighted, 4),
-        "per_class_report": report,
+        "per_class_report": report_str,
+        "per_class_report_dict": report_dict,
     }
+    return metrics, y_test_labels, y_pred_labels
 
 
 def unload(model):
     del model
     gc.collect()
     torch.cuda.empty_cache()
+
+
+# ── Visualizations ────────────────────────────────────────────────────────────
+
+def _safe_name(label: str) -> str:
+    return label.replace("/", "_").replace(":", "_").replace(" ", "_")
+
+
+def plot_confusion_matrix(y_true: list[str], y_pred: list[str], label: str, output_dir: str):
+    class_labels = sorted(set(y_true))
+    n = len(class_labels)
+    fig_size = max(8, n * 0.45)
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.85))
+
+    cm = confusion_matrix(y_true, y_pred, labels=class_labels)
+    disp = ConfusionMatrixDisplay(cm, display_labels=class_labels)
+    disp.plot(ax=ax, xticks_rotation=45, colorbar=True, cmap="Blues")
+    ax.set_title(f"Confusion Matrix — {label}", fontsize=11)
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, f"confusion_matrix_{_safe_name(label)}.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: str, max_samples: int = 2000):
+    if len(X) > max_samples:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(len(X), max_samples, replace=False)
+        X = X[idx]
+        y_labels = [y_labels[i] for i in idx]
+
+    print(f"  Running t-SNE for {label} ({len(X)} samples)...")
+    perplexity = min(30, len(X) - 1)
+    X_2d = TSNE(n_components=2, random_state=42, perplexity=perplexity).fit_transform(X)
+
+    unique_labels = sorted(set(y_labels))
+    cmap = plt.cm.get_cmap("tab20" if len(unique_labels) <= 20 else "hsv", len(unique_labels))
+    color_map = {lbl: cmap(i) for i, lbl in enumerate(unique_labels)}
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for lbl in unique_labels:
+        mask = [i for i, y in enumerate(y_labels) if y == lbl]
+        ax.scatter(X_2d[mask, 0], X_2d[mask, 1], c=[color_map[lbl]], label=lbl, s=12, alpha=0.7)
+
+    ncol = max(1, len(unique_labels) // 20)
+    ax.legend(loc="best", fontsize=6, ncol=ncol, markerscale=1.5)
+    ax.set_title(f"t-SNE Embedding Space — {label}", fontsize=11)
+    ax.set_xlabel("dim 1")
+    ax.set_ylabel("dim 2")
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, f"tsne_{_safe_name(label)}.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_per_class_f1(backbone_reports: dict[str, dict], output_dir: str):
+    # Collect classes from all backbones (excluding summary rows).
+    skip = {"accuracy", "macro avg", "weighted avg"}
+    all_classes = set()
+    for report_dict in backbone_reports.values():
+        all_classes.update(k for k in report_dict if k not in skip)
+    all_classes = sorted(all_classes)
+
+    backbones = list(backbone_reports.keys())
+    n = len(backbones)
+    x = np.arange(len(all_classes))
+    width = 0.8 / n
+
+    fig_w = max(14, len(all_classes) * 0.45)
+    fig, ax = plt.subplots(figsize=(fig_w, 6))
+    for i, key in enumerate(backbones):
+        vals = [backbone_reports[key].get(c, {}).get("f1-score", 0.0) for c in all_classes]
+        offset = (i - (n - 1) / 2) * width
+        bars = ax.bar(x + offset, vals, width, label=key)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(all_classes, rotation=45, ha="right", fontsize=8)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("F1 Score")
+    ax.set_title("Per-class F1 by Backbone")
+    ax.legend()
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "per_class_f1.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_summary(results: dict, output_dir: str):
+    backbones = list(results["backbones"].keys())
+    accuracies = [results["backbones"][b]["accuracy"] for b in backbones]
+    f1_macros = [results["backbones"][b]["f1_macro"] for b in backbones]
+    f1_weighted = [results["backbones"][b]["f1_weighted"] for b in backbones]
+
+    x = np.arange(len(backbones))
+    width = 0.25
+
+    fig, ax = plt.subplots(figsize=(max(7, len(backbones) * 2.5), 5))
+    b1 = ax.bar(x - width, accuracies, width, label="Accuracy")
+    b2 = ax.bar(x,         f1_macros,  width, label="F1 Macro")
+    b3 = ax.bar(x + width, f1_weighted, width, label="F1 Weighted")
+
+    for bars in (b1, b2, b3):
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                    f"{h:.3f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(backbones, rotation=15, ha="right")
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Score")
+    ax.set_title(f"Linear Probe — Backbone Comparison ({results['agml_dataset']})")
+    ax.legend()
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "summary_comparison.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -255,31 +391,52 @@ def main(args):
         "backbones": {},
     }
 
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # Stores (X_all, labels_all) per backbone for t-SNE
+    embeddings_store: dict[str, tuple[np.ndarray, list[str]]] = {}
+    # Stores sklearn report dicts per backbone for per-class F1 chart
+    report_store: dict[str, dict] = {}
+    # Stores (y_test_labels, y_pred_labels) per backbone for confusion matrices
+    pred_store: dict[str, tuple[list[str], list[str]]] = {}
+
     # --- YOLO supervised baseline ---
     if args.yolo_model:
         print(f"\n=== YOLO Backbone: {args.yolo_model} ===")
         X = extract_yolo_embeddings(samples, args.yolo_model, device)
-        results["backbones"]["yolo"] = run_probe(
+        metrics, y_test_lbl, y_pred_lbl = run_probe(
             X[train_idx], X[test_idx], y_train, y_test, le, args.yolo_model
         )
+        results["backbones"]["yolo"] = metrics
+        embeddings_store["yolo"] = (X, labels_all)
+        report_store["yolo"] = metrics["per_class_report_dict"]
+        pred_store["yolo"] = (y_test_lbl, y_pred_lbl)
 
     # --- Gemma4 base (pre-fine-tuning baseline) ---
     if args.baseline_model:
         print(f"\n=== Gemma4 Base: {args.baseline_model} ===")
         processor, model, mm_root = load_gemma4(args.baseline_model, device)
         X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
-        results["backbones"]["gemma4_base"] = run_probe(
+        metrics, y_test_lbl, y_pred_lbl = run_probe(
             X[train_idx], X[test_idx], y_train, y_test, le, args.baseline_model
         )
+        results["backbones"]["gemma4_base"] = metrics
+        embeddings_store["gemma4_base"] = (X, labels_all)
+        report_store["gemma4_base"] = metrics["per_class_report_dict"]
+        pred_store["gemma4_base"] = (y_test_lbl, y_pred_lbl)
         unload(model)
 
     # --- Gemma4 fine-tuned ---
     print(f"\n=== Gemma4 Fine-tuned: {args.model} ===")
     processor, model, mm_root = load_gemma4(args.model, device)
     X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
-    results["backbones"]["gemma4_finetuned"] = run_probe(
+    metrics, y_test_lbl, y_pred_lbl = run_probe(
         X[train_idx], X[test_idx], y_train, y_test, le, args.model
     )
+    results["backbones"]["gemma4_finetuned"] = metrics
+    embeddings_store["gemma4_finetuned"] = (X, labels_all)
+    report_store["gemma4_finetuned"] = metrics["per_class_report_dict"]
+    pred_store["gemma4_finetuned"] = (y_test_lbl, y_pred_lbl)
     unload(model)
 
     # --- Summary table ---
@@ -289,11 +446,26 @@ def main(args):
     for key, res in results["backbones"].items():
         print(f"  {key:<30} {res['accuracy']:>10.4f} {res['f1_macro']:>10.4f}")
 
-    os.makedirs(args.output_dir, exist_ok=True)
     out_path = os.path.join(args.output_dir, "linear_probe_results.json")
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {out_path}")
+
+    # --- Visualizations ---
+    print("\n=== Generating plots ===")
+
+    plot_summary(results, args.output_dir)
+
+    if len(report_store) > 1:
+        plot_per_class_f1(report_store, args.output_dir)
+
+    for key, (y_true, y_pred) in pred_store.items():
+        plot_confusion_matrix(y_true, y_pred, key, args.output_dir)
+
+    for key, (X_all, y_all) in embeddings_store.items():
+        plot_tsne(X_all, y_all, key, args.output_dir)
+
+    print(f"\nAll outputs saved to {args.output_dir}/")
 
 
 if __name__ == "__main__":
@@ -303,7 +475,7 @@ if __name__ == "__main__":
     parser.add_argument("--baseline_model", type=str, default=None,
                         help="Base Gemma4 before fine-tuning (e.g. google/gemma-4-E2B-it)")
     parser.add_argument("--yolo_model", type=str, default=None,
-                        help="YOLO classification model (e.g. yolov8s-cls.pt)")
+                        help="YOLO classification model (e.g. yolo11s-cls.pt)")
     parser.add_argument("--agml_dataset", type=str, required=True,
                         help="AgML dataset name (e.g. bean_disease_uganda)")
     parser.add_argument("--output_dir", type=str, default="results")
