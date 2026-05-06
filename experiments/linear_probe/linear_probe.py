@@ -427,17 +427,18 @@ def main(args):
         unload(model)
 
     # --- Gemma4 fine-tuned ---
-    print(f"\n=== Gemma4 Fine-tuned: {args.model} ===")
-    processor, model, mm_root = load_gemma4(args.model, device)
-    X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
-    metrics, y_test_lbl, y_pred_lbl = run_probe(
-        X[train_idx], X[test_idx], y_train, y_test, le, args.model
-    )
-    results["backbones"]["gemma4_finetuned"] = metrics
-    embeddings_store["gemma4_finetuned"] = (X, labels_all)
-    report_store["gemma4_finetuned"] = metrics["per_class_report_dict"]
-    pred_store["gemma4_finetuned"] = (y_test_lbl, y_pred_lbl)
-    unload(model)
+    if args.model:
+        print(f"\n=== Gemma4 Fine-tuned: {args.model} ===")
+        processor, model, mm_root = load_gemma4(args.model, device)
+        X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
+        metrics, y_test_lbl, y_pred_lbl = run_probe(
+            X[train_idx], X[test_idx], y_train, y_test, le, args.model
+        )
+        results["backbones"]["gemma4_finetuned"] = metrics
+        embeddings_store["gemma4_finetuned"] = (X, labels_all)
+        report_store["gemma4_finetuned"] = metrics["per_class_report_dict"]
+        pred_store["gemma4_finetuned"] = (y_test_lbl, y_pred_lbl)
+        unload(model)
 
     # --- Summary table ---
     print("\n=== Summary ===")
@@ -470,8 +471,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="google/gemma-4-E2B-it",
-                        help="Fine-tuned Gemma4 (HF ID or local path)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Fine-tuned Gemma4 (HF ID or local path). Omit to skip fine-tuned comparison.")
     parser.add_argument("--baseline_model", type=str, default=None,
                         help="Base Gemma4 before fine-tuning (e.g. google/gemma-4-E2B-it)")
     parser.add_argument("--yolo_model", type=str, default=None,
