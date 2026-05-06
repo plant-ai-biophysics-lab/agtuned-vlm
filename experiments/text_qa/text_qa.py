@@ -59,9 +59,14 @@ def extract_predicted_letter(response: str) -> str | None:
     return m.group(1) if m else None
 
 
-def load_agrocot(n_samples: int | None) -> list[dict]:
-    print("Loading AgroCoT dataset (wenyb/AgriCoT, train split)...")
-    ds = load_dataset("wenyb/AgriCoT", split="train")
+def load_agrocot(n_samples: int | None, dataset_path: str | None = None) -> list[dict]:
+    if dataset_path:
+        from datasets import load_from_disk
+        print(f"Loading AgroCoT from disk: {dataset_path}")
+        ds = load_from_disk(dataset_path)
+    else:
+        print("Loading AgroCoT dataset (wenyb/AgriCoT, train split)...")
+        ds = load_dataset("wenyb/AgriCoT", split="train")
     samples = []
     for row in ds:
         samples.append({
@@ -134,7 +139,7 @@ def load_llm(model_id: str) -> LLM:
 
 
 def main(args):
-    samples = load_agrocot(args.n_samples)
+    samples = load_agrocot(args.n_samples, args.dataset_path)
 
     prompts = [
         PROMPT_TEMPLATE.format(
@@ -235,6 +240,8 @@ if __name__ == "__main__":
                         help="Language-only baseline model. Pass 'none' to skip.")
     parser.add_argument("--n_samples", type=int, default=None,
                         help="Limit number of samples (default: all 4821)")
+    parser.add_argument("--dataset_path", type=str, default=None,
+                        help="Path to dataset saved with download_data.py (use when compute nodes have no internet)")
     parser.add_argument("--output_dir", type=str, default="results")
     args = parser.parse_args()
 
