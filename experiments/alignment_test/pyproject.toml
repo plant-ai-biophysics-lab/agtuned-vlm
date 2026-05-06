@@ -3,6 +3,7 @@ name = "h3-alignment"
 version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "accelerate>=0.26.0",
     "agml>=0.7.4",
     "matplotlib>=3.8.0",
     "numpy>=1.26.0",
