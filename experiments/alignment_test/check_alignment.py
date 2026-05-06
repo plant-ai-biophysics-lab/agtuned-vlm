@@ -494,7 +494,7 @@ def main(args):
                 title=(
                     f"Prompt PG={'✓' if pg else '✗'} E={energy:.2f}  |  "
                     f"Semantic PG={'✓' if sem_pg else ('✗' if sem_pg is not None else 'N/A')} "
-                    f"E={sem_energy:.2f if sem_energy is not None else 'N/A'}"
+                    f"E={f'{sem_energy:.2f}' if sem_energy is not None else 'N/A'}"
                 ),
             )
 
