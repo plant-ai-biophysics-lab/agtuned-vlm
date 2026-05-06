@@ -2,88 +2,104 @@
 H2: Text-only QA — Agricultural Language Knowledge
 ===================================================
 Tests whether the model can answer agricultural questions from text alone
-(no images) using the AgroCoT benchmark (multiple-choice).
+(no images) using the KisanVaani agriculture QA benchmark.
 
 If text-only performance is weak → the language model lacks agricultural
 domain knowledge independently of any vision issues → H2 confirmed.
 If text-only performance is strong → the bottleneck is vision, not language.
 
-Dataset: AgroCoT (huggingface: wenyb/AgriCoT)
-  Fields: question, options (list), answer (letter A/B/C/D)
-  Split: train only (4821 rows)
+Dataset: KisanVaani/agriculture-qa-english-only
+  Fields: question (str), answers (str)
+  Split: train (22615 rows)
 
 Backbones compared:
-  --model          Gemma4 base/multimodal (required)
-  --lang_model     Language-only model, e.g. gemma-3-4b-it (optional, on by default)
+  --lang_model     Language-only model, e.g. gemma-3-4b-it (on by default)
+  --model          Gemma4 base/multimodal (on by default)
   --finetuned_model Fine-tuned Gemma4 (optional)
-  Random chance baseline is always computed.
 
 Usage:
-    python text_qa.py --model google/gemma-4-E2B-it
+    python text_qa.py
+    python text_qa.py --model google/gemma-4-E2B-it --n_samples 500
     python text_qa.py --model google/gemma-4-E2B-it \\
-                      --finetuned_model /path/to/vllm_model \\
-                      --n_samples 500
+                      --finetuned_model outputs/vllm_model \\
+                      --dataset_path data/agri_qa
 """
 
 import argparse
 import csv
 import json
-import re
 import time
 from pathlib import Path
 
+import evaluate
 from datasets import load_dataset
 from vllm import LLM, SamplingParams
 
-OPTION_LETTERS = ["A", "B", "C", "D", "E"]
+rouge = evaluate.load("rouge")
+exact_match = evaluate.load("exact_match")
 
 PROMPT_TEMPLATE = (
-    "Answer the following agricultural multiple-choice question. "
-    "Reply with only the letter of the correct answer (A, B, C, or D).\n\n"
+    "Answer the following agricultural question in one or two sentences.\n\n"
     "Question: {question}\n\n"
-    "{options_block}\n\n"
     "Answer:"
 )
 
 
-def format_options(options) -> str:
-    if isinstance(options, dict):
-        items = options.items()
-    else:
-        items = zip(OPTION_LETTERS, options)
-    return "\n".join(f"{letter}. {text}" for letter, text in items)
-
-
-def extract_predicted_letter(response: str) -> str | None:
-    m = re.search(r"\b([A-E])\b", response.strip())
-    return m.group(1) if m else None
-
-
-def load_agrocot(n_samples: int | None, dataset_path: str | None = None) -> list[dict]:
+def load_agri_qa(n_samples: int | None, dataset_path: str | None = None) -> list[dict]:
     if dataset_path:
         from datasets import load_from_disk
-        print(f"Loading AgroCoT from disk: {dataset_path}")
+        print(f"Loading dataset from disk: {dataset_path}")
         ds = load_from_disk(dataset_path)
     else:
-        print("Loading AgroCoT dataset (wenyb/AgriCoT, train split)...")
-        ds = load_dataset("wenyb/AgriCoT", split="train")
-    ds = ds.select_columns(["question", "options", "answer"])
-
-    samples = []
-    for row in ds:
-        samples.append({
-            "question": row["question"],
-            "options": row["options"],
-            "answer": str(row["answer"]).strip().upper(),
-        })
+        print("Loading KisanVaani/agriculture-qa-english-only...")
+        ds = load_dataset("KisanVaani/agriculture-qa-english-only", split="train")
     if n_samples:
-        samples = samples[:n_samples]
+        ds = ds.select(range(n_samples))
+    samples = [{"question": row["question"], "answer": row["answers"]} for row in ds]
     print(f"  {len(samples)} samples")
     return samples
 
 
-def run_inference(llm: LLM, prompts: list[str], label: str) -> list[str]:
-    sampling_params = SamplingParams(temperature=0.0, max_tokens=16)
+def compute_metrics(predictions: list[str], references: list[str]) -> dict:
+    rouge_scores = rouge.compute(predictions=predictions, references=references)
+    em_scores = exact_match.compute(
+        predictions=[p.lower() for p in predictions],
+        references=[r.lower() for r in references],
+    )
+    contains_match = sum(
+        r.lower() in p.lower() for p, r in zip(predictions, references)
+    ) / len(predictions)
+
+    return {
+        "contains_match": round(contains_match, 4),
+        "exact_match": round(em_scores["exact_match"], 4),
+        "rouge1_raw": round(rouge_scores["rouge1"], 4),
+        "rouge2_raw": round(rouge_scores["rouge2"], 4),
+        "rougeL_raw": round(rouge_scores["rougeL"], 4),
+    }
+
+
+def score(responses: list[str], samples: list[dict]) -> tuple[dict, list[dict]]:
+    predictions = [r.strip() for r in responses]
+    references = [s["answer"] for s in samples]
+
+    metrics = compute_metrics(predictions, references)
+
+    rows = [
+        {
+            "question": s["question"],
+            "ground_truth": s["answer"],
+            "response": pred,
+            "contains_match": int(s["answer"].lower() in pred.lower()),
+        }
+        for s, pred in zip(samples, predictions)
+    ]
+
+    return metrics, rows
+
+
+def run_inference(llm: LLM, prompts: list[str], label: str) -> tuple[list[str], float, int]:
+    sampling_params = SamplingParams(temperature=0.0, max_tokens=128)
     print(f"\nRunning inference [{label}]...")
     t_start = time.perf_counter()
     outputs = llm.generate(prompts, sampling_params=sampling_params)
@@ -92,43 +108,6 @@ def run_inference(llm: LLM, prompts: list[str], label: str) -> list[str]:
     total_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
     print(f"  {elapsed:.1f}s | {total_tokens / elapsed:.0f} tok/s")
     return responses, elapsed, total_tokens
-
-
-def score(responses: list[str], samples: list[dict]) -> dict:
-    n_correct = 0
-    n_parsed = 0
-    rows = []
-    for sample, response in zip(samples, responses):
-        predicted = extract_predicted_letter(response)
-        gt = sample["answer"]
-        correct = predicted == gt if predicted is not None else False
-        if predicted is not None:
-            n_parsed += 1
-        if correct:
-            n_correct += 1
-        rows.append({
-            "question": sample["question"],
-            "ground_truth": gt,
-            "raw_response": response,
-            "predicted_letter": predicted or "",
-            "correct": int(correct),
-        })
-    n = len(samples)
-    return {
-        "accuracy": round(n_correct / n, 4),
-        "parse_rate": round(n_parsed / n, 4),
-        "n_correct": n_correct,
-        "n_total": n,
-    }, rows
-
-
-def random_baseline_accuracy(samples: list[dict]) -> float:
-    import random
-    random.seed(42)
-    n_correct = sum(
-        random.choice(OPTION_LETTERS[:4]) == s["answer"] for s in samples
-    )
-    return round(n_correct / len(samples), 4)
 
 
 def load_llm(model_id: str) -> LLM:
@@ -141,32 +120,20 @@ def load_llm(model_id: str) -> LLM:
 
 
 def main(args):
-    samples = load_agrocot(args.n_samples, args.dataset_path)
+    samples = load_agri_qa(args.n_samples, args.dataset_path)
 
-    prompts = [
-        PROMPT_TEMPLATE.format(
-            question=s["question"],
-            options_block=format_options(s["options"]),
-        )
-        for s in samples
-    ]
+    prompts = [PROMPT_TEMPLATE.format(question=s["question"]) for s in samples]
 
     print("\nSample prompt:")
     print(prompts[0])
-    print(f"  Expected answer: {samples[0]['answer']}")
+    print(f"  Expected answer: {samples[0]['answer']}\n")
 
     results = {
-        "dataset": "AgroCoT (wenyb/AgriCoT)",
+        "dataset": "KisanVaani/agriculture-qa-english-only",
         "n_samples": len(samples),
         "models": {},
     }
     all_rows: dict[str, list[dict]] = {}
-
-    # --- Random baseline ---
-    rand_acc = random_baseline_accuracy(samples)
-    print(f"\n=== Random Baseline ===")
-    print(f"  Accuracy: {rand_acc:.4f}  (expected ~0.25 for 4-option MCQ)")
-    results["models"]["random"] = {"accuracy": rand_acc, "parse_rate": 1.0}
 
     # --- Language-only model ---
     if args.lang_model:
@@ -174,10 +141,12 @@ def main(args):
         llm = load_llm(args.lang_model)
         responses, elapsed, total_tokens = run_inference(llm, prompts, args.lang_model)
         metrics, rows = score(responses, samples)
-        metrics["model_id"] = args.lang_model
-        metrics["total_time_s"] = round(elapsed, 3)
-        metrics["throughput_tokens_per_s"] = round(total_tokens / elapsed, 1)
-        results["models"]["lang_model"] = metrics
+        results["models"]["lang_model"] = {
+            "model_id": args.lang_model,
+            "total_time_s": round(elapsed, 3),
+            "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
+            **metrics,
+        }
         all_rows["lang_model"] = rows
         del llm
 
@@ -186,10 +155,12 @@ def main(args):
     llm = load_llm(args.model)
     responses, elapsed, total_tokens = run_inference(llm, prompts, args.model)
     metrics, rows = score(responses, samples)
-    metrics["model_id"] = args.model
-    metrics["total_time_s"] = round(elapsed, 3)
-    metrics["throughput_tokens_per_s"] = round(total_tokens / elapsed, 1)
-    results["models"]["gemma4_base"] = metrics
+    results["models"]["gemma4_base"] = {
+        "model_id": args.model,
+        "total_time_s": round(elapsed, 3),
+        "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
+        **metrics,
+    }
     all_rows["gemma4_base"] = rows
     del llm
 
@@ -199,34 +170,36 @@ def main(args):
         llm = load_llm(args.finetuned_model)
         responses, elapsed, total_tokens = run_inference(llm, prompts, args.finetuned_model)
         metrics, rows = score(responses, samples)
-        metrics["model_id"] = args.finetuned_model
-        metrics["total_time_s"] = round(elapsed, 3)
-        metrics["throughput_tokens_per_s"] = round(total_tokens / elapsed, 1)
-        results["models"]["gemma4_finetuned"] = metrics
+        results["models"]["gemma4_finetuned"] = {
+            "model_id": args.finetuned_model,
+            "total_time_s": round(elapsed, 3),
+            "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
+            **metrics,
+        }
         all_rows["gemma4_finetuned"] = rows
         del llm
 
     # --- Summary table ---
     print("\n=== Summary ===")
-    print(f"  {'Model':<25} {'Accuracy':>10} {'Parse Rate':>12}")
-    print(f"  {'-'*49}")
+    print(f"  {'Model':<25} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10}")
+    print(f"  {'-'*79}")
     for key, m in results["models"].items():
-        print(f"  {key:<25} {m['accuracy']:>10.4f} {m.get('parse_rate', 1.0):>12.4f}")
+        print(f"  {key:<25} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f}")
 
-    output_csv = Path(args.output_dir)
-    output_csv.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for key, rows in all_rows.items():
-        csv_path = output_csv / f"text_qa_{key}.csv"
+        csv_path = output_dir / f"text_qa_{key}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["question", "ground_truth", "raw_response", "predicted_letter", "correct"]
+                f, fieldnames=["question", "ground_truth", "response", "contains_match"]
             )
             writer.writeheader()
             writer.writerows(rows)
         print(f"Saved: {csv_path}")
 
-    metrics_path = output_csv / "text_qa_metrics.json"
+    metrics_path = output_dir / "text_qa_metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Metrics saved to {metrics_path}")
@@ -239,11 +212,11 @@ if __name__ == "__main__":
     parser.add_argument("--finetuned_model", type=str, default=None,
                         help="Fine-tuned Gemma4 (optional)")
     parser.add_argument("--lang_model", type=str, default="google/gemma-3-4b-it",
-                        help="Language-only baseline model. Pass 'none' to skip.")
-    parser.add_argument("--n_samples", type=int, default=None,
-                        help="Limit number of samples (default: all 4821)")
+                        help="Language-only baseline. Pass 'none' to skip.")
     parser.add_argument("--dataset_path", type=str, default=None,
-                        help="Path to dataset saved with download_data.py (use when compute nodes have no internet)")
+                        help="Path to dataset saved with download_data.py (for offline cluster use)")
+    parser.add_argument("--n_samples", type=int, default=None,
+                        help="Limit number of samples (default: all 22615)")
     parser.add_argument("--output_dir", type=str, default="results")
     args = parser.parse_args()
 
