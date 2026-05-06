@@ -82,7 +82,7 @@ def load_model(model_id: str):
     print(f"Loading model: {model_id}")
     processor = AutoProcessor.from_pretrained(model_id)
     model = AutoModelForImageTextToText.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map="auto"
+        model_id, dtype=torch.bfloat16, device_map="auto", attn_implementation="eager"
     )
     model.eval()
     n_img_tokens = getattr(model.config, "vision_soft_tokens_per_image", None)
