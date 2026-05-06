@@ -15,8 +15,6 @@ args = parser.parse_args()
 
 print("Downloading AgroCoT dataset...")
 ds = load_dataset("wenyb/AgriCoT", split="train")
-image_cols = [c for c in ds.column_names if "image" in c.lower()]
-if image_cols:
-    ds = ds.remove_columns(image_cols)
+ds = ds.select_columns(["question", "options", "answer"])
 ds.save_to_disk(args.output_dir)
 print(f"  {len(ds)} samples saved to {args.output_dir}")
