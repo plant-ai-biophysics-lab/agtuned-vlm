@@ -44,6 +44,7 @@ from scipy.ndimage import zoom as sp_zoom
 from transformers import AutoProcessor, AutoModelForImageTextToText
 
 PROMPT = "Identify all wheat heads visible in this image."
+CLASS_WORDS = ["wheat", "head", "heads"]
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -112,37 +113,111 @@ def find_image_positions(input_ids: torch.Tensor, image_token_id: int) -> torch.
     return positions
 
 
-def extract_attention_heatmap(
+def _normalize(arr: np.ndarray) -> np.ndarray:
+    return (arr - arr.min()) / (arr.max() - arr.min() + 1e-8)
+
+
+def _layer_attn_to_flat(attentions, positions, token_positions, n_layers) -> np.ndarray:
+    """Average attention from token_positions → image positions over last n_layers."""
+    maps = []
+    for layer_attn in attentions[-n_layers:]:
+        # layer_attn: (1, n_heads, seq_len, seq_len)
+        tok_attn = layer_attn[0, :, token_positions, :]   # (n_heads, n_toks, seq_len)
+        img_attn = tok_attn[:, :, positions]              # (n_heads, n_toks, n_img)
+        maps.append(img_attn.float().mean(dim=(0, 1)))    # (n_img,)
+    flat = torch.stack(maps).mean(dim=0).cpu().numpy()
+    return _normalize(flat)
+
+
+def find_class_token_positions(
+    generated_ids: torch.Tensor, input_len: int, tokenizer
+) -> list[int]:
+    """Return sequence positions of CLASS_WORDS tokens in the generated portion."""
+    positions = []
+    gen_part = generated_ids[0, input_len:]
+    for word in CLASS_WORDS:
+        for variant in (word, f" {word}"):
+            ids = tokenizer.encode(variant, add_special_tokens=False)
+            for tok_id in ids:
+                hits = (gen_part == tok_id).nonzero(as_tuple=True)[0]
+                positions += [input_len + h.item() for h in hits]
+    return sorted(set(positions))
+
+
+def extract_combined_heatmaps(
     model,
+    processor,
     inputs: dict,
     img_positions: torch.Tensor,
     n_layers: int = 4,
-) -> np.ndarray:
+    max_new_tokens: int = 64,
+) -> tuple[np.ndarray, np.ndarray | None, str]:
     """
-    Run a forward pass and return mean attention from the last text token
-    to each image token position, averaged over the last n_layers and all heads.
-    Returns a 1D float32 numpy array of length len(img_positions), normalized [0,1].
+    1. Generate a response.
+    2. Single forward pass on (input + response) with output_attentions=True.
+    3. Return:
+       - prompt_flat   : attention from last prompt token → image positions
+       - semantic_flat : attention from class word tokens → image positions (None if not found)
+       - response_text : decoded generated response
     """
+    input_len = inputs["input_ids"].shape[1]
+
+    # Generate response
     with torch.no_grad():
-        outputs = model(**inputs, output_attentions=True)
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+        )
+
+    tokenizer = processor.tokenizer
+    response_text = tokenizer.decode(
+        generated_ids[0, input_len:], skip_special_tokens=True
+    ).strip()
+
+    # Build full-sequence inputs (input + generated tokens)
+    full_inputs = dict(inputs)
+    full_inputs["input_ids"] = generated_ids
+    if "attention_mask" in full_inputs:
+        extra = torch.ones(
+            1, generated_ids.shape[1] - input_len,
+            device=full_inputs["attention_mask"].device,
+            dtype=full_inputs["attention_mask"].dtype,
+        )
+        full_inputs["attention_mask"] = torch.cat(
+            [full_inputs["attention_mask"], extra], dim=1
+        )
+
+    # Single forward pass for both heatmaps
+    with torch.no_grad():
+        outputs = model(**full_inputs, output_attentions=True)
 
     if outputs.attentions is None or len(outputs.attentions) == 0:
         raise RuntimeError(
             "output_attentions=True returned no attention weights. "
-            "The model may not support this kwarg at the top level."
+            "Load the model with attn_implementation='eager'."
         )
 
-    # Each element of outputs.attentions: (1, n_heads, seq_len, seq_len)
-    maps = []
-    for layer_attn in outputs.attentions[-n_layers:]:
-        # Attention from the last token (end of prompt) to all positions
-        last_tok = layer_attn[0, :, -1, :]           # (n_heads, seq_len)
-        img_attn = last_tok[:, img_positions]         # (n_heads, n_img_tokens)
-        maps.append(img_attn.float().mean(dim=0))     # (n_img_tokens,)
+    # Prompt-token heatmap: attention from last prompt token
+    prompt_flat = _layer_attn_to_flat(
+        outputs.attentions, img_positions,
+        token_positions=torch.tensor([input_len - 1], device=img_positions.device),
+        n_layers=n_layers,
+    )
 
-    flat = torch.stack(maps).mean(dim=0).cpu().numpy()
-    flat = (flat - flat.min()) / (flat.max() - flat.min() + 1e-8)
-    return flat
+    # Semantic heatmap: attention from class word tokens in generated response
+    class_positions = find_class_token_positions(generated_ids, input_len, tokenizer)
+    if class_positions:
+        class_pos_tensor = torch.tensor(class_positions, device=img_positions.device)
+        semantic_flat = _layer_attn_to_flat(
+            outputs.attentions, img_positions,
+            token_positions=class_pos_tensor,
+            n_layers=n_layers,
+        )
+    else:
+        semantic_flat = None
+
+    return prompt_flat, semantic_flat, response_text
 
 
 # ── Spatial upsampling ────────────────────────────────────────────────────────
@@ -210,15 +285,15 @@ def energy_inside_box(heatmap: np.ndarray, bbox_mask: np.ndarray) -> float:
 
 def save_overlay(
     image: PILImage.Image,
-    heatmap: np.ndarray,
+    prompt_heatmap: np.ndarray,
+    semantic_heatmap: np.ndarray | None,
     bboxes: list,
     path: Path,
     title: str = "",
 ):
     img_np = np.array(image)
-    img_h, img_w = img_np.shape[:2]
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    n_cols = 4 if semantic_heatmap is not None else 3
+    fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
 
     def draw_boxes(ax):
         for bbox in bboxes:
@@ -235,16 +310,28 @@ def save_overlay(
     axes[0].set_title(f"Ground Truth ({len(bboxes)} boxes)")
     axes[0].axis("off")
 
-    axes[1].imshow(heatmap, cmap="hot", vmin=0, vmax=1)
-    axes[1].set_title("Attention Heatmap")
+    axes[1].imshow(img_np)
+    axes[1].imshow(prompt_heatmap, cmap="hot", alpha=0.55, vmin=0, vmax=1)
+    draw_boxes(axes[1])
+    axes[1].set_title(f"Prompt attention overlay")
     axes[1].axis("off")
 
-    axes[2].imshow(img_np)
-    axes[2].imshow(heatmap, cmap="hot", alpha=0.55, vmin=0, vmax=1)
-    draw_boxes(axes[2])
-    axes[2].set_title(f"Overlay — {title}")
-    axes[2].axis("off")
+    if semantic_heatmap is not None:
+        axes[2].imshow(img_np)
+        axes[2].imshow(semantic_heatmap, cmap="hot", alpha=0.55, vmin=0, vmax=1)
+        draw_boxes(axes[2])
+        axes[2].set_title(f"Semantic correspondence\n({'+'.join(CLASS_WORDS)})")
+        axes[2].axis("off")
 
+        axes[3].imshow(img_np)
+        diff = semantic_heatmap - prompt_heatmap
+        diff = (diff - diff.min()) / (diff.max() - diff.min() + 1e-8)
+        axes[3].imshow(diff, cmap="RdBu_r", alpha=0.6, vmin=0, vmax=1)
+        draw_boxes(axes[3])
+        axes[3].set_title("Semantic − Prompt\n(red = semantic gains)")
+        axes[3].axis("off")
+
+    plt.suptitle(title, fontsize=9)
     plt.tight_layout()
     fig.savefig(path, dpi=120, bbox_inches="tight")
     plt.close(fig)
@@ -253,36 +340,50 @@ def save_overlay(
 def plot_summary(
     pg_scores: list[int],
     energy_scores: list[float],
+    sem_pg_scores: list[int],
+    sem_energy_scores: list[float],
     model_label: str,
     output_dir: Path,
 ):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
-    n_total = len(pg_scores)
-    n_correct = sum(pg_scores)
-    axes[0].bar(
-        ["Correct", "Incorrect"],
-        [n_correct, n_total - n_correct],
-        color=["#2ecc71", "#e74c3c"],
-    )
-    for i, v in enumerate([n_correct, n_total - n_correct]):
-        axes[0].text(i, v + 0.3, str(v), ha="center", fontsize=10)
-    axes[0].set_title(f"Pointing Game Accuracy = {n_correct / n_total:.3f}")
-    axes[0].set_ylabel("Count")
+    def pointing_bar(ax, scores, title):
+        n_total = len(scores)
+        n_correct = sum(scores)
+        bars = ax.bar(
+            ["Correct", "Incorrect"],
+            [n_correct, n_total - n_correct],
+            color=["#2ecc71", "#e74c3c"],
+        )
+        for bar, v in zip(bars, [n_correct, n_total - n_correct]):
+            ax.text(bar.get_x() + bar.get_width() / 2, v + 0.3, str(v), ha="center", fontsize=10)
+        ax.set_title(f"{title}\nacc = {n_correct / n_total:.3f}")
+        ax.set_ylabel("Count")
 
-    axes[1].hist(energy_scores, bins=20, color="steelblue", edgecolor="white")
-    axes[1].axvline(
-        np.mean(energy_scores),
-        color="red",
-        linestyle="--",
-        label=f"mean = {np.mean(energy_scores):.3f}",
-    )
-    axes[1].set_title("Energy Inside Bounding Boxes")
-    axes[1].set_xlabel("Fraction of attention inside boxes")
-    axes[1].set_ylabel("Count")
-    axes[1].legend()
+    def energy_hist(ax, scores, title):
+        ax.hist(scores, bins=20, color="steelblue", edgecolor="white")
+        ax.axvline(
+            np.mean(scores), color="red", linestyle="--",
+            label=f"mean = {np.mean(scores):.3f}",
+        )
+        ax.set_title(title)
+        ax.set_xlabel("Fraction of attention inside boxes")
+        ax.set_ylabel("Count")
+        ax.legend()
 
-    plt.suptitle(f"H3 Alignment — {Path(model_label).name}", fontsize=11)
+    pointing_bar(axes[0, 0], pg_scores, "Pointing Game — Prompt Attention")
+    energy_hist(axes[0, 1], energy_scores, "Energy Inside Box — Prompt Attention")
+
+    if sem_pg_scores:
+        pointing_bar(axes[1, 0], sem_pg_scores, "Pointing Game — Semantic Correspondence")
+        energy_hist(axes[1, 1], sem_energy_scores, "Energy Inside Box — Semantic Correspondence")
+    else:
+        axes[1, 0].set_visible(False)
+        axes[1, 1].text(0.5, 0.5, "No class tokens found in any response",
+                        ha="center", va="center", transform=axes[1, 1].transAxes)
+        axes[1, 1].axis("off")
+
+    plt.suptitle(f"H3 Alignment — {Path(model_label).name}", fontsize=12)
     plt.tight_layout()
     path = output_dir / "h3_summary.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -318,6 +419,8 @@ def main(args):
 
     pg_scores: list[int] = []
     energy_scores: list[float] = []
+    sem_pg_scores: list[int] = []
+    sem_energy_scores: list[float] = []
     per_sample: list[dict] = []
 
     for i, sample in enumerate(samples):
@@ -327,11 +430,9 @@ def main(args):
         img_w, img_h = image.size
         bboxes = sample["bboxes"]
 
-        # Prepare inputs
         inputs = processor(text=prompt_text, images=image, return_tensors="pt")
         inputs = {k: v.to(lm_device) for k, v in inputs.items()}
 
-        # Find image token positions
         img_positions = find_image_positions(inputs["input_ids"], img_token_id)
         if len(img_positions) == 0:
             print(f"  WARNING: No image tokens found in input_ids. Skipping.")
@@ -340,48 +441,64 @@ def main(args):
 
         print(f"  seq_len={inputs['input_ids'].shape[1]} | img_tokens={len(img_positions)}")
 
-        # Extract attention heatmap
         try:
-            flat = extract_attention_heatmap(
-                model, inputs, img_positions, n_layers=args.n_layers
+            prompt_flat, semantic_flat, response_text = extract_combined_heatmaps(
+                model, processor, inputs, img_positions, n_layers=args.n_layers
             )
         except RuntimeError as e:
             print(f"  WARNING: {e}")
             continue
 
-        # Upsample to image size
-        heatmap = flat_to_image(flat, img_h, img_w)
+        print(f"  Response: {response_text[:80]}")
+        if semantic_flat is not None:
+            found = [w for w in CLASS_WORDS if w in response_text.lower()]
+            print(f"  Class tokens found: {found}")
+        else:
+            print(f"  Class tokens found: none — semantic heatmap skipped")
 
-        # Metrics
         bbox_mask = bboxes_to_mask(bboxes, img_h, img_w)
-        pg = pointing_game(heatmap, bbox_mask)
-        energy = energy_inside_box(heatmap, bbox_mask)
 
+        prompt_heatmap = flat_to_image(prompt_flat, img_h, img_w)
+        pg = pointing_game(prompt_heatmap, bbox_mask)
+        energy = energy_inside_box(prompt_heatmap, bbox_mask)
         pg_scores.append(int(pg))
         energy_scores.append(energy)
+        print(f"  Prompt   → PG: {'✓' if pg else '✗'}  Energy: {energy:.4f}")
 
-        print(f"  Pointing game : {'✓' if pg else '✗'}  |  Energy inside: {energy:.4f}")
+        sem_pg = sem_energy = None
+        if semantic_flat is not None:
+            sem_heatmap = flat_to_image(semantic_flat, img_h, img_w)
+            sem_pg = pointing_game(sem_heatmap, bbox_mask)
+            sem_energy = energy_inside_box(sem_heatmap, bbox_mask)
+            sem_pg_scores.append(int(sem_pg))
+            sem_energy_scores.append(sem_energy)
+            print(f"  Semantic → PG: {'✓' if sem_pg else '✗'}  Energy: {sem_energy:.4f}")
+        else:
+            sem_heatmap = None
 
         per_sample.append({
             "image": sample["path"],
+            "response": response_text,
             "n_bboxes": len(bboxes),
             "n_img_tokens": len(img_positions),
-            "pointing_game": int(pg),
-            "energy_inside_box": round(energy, 4),
+            "prompt_pointing_game": int(pg),
+            "prompt_energy_inside_box": round(energy, 4),
+            "semantic_pointing_game": int(sem_pg) if sem_pg is not None else None,
+            "semantic_energy_inside_box": round(sem_energy, 4) if sem_energy is not None else None,
         })
 
-        # Save overlays for first n_overlays samples
         if i < args.n_overlays:
             save_overlay(
-                image,
-                heatmap,
-                bboxes,
+                image, prompt_heatmap, sem_heatmap, bboxes,
                 path=overlay_dir / f"overlay_{i:03d}.png",
-                title=f"PG={'✓' if pg else '✗'}  E={energy:.2f}",
+                title=(
+                    f"Prompt PG={'✓' if pg else '✗'} E={energy:.2f}  |  "
+                    f"Semantic PG={'✓' if sem_pg else ('✗' if sem_pg is not None else 'N/A')} "
+                    f"E={sem_energy:.2f if sem_energy is not None else 'N/A'}"
+                ),
             )
 
-        # Free memory between samples
-        del inputs, flat, heatmap, bbox_mask
+        del inputs, prompt_flat, semantic_flat, prompt_heatmap, sem_heatmap, bbox_mask
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -394,17 +511,29 @@ def main(args):
     mean_energy = float(np.mean(energy_scores))
 
     print(f"\n=== H3 Results ({args.agml_dataset}) ===")
-    print(f"  Samples evaluated    : {len(per_sample)}")
-    print(f"  Pointing game acc    : {pg_acc:.4f}")
-    print(f"  Mean energy inside   : {mean_energy:.4f}")
+    print(f"  Samples evaluated         : {len(per_sample)}")
+    print(f"  Prompt   — PG acc         : {pg_acc:.4f}")
+    print(f"  Prompt   — Mean energy    : {mean_energy:.4f}")
+    if sem_pg_scores:
+        sem_pg_acc = float(np.mean(sem_pg_scores))
+        sem_mean_energy = float(np.mean(sem_energy_scores))
+        print(f"  Semantic — PG acc         : {sem_pg_acc:.4f}  ({len(sem_pg_scores)} samples with class tokens)")
+        print(f"  Semantic — Mean energy    : {sem_mean_energy:.4f}")
+    else:
+        sem_pg_acc = sem_mean_energy = None
+        print(f"  Semantic — no class tokens found in any response")
 
     summary = {
         "model": args.model,
         "dataset": args.agml_dataset,
+        "class_words": CLASS_WORDS,
         "n_samples": len(per_sample),
         "n_layers_averaged": args.n_layers,
-        "pointing_game_accuracy": round(pg_acc, 4),
-        "mean_energy_inside_box": round(mean_energy, 4),
+        "prompt_pointing_game_accuracy": round(pg_acc, 4),
+        "prompt_mean_energy_inside_box": round(mean_energy, 4),
+        "semantic_pointing_game_accuracy": round(sem_pg_acc, 4) if sem_pg_acc is not None else None,
+        "semantic_mean_energy_inside_box": round(sem_mean_energy, 4) if sem_mean_energy is not None else None,
+        "semantic_samples_with_class_tokens": len(sem_pg_scores),
         "per_sample": per_sample,
     }
 
@@ -414,7 +543,7 @@ def main(args):
     print(f"  Results saved to {result_path}")
 
     print("\n=== Generating plots ===")
-    plot_summary(pg_scores, energy_scores, args.model, output_dir)
+    plot_summary(pg_scores, energy_scores, sem_pg_scores, sem_energy_scores, args.model, output_dir)
     print(f"\nAll outputs saved to {output_dir}/")
 
 
