@@ -67,6 +67,11 @@ def load_agrocot(n_samples: int | None, dataset_path: str | None = None) -> list
     else:
         print("Loading AgroCoT dataset (wenyb/AgriCoT, train split)...")
         ds = load_dataset("wenyb/AgriCoT", split="train")
+    # Drop image columns to avoid PIL decoding on compute nodes with no display
+    image_cols = [c for c in ds.column_names if "image" in c.lower()]
+    if image_cols:
+        ds = ds.remove_columns(image_cols)
+
     samples = []
     for row in ds:
         samples.append({
