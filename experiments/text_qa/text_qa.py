@@ -13,8 +13,8 @@ Dataset: KisanVaani/agriculture-qa-english-only
   Split: train (22615 rows)
 
 Backbones compared:
-  --lang_model     Language-only model, e.g. gemma-3-4b-it (on by default)
-  --model          Gemma4 base/multimodal (on by default)
+  --lang_model      Language-only model, e.g. gemma-3-4b-it (on by default)
+  --model           Gemma4 base/multimodal (on by default)
   --finetuned_model Fine-tuned Gemma4 (optional)
 
 Usage:
@@ -32,7 +32,10 @@ import time
 from pathlib import Path
 
 import evaluate
+import matplotlib.pyplot as plt
+import numpy as np
 from datasets import load_dataset
+from rouge_score import rouge_scorer as rs_scorer
 from vllm import LLM, SamplingParams
 
 rouge = evaluate.load("rouge")
@@ -44,6 +47,8 @@ PROMPT_TEMPLATE = (
     "Answer:"
 )
 
+
+# ── Data ──────────────────────────────────────────────────────────────────────
 
 def load_agri_qa(n_samples: int | None, dataset_path: str | None = None) -> list[dict]:
     if dataset_path:
@@ -58,6 +63,13 @@ def load_agri_qa(n_samples: int | None, dataset_path: str | None = None) -> list
     samples = [{"question": row["question"], "answer": row["answers"]} for row in ds]
     print(f"  {len(samples)} samples")
     return samples
+
+
+# ── Metrics ───────────────────────────────────────────────────────────────────
+
+def per_sample_rougeL(predictions: list[str], references: list[str]) -> list[float]:
+    scorer = rs_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+    return [scorer.score(ref, pred)["rougeL"].fmeasure for pred, ref in zip(predictions, references)]
 
 
 def compute_metrics(predictions: list[str], references: list[str]) -> dict:
@@ -84,6 +96,7 @@ def score(responses: list[str], samples: list[dict]) -> tuple[dict, list[dict]]:
     references = [s["answer"] for s in samples]
 
     metrics = compute_metrics(predictions, references)
+    rougeL_per_sample = per_sample_rougeL(predictions, references)
 
     rows = [
         {
@@ -91,12 +104,15 @@ def score(responses: list[str], samples: list[dict]) -> tuple[dict, list[dict]]:
             "ground_truth": s["answer"],
             "response": pred,
             "contains_match": int(s["answer"].lower() in pred.lower()),
+            "rougeL": round(rl, 4),
         }
-        for s, pred in zip(samples, predictions)
+        for s, pred, rl in zip(samples, predictions, rougeL_per_sample)
     ]
 
     return metrics, rows
 
+
+# ── Inference ─────────────────────────────────────────────────────────────────
 
 def run_inference(llm: LLM, prompts: list[str], label: str) -> tuple[list[str], float, int]:
     sampling_params = SamplingParams(temperature=0.0, max_tokens=128)
@@ -119,9 +135,132 @@ def load_llm(model_id: str) -> LLM:
     )
 
 
+# ── Plots ─────────────────────────────────────────────────────────────────────
+
+METRIC_LABELS = {
+    "contains_match": "Contains Match",
+    "exact_match": "Exact Match",
+    "rouge1_raw": "ROUGE-1",
+    "rouge2_raw": "ROUGE-2",
+    "rougeL_raw": "ROUGE-L",
+}
+
+
+def plot_metrics_comparison(results: dict, output_dir: Path):
+    models = list(results["models"].keys())
+    metrics = list(METRIC_LABELS.keys())
+    x = np.arange(len(metrics))
+    width = 0.8 / len(models)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for i, key in enumerate(models):
+        vals = [results["models"][key][m] for m in metrics]
+        offset = (i - (len(models) - 1) / 2) * width
+        bars = ax.bar(x + offset, vals, width, label=key)
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                    f"{h:.3f}", ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([METRIC_LABELS[m] for m in metrics])
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Score")
+    ax.set_title("Text QA — Model Comparison")
+    ax.legend()
+    plt.tight_layout()
+    path = output_dir / "metrics_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_rougeL_distribution(all_rows: dict[str, list[dict]], output_dir: Path):
+    models = list(all_rows.keys())
+    data = [[row["rougeL"] for row in all_rows[k]] for k in models]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(models) * 2), 5))
+    parts = ax.violinplot(data, positions=range(len(models)), showmedians=True, showextrema=True)
+    for pc in parts["bodies"]:
+        pc.set_alpha(0.7)
+
+    ax.set_xticks(range(len(models)))
+    ax.set_xticklabels(models)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("ROUGE-L per sample")
+    ax.set_title("ROUGE-L Score Distribution per Model")
+
+    for i, d in enumerate(data):
+        ax.text(i, np.median(d) + 0.02, f"med={np.median(d):.3f}",
+                ha="center", va="bottom", fontsize=8)
+
+    plt.tight_layout()
+    path = output_dir / "rougeL_distribution.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_contains_match_overlap(all_rows: dict[str, list[dict]], output_dir: Path):
+    """Bar chart showing per-model contains_match rate, with a stacked breakdown
+    of questions answered correctly by all models vs only some."""
+    models = list(all_rows.keys())
+    n = len(next(iter(all_rows.values())))
+
+    # Per-question correct count across models
+    per_q = np.array([[row["contains_match"] for row in all_rows[k]] for k in models])
+    total_correct = per_q.sum(axis=0)  # shape (n,)
+
+    all_correct = (total_correct == len(models)).sum()
+    none_correct = (total_correct == 0).sum()
+    some_correct = n - all_correct - none_correct
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Left: per-model contains_match rate
+    rates = [np.mean(per_q[i]) for i in range(len(models))]
+    bars = axes[0].bar(models, rates, color=plt.cm.tab10(np.linspace(0, 0.5, len(models))))
+    for bar, rate in zip(bars, rates):
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
+                     f"{rate:.3f}", ha="center", va="bottom", fontsize=9)
+    axes[0].set_ylim(0, 1.1)
+    axes[0].set_ylabel("Contains Match Rate")
+    axes[0].set_title("Contains Match Rate per Model")
+
+    # Right: question-level overlap breakdown
+    counts = [all_correct, some_correct, none_correct]
+    labels = ["All models correct", "Some models correct", "No model correct"]
+    colors = ["#2ecc71", "#f39c12", "#e74c3c"]
+    axes[1].pie(counts, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
+    axes[1].set_title("Question-level Agreement Across Models")
+
+    plt.tight_layout()
+    path = output_dir / "contains_match_overlap.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_response_length(all_rows: dict[str, list[dict]], output_dir: Path):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for key, rows in all_rows.items():
+        lengths = [len(row["response"].split()) for row in rows]
+        ax.hist(lengths, bins=30, alpha=0.6, label=key)
+    ax.set_xlabel("Response length (words)")
+    ax.set_ylabel("Count")
+    ax.set_title("Response Length Distribution")
+    ax.legend()
+    plt.tight_layout()
+    path = output_dir / "response_length.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main(args):
     samples = load_agri_qa(args.n_samples, args.dataset_path)
-
     prompts = [PROMPT_TEMPLATE.format(question=s["question"]) for s in samples]
 
     print("\nSample prompt:")
@@ -193,7 +332,7 @@ def main(args):
         csv_path = output_dir / f"text_qa_{key}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["question", "ground_truth", "response", "contains_match"]
+                f, fieldnames=["question", "ground_truth", "response", "contains_match", "rougeL"]
             )
             writer.writeheader()
             writer.writerows(rows)
@@ -203,6 +342,14 @@ def main(args):
     with open(metrics_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Metrics saved to {metrics_path}")
+
+    # --- Plots ---
+    print("\n=== Generating plots ===")
+    plot_metrics_comparison(results, output_dir)
+    plot_rougeL_distribution(all_rows, output_dir)
+    plot_contains_match_overlap(all_rows, output_dir)
+    plot_response_length(all_rows, output_dir)
+    print(f"\nAll outputs saved to {output_dir}/")
 
 
 if __name__ == "__main__":
