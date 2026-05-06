@@ -47,7 +47,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
-from transformers import AutoProcessor, AutoModelForImageTextToText
+from transformers import AutoProcessor, AutoModelForImageTextToText, AutoImageProcessor, AutoModel
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -196,6 +196,33 @@ def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.nd
     gc.collect()
     torch.cuda.empty_cache()
     return np.stack(embeddings)
+
+
+# ── DINOv3 embedding extraction ──────────────────────────────────────────────
+
+def load_dino(model_id: str, device: str):
+    print(f"Loading DINOv3: {model_id}")
+    processor = AutoImageProcessor.from_pretrained(model_id)
+    model = AutoModel.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+    model.to(device).eval()
+    return processor, model
+
+
+@torch.no_grad()
+def extract_dino_embeddings(samples, processor, model, device) -> tuple[np.ndarray, list[str]]:
+    embeddings, labels = [], []
+    for i, sample in enumerate(samples):
+        image = PILImage.open(sample["path"]).convert("RGB")
+        inputs = processor(images=image, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        outputs = model(**inputs)
+        # CLS token is the standard image-level embedding for DINO models
+        emb = outputs.last_hidden_state[0, 0, :].cpu().float().numpy()
+        embeddings.append(emb)
+        labels.append(sample["label"])
+        if (i + 1) % 50 == 0 or (i + 1) == len(samples):
+            print(f"  [{i+1}/{len(samples)}] extracted")
+    return np.stack(embeddings), labels
 
 
 # ── Logistic regression probe ─────────────────────────────────────────────────
@@ -367,6 +394,9 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
+    if args.dino_model and args.dino_model.lower() == "none":
+        args.dino_model = None
+
     print(f"\nLoading AgML dataset: {args.agml_dataset}")
     samples = load_agml_samples(args.agml_dataset)
     n_classes = len(set(s["label"] for s in samples))
@@ -399,6 +429,20 @@ def main(args):
     report_store: dict[str, dict] = {}
     # Stores (y_test_labels, y_pred_labels) per backbone for confusion matrices
     pred_store: dict[str, tuple[list[str], list[str]]] = {}
+
+    # --- DINOv3 self-supervised baseline ---
+    if args.dino_model:
+        print(f"\n=== DINOv3: {args.dino_model} ===")
+        dino_processor, dino_model = load_dino(args.dino_model, device)
+        X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
+        metrics, y_test_lbl, y_pred_lbl = run_probe(
+            X[train_idx], X[test_idx], y_train, y_test, le, "dinov3"
+        )
+        results["backbones"]["dinov3"] = metrics
+        embeddings_store["dinov3"] = (X, labels_all)
+        report_store["dinov3"] = metrics["per_class_report_dict"]
+        pred_store["dinov3"] = (y_test_lbl, y_pred_lbl)
+        unload(dino_model)
 
     # --- YOLO supervised baseline ---
     if args.yolo_model:
@@ -475,6 +519,8 @@ if __name__ == "__main__":
                         help="Fine-tuned Gemma4 (HF ID or local path). Omit to skip fine-tuned comparison.")
     parser.add_argument("--baseline_model", type=str, default=None,
                         help="Base Gemma4 before fine-tuning (e.g. google/gemma-4-E2B-it)")
+    parser.add_argument("--dino_model", type=str, default="facebook/dinov3-vitb16-pretrain-lvd1689m",
+                        help="DINOv3 model ID (default: facebook/dinov3-vitb16-pretrain-lvd1689m). Pass 'none' to skip.")
     parser.add_argument("--yolo_model", type=str, default=None,
                         help="YOLO classification model (e.g. yolo11s-cls.pt)")
     parser.add_argument("--agml_dataset", type=str, required=True,
