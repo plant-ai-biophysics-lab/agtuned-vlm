@@ -96,6 +96,15 @@ def load_od_samples(dataset_name: str, n_samples: int | None = None) -> list[dic
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
+def resolve_mm_root(model):
+    if hasattr(model, "vision_tower"):
+        return model
+    if hasattr(model, "model") and hasattr(model.model, "vision_tower"):
+        return model.model
+    available = [n for n, _ in model.named_children()]
+    raise AttributeError(f"Could not locate vision_tower. Top-level: {available}")
+
+
 def load_model(model_id: str):
     local = os.path.abspath(model_id)
     if os.path.exists(local):
@@ -436,7 +445,7 @@ def save_overlay(
     title: str = "",
 ):
     img_np = np.array(image)
-    n_cols = 4 if semantic_heatmap is not None else 3
+    n_cols = 4 if semantic_heatmap is not None else 2
     fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
 
     def draw_boxes(ax):
