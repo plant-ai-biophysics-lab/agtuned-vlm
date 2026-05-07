@@ -14,6 +14,7 @@ Dataset: KisanVaani/agriculture-qa-english-only
 
 Backbones compared:
   --lang_model      Language-only model, e.g. gemma-3-4b-it (on by default)
+  --lang_model2     Second language-only model for comparison (optional)
   --model           Gemma4 base/multimodal (on by default)
   --finetuned_model Fine-tuned Gemma4 (optional)
 
@@ -112,6 +113,17 @@ def score(responses: list[str], samples: list[dict]) -> tuple[dict, list[dict]]:
     return metrics, rows
 
 
+# ── Naive baseline ────────────────────────────────────────────────────────────
+
+def compute_naive_baseline(samples: list[dict]) -> dict:
+    """Randomly shuffle answers across questions — sets the floor for all metrics."""
+    references = [s["answer"] for s in samples]
+    rng = np.random.default_rng(42)
+    shuffled = references.copy()
+    rng.shuffle(shuffled)
+    return compute_metrics(shuffled, references)
+
+
 # ── Inference ─────────────────────────────────────────────────────────────────
 
 def run_inference(llm: LLM, prompts: list[str], label: str) -> tuple[list[str], float, int]:
@@ -156,7 +168,13 @@ def plot_metrics_comparison(results: dict, output_dir: Path):
     for i, key in enumerate(models):
         vals = [results["models"][key][m] for m in metrics]
         offset = (i - (len(models) - 1) / 2) * width
-        bars = ax.bar(x + offset, vals, width, label=key)
+        is_naive = key == "naive"
+        bars = ax.bar(
+            x + offset, vals, width, label=key,
+            color="#aaaaaa" if is_naive else None,
+            hatch="///" if is_naive else None,
+            edgecolor="white" if is_naive else None,
+        )
         for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
@@ -270,7 +288,9 @@ def main(args):
     results = {
         "dataset": "KisanVaani/agriculture-qa-english-only",
         "n_samples": len(samples),
-        "models": {},
+        "models": {
+            "naive": {"model_id": "naive_random", **compute_naive_baseline(samples)},
+        },
     }
     all_rows: dict[str, list[dict]] = {}
 
@@ -287,6 +307,21 @@ def main(args):
             **metrics,
         }
         all_rows["lang_model"] = rows
+        del llm
+
+    # --- Second language-only model ---
+    if args.lang_model2:
+        print(f"\n=== Language Model 2: {args.lang_model2} ===")
+        llm = load_llm(args.lang_model2)
+        responses, elapsed, total_tokens = run_inference(llm, prompts, args.lang_model2)
+        metrics, rows = score(responses, samples)
+        results["models"]["lang_model2"] = {
+            "model_id": args.lang_model2,
+            "total_time_s": round(elapsed, 3),
+            "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
+            **metrics,
+        }
+        all_rows["lang_model2"] = rows
         del llm
 
     # --- Gemma4 base ---
@@ -360,6 +395,8 @@ if __name__ == "__main__":
                         help="Fine-tuned Gemma4 (optional)")
     parser.add_argument("--lang_model", type=str, default="google/gemma-3-4b-it",
                         help="Language-only baseline. Pass 'none' to skip.")
+    parser.add_argument("--lang_model2", type=str, default=None,
+                        help="Second language-only model for comparison (e.g. meta-llama/Llama-3.2-3B-Instruct).")
     parser.add_argument("--dataset_path", type=str, default=None,
                         help="Path to dataset saved with download_data.py (for offline cluster use)")
     parser.add_argument("--n_samples", type=int, default=None,
@@ -369,5 +406,7 @@ if __name__ == "__main__":
 
     if args.lang_model and args.lang_model.lower() == "none":
         args.lang_model = None
+    if args.lang_model2 and args.lang_model2.lower() == "none":
+        args.lang_model2 = None
 
     main(args)
