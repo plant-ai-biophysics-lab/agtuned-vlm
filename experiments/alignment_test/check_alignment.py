@@ -150,6 +150,108 @@ def _layer_attn_to_flat(attentions, positions, token_positions, n_layers) -> np.
     return _normalize(flat)
 
 
+def all_prompt_tokens_to_flat(
+    attentions, img_positions: torch.Tensor, input_len: int, n_layers: int
+) -> np.ndarray:
+    """Average attention from all text prompt tokens → image positions.
+    Only uses tokens that come after the last image token (causal: these are
+    the only tokens that can actually attend to all image positions)."""
+    first_text_pos = int(img_positions.max().item()) + 1
+    device = img_positions.device
+    text_positions = torch.arange(first_text_pos, input_len, device=device)
+    if len(text_positions) == 0:
+        text_positions = torch.tensor([input_len - 1], device=device)
+    return _layer_attn_to_flat(attentions, img_positions, text_positions, n_layers)
+
+
+def attention_rollout_to_flat(
+    attentions, img_positions: torch.Tensor, query_pos: int
+) -> np.ndarray:
+    """Propagate attention signal across all layers via matrix multiplication.
+    Each layer's attention (+ residual) is multiplied into a running rollout
+    matrix so attention from early layers reaches the final query position."""
+    seq_len = attentions[0].shape[-1]
+    device = attentions[0].device
+    rollout = torch.eye(seq_len, dtype=torch.float32, device=device)
+
+    for layer_attn in attentions:
+        attn = layer_attn[0].float().mean(dim=0)                    # (seq_len, seq_len)
+        attn = attn + torch.eye(seq_len, device=device)             # residual connection
+        attn = attn / attn.sum(dim=-1, keepdim=True)                # re-normalize rows
+        rollout = attn @ rollout
+
+    img_attn = rollout[query_pos, img_positions].cpu().numpy()
+    return _normalize(img_attn)
+
+
+def compute_gradcam(
+    model,
+    mm_root,
+    full_inputs: dict,
+    class_positions: list[int],
+    input_len: int,
+) -> np.ndarray | None:
+    """GradCAM: gradient of class token logits w.r.t. last SigLIP encoder layer.
+    Returns a flat array with one value per vision encoder patch (pre-projector)."""
+    vt = mm_root.vision_tower
+    if hasattr(vt, "encoder") and hasattr(vt.encoder, "layers"):
+        target_layer = vt.encoder.layers[-1]
+    elif hasattr(vt, "vision_model") and hasattr(vt.vision_model, "encoder"):
+        target_layer = vt.vision_model.encoder.layers[-1]
+    else:
+        print("  GradCAM: could not locate last vision encoder layer — skipping")
+        return None
+
+    saved_act: list[torch.Tensor] = []
+
+    def fwd_hook(module, inp, out):
+        t = out[0] if isinstance(out, tuple) else out
+        t.retain_grad()
+        saved_act.append(t)
+
+    handle = target_layer.register_forward_hook(fwd_hook)
+    try:
+        model.zero_grad()
+        # Set requires_grad on pixel_values to anchor the computation graph
+        # so intermediate activations accumulate gradients on a frozen model.
+        mod_inputs = {
+            k: (v.detach().requires_grad_(True) if k == "pixel_values" else v.detach())
+            for k, v in full_inputs.items()
+        }
+        with torch.enable_grad():
+            outputs = model(**mod_inputs)
+            logits = outputs.logits  # (1, seq_len, vocab_size)
+            if class_positions:
+                target = torch.stack([
+                    logits[0, pos - 1].max()
+                    for pos in class_positions if pos > 0
+                ]).sum()
+            else:
+                target = logits[0, input_len - 1].max()
+            target.backward()
+    except Exception as e:
+        print(f"  GradCAM: failed ({e}) — skipping")
+        return None
+    finally:
+        handle.remove()
+
+    if not saved_act or saved_act[0].grad is None:
+        print("  GradCAM: no gradient captured — skipping")
+        return None
+
+    act = saved_act[0].float()         # (1, n_tokens, hidden_dim)
+    grad = saved_act[0].grad.float()
+
+    if act.dim() == 3:
+        act, grad = act[0], grad[0]    # (n_tokens, hidden_dim)
+
+    # Drop CLS token (index 0) — keep patch tokens only
+    act, grad = act[1:], grad[1:]      # (n_patches, hidden_dim)
+
+    cam = torch.relu((grad * act).sum(dim=-1)).cpu().numpy()  # (n_patches,)
+    return _normalize(cam)
+
+
 def find_class_token_positions(
     generated_ids: torch.Tensor, input_len: int, tokenizer, class_words: list[str]
 ) -> list[int]:
@@ -170,17 +272,22 @@ def extract_combined_heatmaps(
     processor,
     inputs: dict,
     img_positions: torch.Tensor,
+    mm_root,
     class_words: list[str],
     n_layers: int = 4,
     max_new_tokens: int = 64,
-) -> tuple[np.ndarray, np.ndarray | None, str]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, str]:
     """
     1. Generate a response.
     2. Single forward pass on (input + response) with output_attentions=True.
-    3. Return:
-       - prompt_flat   : attention from last prompt token → image positions
-       - semantic_flat : attention from class word tokens → image positions (None if not found)
-       - response_text : decoded generated response
+    3. Separate GradCAM pass with gradients enabled.
+    4. Return:
+       - prompt_flat    : attention from last prompt token → image positions
+       - allprompt_flat : attention averaged over all text prompt tokens → image positions
+       - rollout_flat   : attention rollout across all layers → image positions
+       - gradcam_flat   : GradCAM from last SigLIP encoder layer (None if failed)
+       - semantic_flat  : attention from class word tokens → image positions (None if not found)
+       - response_text  : decoded generated response
     """
     input_len = inputs["input_ids"].shape[1]
 
@@ -239,7 +346,20 @@ def extract_combined_heatmaps(
     else:
         semantic_flat = None
 
-    return prompt_flat, semantic_flat, response_text
+    # All-prompt-tokens heatmap and attention rollout
+    allprompt_flat = all_prompt_tokens_to_flat(
+        outputs.attentions, img_positions, input_len, n_layers
+    )
+    rollout_flat = attention_rollout_to_flat(
+        outputs.attentions, img_positions, query_pos=input_len - 1
+    )
+
+    # GradCAM — separate forward pass with gradients enabled
+    gradcam_flat = compute_gradcam(
+        model, mm_root, full_inputs, class_positions, input_len
+    )
+
+    return prompt_flat, allprompt_flat, rollout_flat, gradcam_flat, semantic_flat, response_text
 
 
 # ── Spatial upsampling ────────────────────────────────────────────────────────
@@ -359,6 +479,61 @@ def save_overlay(
     plt.close(fig)
 
 
+def save_overlay_v2(
+    image: PILImage.Image,
+    allprompt_heatmap: np.ndarray,
+    rollout_heatmap: np.ndarray,
+    gradcam_heatmap: np.ndarray | None,
+    semantic_heatmap: np.ndarray | None,
+    bboxes: list,
+    path: Path,
+    title: str = "",
+):
+    """Improved overlays: all-prompt-tokens average + attention rollout + GradCAM."""
+    img_np = np.array(image)
+    panels = [
+        ("Ground Truth", None),
+        ("All prompt tokens\n(avg over text positions)", allprompt_heatmap),
+        ("Attention rollout\n(propagated across all layers)", rollout_heatmap),
+    ]
+    if gradcam_heatmap is not None:
+        panels.append(("GradCAM\n(last SigLIP encoder layer)", gradcam_heatmap))
+    if semantic_heatmap is not None:
+        panels.append(("Semantic correspondence", semantic_heatmap))
+
+    fig, axes = plt.subplots(1, len(panels), figsize=(5 * len(panels), 5))
+    if len(panels) == 1:
+        axes = [axes]
+
+    def draw_boxes(ax):
+        for bbox in bboxes:
+            if len(bbox) < 4:
+                continue
+            x, y, w, h = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            rect = mpatches.Rectangle(
+                (x, y), w, h, linewidth=1, edgecolor="lime", facecolor="none"
+            )
+            ax.add_patch(rect)
+
+    for ax, (panel_title, heatmap) in zip(axes, panels):
+        ax.imshow(img_np)
+        if heatmap is not None:
+            ax.imshow(heatmap, cmap="hot", alpha=0.55, vmin=0, vmax=1)
+        else:
+            draw_boxes(ax)
+            ax.set_title(f"{panel_title} ({len(bboxes)} boxes)")
+            ax.axis("off")
+            continue
+        draw_boxes(ax)
+        ax.set_title(panel_title)
+        ax.axis("off")
+
+    plt.suptitle(title, fontsize=9)
+    plt.tight_layout()
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_summary(
     pg_scores: list[int],
     energy_scores: list[float],
@@ -437,6 +612,8 @@ def main(args):
     output_dir.mkdir(parents=True, exist_ok=True)
     overlay_dir = output_dir / "overlays"
     overlay_dir.mkdir(exist_ok=True)
+    overlay_v2_dir = output_dir / "overlay_v2"
+    overlay_v2_dir.mkdir(exist_ok=True)
 
     pg_scores: list[int] = []
     energy_scores: list[float] = []
@@ -470,8 +647,8 @@ def main(args):
         print(f"  seq_len={inputs['input_ids'].shape[1]} | img_tokens={len(img_positions)}")
 
         try:
-            prompt_flat, semantic_flat, response_text = extract_combined_heatmaps(
-                model, processor, inputs, img_positions,
+            prompt_flat, allprompt_flat, rollout_flat, gradcam_flat, semantic_flat, response_text = extract_combined_heatmaps(
+                model, processor, inputs, img_positions, mm_root,
                 class_words=class_words, n_layers=args.n_layers,
             )
         except RuntimeError as e:
@@ -516,6 +693,10 @@ def main(args):
             "semantic_energy_inside_box": round(sem_energy, 4) if sem_energy is not None else None,
         })
 
+        allprompt_heatmap = flat_to_image(allprompt_flat, img_h, img_w)
+        rollout_heatmap = flat_to_image(rollout_flat, img_h, img_w)
+        gradcam_heatmap = flat_to_image(gradcam_flat, img_h, img_w) if gradcam_flat is not None else None
+
         if i < args.n_overlays:
             save_overlay(
                 image, prompt_heatmap, sem_heatmap, bboxes,
@@ -526,8 +707,19 @@ def main(args):
                     f"E={f'{sem_energy:.2f}' if sem_energy is not None else 'N/A'}"
                 ),
             )
+            save_overlay_v2(
+                image, allprompt_heatmap, rollout_heatmap, gradcam_heatmap, sem_heatmap, bboxes,
+                path=overlay_v2_dir / f"overlay_{i:03d}.png",
+                title=(
+                    f"All-prompt PG={'✓' if pg else '✗'} E={energy:.2f}  |  "
+                    f"Rollout  |  GradCAM: {'ok' if gradcam_heatmap is not None else 'skip'}  |  "
+                    f"Semantic PG={'✓' if sem_pg else ('✗' if sem_pg is not None else 'N/A')} "
+                    f"E={f'{sem_energy:.2f}' if sem_energy is not None else 'N/A'}"
+                ),
+            )
 
-        del inputs, prompt_flat, semantic_flat, prompt_heatmap, sem_heatmap, bbox_mask
+        del inputs, prompt_flat, allprompt_flat, rollout_flat, gradcam_flat, semantic_flat
+        del prompt_heatmap, allprompt_heatmap, rollout_heatmap, gradcam_heatmap, sem_heatmap, bbox_mask
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
