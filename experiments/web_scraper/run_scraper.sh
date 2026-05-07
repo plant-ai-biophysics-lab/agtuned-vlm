@@ -45,12 +45,9 @@ BATCH_SIZE=8         # Inference batch size — lower if GPU runs tight
 MAX_DISCOVER=1500    # Max fact sheet URLs to discover
 SCRAPE_DELAY=1.5     # Seconds between HTTP requests (be polite to idtools.org)
 
-# Python environment — update if you use conda or a different venv path
-PYTHON="${PYTHON:-python3}"
-
-# Optional: activate your conda/venv here
-# source activate aggemma
-# source /path/to/venv/bin/activate
+# Python environment — uses uv run to pick up the pyproject.toml environment.
+# Override with PYTHON=python3 if running outside the uv project.
+PYTHON="${PYTHON:-uv run python}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -62,6 +59,11 @@ SCRIPT="$SCRIPT_DIR/scrape_idtools.py"
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 check_deps() {
+    # Sync the uv environment before checking imports
+    if command -v uv &>/dev/null && [[ -f "$SCRIPT_DIR/pyproject.toml" ]]; then
+        echo "Syncing uv environment ..."
+        (cd "$SCRIPT_DIR" && uv sync --quiet)
+    fi
     local missing=()
     for pkg in vllm transformers bs4 requests psutil; do
         if ! $PYTHON -c "import $pkg" &>/dev/null; then
@@ -70,8 +72,7 @@ check_deps() {
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "❌  Missing Python packages: ${missing[*]}"
-        echo "    Install with:"
-        echo "    pip install vllm transformers beautifulsoup4 requests psutil"
+        echo "    Install with: cd $SCRIPT_DIR && uv sync"
         exit 1
     fi
     echo "✓ All dependencies found"
