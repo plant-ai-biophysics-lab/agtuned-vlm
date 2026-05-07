@@ -43,31 +43,51 @@ from PIL import Image as PILImage
 from scipy.ndimage import zoom as sp_zoom
 from transformers import AutoProcessor, AutoModelForImageTextToText
 
-PROMPT = "Identify all wheat heads visible in this image."
-CLASS_WORDS = ["wheat", "head", "heads"]
-
-
 # ── Dataset ───────────────────────────────────────────────────────────────────
+
+def _clean_label(name: str) -> str:
+    return name.replace("___", " ").replace("_", " ").strip()
+
+
+def _resolve_class(cat_id: int, class_names: list[str]) -> str | None:
+    """Handle both 0-indexed and 1-indexed COCO category_ids."""
+    if 0 <= cat_id < len(class_names):
+        return class_names[cat_id]
+    if 0 <= cat_id - 1 < len(class_names):
+        return class_names[cat_id - 1]
+    return None
+
 
 def load_od_samples(dataset_name: str, n_samples: int | None = None) -> list[dict]:
     loader = agml.data.AgMLDataLoader(dataset_name)
     loader.split(train=0.8, val=0.1, test=0.1)
     contents = cast(Dict[str, Any], loader.export_contents())
+    class_names = cast(list[str], loader.classes)
 
     samples = []
     for path, annots in contents.items():
         # COCO format: list of {'bbox': [x,y,w,h], 'category_id': ..., ...}
         if isinstance(annots, list):
             bboxes = [a["bbox"] for a in annots if "bbox" in a]
+            cat_ids = [a["category_id"] for a in annots if "category_id" in a]
         elif isinstance(annots, dict):
             bboxes = annots.get("bboxes", annots.get("bbox", []))
+            cat_ids = annots.get("category_ids", [])
         else:
             bboxes = []
+            cat_ids = []
 
         if not bboxes:
             continue
 
-        samples.append({"path": str(path), "bboxes": bboxes})
+        unique_cats = sorted(set(cat_ids))
+        img_classes = [
+            _clean_label(n)
+            for c in unique_cats
+            if (n := _resolve_class(c, class_names)) is not None
+        ]
+
+        samples.append({"path": str(path), "bboxes": bboxes, "classes": img_classes})
         if n_samples and len(samples) >= n_samples:
             break
 
@@ -93,13 +113,14 @@ def load_model(model_id: str):
     return processor, model, img_token_id, n_img_tokens
 
 
-def build_prompt_text(processor) -> str:
+def build_prompt_text(processor, class_label: str) -> str:
+    prompt = f"Identify all {class_label} visible in this image."
     messages = [
         {
             "role": "user",
             "content": [
                 {"type": "image"},
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": prompt},
             ],
         }
     ]
@@ -130,12 +151,12 @@ def _layer_attn_to_flat(attentions, positions, token_positions, n_layers) -> np.
 
 
 def find_class_token_positions(
-    generated_ids: torch.Tensor, input_len: int, tokenizer
+    generated_ids: torch.Tensor, input_len: int, tokenizer, class_words: list[str]
 ) -> list[int]:
-    """Return sequence positions of CLASS_WORDS tokens in the generated portion."""
+    """Return sequence positions of class word tokens in the generated portion."""
     positions = []
     gen_part = generated_ids[0, input_len:]
-    for word in CLASS_WORDS:
+    for word in class_words:
         for variant in (word, f" {word}"):
             ids = tokenizer.encode(variant, add_special_tokens=False)
             for tok_id in ids:
@@ -149,6 +170,7 @@ def extract_combined_heatmaps(
     processor,
     inputs: dict,
     img_positions: torch.Tensor,
+    class_words: list[str],
     n_layers: int = 4,
     max_new_tokens: int = 64,
 ) -> tuple[np.ndarray, np.ndarray | None, str]:
@@ -206,7 +228,7 @@ def extract_combined_heatmaps(
     )
 
     # Semantic heatmap: attention from class word tokens in generated response
-    class_positions = find_class_token_positions(generated_ids, input_len, tokenizer)
+    class_positions = find_class_token_positions(generated_ids, input_len, tokenizer, class_words)
     if class_positions:
         class_pos_tensor = torch.tensor(class_positions, device=img_positions.device)
         semantic_flat = _layer_attn_to_flat(
@@ -320,7 +342,7 @@ def save_overlay(
         axes[2].imshow(img_np)
         axes[2].imshow(semantic_heatmap, cmap="hot", alpha=0.55, vmin=0, vmax=1)
         draw_boxes(axes[2])
-        axes[2].set_title(f"Semantic correspondence\n({'+'.join(CLASS_WORDS)})")
+        axes[2].set_title(f"Semantic correspondence")
         axes[2].axis("off")
 
         axes[3].imshow(img_np)
@@ -409,7 +431,6 @@ def main(args):
             "Check model config for the correct attribute name."
         )
 
-    prompt_text = build_prompt_text(processor)
     lm_device = next(model.parameters()).device
 
     output_dir = Path(args.output_dir)
@@ -429,6 +450,13 @@ def main(args):
         image = PILImage.open(sample["path"]).convert("RGB")
         img_w, img_h = image.size
         bboxes = sample["bboxes"]
+        img_classes = sample["classes"]
+
+        # Build per-sample prompt and class word list from dataset annotations
+        class_label = " and ".join(img_classes) if img_classes else "objects"
+        class_words = list({w for c in img_classes for w in c.split()})
+        prompt_text = build_prompt_text(processor, class_label)
+        print(f"  Prompt   : Identify all {class_label} visible in this image.")
 
         inputs = processor(text=prompt_text, images=image, return_tensors="pt")
         inputs = {k: v.to(lm_device) for k, v in inputs.items()}
@@ -443,7 +471,8 @@ def main(args):
 
         try:
             prompt_flat, semantic_flat, response_text = extract_combined_heatmaps(
-                model, processor, inputs, img_positions, n_layers=args.n_layers
+                model, processor, inputs, img_positions,
+                class_words=class_words, n_layers=args.n_layers,
             )
         except RuntimeError as e:
             print(f"  WARNING: {e}")
@@ -451,7 +480,7 @@ def main(args):
 
         print(f"  Response: {response_text[:80]}")
         if semantic_flat is not None:
-            found = [w for w in CLASS_WORDS if w in response_text.lower()]
+            found = [w for w in class_words if w in response_text.lower()]
             print(f"  Class tokens found: {found}")
         else:
             print(f"  Class tokens found: none — semantic heatmap skipped")
@@ -526,7 +555,7 @@ def main(args):
     summary = {
         "model": args.model,
         "dataset": args.agml_dataset,
-        "class_words": CLASS_WORDS,
+        "class_words": sorted({w for s in samples for w in s["classes"]}),
         "n_samples": len(per_sample),
         "n_layers_averaged": args.n_layers,
         "prompt_pointing_game_accuracy": round(pg_acc, 4),
