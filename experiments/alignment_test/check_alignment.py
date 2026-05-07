@@ -157,7 +157,7 @@ def _layer_attn_to_flat(attentions, positions, token_positions, n_layers) -> np.
         tok_attn = layer_attn[0, :, token_positions, :]   # (n_heads, n_toks, seq_len)
         img_attn = tok_attn[:, :, positions]              # (n_heads, n_toks, n_img)
         maps.append(img_attn.float().mean(dim=(0, 1)))    # (n_img,)
-    flat = torch.stack(maps).mean(dim=0).cpu().numpy()
+    flat = torch.stack(maps).mean(dim=0).detach().cpu().numpy()
     return _normalize(flat)
 
 
@@ -191,7 +191,7 @@ def attention_rollout_to_flat(
         attn = attn / attn.sum(dim=-1, keepdim=True)                # re-normalize rows
         rollout = attn @ rollout
 
-    img_attn = rollout[query_pos, img_positions].cpu().numpy()
+    img_attn = rollout[query_pos, img_positions].detach().cpu().numpy()
     return _normalize(img_attn)
 
 
@@ -259,7 +259,7 @@ def compute_gradcam(
     # Drop CLS token (index 0) — keep patch tokens only
     act, grad = act[1:], grad[1:]      # (n_patches, hidden_dim)
 
-    cam = torch.relu((grad * act).sum(dim=-1)).cpu().numpy()  # (n_patches,)
+    cam = torch.relu((grad * act).sum(dim=-1)).detach().cpu().numpy()  # (n_patches,)
     return _normalize(cam)
 
 
