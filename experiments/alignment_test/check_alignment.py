@@ -108,9 +108,11 @@ def load_model(model_id: str):
     model.eval()
     n_img_tokens = getattr(model.config, "vision_soft_tokens_per_image", None)
     img_token_id = getattr(model.config, "image_token_id", None)
+    mm_root = resolve_mm_root(model)
     print(f"  image_token_id          : {img_token_id}")
     print(f"  vision_soft_tokens/image: {n_img_tokens}")
-    return processor, model, img_token_id, n_img_tokens
+    print(f"  vision_tower            : {type(mm_root.vision_tower).__name__}")
+    return processor, model, mm_root, img_token_id, n_img_tokens
 
 
 def build_prompt_text(processor, class_label: str) -> str:
@@ -598,7 +600,7 @@ def main(args):
     samples = load_od_samples(args.agml_dataset, args.n_samples)
     print(f"  {len(samples)} samples with bounding boxes")
 
-    processor, model, img_token_id, n_img_tokens = load_model(args.model)
+    processor, model, mm_root, img_token_id, n_img_tokens = load_model(args.model)
 
     if img_token_id is None:
         raise ValueError(
