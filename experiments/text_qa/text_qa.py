@@ -66,6 +66,35 @@ def load_agri_qa(n_samples: int | None, dataset_path: str | None = None) -> list
     return samples
 
 
+def load_idtools_qa(jsonl_path: str, n_samples: int | None = None) -> list[dict]:
+    """
+    Load IDtools scraper output (messages format) as flat question/answer pairs.
+    Each JSONL line: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}], ...}
+    """
+    print(f"Loading IDtools dataset: {jsonl_path}")
+    samples = []
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msgs = record.get("messages", [])
+            if len(msgs) < 2:
+                continue
+            question = msgs[0].get("content", "").strip()
+            answer   = msgs[1].get("content", "").strip()
+            if question and answer:
+                samples.append({"question": question, "answer": answer})
+    if n_samples:
+        samples = samples[:n_samples]
+    print(f"  {len(samples)} samples")
+    return samples
+
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 def per_sample_rougeL(predictions: list[str], references: list[str]) -> list[float]:
@@ -278,7 +307,13 @@ def plot_response_length(all_rows: dict[str, list[dict]], output_dir: Path):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main(args):
-    samples = load_agri_qa(args.n_samples, args.dataset_path)
+    if args.idtools_jsonl:
+        samples = load_idtools_qa(args.idtools_jsonl, args.n_samples)
+        dataset_label = f"IDtools:{args.idtools_jsonl}"
+    else:
+        samples = load_agri_qa(args.n_samples, args.dataset_path)
+        dataset_label = args.dataset_path or "KisanVaani/agriculture-qa-english-only"
+
     prompts = [PROMPT_TEMPLATE.format(question=s["question"]) for s in samples]
 
     print("\nSample prompt:")
@@ -286,7 +321,7 @@ def main(args):
     print(f"  Expected answer: {samples[0]['answer']}\n")
 
     results = {
-        "dataset": "KisanVaani/agriculture-qa-english-only",
+        "dataset": dataset_label,
         "n_samples": len(samples),
         "models": {
             "naive": {"model_id": "naive_random", **compute_naive_baseline(samples)},
@@ -399,6 +434,8 @@ if __name__ == "__main__":
                         help="Second language-only model for comparison (e.g. meta-llama/Llama-3.2-3B-Instruct).")
     parser.add_argument("--dataset_path", type=str, default=None,
                         help="Path to dataset saved with download_data.py (for offline cluster use)")
+    parser.add_argument("--idtools_jsonl", type=str, default=None,
+                        help="Path to scrape_idtools.py JSONL output — uses IDtools visual-descriptor QA instead of KisanVaani")
     parser.add_argument("--n_samples", type=int, default=None,
                         help="Limit number of samples (default: all 22615)")
     parser.add_argument("--output_dir", type=str, default="results")
