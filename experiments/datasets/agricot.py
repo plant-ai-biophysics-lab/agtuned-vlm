@@ -95,74 +95,103 @@ def wrap(text: str, width: int = 90, indent: str = "    ") -> str:
 
 # ── Load ──────────────────────────────────────────────────────────────────────
 
-def _find_json_records(zf) -> list[dict]:
-    """
-    Scan a ZipFile for JSON files containing a list of dicts with
-    question/answer/reasoning fields. Returns the first match.
-    """
-    import zipfile
+def _is_qa_record(record: dict) -> bool:
+    """True if a dict looks like a QA record, not a bbox/annotation record."""
+    if not isinstance(record, dict):
+        return False
+    # Must have a text question
+    q = record.get("question", "")
+    if not isinstance(q, str) or len(q) < 10:
+        return False
+    # Answer must be a string (A/B/C/D or short text), not a list of floats
+    ans = record.get("answer")
+    if ans is not None and not isinstance(ans, str):
+        return False
+    # Should have reasoning or options to be a CoT QA record
+    has_reasoning = isinstance(record.get("reasoning"), str) and len(record.get("reasoning", "")) > 0
+    has_options   = record.get("options") is not None
+    has_dim       = record.get("dimension_id") is not None
+    return has_reasoning or has_options or has_dim
 
+
+def _find_json_records(zf, hint: str | None = None) -> list[dict]:
+    """
+    Scan a ZipFile for the QA metadata JSON. Prints all JSON files found
+    so you can use --json_hint to target a specific one if needed.
+    """
     names = zf.namelist()
-    print(f"  ZIP contains {len(names)} files. Scanning for JSON metadata ...")
+    json_files = [n for n in names if n.endswith(".json")]
+    print(f"  ZIP contains {len(names)} files, {len(json_files)} JSON files:")
+    for n in json_files:
+        info = zf.getinfo(n)
+        print(f"    {n}  ({info.file_size // 1_000:,} KB)")
 
-    # Prefer files whose name suggests QA data
-    priority = sorted(names, key=lambda n: (
-        0 if any(k in n.lower() for k in ("vqra", "qa", "anno", "data", "meta")) else 1,
-        not n.endswith(".json"),
-        n,
-    ))
+    # If user gave a hint, try that first
+    if hint:
+        ordered = sorted(json_files, key=lambda n: (0 if hint.lower() in n.lower() else 1, n))
+    else:
+        # Prefer names that suggest QA data; deprioritise annotation/bbox files
+        ordered = sorted(json_files, key=lambda n: (
+            0 if any(k in n.lower() for k in ("vqra", "qa", "question", "cot")) else
+            1 if any(k in n.lower() for k in ("data", "meta", "sample")) else
+            2 if any(k in n.lower() for k in ("anno", "bbox", "detect")) else 3,
+            n,
+        ))
 
-    for name in priority:
-        if not name.endswith(".json"):
-            continue
+    for name in ordered:
         info = zf.getinfo(name)
-        if info.file_size > 500 * 1024 * 1024:  # skip files >500 MB
-            print(f"  Skipping {name} (too large: {info.file_size // 1_000_000} MB)")
+        if info.file_size > 500 * 1024 * 1024:
+            print(f"  Skipping {name} — too large ({info.file_size // 1_000_000} MB)")
             continue
-        print(f"  Trying: {name} ({info.file_size // 1_000} KB) ...")
+        print(f"  Trying: {name} ...")
         try:
             with zf.open(name) as f:
                 data = json.load(f)
         except Exception as e:
-            print(f"    Could not parse: {e}")
+            print(f"    Parse error: {e}")
             continue
 
-        # Unwrap common envelope formats
+        # Unwrap envelope formats like {"data": [...]} or {"samples": [...]}
         if isinstance(data, dict):
-            for key in ("data", "samples", "annotations", "items"):
+            for key in ("data", "samples", "items", "records", "questions"):
                 if key in data and isinstance(data[key], list):
                     data = data[key]
                     break
             else:
-                data = list(data.values())[0] if len(data) == 1 else None
+                # Single-key dict: unwrap the value
+                if len(data) == 1:
+                    data = list(data.values())[0]
 
-        if not isinstance(data, list) or not data:
+        if not isinstance(data, list) or len(data) < 2:
+            print(f"    Skipped — not a list or too few items ({type(data).__name__})")
             continue
 
-        # Validate: first item should look like a QA record
-        first = data[0]
-        if isinstance(first, dict) and any(
-            k in first for k in ("question", "answer", "reasoning", "item_id")
-        ):
-            print(f"  Found {len(data):,} records in {name}")
+        # Sample a few records to validate
+        sample = data[:5]
+        if any(_is_qa_record(r) for r in sample):
+            print(f"  ✓ Loaded {len(data):,} QA records from {name}")
             return data
+        else:
+            keys = list(sample[0].keys()) if sample else []
+            print(f"    Skipped — doesn't look like QA data. Keys: {keys}")
 
     raise RuntimeError(
-        "No suitable JSON file found inside the ZIP. "
-        "ZIP contents: " + ", ".join(names[:20])
+        "No QA JSON found in ZIP. "
+        "Use --json_hint <substring> to target a specific file. "
+        "JSON files found: " + ", ".join(json_files)
     )
 
 
-def load_records(n_samples: int | None) -> list[dict]:
+def load_records(n_samples: int | None, json_hint: str | None = None) -> list[dict]:
     """
-    Downloads AgriCoT_2.zip from the Hub (337 MB, cached after first run),
-    extracts the JSON metadata, and returns a list of records.
-    Falls back to AgriCoT.zip if needed.
+    Downloads AgriCoT ZIPs from the Hub (cached after first run),
+    scans for the QA metadata JSON, and returns a list of records.
+    Tries AgriCoT_2.zip first (337 MB), then AgriCoT.zip (3.7 GB).
     """
     import zipfile
 
     for filename in ("AgriCoT_2.zip", "AgriCoT.zip"):
-        print(f"Downloading {filename} from wenyb/AgriCoT ...")
+        print(f"\nDownloading {filename} from wenyb/AgriCoT ...")
         try:
             zip_path = hf_hub_download(
                 repo_id="wenyb/AgriCoT",
@@ -176,15 +205,16 @@ def load_records(n_samples: int | None) -> list[dict]:
 
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                records = _find_json_records(zf)
+                records = _find_json_records(zf, hint=json_hint)
             break
         except RuntimeError as e:
-            print(f"  {e} — trying next archive ...")
+            print(f"  {e}\n  Trying next archive ...")
             continue
     else:
         raise RuntimeError(
-            "Could not load records from any AgriCoT ZIP archive.\n"
-            "Try: huggingface-cli login  (if the dataset is gated)"
+            "Could not load QA records from any AgriCoT ZIP archive.\n"
+            "Try: huggingface-cli login  (if the dataset is gated)\n"
+            "Or:  --json_hint <substring of the target filename>"
         )
 
     if n_samples and n_samples < len(records):
@@ -302,11 +332,13 @@ def main():
                         help="Limit to first N records (default: all ~4800)")
     parser.add_argument("--show_samples", type=int, default=3,
                         help="Number of sample items to print (default: 3)")
+    parser.add_argument("--json_hint",    type=str, default=None,
+                        help="Substring to match against ZIP filenames when auto-detection fails")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    records = load_records(args.n_samples)
+    records = load_records(args.n_samples, json_hint=args.json_hint)
 
     # Print actual keys found so we know the real schema
     if records:
