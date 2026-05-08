@@ -40,81 +40,87 @@ GPU_MEM=0.90
 MAX_MODEL_LEN=4096
 
 # QA generation settings
-MAX_PAIRS=5          # QA pairs per fact sheet
-BATCH_SIZE=8         # Inference batch size — lower if GPU runs tight
-MAX_DISCOVER=1500    # Max fact sheet URLs to discover
-SCRAPE_DELAY=1.5     # Seconds between HTTP requests (be polite to idtools.org)
+MAX_PAIRS=5       # QA pairs per fact sheet
+BATCH_SIZE=8      # Inference batch size — lower if GPU runs tight
+MAX_DISCOVER=1500 # Max fact sheet URLs to discover
+SCRAPE_DELAY=1.5  # Seconds between HTTP requests (be polite to idtools.org)
 
-# Python environment — uses uv run to pick up the pyproject.toml environment.
-# Override with PYTHON=python3 if running outside the uv project.
-PYTHON="${PYTHON:-uv run python}"
+# Python runner — defaults to "uv run python" if uv is on PATH, else python3
+# Override from the environment: PYTHON="python3" bash run_scraper.sh run
+if [[ -z "${PYTHON:-}" ]]; then
+  if command -v uv &>/dev/null; then
+    PYTHON="uv run python"
+  else
+    PYTHON="python3"
+  fi
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 MODE="${1:-run}"
-shift || true           # remaining args passed through to Python script
+shift || true # remaining args passed through to Python script
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SCRIPT_DIR/scrape_idtools.py"
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 check_deps() {
-    # Sync the uv environment before checking imports
-    if command -v uv &>/dev/null && [[ -f "$SCRIPT_DIR/pyproject.toml" ]]; then
-        echo "Syncing uv environment ..."
-        (cd "$SCRIPT_DIR" && uv sync --quiet)
+  local missing=()
+  for pkg in vllm transformers bs4 requests psutil; do
+    if ! $PYTHON -c "import $pkg" &>/dev/null; then
+      missing+=("$pkg")
     fi
-    local missing=()
-    for pkg in vllm transformers bs4 requests psutil; do
-        if ! $PYTHON -c "import $pkg" &>/dev/null; then
-            missing+=("$pkg")
-        fi
-    done
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "❌  Missing Python packages: ${missing[*]}"
-        echo "    Install with: cd $SCRIPT_DIR && uv sync"
-        exit 1
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "❌  Missing Python packages: ${missing[*]}"
+    echo "    Install with:"
+    if command -v uv &>/dev/null; then
+      echo "    uv add vllm transformers beautifulsoup4 requests psutil"
+    else
+      echo "    pip install vllm transformers beautifulsoup4 requests psutil"
     fi
-    echo "✓ All dependencies found"
+    exit 1
+  fi
+  echo "✓ All dependencies found (runner: $PYTHON)"
 }
 
 # ── GPU check ─────────────────────────────────────────────────────────────────
 check_gpu() {
-    if command -v nvidia-smi &>/dev/null; then
-        echo ""
-        echo "── GPU Status ────────────────────────────────────"
-        nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu \
-                   --format=csv,noheader,nounits \
-        | awk -F',' '{
+  if command -v nvidia-smi &>/dev/null; then
+    echo ""
+    echo "── GPU Status ────────────────────────────────────"
+    nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu \
+      --format=csv,noheader,nounits |
+      awk -F',' '{
             printf "  GPU:   %s\n", $1
             printf "  VRAM:  %s MB total | %s MB used | %s MB free\n", $2, $3, $4
             printf "  Usage: %s%%\n", $5
           }'
-        echo "──────────────────────────────────────────────────"
-        echo ""
-    fi
+    echo "──────────────────────────────────────────────────"
+    echo ""
+  fi
 }
 
 # ── Database status ───────────────────────────────────────────────────────────
 show_status() {
-    if [[ ! -f "$DB" ]]; then
-        echo "No database found at $DB — run 'bash run_scraper.sh discover' first."
-        return
-    fi
-    echo ""
-    echo "── Database: $DB ────────────────────────────────"
-    sqlite3 "$DB" \
-        "SELECT status, COUNT(*) as count FROM urls GROUP BY status ORDER BY count DESC;" \
-        | column -t -s '|' | awk '{print "  " $0}'
-    echo ""
-    QA_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM qa_pairs;" 2>/dev/null || echo 0)
-    echo "  Total QA pairs generated : $QA_COUNT"
-    if [[ -f "$OUTPUT" ]]; then
-        LINE_COUNT=$(wc -l < "$OUTPUT")
-        echo "  JSONL output lines       : $LINE_COUNT  ($OUTPUT)"
-    fi
-    echo "──────────────────────────────────────────────────"
-    echo ""
+  if [[ ! -f "$DB" ]]; then
+    echo "No database found at $DB — run 'bash run_scraper.sh discover' first."
+    return
+  fi
+  echo ""
+  echo "── Database: $DB ────────────────────────────────"
+  sqlite3 "$DB" \
+    "SELECT status, COUNT(*) as count FROM urls GROUP BY status ORDER BY count DESC;" |
+    column -t -s '|' | awk '{print "  " $0}'
+  echo ""
+  QA_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM qa_pairs;" 2>/dev/null || echo 0)
+  echo "  Total QA pairs generated : $QA_COUNT"
+  if [[ -f "$OUTPUT" ]]; then
+    LINE_COUNT=$(wc -l <"$OUTPUT")
+    echo "  JSONL output lines       : $LINE_COUNT  ($OUTPUT)"
+  fi
+  echo "──────────────────────────────────────────────────"
+  echo ""
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -132,91 +138,90 @@ echo ""
 
 case "$MODE" in
 
-  # ── Help ───────────────────────────────────────────────────────────────────
-  help|--help|-h)
-    sed -n '2,30p' "${BASH_SOURCE[0]}"
-    exit 0
-    ;;
+# ── Help ───────────────────────────────────────────────────────────────────
+help | --help | -h)
+  sed -n '2,30p' "${BASH_SOURCE[0]}"
+  exit 0
+  ;;
 
-  # ── Status only ────────────────────────────────────────────────────────────
-  status)
-    show_status
-    exit 0
-    ;;
+# ── Status only ────────────────────────────────────────────────────────────
+status)
+  show_status
+  exit 0
+  ;;
 
-  # ── Convert existing output to SFT format ─────────────────────────────────
-  convert)
-    check_deps
-    if [[ ! -f "$OUTPUT" ]]; then
-        echo "❌  Output file not found: $OUTPUT"
-        echo "    Run the scraper first before converting."
-        exit 1
-    fi
-    SFT_OUTPUT="${OUTPUT%.jsonl}_sft.jsonl"
-    echo "Converting $OUTPUT → $SFT_OUTPUT ..."
-    $PYTHON - <<EOF
+# ── Convert existing output to SFT format ─────────────────────────────────
+convert)
+  check_deps
+  if [[ ! -f "$OUTPUT" ]]; then
+    echo "❌  Output file not found: $OUTPUT"
+    echo "    Run the scraper first before converting."
+    exit 1
+  fi
+  SFT_OUTPUT="${OUTPUT%.jsonl}_sft.jsonl"
+  echo "Converting $OUTPUT → $SFT_OUTPUT ..."
+  $PYTHON - <<EOF
 import sys
 sys.path.insert(0, "$SCRIPT_DIR")
 from scrape_idtools import convert_to_sft_format, setup_logging
 setup_logging("INFO", "$LOG_FILE")
 convert_to_sft_format("$OUTPUT", "$SFT_OUTPUT")
 EOF
-    echo "✓ SFT conversion complete: $SFT_OUTPUT"
-    exit 0
-    ;;
+  echo "✓ SFT conversion complete: $SFT_OUTPUT"
+  exit 0
+  ;;
 
-  # ── Discover URLs only ─────────────────────────────────────────────────────
-  discover)
-    check_deps
-    check_gpu
-    echo "Running URL discovery only (no inference) ..."
-    $PYTHON "$SCRIPT" \
-        --model        "$MODEL"        \
-        --db           "$DB"           \
-        --output       "$OUTPUT"       \
-        --log-level    "$LOG_LEVEL"    \
-        --log-file     "$LOG_FILE"     \
-        --max-discover "$MAX_DISCOVER" \
-        --scrape-delay "$SCRAPE_DELAY" \
-        --discover-only \
-        "$@"
-    echo ""
-    show_status
-    ;;
+# ── Discover URLs only ─────────────────────────────────────────────────────
+discover)
+  check_deps
+  echo "Running URL discovery only (no inference) ..."
+  $PYTHON "$SCRIPT" \
+    --model "$MODEL" \
+    --db "$DB" \
+    --output "$OUTPUT" \
+    --log-level "$LOG_LEVEL" \
+    --log-file "$LOG_FILE" \
+    --max-discover "$MAX_DISCOVER" \
+    --scrape-delay "$SCRAPE_DELAY" \
+    --discover-only \
+    "$@"
+  echo ""
+  show_status
+  ;;
 
-  # ── Full run / resume ──────────────────────────────────────────────────────
-  run|resume)
-    check_deps
-    check_gpu
-    show_status
+# ── Full run / resume ──────────────────────────────────────────────────────
+run | resume)
+  check_deps
+  check_gpu
+  show_status
 
-    echo "Starting scraper (safe to Ctrl+C and resume anytime) ..."
-    echo "Logs → $LOG_FILE"
-    echo ""
+  echo "Starting scraper (safe to Ctrl+C and resume anytime) ..."
+  echo "Logs → $LOG_FILE"
+  echo ""
 
-    $PYTHON "$SCRIPT" \
-        --model          "$MODEL"        \
-        --db             "$DB"           \
-        --output         "$OUTPUT"       \
-        --log-level      "$LOG_LEVEL"    \
-        --log-file       "$LOG_FILE"     \
-        --max-pairs      "$MAX_PAIRS"    \
-        --batch-size     "$BATCH_SIZE"   \
-        --max-model-len  "$MAX_MODEL_LEN" \
-        --gpu-mem        "$GPU_MEM"      \
-        --max-discover   "$MAX_DISCOVER" \
-        --scrape-delay   "$SCRAPE_DELAY" \
-        --convert-sft \
-        "$@"
+  $PYTHON "$SCRIPT" \
+    --model "$MODEL" \
+    --db "$DB" \
+    --output "$OUTPUT" \
+    --log-level "$LOG_LEVEL" \
+    --log-file "$LOG_FILE" \
+    --max-pairs "$MAX_PAIRS" \
+    --batch-size "$BATCH_SIZE" \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --gpu-mem "$GPU_MEM" \
+    --max-discover "$MAX_DISCOVER" \
+    --scrape-delay "$SCRAPE_DELAY" \
+    --convert-sft \
+    "$@"
 
-    echo ""
-    show_status
-    echo "✓ Done. Output: $OUTPUT"
-    ;;
+  echo ""
+  show_status
+  echo "✓ Done. Output: $OUTPUT"
+  ;;
 
-  *)
-    echo "❌  Unknown mode: $MODE"
-    echo "    Valid modes: discover | run | resume | convert | status | help"
-    exit 1
-    ;;
+*)
+  echo "❌  Unknown mode: $MODE"
+  echo "    Valid modes: discover | run | resume | convert | status | help"
+  exit 1
+  ;;
 esac
