@@ -73,32 +73,31 @@ def memory_stats() -> Dict:
     """Return current RAM and GPU memory stats."""
     ram = psutil.virtual_memory()
     stats = {
-        "ram_used_gb": round(ram.used / 1e9, 2),
+        "ram_used_gb":  round(ram.used  / 1e9, 2),
         "ram_total_gb": round(ram.total / 1e9, 2),
-        "ram_pct": round(ram.percent, 1),
+        "ram_pct":      round(ram.percent, 1),
     }
     try:
         import torch
-
         if torch.cuda.is_available():
             dev = torch.cuda.current_device()
             allocated = torch.cuda.memory_allocated(dev)
-            reserved = torch.cuda.memory_reserved(dev)
-            total = torch.cuda.get_device_properties(dev).total_memory
-            stats.update(
-                {
-                    "gpu_allocated_gb": round(allocated / 1e9, 2),
-                    "gpu_reserved_gb": round(reserved / 1e9, 2),
-                    "gpu_total_gb": round(total / 1e9, 2),
-                    "gpu_pct": round(100 * reserved / total, 1),
-                }
-            )
+            reserved  = torch.cuda.memory_reserved(dev)
+            total     = torch.cuda.get_device_properties(dev).total_memory
+            stats.update({
+                "gpu_allocated_gb": round(allocated / 1e9, 2),
+                "gpu_reserved_gb":  round(reserved  / 1e9, 2),
+                "gpu_total_gb":     round(total     / 1e9, 2),
+                "gpu_pct":          round(100 * reserved / total, 1),
+            })
     except Exception:
         pass
     return stats
 
 
-def log_memory(label: str = "", warn_gpu_pct: float = 92.0, warn_ram_pct: float = 88.0):
+def log_memory(label: str = "",
+               warn_gpu_pct: float = 92.0,
+               warn_ram_pct: float = 88.0):
     s = memory_stats()
     tag = f"[{label}] " if label else ""
 
@@ -110,7 +109,8 @@ def log_memory(label: str = "", warn_gpu_pct: float = 92.0, warn_ram_pct: float 
         )
 
     log.info(
-        f"{tag}RAM {s['ram_used_gb']}/{s['ram_total_gb']} GB ({s['ram_pct']}%){gpu_str}"
+        f"{tag}RAM {s['ram_used_gb']}/{s['ram_total_gb']} GB "
+        f"({s['ram_pct']}%){gpu_str}"
     )
 
     if s.get("gpu_pct", 0) > warn_gpu_pct:
@@ -165,14 +165,13 @@ def init_db(db_path: str) -> sqlite3.Connection:
 
 
 def url_is_known(conn: sqlite3.Connection, url: str) -> bool:
-    return (
-        conn.execute("SELECT 1 FROM urls WHERE url = ?", (url,)).fetchone() is not None
-    )
+    return conn.execute(
+        "SELECT 1 FROM urls WHERE url = ?", (url,)
+    ).fetchone() is not None
 
 
-def upsert_url(
-    conn: sqlite3.Connection, url: str, tool: str, subject: str, category: str
-):
+def upsert_url(conn: sqlite3.Connection,
+               url: str, tool: str, subject: str, category: str):
     conn.execute(
         """INSERT OR IGNORE INTO urls (url, tool, subject, category, status)
            VALUES (?, ?, ?, ?, 'pending')""",
@@ -181,7 +180,8 @@ def upsert_url(
     conn.commit()
 
 
-def mark_url(conn: sqlite3.Connection, url: str, status: str, error: str = None):
+def mark_url(conn: sqlite3.Connection,
+             url: str, status: str, error: str = None):
     ts = datetime.utcnow().isoformat()
     if status == "scraped":
         conn.execute(
@@ -196,13 +196,14 @@ def mark_url(conn: sqlite3.Connection, url: str, status: str, error: str = None)
     conn.commit()
 
 
-def insert_qa_pairs(
-    conn: sqlite3.Connection, url: str, pairs: List[Dict], subject: str, category: str
-):
+def insert_qa_pairs(conn: sqlite3.Connection,
+                    url: str, pairs: List[Dict],
+                    subject: str, category: str):
     conn.executemany(
         """INSERT INTO qa_pairs (url, question, answer, subject, category)
            VALUES (?, ?, ?, ?, ?)""",
-        [(url, p["question"], p["answer"], subject, category) for p in pairs],
+        [(url, p["question"], p["answer"], subject, category)
+         for p in pairs],
     )
     conn.commit()
 
@@ -215,7 +216,8 @@ def get_pending_urls(conn: sqlite3.Connection) -> List[Dict]:
            ORDER BY RANDOM()"""
     ).fetchall()
     return [
-        {"url": r[0], "tool": r[1], "subject": r[2], "category": r[3]} for r in rows
+        {"url": r[0], "tool": r[1], "subject": r[2], "category": r[3]}
+        for r in rows
     ]
 
 
@@ -243,22 +245,38 @@ def db_summary(conn: sqlite3.Connection) -> str:
 #   3. Crawler finds entityID links (individual fact sheets) → saves them
 
 # Known tool index pages — all confirmed real subdirectories on idtools.org
+# Include both tool index pages AND known package index pages directly
+# so we don't depend on the crawler finding packageID links from redirected homepages
 SEED_URLS = [
-    # Plant diseases
+    # ── Package index pages (fact sheet listings) ─────────────────────────
+    # These directly list all entityID fact sheet links in static HTML
+    # citrus pests (61 fact sheets)
+    "https://idtools.org/citrus_pests/index.cfm?packageID=63",
+    # citrus diseases
+    "https://idtools.org/citrus_diseases/index.cfm?packageID=14",
+    # Phytophthora
+    "https://idtools.org/phytophthora/index.cfm?packageID=1131",
+
+    # ── Tool index pages ──────────────────────────────────────────────────
+    # Crawler will find packageID links from navigation on these pages
+    "https://idtools.org/citrus_pests/index.cfm",
     "https://idtools.org/citrus_diseases/index.cfm",
     "https://idtools.org/phytophthora/index.cfm",
-    # Insect pests
-    "https://idtools.org/citrus_pests/index.cfm",
     "https://idtools.org/aphid/index.cfm",
     "https://idtools.org/thrips/index.cfm",
     "https://idtools.org/tortricid/index.cfm",
     "https://idtools.org/sawfly/index.cfm",
     "https://idtools.org/diprion/index.cfm",
-    "https://idtools.org/bbgus/index.cfm",  # bark beetles
-    "https://idtools.org/thebeemd/index.cfm",  # bees/pollinators
-    # Broad tool listing — crawler will find more from here
+    "https://idtools.org/bbgus/index.cfm",
+    "https://idtools.org/thebeemd/index.cfm",
+
+    # ── Numeric tool IDs (alternate URL format) ───────────────────────────
+    "https://idtools.org/tools/5/index.cfm",     # citrus diseases alt URL
+    "https://idtools.org/tools/15/index.cfm",    # citrus pests alt URL
+    "https://idtools.org/tools/1076/index.cfm",  # citrus ID edition 2
+
+    # ── Broad portal — crawler will find more tool links here ─────────────
     "https://idtools.org/identify.cfm",
-    "https://idtools.org/identify.cfm?format=1",
 ]
 
 _HTTP_HEADERS = {
@@ -274,7 +292,6 @@ _HTTP_HEADERS = {
 def _parse_qs(url: str) -> Dict:
     """Parse query string of a URL into a dict."""
     from urllib.parse import parse_qs
-
     qs = urlparse(url).query
     return {k: v[0] for k, v in parse_qs(qs).items()}
 
@@ -328,57 +345,24 @@ def infer_subject(url: str, link_text: str) -> str:
 
 def infer_category(url: str, tool_name: str = "") -> str:
     combined = (url + " " + tool_name).lower()
-    if any(
-        w in combined
-        for w in [
-            "disease",
-            "pathogen",
-            "phytophthora",
-            "blight",
-            "rot",
-            "rust",
-            "mold",
-            "mildew",
-            "fungal",
-            "bacterial",
-            "viral",
-        ]
-    ):
+    if any(w in combined for w in ["disease", "pathogen", "phytophthora",
+                                    "blight", "rot", "rust", "mold", "mildew",
+                                    "fungal", "bacterial", "viral"]):
         return "disease"
-    if any(
-        w in combined
-        for w in ["weed", "grass", "broadleaf", "invasive", "palm", "plant_id"]
-    ):
+    if any(w in combined for w in ["weed", "grass", "broadleaf", "invasive",
+                                    "palm", "plant_id"]):
         return "weed"
-    if any(
-        w in combined
-        for w in [
-            "pest",
-            "insect",
-            "mite",
-            "thrip",
-            "fly",
-            "bug",
-            "beetle",
-            "moth",
-            "aphid",
-            "scale",
-            "mealybug",
-            "nematode",
-            "sawfly",
-            "bee",
-            "wasp",
-            "psyllid",
-            "whitefly",
-        ]
-    ):
+    if any(w in combined for w in ["pest", "insect", "mite", "thrip", "fly",
+                                    "bug", "beetle", "moth", "aphid", "scale",
+                                    "mealybug", "nematode", "sawfly", "bee",
+                                    "wasp", "psyllid", "whitefly"]):
         return "pest"
     return "unknown"
 
 
-def discover_factsheet_urls(
-    conn: sqlite3.Connection, max_discover: int = 1500, delay: float = 1.5
-) -> int:
+def discover_factsheet_urls(conn: sqlite3.Connection,
+                             max_discover: int = 1500,
+                             delay: float = 1.5) -> int:
     """
     Crawl IDtools from seed pages to find individual fact sheet URLs.
 
@@ -388,11 +372,13 @@ def discover_factsheet_urls(
       Level 2: package index pages (e.g. ?packageID=63)
                → find entityID links → save as fact sheets
     """
-    crawled = set()
-    queue = list(SEED_URLS)
+    crawled   = set()
+    queue     = list(SEED_URLS)
     new_count = 0
 
-    known = set(r[0] for r in conn.execute("SELECT url FROM urls").fetchall())
+    known = set(
+        r[0] for r in conn.execute("SELECT url FROM urls").fetchall()
+    )
 
     log.info(f"Starting URL discovery (max {max_discover}) ...")
     log.info(f"  Seed URLs: {len(queue)}")
@@ -424,7 +410,7 @@ def discover_factsheet_urls(
                 continue
 
             abs_url = urljoin(base, href).split("#")[0]
-            parsed = urlparse(abs_url)
+            parsed  = urlparse(abs_url)
 
             # Stay within idtools.org
             if "idtools.org" not in parsed.netloc:
@@ -437,8 +423,8 @@ def discover_factsheet_urls(
             # ── Fact sheet (has entityID) → save it ──────────────────────
             if is_factsheet_url(abs_url):
                 if abs_url not in known:
-                    tool = infer_tool_name(abs_url)
-                    subject = infer_subject(abs_url, link_text)
+                    tool     = infer_tool_name(abs_url)
+                    subject  = infer_subject(abs_url, link_text)
                     category = infer_category(abs_url, tool)
                     upsert_url(conn, abs_url, tool, subject, category)
                     known.add(abs_url)
@@ -456,16 +442,16 @@ def discover_factsheet_urls(
                 if abs_url not in crawled:
                     queue.append(abs_url)
 
-            # ── Other idtools.org page with cfm → maybe crawl ────────────
+            # ── Any other idtools.org .cfm page → crawl it ───────────────
+            # Be aggressive: queue all .cfm URLs so we don't miss
+            # package index pages linked from redirected tool homepages
             elif (
-                parsed.path.endswith(".cfm")
-                and "idtools.org" in parsed.netloc
+                "idtools.org" in parsed.netloc
+                and parsed.path.endswith(".cfm")
                 and abs_url not in crawled
+                and "entityID" not in parsed.query   # already handled above
             ):
-                # Only queue shallow pages to avoid crawling non-content pages
-                depth = len([p for p in parsed.path.split("/") if p])
-                if depth <= 3:
-                    queue.append(abs_url)
+                queue.append(abs_url)
 
         time.sleep(delay)
 
@@ -478,85 +464,29 @@ def discover_factsheet_urls(
 # ─────────────────────────────────────────────────────────────────────────────
 # Section headings that contain visual / identification content
 _VISUAL_HEADINGS = {
-    "symptom",
-    "symptoms",
-    "description",
-    "identification",
-    "visual",
-    "appearance",
-    "morphology",
-    "morphological",
-    "diagnostic",
-    "characteristics",
-    "field identification",
-    "how to identify",
-    "signs",
-    "damage symptoms",
-    "distinguishing features",
-    "recognition",
-    "overview",
+    "symptom", "symptoms", "description", "identification",
+    "visual", "appearance", "morphology", "morphological",
+    "diagnostic", "characteristics", "field identification",
+    "how to identify", "signs", "damage symptoms",
+    "distinguishing features", "recognition", "overview",
 }
 
 # Section headings to skip entirely
 _SKIP_HEADINGS = {
-    "management",
-    "control",
-    "chemical control",
-    "biological control",
-    "pesticide",
-    "treatment",
-    "biology",
-    "life cycle",
-    "lifecycle",
-    "distribution",
-    "economic",
-    "references",
-    "links",
-    "contact",
-    "navigation",
-    "related",
-    "legal",
-    "disclaimer",
-    "footer",
-    "similar species management",
-    "prevention",
+    "management", "control", "chemical control", "biological control",
+    "pesticide", "treatment", "biology", "life cycle", "lifecycle",
+    "distribution", "economic", "references", "links", "contact",
+    "navigation", "related", "legal", "disclaimer", "footer",
+    "similar species management", "prevention",
 }
 
 # Minimum visual keyword count to accept a page
 _VISUAL_KEYWORDS = [
-    "color",
-    "colour",
-    "symptom",
-    "appear",
-    "lesion",
-    "spot",
-    "pustule",
-    "yellow",
-    "brown",
-    "white",
-    "black",
-    "orange",
-    "red",
-    "purple",
-    "streak",
-    "texture",
-    "shape",
-    "size",
-    "necrosis",
-    "chlorosis",
-    "wilting",
-    "mottl",
-    "blight",
-    "decay",
-    "discolor",
-    "pattern",
-    "leaf",
-    "stem",
-    "root",
-    "fruit",
-    "flower",
-    "margin",
-    "surface",
+    "color", "colour", "symptom", "appear", "lesion", "spot", "pustule",
+    "yellow", "brown", "white", "black", "orange", "red", "purple",
+    "streak", "texture", "shape", "size", "necrosis", "chlorosis",
+    "wilting", "mottl", "blight", "decay", "discolor", "pattern",
+    "leaf", "stem", "root", "fruit", "flower", "margin", "surface",
 ]
 
 
@@ -578,20 +508,8 @@ def scrape_factsheet(url: str, timeout: int = 20) -> Optional[Tuple[str, str]]:
     soup = BeautifulSoup(resp.text, "html.parser")
 
     # Strip boilerplate
-    for tag in soup(
-        [
-            "script",
-            "style",
-            "nav",
-            "header",
-            "footer",
-            "aside",
-            "form",
-            "button",
-            "noscript",
-            "iframe",
-        ]
-    ):
+    for tag in soup(["script", "style", "nav", "header", "footer",
+                     "aside", "form", "button", "noscript", "iframe"]):
         tag.decompose()
 
     # Extract subject name
@@ -695,12 +613,10 @@ Return ONLY a JSON array:
 ]"""
 
 
-def load_model(
-    model_name: str,
-    gpu_memory_utilization: float = 0.90,
-    max_model_len: int = 4096,
-    quantization: Optional[str] = None,
-):
+def load_model(model_name: str,
+               gpu_memory_utilization: float = 0.90,
+               max_model_len: int = 4096,
+               quantization: Optional[str] = None):
     """
     Load Qwen3.6-35B-A3B via vLLM Python API.
     Returns (llm, tokenizer, sampling_params).
@@ -718,7 +634,9 @@ def load_model(
     from transformers import AutoTokenizer
 
     log.info(f"Loading tokenizer: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, trust_remote_code=True
+    )
 
     log_memory("before model load")
 
@@ -737,15 +655,15 @@ def load_model(
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
         dtype="bfloat16",
-        quantization=quantization,  # None = full bf16
+        quantization=quantization,         # None = full bf16
         trust_remote_code=True,
-        enforce_eager=False,  # set True only if hitting CUDA graph OOM
-        enable_prefix_caching=True,  # caches system prompt tokens across batch
-        max_num_seqs=16,  # limit concurrent sequences to control mem
+        enforce_eager=False,               # set True only if hitting CUDA graph OOM
+        enable_prefix_caching=True,        # caches system prompt tokens across batch
+        max_num_seqs=16,                   # limit concurrent sequences to control mem
     )
 
     sampling_params = SamplingParams(
-        temperature=0.6,  # low but not greedy — some diversity in phrasing
+        temperature=0.6,          # low but not greedy — some diversity in phrasing
         top_p=0.92,
         repetition_penalty=1.05,  # discourage repetitive answers
         max_tokens=1024,
@@ -764,7 +682,9 @@ def build_prompt(tokenizer, content: str, n_pairs: int) -> str:
     """
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": _USER_TEMPLATE.format(content=content, n=n_pairs)},
+        {"role": "user",   "content": _USER_TEMPLATE.format(
+            content=content, n=n_pairs
+        )},
     ]
     try:
         # Qwen3 series: enable_thinking=False disables <think> reasoning blocks
@@ -809,29 +729,14 @@ def parse_qa_output(raw: str, max_pairs: int = 5) -> List[Dict]:
         if not isinstance(item, dict):
             continue
         q = str(item.get("question", "")).strip()
-        a = str(item.get("answer", "")).strip()
+        a = str(item.get("answer",   "")).strip()
         # Basic quality filters
         if len(q) < 15 or len(a) < 30:
             continue
-        if not any(
-            kw in a.lower()
-            for kw in [
-                "color",
-                "colour",
-                "appear",
-                "symptom",
-                "lesion",
-                "yellow",
-                "brown",
-                "white",
-                "look",
-                "spot",
-                "shape",
-                "texture",
-                "red",
-                "black",
-            ]
-        ):
+        if not any(kw in a.lower() for kw in ["color", "colour", "appear",
+                                                "symptom", "lesion", "yellow",
+                                                "brown", "white", "look", "spot",
+                                                "shape", "texture", "red", "black"]):
             continue  # Reject answers with no visual vocabulary
         valid.append({"question": q, "answer": a})
         if len(valid) >= max_pairs:
@@ -840,15 +745,18 @@ def parse_qa_output(raw: str, max_pairs: int = 5) -> List[Dict]:
     return valid
 
 
-def run_inference_batch(
-    llm, tokenizer, sampling_params, batch: List[Dict], max_pairs: int = 5
-) -> List[Dict]:
+def run_inference_batch(llm,
+                        tokenizer,
+                        sampling_params,
+                        batch: List[Dict],
+                        max_pairs: int = 5) -> List[Dict]:
     """
     Generate QA pairs for a batch of scraped fact sheets.
     Returns list of result dicts with url, subject, category, pairs.
     """
     prompts = [
-        build_prompt(tokenizer, entry["content"], n_pairs=max_pairs) for entry in batch
+        build_prompt(tokenizer, entry["content"], n_pairs=max_pairs)
+        for entry in batch
     ]
 
     try:
@@ -856,29 +764,22 @@ def run_inference_batch(
     except Exception as e:
         log.error(f"vLLM inference error: {e}")
         return [
-            {
-                "url": e["url"],
-                "subject": e["subject"],
-                "category": e["category"],
-                "pairs": [],
-                "error": str(e),
-            }
+            {"url": e["url"], "subject": e["subject"],
+             "category": e["category"], "pairs": [], "error": str(e)}
             for e in batch
         ]
 
     results = []
     for entry, output in zip(batch, outputs):
-        raw = output.outputs[0].text
+        raw   = output.outputs[0].text
         pairs = parse_qa_output(raw, max_pairs=max_pairs)
-        results.append(
-            {
-                "url": entry["url"],
-                "subject": entry["subject"],
-                "category": entry["category"],
-                "pairs": pairs,
-                "error": None,
-            }
-        )
+        results.append({
+            "url":      entry["url"],
+            "subject":  entry["subject"],
+            "category": entry["category"],
+            "pairs":    pairs,
+            "error":    None,
+        })
         log.debug(
             f"  {entry['subject']}: {len(pairs)} pairs "
             f"(tokens used: {len(output.outputs[0].token_ids)})"
@@ -939,21 +840,21 @@ def write_jsonl_inference(output_path: str, results: List[Dict]):
             for pair in result["pairs"]:
                 record = {
                     "messages": [
-                        {"role": "user", "content": pair["question"]},
+                        {"role": "user",      "content": pair["question"]},
                         {"role": "assistant", "content": pair["answer"]},
                     ],
                     "metadata": {
                         # Provenance
-                        "source_name": "USDA APHIS Identification Technology Program (ITP)",
-                        "source_url": result["url"],
-                        "tool": tool_dir,
-                        "subject": result["subject"],
-                        "category": result["category"],
-                        "task": "visual_descriptor_qa",
+                        "source_name":  "USDA APHIS Identification Technology Program (ITP)",
+                        "source_url":   result["url"],
+                        "tool":         tool_dir,
+                        "subject":      result["subject"],
+                        "category":     result["category"],
+                        "task":         "visual_descriptor_qa",
                         # Licensing
-                        "license": "Public Domain (17 U.S.C. § 105 — US government work)",
-                        "license_url": "https://www.usa.gov/government-works",
-                        "attribution": (
+                        "license":      "Public Domain (17 U.S.C. § 105 — US government work)",
+                        "license_url":  "https://www.usa.gov/government-works",
+                        "attribution":  (
                             "USDA APHIS Plant Protection and Quarantine, "
                             "Identification Technology Program (ITP). "
                             "https://idtools.org"
@@ -961,7 +862,7 @@ def write_jsonl_inference(output_path: str, results: List[Dict]):
                         # Generation
                         "generated_by": "Qwen/Qwen3.6-35B-A3B via vLLM (QA synthesis)",
                         "dataset_name": "AgGemma-IDtools-VisualQA",
-                        "created_at": ts,
+                        "created_at":   ts,
                     },
                 }
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -980,10 +881,8 @@ def convert_to_sft_format(input_path: str, output_path: str):
     }
     """
     written = 0
-    with (
-        open(input_path, "r", encoding="utf-8") as fin,
-        open(output_path, "w", encoding="utf-8") as fout,
-    ):
+    with open(input_path, "r", encoding="utf-8") as fin, \
+         open(output_path, "w", encoding="utf-8") as fout:
         for line in fin:
             line = line.strip()
             if not line:
@@ -995,7 +894,7 @@ def convert_to_sft_format(input_path: str, output_path: str):
             sft_record = {
                 "conversations": [
                     {"from": "human", "value": messages[0]["content"]},
-                    {"from": "gpt", "value": messages[1]["content"]},
+                    {"from": "gpt",   "value": messages[1]["content"]},
                 ],
                 "metadata": record.get("metadata", {}),
             }
@@ -1015,92 +914,46 @@ def main():
     )
 
     # Core options
-    parser.add_argument(
-        "--model",
-        default="Qwen/Qwen3.6-35B-A3B",
-        help="HuggingFace model ID (default: Qwen/Qwen3.6-35B-A3B)",
-    )
-    parser.add_argument(
-        "--db",
-        default="idtools_scraper.db",
-        help="SQLite checkpoint database (default: idtools_scraper.db)",
-    )
-    parser.add_argument(
-        "--output",
-        default="idtools_qa_dataset.jsonl",
-        help="Output JSONL file (default: idtools_qa_dataset.jsonl)",
-    )
+    parser.add_argument("--model", default="Qwen/Qwen3.6-35B-A3B",
+        help="HuggingFace model ID (default: Qwen/Qwen3.6-35B-A3B)")
+    parser.add_argument("--db", default="idtools_scraper.db",
+        help="SQLite checkpoint database (default: idtools_scraper.db)")
+    parser.add_argument("--output", default="idtools_qa_dataset.jsonl",
+        help="Output JSONL file (default: idtools_qa_dataset.jsonl)")
 
     # QA generation options
-    parser.add_argument(
-        "--max-pairs",
-        type=int,
-        default=5,
-        help="Max QA pairs per fact sheet, default 5",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=8,
-        help="Inference batch size, default 8. Reduce if GPU OOM.",
-    )
+    parser.add_argument("--max-pairs", type=int, default=5,
+        help="Max QA pairs per fact sheet, default 5")
+    parser.add_argument("--batch-size", type=int, default=8,
+        help="Inference batch size, default 8. Reduce if GPU OOM.")
 
     # vLLM options
-    parser.add_argument(
-        "--max-model-len",
-        type=int,
-        default=4096,
-        help="Max context length (default 4096). Reduce to 2048 if OOM.",
-    )
-    parser.add_argument(
-        "--gpu-mem",
-        type=float,
-        default=0.90,
-        help="GPU memory utilization fraction (default 0.90).",
-    )
-    parser.add_argument(
-        "--quantization",
-        default=None,
+    parser.add_argument("--max-model-len", type=int, default=4096,
+        help="Max context length (default 4096). Reduce to 2048 if OOM.")
+    parser.add_argument("--gpu-mem", type=float, default=0.90,
+        help="GPU memory utilization fraction (default 0.90).")
+    parser.add_argument("--quantization", default=None,
         choices=["awq", "gptq", "bitsandbytes"],
-        help="vLLM quantization. Only use if model variant is pre-quantized.",
-    )
+        help="vLLM quantization. Only use if model variant is pre-quantized.")
 
     # Scraping options
-    parser.add_argument(
-        "--scrape-delay",
-        type=float,
-        default=1.5,
-        help="Seconds between HTTP requests (default 1.5). Be polite.",
-    )
-    parser.add_argument(
-        "--max-discover",
-        type=int,
-        default=1500,
-        help="Max fact sheet URLs to discover (default 1500).",
-    )
+    parser.add_argument("--scrape-delay", type=float, default=1.5,
+        help="Seconds between HTTP requests (default 1.5). Be polite.")
+    parser.add_argument("--max-discover", type=int, default=1500,
+        help="Max fact sheet URLs to discover (default 1500).")
 
     # Mode flags
-    parser.add_argument(
-        "--discover-only",
-        action="store_true",
-        help="Discover URLs only, do not run inference.",
-    )
-    parser.add_argument(
-        "--convert-sft",
-        action="store_true",
-        help="After generation, also write an Unsloth SFT-format JSONL.",
-    )
+    parser.add_argument("--discover-only", action="store_true",
+        help="Discover URLs only, do not run inference.")
+    parser.add_argument("--convert-sft", action="store_true",
+        help="After generation, also write an Unsloth SFT-format JSONL.")
 
     # Misc
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
+    parser.add_argument("--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING"],
-        help="Logging verbosity (default INFO).",
-    )
-    parser.add_argument(
-        "--log-file", default="scraper.log", help="Log file path (default scraper.log)."
-    )
+        help="Logging verbosity (default INFO).")
+    parser.add_argument("--log-file", default="scraper.log",
+        help="Log file path (default scraper.log).")
 
     args = parser.parse_args()
 
@@ -1164,8 +1017,8 @@ def main():
 
     # ── Main scrape + generate loop ───────────────────────────────────────────
     total_pairs = 0
-    total_done = 0
-    batch_buf = []  # list of {url, subject, category, content}
+    total_done  = 0
+    batch_buf   = []     # list of {url, subject, category, content}
 
     def flush_batch():
         """Run inference on the current batch buffer and save results."""
@@ -1178,9 +1031,7 @@ def main():
         log_memory("pre-inference")
 
         results = run_inference_batch(
-            llm,
-            tokenizer,
-            sampling_params,
+            llm, tokenizer, sampling_params,
             batch_buf,
             max_pairs=args.max_pairs,
         )
@@ -1195,28 +1046,33 @@ def main():
 
             if res["pairs"]:
                 insert_qa_pairs(
-                    conn, res["url"], res["pairs"], res["subject"], res["category"]
+                    conn, res["url"], res["pairs"],
+                    res["subject"], res["category"]
                 )
                 write_jsonl_inference(args.output, [res])
                 total_pairs += len(res["pairs"])
-                total_done += 1
+                total_done  += 1
                 mark_url(conn, res["url"], "processed")
                 log.info(
                     f"  ✓ {res['subject']} ({res['category']}): "
                     f"{len(res['pairs'])} pairs"
                 )
             else:
-                mark_url(conn, res["url"], "failed", error="no valid pairs generated")
+                mark_url(conn, res["url"], "failed",
+                         error="no valid pairs generated")
                 log.warning(f"  ✗ {res['subject']}: model returned no valid pairs")
 
         batch_buf.clear()
 
     for i, entry in enumerate(pending):
-        url = entry["url"]
-        subject = entry["subject"]
+        url      = entry["url"]
+        subject  = entry["subject"]
         category = entry["category"]
 
-        log.info(f"[{i + 1}/{len(pending)}] Scraping: {subject} ({category}) ...")
+        log.info(
+            f"[{i+1}/{len(pending)}] Scraping: {subject} "
+            f"({category}) ..."
+        )
 
         result = scrape_factsheet(url, timeout=20)
         time.sleep(args.scrape_delay)
@@ -1230,21 +1086,21 @@ def main():
         # Prefer scraped title over inferred subject if available
         if page_subject and len(page_subject) > 3:
             subject = page_subject
-            conn.execute("UPDATE urls SET subject=? WHERE url=?", (subject, url))
+            conn.execute(
+                "UPDATE urls SET subject=? WHERE url=?", (subject, url)
+            )
             conn.commit()
 
         mark_url(conn, url, "scraped")
 
-        batch_buf.append(
-            {
-                "url": url,
-                "subject": subject,
-                "category": category,
-                "content": content,
-            }
-        )
+        batch_buf.append({
+            "url":      url,
+            "subject":  subject,
+            "category": category,
+            "content":  content,
+        })
 
-        is_last = i == len(pending) - 1
+        is_last = (i == len(pending) - 1)
         if len(batch_buf) >= args.batch_size or is_last:
             flush_batch()
             log.info(
