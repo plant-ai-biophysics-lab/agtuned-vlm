@@ -182,15 +182,19 @@ def _find_json_records(zf, hint: str | None = None) -> list[dict]:
     )
 
 
-def load_records(n_samples: int | None, json_hint: str | None = None) -> list[dict]:
+def load_records(n_samples: int | None,
+                 json_hint: str | None = None,
+                 zip_file: str | None = None) -> list[dict]:
     """
     Downloads AgriCoT ZIPs from the Hub (cached after first run),
     scans for the QA metadata JSON, and returns a list of records.
-    Tries AgriCoT_2.zip first (337 MB), then AgriCoT.zip (3.7 GB).
+    Default order: AgriCoT_2.zip (337 MB) → AgriCoT.zip (3.7 GB).
+    Use zip_file="AgriCoT.zip" to skip straight to the larger archive.
     """
     import zipfile
 
-    for filename in ("AgriCoT_2.zip", "AgriCoT.zip"):
+    candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
+    for filename in candidates:
         print(f"\nDownloading {filename} from wenyb/AgriCoT ...")
         try:
             zip_path = hf_hub_download(
@@ -334,17 +338,39 @@ def main():
                         help="Number of sample items to print (default: 3)")
     parser.add_argument("--json_hint",    type=str, default=None,
                         help="Substring to match against ZIP filenames when auto-detection fails")
+    parser.add_argument("--zip",          type=str, default=None,
+                        help="Force a specific ZIP file, e.g. AgriCoT.zip (skips AgriCoT_2.zip)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    records = load_records(args.n_samples, json_hint=args.json_hint)
+    records = load_records(args.n_samples, json_hint=args.json_hint, zip_file=args.zip)
 
     # Print actual keys found so we know the real schema
     if records:
         print(f"  Keys in first record: {list(records[0].keys())}")
 
     print_samples(records, n=args.show_samples)
+
+    # ── Save samples to file ───────────────────────────────────────────────────
+    samples_path = os.path.join(args.output_dir, "samples.json")
+    samples_out  = []
+    for i, row in enumerate(records[:args.show_samples]):
+        samples_out.append({
+            "index":          i,
+            "item_id":        row.get("item_id"),
+            "dimension":      dim_label(row.get("dimension_id")),
+            "sub_dimension":  subdim_label(row.get("sub_dimension_id")),
+            "type_id":        row.get("type_id"),
+            "image_path":     row.get("image_path"),
+            "question":       row.get("question"),
+            "options":        row.get("options"),
+            "answer":         row.get("answer"),
+            "reasoning":      row.get("reasoning"),
+        })
+    with open(samples_path, "w", encoding="utf-8") as f:
+        json.dump(samples_out, f, indent=2, ensure_ascii=False)
+    print(f"  Saved {len(samples_out)} samples → {samples_path}")
 
     # ── Collect distributions ──────────────────────────────────────────────────
     dim_counts:    Counter = Counter()
