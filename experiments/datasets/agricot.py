@@ -23,6 +23,8 @@ import os
 import textwrap
 from collections import Counter, defaultdict
 
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend for headless servers
 import matplotlib.pyplot as plt
 import numpy as np
 from huggingface_hub import hf_hub_download
@@ -93,31 +95,97 @@ def wrap(text: str, width: int = 90, indent: str = "    ") -> str:
 
 # ── Load ──────────────────────────────────────────────────────────────────────
 
+def _find_json_records(zf) -> list[dict]:
+    """
+    Scan a ZipFile for JSON files containing a list of dicts with
+    question/answer/reasoning fields. Returns the first match.
+    """
+    import zipfile
+
+    names = zf.namelist()
+    print(f"  ZIP contains {len(names)} files. Scanning for JSON metadata ...")
+
+    # Prefer files whose name suggests QA data
+    priority = sorted(names, key=lambda n: (
+        0 if any(k in n.lower() for k in ("vqra", "qa", "anno", "data", "meta")) else 1,
+        not n.endswith(".json"),
+        n,
+    ))
+
+    for name in priority:
+        if not name.endswith(".json"):
+            continue
+        info = zf.getinfo(name)
+        if info.file_size > 500 * 1024 * 1024:  # skip files >500 MB
+            print(f"  Skipping {name} (too large: {info.file_size // 1_000_000} MB)")
+            continue
+        print(f"  Trying: {name} ({info.file_size // 1_000} KB) ...")
+        try:
+            with zf.open(name) as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"    Could not parse: {e}")
+            continue
+
+        # Unwrap common envelope formats
+        if isinstance(data, dict):
+            for key in ("data", "samples", "annotations", "items"):
+                if key in data and isinstance(data[key], list):
+                    data = data[key]
+                    break
+            else:
+                data = list(data.values())[0] if len(data) == 1 else None
+
+        if not isinstance(data, list) or not data:
+            continue
+
+        # Validate: first item should look like a QA record
+        first = data[0]
+        if isinstance(first, dict) and any(
+            k in first for k in ("question", "answer", "reasoning", "item_id")
+        ):
+            print(f"  Found {len(data):,} records in {name}")
+            return data
+
+    raise RuntimeError(
+        "No suitable JSON file found inside the ZIP. "
+        "ZIP contents: " + ", ".join(names[:20])
+    )
+
+
 def load_records(n_samples: int | None) -> list[dict]:
     """
-    Download VQRA.json from the Hub and return the list of records.
-    Falls back to trying the dataset parquet metadata if JSON is not found.
+    Downloads AgriCoT_2.zip from the Hub (337 MB, cached after first run),
+    extracts the JSON metadata, and returns a list of records.
+    Falls back to AgriCoT.zip if needed.
     """
-    print("Downloading VQRA.json from wenyb/AgriCoT ...")
-    try:
-        path = hf_hub_download(
-            repo_id="wenyb/AgriCoT",
-            filename="VQRA.json",
-            repo_type="dataset",
-        )
-        print(f"  Downloaded to: {path}")
-        with open(path, encoding="utf-8") as f:
-            records = json.load(f)
-        if not isinstance(records, list):
-            # Some datasets wrap in {"data": [...]}
-            records = records.get("data", list(records.values())[0])
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not download VQRA.json: {e}\n"
-            "Try: huggingface-cli login  (if the dataset is gated)"
-        ) from e
+    import zipfile
 
-    print(f"  Loaded {len(records):,} records from VQRA.json")
+    for filename in ("AgriCoT_2.zip", "AgriCoT.zip"):
+        print(f"Downloading {filename} from wenyb/AgriCoT ...")
+        try:
+            zip_path = hf_hub_download(
+                repo_id="wenyb/AgriCoT",
+                filename=filename,
+                repo_type="dataset",
+            )
+            print(f"  Cached at: {zip_path}")
+        except Exception as e:
+            print(f"  Could not download {filename}: {e}")
+            continue
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                records = _find_json_records(zf)
+            break
+        except RuntimeError as e:
+            print(f"  {e} — trying next archive ...")
+            continue
+    else:
+        raise RuntimeError(
+            "Could not load records from any AgriCoT ZIP archive.\n"
+            "Try: huggingface-cli login  (if the dataset is gated)"
+        )
 
     if n_samples and n_samples < len(records):
         records = records[:n_samples]
