@@ -12,10 +12,10 @@ dependencies = [
     "hf-transfer>=0.1.9",
     "matplotlib>=3.8.0",
     "numpy>=1.26.0",
-    "nvidia-cudnn-cu13",
-    "nvidia-cusparselt-cu13==0.8.0",
-    "nvidia-nccl-cu13",
-    "nvidia-nvshmem-cu13",
+    "nvidia-cudnn-cu13; sys_platform == 'linux'",
+    "nvidia-cusparselt-cu13==0.8.0; sys_platform == 'linux'",
+    "nvidia-nccl-cu13; sys_platform == 'linux'",
+    "nvidia-nvshmem-cu13; sys_platform == 'linux'",
     "peft>=0.10.0",
     "pillow>=10.0.0",
     "protobuf>=3.20.0",
@@ -25,16 +25,19 @@ dependencies = [
     "timm>=1.0.26",
     "torch>=2.2.0",
     "torchao>=0.17.0",
-    "torchcodec>=0.11.1",
+    "torchcodec>=0.11.1; sys_platform == 'linux'",
     "torchvision>=0.17.0",
     "trackio>=0.25.1",
     "transformers>=5.5.0",
-    "triton>=3.6.0",
+    "triton>=3.6.0; sys_platform == 'linux'",
     "trl>=0.24.0",
-    "unsloth>=2026.4.8",
-    "unsloth-zoo>=2026.4.9",
-    "xformers>=0.0.25",
+    "unsloth>=2026.4.8; sys_platform == 'linux'",
+    "unsloth-zoo>=2026.4.9; sys_platform == 'linux'",
+    "xformers>=0.0.25; sys_platform == 'linux'",
 ]
 
 [tool.uv]
-environments = ["sys_platform == 'linux'"]
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin'",
+]
