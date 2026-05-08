@@ -1,0 +1,27 @@
+arabica_coffee_leaf_disease_classification, coffee, disease
+banana_leaf_disease_classification, banana, disease
+bean_disease_uganda, bean, disease
+betel_leaf_disease_classification, betel, disease
+blackgram_plant_leaf_disease_classification, blackgram, disease
+chilli_leaf_classification, chilli, pest/damage
+coconut_tree_disease_classification, coconut, disease
+corn_maize_leaf_disease, corn, disease
+crop_weeds_greece, crop, crops/weeds
+cucumber_disease_classification, cucumber, disease
+guava_disease_pakistan, guava, disease
+java_plum_leaf_disease_classification, java plum, disease
+onion_leaf_classification, onion, pest/damage
+orange_leaf_disease_classification, orange, disease
+paddy_disease_classification, paddy, disease
+papaya_leaf_disease_classification, papaya, disease
+plant_seedlings_aarhus, plant, crops/weeds
+plant_village_classification, plant, disease
+rangeland_weeds_australia, rangeland, crops/weeds
+rice_leaf_disease_classification, rice, disease
+soybean_insect_classification, soybean, pest/damage
+soybean_weed_uav_brazil, soybean, crops/weeds
+sugarcane_damage_usa, sugarcane, pest/damage
+sunflower_disease_classification, sunflower, disease
+tea_leaf_disease_classification, tea, disease
+tomato_leaf_disease, tomato, disease
+vine_virus_photo_dataset, vine, pest/damage

@@ -399,6 +399,17 @@ def main(args):
 
     print(f"\nLoading AgML dataset: {args.agml_dataset}")
     samples = load_agml_samples(args.agml_dataset)
+    if args.n_samples and args.n_samples < len(samples):
+        # Stratified subsample so class distribution is preserved
+        labels_tmp = [s["label"] for s in samples]
+        le_tmp = LabelEncoder()
+        y_tmp = le_tmp.fit_transform(labels_tmp)
+        splitter_tmp = StratifiedShuffleSplit(
+            n_splits=1, train_size=args.n_samples, random_state=42
+        )
+        sub_idx, _ = next(splitter_tmp.split(np.zeros(len(y_tmp)), y_tmp))
+        samples = [samples[i] for i in sub_idx]
+        print(f"  Subsampled to {len(samples)} images")
     n_classes = len(set(s["label"] for s in samples))
     print(f"  {len(samples)} images | {n_classes} classes")
 
@@ -526,5 +537,7 @@ if __name__ == "__main__":
     parser.add_argument("--agml_dataset", type=str, required=True,
                         help="AgML dataset name (e.g. bean_disease_uganda)")
     parser.add_argument("--output_dir", type=str, default="results")
+    parser.add_argument("--n_samples", type=int, default=None,
+                        help="Max samples per dataset (stratified). Default: use all.")
     args = parser.parse_args()
     main(args)
