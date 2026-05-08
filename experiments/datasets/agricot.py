@@ -8,6 +8,9 @@ Loads wenyb/AgriCoT from HuggingFace and produces:
   - Text length stats: question length, reasoning length, number of options
   - All charts saved to --output_dir
 
+The metadata (question/answer/reasoning) lives in VQRA.json on the Hub.
+Images are not needed for this analysis and are skipped entirely.
+
 Usage:
     python agricot.py
     python agricot.py --n_samples 500 --output_dir agricot_analysis
@@ -22,7 +25,7 @@ from collections import Counter, defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 
 
 # ── Label maps (from README) ──────────────────────────────────────────────────
@@ -35,16 +38,7 @@ DIMENSION_LABELS = {
     5: "Environmental Management",
 }
 
-# sub_dimension_id meanings are not fully documented; show ID + inferred label
-# where known, else fall back to "Sub-dim N"
-SUB_DIMENSION_LABELS = {}  # populated dynamically if not mapped
-
-SOURCE_LABELS = {
-    "CDDM":      "CDDM",
-    "AGMMU":     "AGMMU",
-    "AgroMind":  "AgroMind",
-    "AgroBench": "AgroBench",
-}
+SUB_DIMENSION_LABELS: dict = {}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -62,9 +56,12 @@ def count_options(options_field) -> int:
         return 0
     if isinstance(options_field, dict):
         return len(options_field)
+    if isinstance(options_field, (list, tuple)):
+        return len(options_field)
     if isinstance(options_field, str):
         try:
-            return len(json.loads(options_field))
+            parsed = json.loads(options_field)
+            return len(parsed) if isinstance(parsed, (dict, list)) else 0
         except Exception:
             return 0
     return 0
@@ -75,9 +72,13 @@ def format_options(options_field) -> str:
         return "(no options)"
     if isinstance(options_field, dict):
         d = options_field
+    elif isinstance(options_field, list):
+        return "  ".join(str(x) for x in options_field)
     elif isinstance(options_field, str):
         try:
             d = json.loads(options_field)
+            if isinstance(d, list):
+                return "  ".join(str(x) for x in d)
         except Exception:
             return options_field
     else:
@@ -90,14 +91,48 @@ def wrap(text: str, width: int = 90, indent: str = "    ") -> str:
                          subsequent_indent=indent)
 
 
+# ── Load ──────────────────────────────────────────────────────────────────────
+
+def load_records(n_samples: int | None) -> list[dict]:
+    """
+    Download VQRA.json from the Hub and return the list of records.
+    Falls back to trying the dataset parquet metadata if JSON is not found.
+    """
+    print("Downloading VQRA.json from wenyb/AgriCoT ...")
+    try:
+        path = hf_hub_download(
+            repo_id="wenyb/AgriCoT",
+            filename="VQRA.json",
+            repo_type="dataset",
+        )
+        print(f"  Downloaded to: {path}")
+        with open(path, encoding="utf-8") as f:
+            records = json.load(f)
+        if not isinstance(records, list):
+            # Some datasets wrap in {"data": [...]}
+            records = records.get("data", list(records.values())[0])
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not download VQRA.json: {e}\n"
+            "Try: huggingface-cli login  (if the dataset is gated)"
+        ) from e
+
+    print(f"  Loaded {len(records):,} records from VQRA.json")
+
+    if n_samples and n_samples < len(records):
+        records = records[:n_samples]
+        print(f"  Subsampled to {len(records):,}")
+
+    return records
+
+
 # ── Sample printer ────────────────────────────────────────────────────────────
 
-def print_samples(dataset, n: int = 3):
+def print_samples(records: list[dict], n: int = 3):
     print(f"\n{'='*70}")
     print(f"  SAMPLE ITEMS  (showing {n})")
     print(f"{'='*70}")
-    for i in range(min(n, len(dataset))):
-        row = dataset[i]
+    for i, row in enumerate(records[:n]):
         print(f"\n─── Sample #{row.get('item_id', i)} ───────────────────────────────")
         print(f"  Dim:        {dim_label(row.get('dimension_id'))}  "
               f"| Sub-dim: {subdim_label(row.get('sub_dimension_id'))}  "
@@ -106,7 +141,7 @@ def print_samples(dataset, n: int = 3):
         print(f"  Question:")
         print(wrap(row.get("question", ""), indent="    "))
         opts = format_options(row.get("options"))
-        if opts:
+        if opts and opts != "(no options)":
             print(f"  Options:    {opts}")
         print(f"  Answer:     {row.get('answer', 'N/A')}")
         reasoning = str(row.get("reasoning", ""))
@@ -116,7 +151,7 @@ def print_samples(dataset, n: int = 3):
     print()
 
 
-# ── Distribution helpers ──────────────────────────────────────────────────────
+# ── Chart helpers ─────────────────────────────────────────────────────────────
 
 def bar_chart(counts: dict, title: str, xlabel: str, path: str,
               color: str = "steelblue", rotate: int = 0):
@@ -181,7 +216,8 @@ def heatmap_chart(matrix: dict, title: str, path: str):
             v = data[i, j]
             if v > 0:
                 ax.text(j, i, str(int(v)), ha="center", va="center",
-                        fontsize=7, color="black" if v < data.max() * 0.7 else "white")
+                        fontsize=7,
+                        color="black" if v < data.max() * 0.7 else "white")
     ax.set_title(title)
     plt.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -195,27 +231,22 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze the AgriCoT HuggingFace dataset")
     parser.add_argument("--output_dir",   type=str, default="agricot_analysis")
     parser.add_argument("--n_samples",    type=int, default=None,
-                        help="Limit to first N samples (default: all ~4800)")
+                        help="Limit to first N records (default: all ~4800)")
     parser.add_argument("--show_samples", type=int, default=3,
                         help="Number of sample items to print (default: 3)")
-    parser.add_argument("--split",        type=str, default="train",
-                        help="Dataset split to load (default: train)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-    print(f"Loading wenyb/AgriCoT ({args.split}) ...")
-    ds = load_dataset("wenyb/AgriCoT", split=args.split, trust_remote_code=True)
-    if args.n_samples and args.n_samples < len(ds):
-        ds = ds.select(range(args.n_samples))
-    print(f"  Loaded {len(ds):,} samples")
-    print(f"  Columns: {ds.column_names}")
+    records = load_records(args.n_samples)
 
-    # ── Samples ───────────────────────────────────────────────────────────────
-    print_samples(ds, n=args.show_samples)
+    # Print actual keys found so we know the real schema
+    if records:
+        print(f"  Keys in first record: {list(records[0].keys())}")
 
-    # ── Collect raw values ─────────────────────────────────────────────────────
+    print_samples(records, n=args.show_samples)
+
+    # ── Collect distributions ──────────────────────────────────────────────────
     dim_counts:    Counter = Counter()
     subdim_counts: Counter = Counter()
     type_counts:   Counter = Counter()
@@ -223,10 +254,10 @@ def main():
     option_counts: Counter = Counter()
     dim_subdim:    dict    = defaultdict(int)
 
-    q_lengths:  list = []
-    r_lengths:  list = []
+    q_lengths: list = []
+    r_lengths: list = []
 
-    for row in ds:
+    for row in records:
         did  = row.get("dimension_id")
         sid  = row.get("sub_dimension_id")
         tid  = row.get("type_id")
@@ -249,8 +280,7 @@ def main():
     print(f"{'='*70}")
     print("  METADATA SUMMARY")
     print(f"{'='*70}")
-    print(f"  Total samples       : {len(ds):,}")
-    print(f"  Columns             : {', '.join(ds.column_names)}")
+    print(f"  Total samples       : {len(records):,}")
     print(f"  Task dimensions     : {len(dim_counts)}")
     print(f"  Sub-dimensions      : {len(subdim_counts)}")
     print(f"  Question types      : {len(type_counts)}")
@@ -264,33 +294,32 @@ def main():
 
     print(f"\n  Dimension breakdown:")
     for k, v in sorted(dim_counts.items(), key=lambda x: -x[1]):
-        print(f"    {k:<30} {v:>5}  ({100*v/len(ds):.1f}%)")
+        print(f"    {k:<30} {v:>5}  ({100*v/len(records):.1f}%)")
 
     print(f"\n  Answer distribution:")
     for k, v in sorted(answer_counts.items()):
-        print(f"    {k:<6} {v:>5}  ({100*v/len(ds):.1f}%)")
+        print(f"    {k:<6} {v:>5}  ({100*v/len(records):.1f}%)")
 
     print(f"\n  Options per question:")
     for k, v in sorted(option_counts.items()):
-        print(f"    {k} options: {v:>5}  ({100*v/len(ds):.1f}%)")
+        print(f"    {k} options: {v:>5}  ({100*v/len(records):.1f}%)")
 
     # ── Save JSON summary ─────────────────────────────────────────────────────
     summary = {
-        "n_samples":          len(ds),
-        "columns":            ds.column_names,
-        "dimension_counts":   dict(dim_counts),
+        "n_samples":           len(records),
+        "dimension_counts":    dict(dim_counts),
         "subdimension_counts": dict(subdim_counts),
-        "type_counts":        dict(type_counts),
-        "answer_counts":      dict(answer_counts),
-        "option_counts":      {str(k): v for k, v in option_counts.items()},
-        "question_length":    {
+        "type_counts":         dict(type_counts),
+        "answer_counts":       dict(answer_counts),
+        "option_counts":       {str(k): v for k, v in option_counts.items()},
+        "question_length": {
             "mean":   round(float(np.mean(q_lengths)), 1),
             "median": float(np.median(q_lengths)),
             "max":    int(max(q_lengths)),
             "min":    int(min(q_lengths)),
             "p90":    float(np.percentile(q_lengths, 90)),
         },
-        "reasoning_length":   {
+        "reasoning_length": {
             "mean":   round(float(np.mean(r_lengths)), 1),
             "median": float(np.median(r_lengths)),
             "max":    int(max(r_lengths)),
