@@ -29,6 +29,7 @@ Usage:
 import argparse
 import csv
 import json
+import re
 import time
 from pathlib import Path
 
@@ -155,25 +156,86 @@ def compute_naive_baseline(samples: list[dict]) -> dict:
 
 # ── Inference ─────────────────────────────────────────────────────────────────
 
-def run_inference(llm: LLM, prompts: list[str], label: str) -> tuple[list[str], float, int]:
-    sampling_params = SamplingParams(temperature=0.0, max_tokens=128)
+_SAMPLING = SamplingParams(
+    temperature=0.0,
+    max_tokens=128,
+    repetition_penalty=1.1,
+    stop=["Question:", "\n\nQ:", "\n\nAnswer:", "[Answer"],
+)
+
+_REPEAT_RE  = re.compile(r'(\b\w+\b)(\s+\1){4,}', re.IGNORECASE)
+_THINK_RE   = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+
+
+def _clean_response(text: str) -> str:
+    """Strip degenerate and thinking outputs from instruct model responses."""
+    # Remove complete <think>...</think> blocks
+    text = _THINK_RE.sub('', text).strip()
+    # Remove incomplete <think> block (no closing tag — truncate at opening)
+    think_start = text.lower().find('<think>')
+    if think_start != -1:
+        text = text[:think_start].strip()
+    # Truncate at recursive bracket patterns like "[Answer: [Answer: ..."
+    bracket = text.find("[Answer")
+    if bracket != -1:
+        text = text[:bracket].strip()
+    # Truncate at first run of 5+ repeated words
+    m = _REPEAT_RE.search(text)
+    if m:
+        text = text[:m.start()].strip()
+    return text
+
+
+def _apply_chat_template(tokenizer, question: str) -> str:
+    messages = [{"role": "user", "content": PROMPT_TEMPLATE.format(question=question)}]
+    # Try with enable_thinking=False (Qwen3 and similar)
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+    except TypeError:
+        pass
+    # Fallback: add /no_think via system prompt for models that use that convention
+    try:
+        msgs_with_sys = [
+            {"role": "system", "content": "/no_think"},
+            *messages,
+        ]
+        return tokenizer.apply_chat_template(
+            msgs_with_sys, tokenize=False, add_generation_prompt=True
+        )
+    except Exception:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+
+def run_inference(llm: LLM, prompts: list[str], label: str,
+                  tokenizer=None) -> tuple[list[str], float, int]:
+    # Use chat template for instruct models when tokenizer is available
+    if tokenizer is not None:
+        prompts = [_apply_chat_template(tokenizer, p) for p in prompts]
+
     print(f"\nRunning inference [{label}]...")
     t_start = time.perf_counter()
-    outputs = llm.generate(prompts, sampling_params=sampling_params)
+    outputs = llm.generate(prompts, sampling_params=_SAMPLING)
     elapsed = time.perf_counter() - t_start
-    responses = [o.outputs[0].text.strip() for o in outputs]
+    responses = [_clean_response(o.outputs[0].text) for o in outputs]
     total_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
     print(f"  {elapsed:.1f}s | {total_tokens / elapsed:.0f} tok/s")
     return responses, elapsed, total_tokens
 
 
-def load_llm(model_id: str) -> LLM:
-    return LLM(
+def load_llm(model_id: str):
+    from transformers import AutoTokenizer
+    llm = LLM(
         model=model_id,
         dtype="bfloat16",
         max_model_len=2048,
         gpu_memory_utilization=0.9,
     )
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    return llm, tokenizer
 
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
@@ -185,6 +247,11 @@ METRIC_LABELS = {
     "rouge2_raw": "ROUGE-2",
     "rougeL_raw": "ROUGE-L",
 }
+
+
+def _safe_name(model_id: str) -> str:
+    """Filesystem-safe version of a model ID for filenames."""
+    return model_id.replace("/", "_").replace(" ", "_")
 
 
 def plot_metrics_comparison(results: dict, output_dir: Path):
@@ -332,74 +399,74 @@ def main(args):
     # --- Language-only model ---
     if args.lang_model:
         print(f"\n=== Language Model: {args.lang_model} ===")
-        llm = load_llm(args.lang_model)
-        responses, elapsed, total_tokens = run_inference(llm, prompts, args.lang_model)
+        llm, tokenizer = load_llm(args.lang_model)
+        responses, elapsed, total_tokens = run_inference(llm, prompts, args.lang_model, tokenizer)
         metrics, rows = score(responses, samples)
-        results["models"]["lang_model"] = {
+        results["models"][args.lang_model] = {
             "model_id": args.lang_model,
             "total_time_s": round(elapsed, 3),
             "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
             **metrics,
         }
-        all_rows["lang_model"] = rows
-        del llm
+        all_rows[args.lang_model] = rows
+        del llm, tokenizer
 
     # --- Second language-only model ---
     if args.lang_model2:
         print(f"\n=== Language Model 2: {args.lang_model2} ===")
-        llm = load_llm(args.lang_model2)
-        responses, elapsed, total_tokens = run_inference(llm, prompts, args.lang_model2)
+        llm, tokenizer = load_llm(args.lang_model2)
+        responses, elapsed, total_tokens = run_inference(llm, prompts, args.lang_model2, tokenizer)
         metrics, rows = score(responses, samples)
-        results["models"]["lang_model2"] = {
+        results["models"][args.lang_model2] = {
             "model_id": args.lang_model2,
             "total_time_s": round(elapsed, 3),
             "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
             **metrics,
         }
-        all_rows["lang_model2"] = rows
-        del llm
+        all_rows[args.lang_model2] = rows
+        del llm, tokenizer
 
     # --- Gemma4 base ---
     print(f"\n=== Gemma4 Base: {args.model} ===")
-    llm = load_llm(args.model)
-    responses, elapsed, total_tokens = run_inference(llm, prompts, args.model)
+    llm, tokenizer = load_llm(args.model)
+    responses, elapsed, total_tokens = run_inference(llm, prompts, args.model, tokenizer)
     metrics, rows = score(responses, samples)
-    results["models"]["gemma4_base"] = {
+    results["models"][args.model] = {
         "model_id": args.model,
         "total_time_s": round(elapsed, 3),
         "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
         **metrics,
     }
-    all_rows["gemma4_base"] = rows
-    del llm
+    all_rows[args.model] = rows
+    del llm, tokenizer
 
     # --- Gemma4 fine-tuned (optional) ---
     if args.finetuned_model:
         print(f"\n=== Gemma4 Fine-tuned: {args.finetuned_model} ===")
-        llm = load_llm(args.finetuned_model)
-        responses, elapsed, total_tokens = run_inference(llm, prompts, args.finetuned_model)
+        llm, tokenizer = load_llm(args.finetuned_model)
+        responses, elapsed, total_tokens = run_inference(llm, prompts, args.finetuned_model, tokenizer)
         metrics, rows = score(responses, samples)
-        results["models"]["gemma4_finetuned"] = {
+        results["models"][args.finetuned_model] = {
             "model_id": args.finetuned_model,
             "total_time_s": round(elapsed, 3),
             "throughput_tokens_per_s": round(total_tokens / elapsed, 1),
             **metrics,
         }
-        all_rows["gemma4_finetuned"] = rows
-        del llm
+        all_rows[args.finetuned_model] = rows
+        del llm, tokenizer
 
     # --- Summary table ---
     print("\n=== Summary ===")
-    print(f"  {'Model':<25} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10}")
-    print(f"  {'-'*79}")
+    print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10}")
+    print(f"  {'-'*94}")
     for key, m in results["models"].items():
-        print(f"  {key:<25} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f}")
+        print(f"  {key:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for key, rows in all_rows.items():
-        csv_path = output_dir / f"text_qa_{key}.csv"
+        csv_path = output_dir / f"text_qa_{_safe_name(key)}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["question", "ground_truth", "response", "contains_match", "rougeL"]
