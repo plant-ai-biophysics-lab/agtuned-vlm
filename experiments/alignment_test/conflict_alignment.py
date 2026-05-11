@@ -54,6 +54,16 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 
 
+# ── Task metadata ─────────────────────────────────────────────────────────────
+
+DIMENSION_NAMES: dict[int, str] = {
+    1: "Produce Counting",
+    2: "Pest Localization",
+    3: "Crop Species ID",
+    4: "Disease Assessment",
+    5: "Field Management",
+}
+
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
 # MCQ prompts (AgriCoT)
@@ -209,9 +219,10 @@ def _find_qa_json(zf: zipfile.ZipFile, hint: str | None) -> list[dict]:
     )
 
 
-def load_agricot(n_samples: int | None,
-                 zip_file: str | None = None,
-                 json_hint: str | None = None) -> list[dict]:
+def load_agricot_by_task(n_samples: int | None,
+                         zip_file: str | None = None,
+                         json_hint: str | None = None) -> dict[str, list[dict]]:
+    """Load AgriCoT and return records grouped by task name (dimension_id)."""
     candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
     for filename in candidates:
         print(f"Downloading {filename} ...")
@@ -226,14 +237,11 @@ def load_agricot(n_samples: int | None,
         try:
             with zipfile.ZipFile(zip_path) as zf:
                 records = _find_qa_json(zf, hint=json_hint)
-
-                # Also build image lookup: image_path → raw bytes
                 image_index: dict[str, bytes] = {}
                 for member in zf.namelist():
                     if member.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
                         stem = Path(member).name
                         image_index[stem] = zf.read(member)
-
             break
         except RuntimeError as e:
             print(f"  {e}")
@@ -241,40 +249,32 @@ def load_agricot(n_samples: int | None,
     else:
         raise RuntimeError("Could not load AgriCoT from any ZIP archive.")
 
-    # Filter: need question + options + answer + reasoning + image_path
-    if records:
-        sample = {k: v for k, v in records[0].items() if k != "_image_bytes"}
-        print(f"  Sample record keys: {list(sample.keys())}")
-        print(f"  Sample record: {sample}")
-        print(f"  image_index size: {len(image_index)}, sample keys: {list(image_index.keys())[:5]}")
-
-    valid = []
+    # Group valid MCQ records by task
+    by_task: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         if not _is_qa_record(r):
-            print(f"  [skip] failed _is_qa_record: {list(r.keys())}")
             continue
-        if not r.get("options"):
-            print(f"  [skip] no options: {r.get('options')!r}")
-            continue
-        if not r.get("reasoning"):
-            print(f"  [skip] no reasoning: {r.get('reasoning')!r}")
+        if not r.get("options") or not r.get("reasoning"):
             continue
         ip = r.get("image_path", "")
         stem = Path(ip).name if ip else ""
         if stem not in image_index:
-            print(f"  [skip] image not found: {stem!r}")
             continue
         r["_image_bytes"] = image_index[stem]
         r["reasoning"] = clean_reasoning(r["reasoning"])
-        r.setdefault("item_id", len(valid))
-        valid.append(r)
+        r.setdefault("item_id", len(by_task))
+        dim_id = r.get("dimension_id")
+        task_name = DIMENSION_NAMES.get(dim_id, f"task_{dim_id}")
+        by_task[task_name].append(r)
 
-    print(f"  {len(valid):,} valid samples loaded")
+    # Apply n_samples cap per task
+    result: dict[str, list[dict]] = {}
+    for task_name, task_records in by_task.items():
+        capped = task_records[:n_samples] if n_samples else task_records
+        result[task_name] = capped
+        print(f"  {task_name}: {len(capped):,} samples")
 
-    if n_samples and n_samples < len(valid):
-        valid = valid[:n_samples]
-
-    return valid
+    return result
 
 
 # ── IDtools loader ────────────────────────────────────────────────────────────
@@ -530,6 +530,8 @@ def run_branch(llm, tokenizer, sampling_params,
                 "answer":       ans,
                 "logprob":      lp,
                 "ground_truth": gt,
+                "question":     record.get("question", ""),
+                "reasoning":    record.get("reasoning", ""),
             })
 
         done = min(start + batch_size, total)
@@ -581,8 +583,10 @@ def compute_metrics(visual_results: list[dict],
         (cd_conflict if flipped else cd_no_conflict).append(cd)
 
         per_sample.append({
-            "item_id":      v["item_id"],
-            "ground_truth": gt,
+            "item_id":        v["item_id"],
+            "question":       v.get("question", ""),
+            "reasoning":      v.get("reasoning", ""),
+            "ground_truth":   gt,
             "visual_answer":  vis_ans,
             "textual_answer": text_ans,
             "visual_correct":  vis_ok,
@@ -713,27 +717,109 @@ def plot_answer_heatmap(metrics: dict, model_label: str, output_dir: str):
     print(f"  Saved: {path}")
 
 
+def plot_task_summary(task_metrics: dict[str, dict], model_label: str, output_dir: str):
+    """Grouped bar chart: one group per task, bars = vis_acc / text_acc / FR / CR."""
+    tasks  = list(task_metrics.keys())
+    keys   = ["visual_accuracy", "textual_accuracy", "flip_rate", "conflict_rate"]
+    labels = ["Visual Acc", "Textual Acc", "Flip Rate", "Conflict Rate"]
+    colors = ["steelblue", "darkorange", "tomato", "mediumpurple"]
+
+    x     = np.arange(len(tasks))
+    width = 0.18
+    fig, ax = plt.subplots(figsize=(max(8, len(tasks) * 2.5 + 2), 5))
+
+    for i, (key, label, color) in enumerate(zip(keys, labels, colors)):
+        vals   = [task_metrics[t].get(key, 0) or 0 for t in tasks]
+        offset = (i - (len(keys) - 1) / 2) * width
+        bars   = ax.bar(x + offset, vals, width, label=label, color=color)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.005,
+                    f"{v:.2f}", ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(tasks, rotation=15, ha="right")
+    ax.set_ylim(0, 1.25)
+    ax.set_ylabel("Rate / Accuracy")
+    ax.set_title(f"Per-Task Conflict Analysis — {model_label}")
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+
+    safe = model_label.replace("/", "_").replace(" ", "_")
+    path = os.path.join(output_dir, f"task_summary_{safe}.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def print_task_table(task_metrics: dict[str, dict], model_label: str):
+    """Print a compact summary table to stdout."""
+    cols = ["n_samples", "visual_accuracy", "textual_accuracy", "flip_rate", "conflict_rate"]
+    header = f"{'Task':<25} {'N':>5} {'VisAcc':>8} {'TxtAcc':>8} {'FR':>8} {'CR':>8}"
+    print(f"\n  {model_label}")
+    print("  " + "-" * len(header))
+    print("  " + header)
+    print("  " + "-" * len(header))
+    for task, m in task_metrics.items():
+        n   = m.get("n_samples", 0)
+        va  = m.get("visual_accuracy",  0) or 0
+        ta  = m.get("textual_accuracy", 0) or 0
+        fr  = m.get("flip_rate",        0) or 0
+        cr  = m.get("conflict_rate",    0) or 0
+        print(f"  {task:<25} {n:>5} {va:>8.4f} {ta:>8.4f} {fr:>8.4f} {cr:>8.4f}")
+    print("  " + "-" * len(header))
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run_model(model_name: str, records: list[dict], args, mode: str = "mcq") -> dict:
+def _print_samples(per_sample: list[dict], task_name: str, n: int = 3):
+    """Print n sample records per task to aid reasoning-leakage inspection."""
+    samples = per_sample[:n]
+    print(f"\n  ── Sample outputs: {task_name} ──")
+    for s in samples:
+        flip_tag = " [FLIP]" if s["flipped"] else ""
+        print(f"  item {s['item_id']}{flip_tag}")
+        print(f"    Q        : {s['question']}")
+        print(f"    Reasoning: {s['reasoning'][:300].strip()!r}")
+        print(f"    GT={s['ground_truth']}  Visual={s['visual_answer']}(lp={s['visual_logprob']:.3f})"
+              f"  Textual={s['textual_answer']}(lp={s['textual_logprob']:.3f})")
+
+
+def run_model(model_name: str,
+              tasks: dict[str, list[dict]],
+              args,
+              mode: str = "mcq") -> dict[str, dict]:
+    """Load model once, run all tasks, return {task_name: metrics}."""
     llm, tokenizer, sampling_params = load_vllm_model(
         model_name, gpu_mem=args.gpu_mem, max_model_len=args.max_model_len, mode=mode
     )
 
-    print(f"\nRunning visual branch ({mode}) ...")
-    visual_results = run_branch(llm, tokenizer, sampling_params,
-                                records, "visual", args.batch_size, mode=mode)
+    task_metrics: dict[str, dict] = {}
+    for task_name, records in tasks.items():
+        if not records:
+            continue
+        print(f"\n  ── Task: {task_name} ({len(records)} samples) ──")
 
-    print(f"\nRunning textual branch ({mode}) ...")
-    textual_results = run_branch(llm, tokenizer, sampling_params,
-                                 records, "textual", args.batch_size, mode=mode)
+        print(f"  Running visual branch ...")
+        visual_results = run_branch(llm, tokenizer, sampling_params,
+                                    records, "visual", args.batch_size, mode=mode)
+
+        print(f"  Running textual branch ...")
+        textual_results = run_branch(llm, tokenizer, sampling_params,
+                                     records, "textual", args.batch_size, mode=mode)
+
+        metrics = compute_metrics(visual_results, textual_results, mode=mode)
+        metrics["task"] = task_name
+        task_metrics[task_name] = metrics
+
+        _print_samples(metrics["per_sample"], task_name, n=3)
 
     del llm
     import gc, torch
     gc.collect()
     torch.cuda.empty_cache()
 
-    return compute_metrics(visual_results, textual_results, mode=mode)
+    return task_metrics
 
 
 def main():
@@ -772,14 +858,18 @@ def main():
         print("Loaded saved results — re-plotting ...")
     else:
         if args.source == "idtools":
+            # idtools is a single flat list — wrap as one task
             records = load_idtools(args.idtools_jsonl, n_samples=args.n_samples)
-            mode = "oeq"
+            tasks   = {"idtools": records}
+            mode    = "oeq"
         else:
-            records = load_agricot(args.n_samples,
-                                   zip_file=args.zip,
-                                   json_hint=args.json_hint)
-            mode = "mcq"
-        print(f"\nRunning on {len(records)} samples  [mode={mode}]\n")
+            tasks = load_agricot_by_task(args.n_samples,
+                                         zip_file=args.zip,
+                                         json_hint=args.json_hint)
+            mode  = "mcq"
+
+        total = sum(len(v) for v in tasks.values())
+        print(f"\nRunning on {total} samples across {len(tasks)} tasks  [mode={mode}]\n")
 
         all_metrics: dict = {}
 
@@ -792,13 +882,9 @@ def main():
             print(f"\n{'='*60}")
             print(f"  Model: {model_name}  ({label})")
             print(f"{'='*60}")
-            metrics = run_model(model_name, records, args, mode=mode)
-            all_metrics[label] = metrics
-            print(f"\n  Visual Acc  : {metrics['visual_accuracy']:.4f}")
-            print(f"  Textual Acc : {metrics['textual_accuracy']:.4f}")
-            print(f"  Flip Rate   : {metrics['flip_rate']:.4f}")
-            print(f"  Conflict Rate: {metrics['conflict_rate']:.4f}")
-            print(f"  CD Mean     : {metrics['cd_mean']:.4f}")
+            task_metrics = run_model(model_name, tasks, args, mode=mode)
+            all_metrics[label] = task_metrics
+            print_task_table(task_metrics, label)
 
         with open(results_path, "w") as f:
             json.dump(all_metrics, f, indent=2)
@@ -807,16 +893,24 @@ def main():
     # ── Plots ──────────────────────────────────────────────────────────────────
     print("\nGenerating plots ...")
 
-    # Summary bar chart across models
-    summary_input = {k: v for k, v in all_metrics.items() if "per_sample" in v}
-    if len(summary_input) > 0:
-        plot_summary(summary_input, args.output_dir)
-
-    for label, metrics in all_metrics.items():
-        if "per_sample" not in metrics:
+    for label, task_metrics in all_metrics.items():
+        if not isinstance(task_metrics, dict):
             continue
-        plot_cd_distribution(metrics, label, args.output_dir)
-        plot_answer_heatmap(metrics, label, args.output_dir)
+        # Per-task summary bar chart
+        plot_task_summary(task_metrics, label, args.output_dir)
+        # Per-task CD distribution and answer heatmap
+        for task_name, metrics in task_metrics.items():
+            if "per_sample" not in metrics:
+                continue
+            plot_cd_distribution(metrics, f"{label}_{task_name}", args.output_dir)
+            plot_answer_heatmap(metrics, f"{label}_{task_name}", args.output_dir)
+
+    # Cross-model summary (if multiple models)
+    model_level = {label: list(tm.values())[0]
+                   for label, tm in all_metrics.items()
+                   if isinstance(tm, dict) and tm}
+    if len(model_level) > 1:
+        plot_summary(model_level, args.output_dir)
 
     print(f"\nAll outputs in {args.output_dir}/")
 
