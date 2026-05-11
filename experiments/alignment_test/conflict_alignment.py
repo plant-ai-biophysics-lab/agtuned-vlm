@@ -933,10 +933,15 @@ def main():
 
         all_metrics: dict = {}
 
-        for label, model_name in [
-            ("finetuned", args.model),
-            ("baseline",  args.baseline_model),
-        ]:
+        def _model_label(model_path: str) -> str:
+            name = Path(model_path).name if "/" not in model_path else model_path.split("/")[-1]
+            return name
+
+        models_to_run = [(_model_label(args.model), args.model)]
+        if args.baseline_model:
+            models_to_run.append((_model_label(args.baseline_model), args.baseline_model))
+
+        for label, model_name in models_to_run:
             if not model_name:
                 continue
             print(f"\n{'='*60}")
