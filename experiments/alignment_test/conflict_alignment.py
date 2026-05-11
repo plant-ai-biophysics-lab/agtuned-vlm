@@ -65,7 +65,7 @@ MCQ_SYSTEM_PROMPT = (
 
 def visual_prompt(question: str, options: dict) -> str:
     opts = "\n".join(f"  {k}: {v}" for k, v in sorted(options.items()))
-    return f"<image>\n{question}\n{opts}"
+    return f"<|image|>\n{question}\n{opts}"
 
 
 def textual_prompt(description: str, question: str, options: dict) -> str:
@@ -84,7 +84,7 @@ OEQ_SYSTEM_PROMPT = (
 )
 
 def oeq_visual_prompt(question: str) -> str:
-    return f"<image>\n{question}"
+    return f"<|image|>\n{question}"
 
 
 def oeq_textual_prompt(description: str, question: str) -> str:
