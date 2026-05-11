@@ -211,8 +211,7 @@ def _find_qa_json(zf: zipfile.ZipFile, hint: str | None) -> list[dict]:
 
 def load_agricot(n_samples: int | None,
                  zip_file: str | None = None,
-                 json_hint: str | None = None,
-                 dimension_id: int = 3) -> list[dict]:
+                 json_hint: str | None = None) -> list[dict]:
     candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
     for filename in candidates:
         print(f"Downloading {filename} ...")
@@ -242,25 +241,10 @@ def load_agricot(n_samples: int | None,
     else:
         raise RuntimeError("Could not load AgriCoT from any ZIP archive.")
 
-    # Print all dimension_ids present in the raw dataset
-    all_dim_ids = sorted(set(r.get("dimension_id") for r in records))
-    print(f"  dimension_ids in dataset: {all_dim_ids}")
-    print(f"  dimension_id type sample: {type(records[0].get('dimension_id')) if records else 'N/A'}")
-
-    # Coerce dimension_id to match the type found in the data
-    sample_dim = records[0].get("dimension_id") if records else dimension_id
-    if isinstance(sample_dim, str):
-        target_dim = str(dimension_id)
-    else:
-        target_dim = dimension_id
-
     # Filter: need question + options + answer + reasoning + image_path
-    # Only keep Disease Monitoring samples (dimension_id == 3)
     valid = []
     for r in records:
         if not _is_qa_record(r):
-            continue
-        if r.get("dimension_id") != target_dim:
             continue
         if not r.get("options"):
             continue
@@ -275,7 +259,7 @@ def load_agricot(n_samples: int | None,
         r.setdefault("item_id", len(valid))
         valid.append(r)
 
-    print(f"  {len(valid):,} samples after filtering (dimension_id={target_dim})")
+    print(f"  {len(valid):,} valid samples loaded")
 
     if n_samples and n_samples < len(valid):
         valid = valid[:n_samples]
@@ -763,8 +747,7 @@ def main():
     parser.add_argument("--zip",            type=str, default=None,
         help="Force specific ZIP file, e.g. AgriCoT.zip (agricot source only)")
     parser.add_argument("--json_hint",      type=str, default=None)
-    parser.add_argument("--dimension_id",   type=int, default=3,
-        help="AgriCoT dimension_id to filter on (default: 3 = Disease Monitoring)")
+
     parser.add_argument("--plot_only",      action="store_true",
         help="Skip inference, re-plot from saved results JSON")
     args = parser.parse_args()
@@ -784,8 +767,7 @@ def main():
         else:
             records = load_agricot(args.n_samples,
                                    zip_file=args.zip,
-                                   json_hint=args.json_hint,
-                                   dimension_id=args.dimension_id)
+                                   json_hint=args.json_hint)
             mode = "mcq"
         print(f"\nRunning on {len(records)} samples  [mode={mode}]\n")
 
