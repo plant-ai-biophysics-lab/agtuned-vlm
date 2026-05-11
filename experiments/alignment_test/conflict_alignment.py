@@ -277,6 +277,49 @@ def load_agricot_by_task(n_samples: int | None,
     return result
 
 
+def load_preprocessed_by_task(preprocessed_json: str,
+                               zip_file: str | None,
+                               n_samples: int | None) -> dict[str, list[dict]]:
+    """Load from preprocess_reasoning.py output, attach image bytes, group by task."""
+    with open(preprocessed_json) as f:
+        records = json.load(f)
+
+    # Download zip just for images
+    candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
+    image_index: dict[str, bytes] = {}
+    for filename in candidates:
+        try:
+            zip_path = hf_hub_download(
+                repo_id="wenyb/AgriCoT", filename=filename, repo_type="dataset"
+            )
+            with zipfile.ZipFile(zip_path) as zf:
+                for member in zf.namelist():
+                    if member.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        image_index[Path(member).name] = zf.read(member)
+            break
+        except Exception:
+            continue
+
+    by_task: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        stem = Path(r.get("image_path", "")).name
+        if stem not in image_index:
+            continue
+        r["_image_bytes"] = image_index[stem]
+        # ensure fallback question fields exist
+        r.setdefault("question", r.get("question_visual", ""))
+        task = r.get("task") or DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
+        by_task[task].append(r)
+
+    result: dict[str, list[dict]] = {}
+    for task_name, task_records in by_task.items():
+        capped = task_records[:n_samples] if n_samples else task_records
+        result[task_name] = capped
+        print(f"  {task_name}: {len(capped):,} samples")
+
+    return result
+
+
 # ── IDtools loader ────────────────────────────────────────────────────────────
 
 def load_idtools(jsonl_path: str, n_samples: int | None = None) -> list[dict]:
@@ -368,15 +411,17 @@ def load_vllm_model(model_name: str,
     return llm, tokenizer, sampling_params
 
 
+def _opts(record: dict) -> dict:
+    o = record["options"]
+    return o if isinstance(o, dict) else json.loads(o)
+
+
 def _make_visual_messages(tokenizer, record: dict) -> str:
-    """MCQ: chat prompt with embedded image."""
+    """MCQ visual branch: image + question_visual (mentions 'this image')."""
+    q = record.get("question_visual") or record["question"]
     messages = [
         {"role": "system", "content": MCQ_SYSTEM_PROMPT},
-        {"role": "user",   "content": visual_prompt(
-            record["question"],
-            record["options"] if isinstance(record["options"], dict)
-            else json.loads(record["options"])
-        )},
+        {"role": "user",   "content": visual_prompt(q, _opts(record))},
     ]
     return tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -384,13 +429,15 @@ def _make_visual_messages(tokenizer, record: dict) -> str:
 
 
 def _make_textual_messages(tokenizer, record: dict) -> str:
-    """MCQ: chat prompt with description text only (no image)."""
-    opts = record["options"] if isinstance(record["options"], dict) \
-           else json.loads(record["options"])
-    desc = record.get("description") or record.get("reasoning", "")
+    """MCQ textual branch: visual_description + question_textual (no image reference)."""
+    opts = _opts(record)
+    desc = record.get("visual_description") \
+        or record.get("description") \
+        or record.get("reasoning", "")
+    q    = record.get("question_textual") or record["question"]
     messages = [
         {"role": "system", "content": MCQ_SYSTEM_PROMPT},
-        {"role": "user",   "content": textual_prompt(desc, record["question"], opts)},
+        {"role": "user",   "content": textual_prompt(desc, q, opts)},
     ]
     return tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -398,10 +445,11 @@ def _make_textual_messages(tokenizer, record: dict) -> str:
 
 
 def _make_visual_messages_oeq(tokenizer, record: dict) -> str:
-    """OEQ: chat prompt with embedded image, no options."""
+    """OEQ visual branch: image + question_visual."""
+    q = record.get("question_visual") or record["question"]
     messages = [
         {"role": "system", "content": OEQ_SYSTEM_PROMPT},
-        {"role": "user",   "content": oeq_visual_prompt(record["question"])},
+        {"role": "user",   "content": oeq_visual_prompt(q)},
     ]
     return tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -409,11 +457,14 @@ def _make_visual_messages_oeq(tokenizer, record: dict) -> str:
 
 
 def _make_textual_messages_oeq(tokenizer, record: dict) -> str:
-    """OEQ: chat prompt with description text only (no image, no options)."""
-    desc = record.get("description") or record.get("reasoning", "")
+    """OEQ textual branch: visual_description + question_textual."""
+    desc = record.get("visual_description") \
+        or record.get("description") \
+        or record.get("reasoning", "")
+    q = record.get("question_textual") or record["question"]
     messages = [
         {"role": "system", "content": OEQ_SYSTEM_PROMPT},
-        {"role": "user",   "content": oeq_textual_prompt(desc, record["question"])},
+        {"role": "user",   "content": oeq_textual_prompt(desc, q)},
     ]
     return tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -842,7 +893,9 @@ def main():
         help="Path to scrape_idtools_with_images.py output (used when --source idtools)")
     parser.add_argument("--zip",            type=str, default=None,
         help="Force specific ZIP file, e.g. AgriCoT.zip (agricot source only)")
-    parser.add_argument("--json_hint",      type=str, default=None)
+    parser.add_argument("--json_hint",        type=str, default=None)
+    parser.add_argument("--preprocessed_json", type=str, default=None,
+        help="Path to output of preprocess_reasoning.py (skips raw AgriCoT loading)")
 
     parser.add_argument("--plot_only",      action="store_true",
         help="Skip inference, re-plot from saved results JSON")
@@ -858,10 +911,15 @@ def main():
         print("Loaded saved results — re-plotting ...")
     else:
         if args.source == "idtools":
-            # idtools is a single flat list — wrap as one task
             records = load_idtools(args.idtools_jsonl, n_samples=args.n_samples)
             tasks   = {"idtools": records}
             mode    = "oeq"
+        elif args.preprocessed_json:
+            print(f"Loading preprocessed records from {args.preprocessed_json} ...")
+            tasks = load_preprocessed_by_task(args.preprocessed_json,
+                                               zip_file=args.zip,
+                                               n_samples=args.n_samples)
+            mode  = "mcq"
         else:
             tasks = load_agricot_by_task(args.n_samples,
                                          zip_file=args.zip,
