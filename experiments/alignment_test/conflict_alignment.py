@@ -58,10 +58,10 @@ from huggingface_hub import hf_hub_download
 
 DIMENSION_NAMES: dict[int, str] = {
     1: "Produce Counting",
-    2: "Pest Localization",
+    2: "Farm Management",
     3: "Crop Species ID",
-    4: "Disease Assessment",
-    5: "Field Management",
+    4: "Pest and Disease",
+    5: "Weed Management",
 }
 
 # ── Prompt templates ──────────────────────────────────────────────────────────

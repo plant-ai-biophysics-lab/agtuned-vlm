@@ -31,10 +31,10 @@ from transformers import AutoTokenizer
 
 DIMENSION_NAMES: dict[int, str] = {
     1: "Produce Counting",
-    2: "Pest Localization",
+    2: "Farm Management",
     3: "Crop Species ID",
-    4: "Disease Assessment",
-    5: "Field Management",
+    4: "Pest and Disease",
+    5: "Weed Management",
 }
 
 DESCRIPTION_SYSTEM = (
@@ -201,14 +201,15 @@ def main():
     parser.add_argument("--resume",      action="store_true",
         help="Skip records already in --output")
     parser.add_argument("--disease_only", action="store_true",
-        help="Filter to Disease Assessment records only (dimension_id=3)")
+        help="Filter to disease monitoring records (dimension_id=4, sub_dimension_id=3)")
     args = parser.parse_args()
 
     records = _load_valid_records(args.zip)
 
     if args.disease_only:
-        records = [r for r in records if r.get("dimension_id") == 3]
-        print(f"  {len(records)} disease records after filtering")
+        records = [r for r in records
+                   if r.get("dimension_id") == 4 and r.get("sub_dimension_id") == 3]
+        print(f"  {len(records)} disease monitoring records (dim=4, sub_dim=3)")
 
     if args.n:
         records = records[: args.n]
