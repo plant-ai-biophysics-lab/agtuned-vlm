@@ -39,22 +39,24 @@ DIMENSION_NAMES: dict[int, str] = {
 
 DESCRIPTION_SYSTEM = (
     "You write one-sentence visual captions for agricultural images.\n\n"
-    "Rules — follow all strictly:\n"
-    "- Exactly one sentence. No more.\n"
-    "- Describe only the high-level visual subject: what type of plant/crop/object "
-    "is shown and its most prominent visible feature (color, condition, part).\n"
-    "- Do NOT mention the correct answer or any word that names it.\n"
-    "- Do NOT mention any option letter (A, B, C, D).\n"
-    "- Do NOT include any analysis, conclusion, or reasoning.\n"
-    "- Style: 'A rice leaf showing brown circular lesions.' / "
-    "'A corn cob with scattered discolored kernels.' / "
-    "'A wheat stem with orange powdery pustules.'\n"
-    "Return only the one-sentence caption, nothing else."
+    "Rules — follow ALL strictly or your output is wrong:\n"
+    "- ONE sentence only. If you write more than one sentence you have failed.\n"
+    "- Describe only: what crop/plant/object is visible and its most prominent "
+    "visual feature (color, texture, affected part). Nothing else.\n"
+    "- NEVER include any number, count, quantity, or range.\n"
+    "- NEVER name the correct answer or any concept that reveals it.\n"
+    "- NEVER mention option letters (A, B, C, D).\n"
+    "- NEVER include analysis, reasoning, counting, or conclusions.\n"
+    "- Style examples:\n"
+    "    'A corn cob with kernels showing dark discoloration and surface cracking.'\n"
+    "    'A rice leaf with brown circular lesions and yellowing margins.'\n"
+    "    'A wheat stem with orange powdery pustules along the surface.'\n"
+    "Return only the caption sentence, no prefix, no explanation."
 )
 
 DESCRIPTION_USER_TEMPLATE = (
-    "Correct answer (do NOT mention this in your caption): {answer} = {answer_text}\n\n"
-    "Reasoning (for context only):\n{reasoning}"
+    "ANSWER TO HIDE (do not reveal or hint at this): {answer} = {answer_text}\n\n"
+    "Reasoning (extract visual details only, ignore counts and conclusions):\n{reasoning}"
 )
 
 QUESTION_REWORD_SYSTEM = (
@@ -97,6 +99,18 @@ def _load_valid_records(zip_file: str | None) -> list[dict]:
         return valid
 
     raise RuntimeError("Could not load AgriCoT.")
+
+
+def _sanitize_description(text: str, answer_text: str) -> str:
+    """Keep only the first sentence and strip any leaked answer text."""
+    # Take only the first sentence
+    sentence = re.split(r'(?<=[.!?])\s', text.strip())[0]
+    # Warn if answer text keywords appear (digits or key answer words)
+    answer_words = [w for w in re.findall(r'\w+', answer_text) if len(w) > 2]
+    for word in answer_words:
+        if re.search(rf'\b{re.escape(word)}\b', sentence, re.IGNORECASE):
+            print(f"  [warn] possible leakage of '{word}' in: {sentence!r}")
+    return sentence
 
 
 def _needs_reword(question: str) -> bool:
@@ -242,8 +256,10 @@ def main():
             reword_map = {}
 
         for i, r in enumerate(batch):
-            q_textual = reword_map[i] if i in reword_map else r["question"]
-            task = DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
+            q_textual    = reword_map[i] if i in reword_map else r["question"]
+            answer_text  = r["options"].get(r["answer"], "")
+            task         = DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
+            description  = _sanitize_description(desc_outputs[i], answer_text)
             results.append({
                 "item_id":            r.get("item_id", start + i),
                 "dimension_id":       r.get("dimension_id"),
@@ -253,7 +269,7 @@ def main():
                 "image_path":         r.get("image_path", ""),
                 "question_visual":    r["question"],
                 "question_textual":   q_textual,
-                "visual_description": desc_outputs[i],
+                "visual_description": description,
                 "reasoning_original": r["reasoning"],
             })
 
