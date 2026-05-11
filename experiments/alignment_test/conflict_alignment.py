@@ -596,8 +596,8 @@ def compute_metrics(visual_results: list[dict],
     vis_acc  = vis_correct  / n
     text_acc = text_correct / n
     fr       = flip_count   / n
-    delta    = abs(vis_acc - text_acc)
-    cr       = fr - delta  # Conflict Rate = FR - |ΔAcc|
+    delta    = text_acc - vis_acc   # ΔAcc = Acc_textual − Acc_visual (signed, per paper eq.5)
+    cr       = fr - delta           # CR = FR − ΔAcc
 
     return {
         "n_samples":        n,
