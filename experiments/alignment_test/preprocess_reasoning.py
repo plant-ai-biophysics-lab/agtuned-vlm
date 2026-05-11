@@ -101,6 +101,18 @@ def _load_valid_records(zip_file: str | None) -> list[dict]:
     raise RuntimeError("Could not load AgriCoT.")
 
 
+def _answer_str(r: dict) -> str:
+    ans = r.get("answer", "")
+    return ans if isinstance(ans, str) else str(ans)
+
+
+def _answer_text(r: dict) -> str:
+    ans = _answer_str(r)
+    opts = r.get("options", {})
+    val = opts.get(ans, "") if isinstance(ans, str) else ""
+    return val if isinstance(val, str) else str(val)
+
+
 def _sanitize_description(text: str, answer_text: str) -> str:
     """Keep only the first sentence and strip any leaked answer text."""
     # Take only the first sentence
@@ -224,8 +236,8 @@ def main():
                 tokenizer,
                 DESCRIPTION_SYSTEM,
                 DESCRIPTION_USER_TEMPLATE.format(
-                    answer=r["answer"],
-                    answer_text=r["options"].get(r["answer"], "") if isinstance(r["options"].get(r["answer"], ""), str) else str(r["options"].get(r["answer"], "")),
+                    answer=_answer_str(r),
+                    answer_text=_answer_text(r),
                     reasoning=r["reasoning"],
                 ),
             )
@@ -257,8 +269,7 @@ def main():
 
         for i, r in enumerate(batch):
             q_textual    = reword_map[i] if i in reword_map else r["question"]
-            answer_val   = r["options"].get(r["answer"], "")
-            answer_text  = answer_val if isinstance(answer_val, str) else str(answer_val)
+            answer_text  = _answer_text(r)
             task         = DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
             description  = _sanitize_description(desc_outputs[i], answer_text)
             results.append({
