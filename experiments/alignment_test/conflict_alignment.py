@@ -223,7 +223,7 @@ def load_agricot_by_task(n_samples: int | None,
                          zip_file: str | None = None,
                          json_hint: str | None = None) -> dict[str, list[dict]]:
     """Load AgriCoT and return records grouped by task name (dimension_id)."""
-    candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
+    candidates = (zip_file,) if zip_file else ("AgriCoT.zip", "AgriCoT_2.zip")
     for filename in candidates:
         print(f"Downloading {filename} ...")
         try:
@@ -256,6 +256,8 @@ def load_agricot_by_task(n_samples: int | None,
             continue
         if not r.get("options") or not r.get("reasoning"):
             continue
+        if not isinstance(r.get("answer"), str):
+            continue
         ip = r.get("image_path", "")
         stem = Path(ip).name if ip else ""
         if stem not in image_index:
@@ -285,7 +287,7 @@ def load_preprocessed_by_task(preprocessed_json: str,
         records = json.load(f)
 
     # Download zip just for images
-    candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
+    candidates = (zip_file,) if zip_file else ("AgriCoT.zip", "AgriCoT_2.zip")
     image_index: dict[str, bytes] = {}
     for filename in candidates:
         try:

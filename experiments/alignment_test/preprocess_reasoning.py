@@ -67,9 +67,28 @@ QUESTION_REWORD_SYSTEM = (
     "Return only the rewritten question, nothing else."
 )
 
+VERIFY_SYSTEM = (
+    "You are a strict quality checker for agricultural image captions.\n\n"
+    "You will be given a one-sentence caption and the correct answer to a "
+    "multiple-choice question about the image.\n\n"
+    "Check BOTH of these:\n"
+    "1. Is the caption purely visual? (describes only appearance — no analysis, "
+    "counts, conclusions, or reasoning)\n"
+    "2. Does the caption avoid revealing the correct answer? (no direct naming "
+    "of the answer concept, no hints that narrow down to the answer)\n\n"
+    "If BOTH pass: respond with exactly: PASS\n"
+    "If either fails: respond with exactly: REWRITE: <corrected one-sentence caption>\n\n"
+    "The corrected caption must still be one sentence, visual only, and answer-free."
+)
+
+VERIFY_USER_TEMPLATE = (
+    "Correct answer to hide: {answer} = {answer_text}\n\n"
+    "Caption to check: {description}"
+)
+
 
 def _load_valid_records(zip_file: str | None) -> list[dict]:
-    candidates = (zip_file,) if zip_file else ("AgriCoT_2.zip", "AgriCoT.zip")
+    candidates = (zip_file,) if zip_file else ("AgriCoT.zip", "AgriCoT_2.zip")
     for filename in candidates:
         print(f"Downloading {filename} ...")
         try:
@@ -81,7 +100,14 @@ def _load_valid_records(zip_file: str | None) -> list[dict]:
             continue
 
         with zipfile.ZipFile(zip_path) as zf:
-            data = json.loads(zf.read("AgriCoT_2/VQRA.json"))
+            # AgriCoT.zip has VQRA.json at root; AgriCoT_2.zip has it nested
+            vqra_path = next(
+                (n for n in zf.namelist() if n.endswith("VQRA.json")), None
+            )
+            if vqra_path is None:
+                print(f"  No VQRA.json found in {filename}")
+                continue
+            data = json.loads(zf.read(vqra_path))
             image_names = {
                 Path(m).name
                 for m in zf.namelist()
@@ -93,9 +119,10 @@ def _load_valid_records(zip_file: str | None) -> list[dict]:
             if r.get("options")
             and r.get("reasoning")
             and r.get("question")
+            and isinstance(r.get("answer"), str)
             and Path(r.get("image_path", "")).name in image_names
         ]
-        print(f"  {len(valid)} valid MCQ records")
+        print(f"  {len(valid)} valid single-answer MCQ records")
         return valid
 
     raise RuntimeError("Could not load AgriCoT.")
@@ -173,9 +200,16 @@ def main():
         help="Print first N raw records without calling the model")
     parser.add_argument("--resume",      action="store_true",
         help="Skip records already in --output")
+    parser.add_argument("--disease_only", action="store_true",
+        help="Filter to Disease Assessment records only (dimension_id=3)")
     args = parser.parse_args()
 
     records = _load_valid_records(args.zip)
+
+    if args.disease_only:
+        records = [r for r in records if r.get("dimension_id") == 3]
+        print(f"  {len(records)} disease records after filtering")
+
     if args.n:
         records = records[: args.n]
 
@@ -204,7 +238,7 @@ def main():
         return
 
     # Load model
-    from vllm import LLM, SamplingParams
+    from vllm import LLM, SamplingParams  # noqa: E402
 
     print(f"\nLoading {args.model} ...")
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
@@ -252,10 +286,41 @@ def main():
             for r in batch
         ]
 
-        # Run description generation
+        # Stage 1: generate descriptions
         desc_outputs = _batch_generate(llm, tokenizer, desc_prompts, sampling_params)
 
-        # Run reword generation (only non-None prompts)
+        # Stage 2: verify each description — rewrite if it leaks or is non-visual
+        verify_prompts = [
+            _build_prompt(
+                tokenizer,
+                VERIFY_SYSTEM,
+                VERIFY_USER_TEMPLATE.format(
+                    answer=_answer_str(r),
+                    answer_text=_answer_text(r),
+                    description=_sanitize_description(desc_outputs[i], _answer_text(r)),
+                ),
+            )
+            for i, r in enumerate(batch)
+        ]
+        verify_outputs = _batch_generate(
+            llm, tokenizer, verify_prompts,
+            SamplingParams(temperature=0.1, top_p=0.9, max_tokens=80, stop=["\n\n\n"]),
+        )
+
+        final_descriptions = []
+        for i, (raw, verify_out) in enumerate(zip(desc_outputs, verify_outputs)):
+            base = _sanitize_description(raw, _answer_text(batch[i]))
+            if verify_out.startswith("REWRITE:"):
+                rewritten = verify_out[len("REWRITE:"):].strip()
+                rewritten = _sanitize_description(rewritten, _answer_text(batch[i]))
+                print(f"  [verify] item {batch[i].get('item_id')} rewritten")
+                print(f"    before: {base!r}")
+                print(f"    after : {rewritten!r}")
+                final_descriptions.append(rewritten)
+            else:
+                final_descriptions.append(base)
+
+        # Stage 3: reword questions that reference the image
         reword_indices = [i for i, p in enumerate(reword_prompts) if p is not None]
         if reword_indices:
             reword_out = _batch_generate(
@@ -268,10 +333,8 @@ def main():
             reword_map = {}
 
         for i, r in enumerate(batch):
-            q_textual    = reword_map[i] if i in reword_map else r["question"]
-            answer_text  = _answer_text(r)
-            task         = DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
-            description  = _sanitize_description(desc_outputs[i], answer_text)
+            q_textual = reword_map[i] if i in reword_map else r["question"]
+            task      = DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
             results.append({
                 "item_id":            r.get("item_id", start + i),
                 "dimension_id":       r.get("dimension_id"),
@@ -281,7 +344,7 @@ def main():
                 "image_path":         r.get("image_path", ""),
                 "question_visual":    r["question"],
                 "question_textual":   q_textual,
-                "visual_description": description,
+                "visual_description": final_descriptions[i],
                 "reasoning_original": r["reasoning"],
             })
 
