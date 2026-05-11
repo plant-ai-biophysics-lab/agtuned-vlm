@@ -174,7 +174,7 @@ def _find_qa_json(zf: zipfile.ZipFile, hint: str | None) -> list[dict]:
     ordered = sorted(json_files, key=lambda n: (
         0 if (hint and hint.lower() in n.lower()) else
         0 if any(k in n.lower() for k in ("vqra", "qa", "question", "cot")) else
-        1 if any(k in n.lower() for k in ("data", "meta", "sample")) else 2,
+        1 if any(k in n.lower() for k in ("meta", "sample")) else 2,
         n,
     ))
 
@@ -199,7 +199,7 @@ def _find_qa_json(zf: zipfile.ZipFile, hint: str | None) -> list[dict]:
 
         if not isinstance(data, list) or len(data) < 5:
             continue
-        if any(_is_qa_record(r) for r in data[:5]):
+        if any(_is_qa_record(r) for r in data[:5]) and any(r.get("reasoning") for r in data[:5]):
             print(f"  ✓ Found {len(data):,} QA records in {name}")
             return data
 
@@ -242,17 +242,27 @@ def load_agricot(n_samples: int | None,
         raise RuntimeError("Could not load AgriCoT from any ZIP archive.")
 
     # Filter: need question + options + answer + reasoning + image_path
+    if records:
+        sample = {k: v for k, v in records[0].items() if k != "_image_bytes"}
+        print(f"  Sample record keys: {list(sample.keys())}")
+        print(f"  Sample record: {sample}")
+        print(f"  image_index size: {len(image_index)}, sample keys: {list(image_index.keys())[:5]}")
+
     valid = []
     for r in records:
         if not _is_qa_record(r):
+            print(f"  [skip] failed _is_qa_record: {list(r.keys())}")
             continue
         if not r.get("options"):
+            print(f"  [skip] no options: {r.get('options')!r}")
             continue
         if not r.get("reasoning"):
+            print(f"  [skip] no reasoning: {r.get('reasoning')!r}")
             continue
         ip = r.get("image_path", "")
         stem = Path(ip).name if ip else ""
         if stem not in image_index:
+            print(f"  [skip] image not found: {stem!r}")
             continue
         r["_image_bytes"] = image_index[stem]
         r["reasoning"] = clean_reasoning(r["reasoning"])
