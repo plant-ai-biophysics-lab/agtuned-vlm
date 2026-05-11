@@ -245,6 +245,14 @@ def load_agricot(n_samples: int | None,
     # Print all dimension_ids present in the raw dataset
     all_dim_ids = sorted(set(r.get("dimension_id") for r in records))
     print(f"  dimension_ids in dataset: {all_dim_ids}")
+    print(f"  dimension_id type sample: {type(records[0].get('dimension_id')) if records else 'N/A'}")
+
+    # Coerce dimension_id to match the type found in the data
+    sample_dim = records[0].get("dimension_id") if records else dimension_id
+    if isinstance(sample_dim, str):
+        target_dim = str(dimension_id)
+    else:
+        target_dim = dimension_id
 
     # Filter: need question + options + answer + reasoning + image_path
     # Only keep Disease Monitoring samples (dimension_id == 3)
@@ -252,7 +260,7 @@ def load_agricot(n_samples: int | None,
     for r in records:
         if not _is_qa_record(r):
             continue
-        if r.get("dimension_id") != dimension_id:
+        if r.get("dimension_id") != target_dim:
             continue
         if not r.get("options"):
             continue
@@ -267,7 +275,7 @@ def load_agricot(n_samples: int | None,
         r.setdefault("item_id", len(valid))
         valid.append(r)
 
-    print(f"  {len(valid):,} Disease Monitoring samples (dimension_id=3)")
+    print(f"  {len(valid):,} samples after filtering (dimension_id={target_dim})")
 
     if n_samples and n_samples < len(valid):
         valid = valid[:n_samples]
