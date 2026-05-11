@@ -38,26 +38,23 @@ DIMENSION_NAMES: dict[int, str] = {
 }
 
 DESCRIPTION_SYSTEM = (
-    "You are a precise visual observer. You will be given reasoning text about an "
-    "agricultural image and the multiple-choice question asked about it.\n\n"
-    "Your job: write a neutral visual description (2–4 sentences) of what is likely "
-    "visible in the image, based only on the physical observations in the reasoning.\n\n"
-    "Rules — follow all of these strictly:\n"
-    "- Describe only visible attributes: colors, shapes, textures, sizes, patterns, "
-    "spatial layout, plant parts, lesions, objects present.\n"
-    "- Do NOT mention any answer option letter (A, B, C, D).\n"
-    "- Do NOT name the disease, species, pest, or category that is the answer.\n"
-    "- Do NOT write any sentence that could let the reader infer the correct answer.\n"
-    "- Do NOT write 'the answer is', 'this is', 'this shows', or any conclusion.\n"
-    "- Write in third-person present tense: 'The leaves show...', 'A reddish-brown "
-    "lesion is visible...'.\n"
-    "- If the reasoning has no useful visual observations, write: "
-    "'No visual details available.'\n"
-    "Return only the visual description, nothing else."
+    "You write one-sentence visual captions for agricultural images.\n\n"
+    "Rules — follow all strictly:\n"
+    "- Exactly one sentence. No more.\n"
+    "- Describe only the high-level visual subject: what type of plant/crop/object "
+    "is shown and its most prominent visible feature (color, condition, part).\n"
+    "- Do NOT mention the correct answer or any word that names it.\n"
+    "- Do NOT mention any option letter (A, B, C, D).\n"
+    "- Do NOT include any analysis, conclusion, or reasoning.\n"
+    "- Style: 'A rice leaf showing brown circular lesions.' / "
+    "'A corn cob with scattered discolored kernels.' / "
+    "'A wheat stem with orange powdery pustules.'\n"
+    "Return only the one-sentence caption, nothing else."
 )
 
 DESCRIPTION_USER_TEMPLATE = (
-    "Question: {question}\n\nOptions:\n{options}\n\nReasoning to convert:\n{reasoning}"
+    "Correct answer (do NOT mention this in your caption): {answer} = {answer_text}\n\n"
+    "Reasoning (for context only):\n{reasoning}"
 )
 
 QUESTION_REWORD_SYSTEM = (
@@ -198,7 +195,7 @@ def main():
     sampling_params = SamplingParams(
         temperature=0.3,
         top_p=0.92,
-        max_tokens=256,
+        max_tokens=80,
         stop=["\n\n\n"],
     )
 
@@ -213,8 +210,8 @@ def main():
                 tokenizer,
                 DESCRIPTION_SYSTEM,
                 DESCRIPTION_USER_TEMPLATE.format(
-                    question=r["question"],
-                    options="\n".join(f"  {k}: {v}" for k, v in sorted(r["options"].items())),
+                    answer=r["answer"],
+                    answer_text=r["options"].get(r["answer"], ""),
                     reasoning=r["reasoning"],
                 ),
             )
