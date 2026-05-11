@@ -225,7 +225,7 @@ def main():
                 DESCRIPTION_SYSTEM,
                 DESCRIPTION_USER_TEMPLATE.format(
                     answer=r["answer"],
-                    answer_text=r["options"].get(r["answer"], ""),
+                    answer_text=r["options"].get(r["answer"], "") if isinstance(r["options"].get(r["answer"], ""), str) else str(r["options"].get(r["answer"], "")),
                     reasoning=r["reasoning"],
                 ),
             )
@@ -257,7 +257,8 @@ def main():
 
         for i, r in enumerate(batch):
             q_textual    = reword_map[i] if i in reword_map else r["question"]
-            answer_text  = r["options"].get(r["answer"], "")
+            answer_val   = r["options"].get(r["answer"], "")
+            answer_text  = answer_val if isinstance(answer_val, str) else str(answer_val)
             task         = DIMENSION_NAMES.get(r.get("dimension_id"), "unknown")
             description  = _sanitize_description(desc_outputs[i], answer_text)
             results.append({
