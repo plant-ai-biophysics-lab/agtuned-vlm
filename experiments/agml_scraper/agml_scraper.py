@@ -146,11 +146,21 @@ def parse_class_label(raw_label: str, dataset_crop: str | None) -> tuple[str, st
 
 # ── Prompt building ────────────────────────────────────────────────────────────
 
+_NO_LABEL_SUFFIX = (
+    " Focus only on visual characteristics you can observe "
+    "(color, texture, shape, pattern, size, location on plant). "
+    "Do not name or repeat the disease, pest, species, or class label in your response."
+)
+
+
 def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> dict:
     messages = [
         {
             "role": "user",
-            "content": [{"type": "image"}, {"type": "text", "text": question}],
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": question + _NO_LABEL_SUFFIX},
+            ],
         }
     ]
     text = tokenizer.apply_chat_template(
@@ -218,7 +228,10 @@ def run_synthesis_pass(
         f"You are given {len(raw_captions)} visual descriptions of {context}, "
         f"each written from a separate photograph. Synthesize these into one clear, "
         f"representative 2-3 sentence description that captures the consensus visual "
-        f"features. Ignore noise or one-off observations.\n\nDescriptions:\n{numbered}"
+        f"features (color, texture, shape, pattern, size, location on plant). "
+        f"Ignore noise or one-off observations. "
+        f"Do not name or repeat the disease, pest, species, or class label — "
+        f"describe only what can be visually observed.\n\nDescriptions:\n{numbered}"
     )
     prompt  = _apply_chat_template(tokenizer, synthesis_prompt)
     outputs = llm.generate([prompt], sampling_params=SYNTHESIS_PARAMS)
