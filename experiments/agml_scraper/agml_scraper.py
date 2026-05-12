@@ -281,6 +281,7 @@ def make_classification_record(
     crop: str,
     task_type: str,
     model_id: str,
+    synthesized_description: str,
 ) -> dict:
     return {
         "messages": [
@@ -288,12 +289,13 @@ def make_classification_record(
             {"role": "assistant", "content": clean_cls},
         ],
         "metadata": {
-            "record_type":     "classification",
-            "agml_dataset":    agml_name,
-            "crop":            crop,
-            "class_label":     clean_cls,
-            "task_type":       task_type,
-            "generator_model": model_id,
+            "record_type":            "classification",
+            "agml_dataset":           agml_name,
+            "crop":                   crop,
+            "class_label":            clean_cls,
+            "task_type":              task_type,
+            "synthesized_description": synthesized_description,
+            "generator_model":        model_id,
         },
     }
 
@@ -407,6 +409,7 @@ def main(args: argparse.Namespace) -> None:
                 crop=crop,
                 task_type=task_type,
                 model_id=args.model,
+                synthesized_description=synthesized,
             ))
 
             checkpoint[agml_name][class_key] = {
