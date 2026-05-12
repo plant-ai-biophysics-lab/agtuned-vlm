@@ -187,6 +187,7 @@ def load_llm(model_id: str) -> tuple[LLM, object]:
         dtype="bfloat16",
         max_model_len=4096,
         gpu_memory_utilization=0.9,
+        max_num_seqs=128,
         limit_mm_per_prompt={"image": 1},
     )
     tokenizer = llm.get_tokenizer()
