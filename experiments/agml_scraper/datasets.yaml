@@ -1,0 +1,477 @@
+# AgML image classification datasets for agml_scraper.
+#
+# task_type options:
+#   disease            - leaf/plant disease classification
+#   pest               - insect / pest classification
+#   stress             - physical damage, abiotic stress, or mixed damage types
+#   weed_identification - weed or mixed crop/weed species classification
+#   crop_identification - crop ripeness or growth-stage classification
+#
+# skip: true          - exclude dataset entirely from generation
+#
+# Q3/Q4 (disease/stress description questions) are only generated for
+# task_type: disease | pest | stress.
+# Datasets with task_type: weed_identification | crop_identification
+# get Q1/Q2 only.
+
+datasets:
+
+  # ── Disease datasets ────────────────────────────────────────────────────────
+
+  - agml_name: bean_disease_uganda
+    crop: bean
+    task_type: disease
+    n_images: 1295
+    classes:
+      - angular_leaf_spot
+      - bean_rust
+      - healthy
+    location: [africa, uganda]
+    skip: false
+
+  - agml_name: plant_village_classification
+    crop: multiple  # apple, blueberry, cherry, corn, grape, orange, peach, pepper, potato, raspberry, soybean, squash, strawberry, tomato
+    task_type: disease
+    n_images: 55448
+    classes:
+      - Apple___Apple_scab
+      - Apple___Black_rot
+      - Apple___Cedar_apple_rust
+      - Apple___healthy
+      - Background_without_leaves
+      - Blueberry___healthy
+      - Cherry___Powdery_mildew
+      - Cherry___healthy
+      - Corn___Cercospora_leaf_spot Gray_leaf_spot
+      - Corn___Common_rust
+      - Corn___Northern_Leaf_Blight
+      - Corn___healthy
+      - Grape___Black_rot
+      - Grape___Esca_(Black_Measles)
+      - Grape___Leaf_blight_(Isariopsis_Leaf_Spot)
+      - Grape___healthy
+      - Orange___Haunglongbing_(Citrus_greening)
+      - Peach___Bacterial_spot
+      - Peach___healthy
+      - Pepper,_bell___Bacterial_spot
+      - Pepper,_bell___healthy
+      - Potato___Early_blight
+      - Potato___Late_blight
+      - Potato___healthy
+      - Raspberry___healthy
+      - Soybean___healthy
+      - Squash___Powdery_mildew
+      - Strawberry___Leaf_scorch
+      - Strawberry___healthy
+      - Tomato___Bacterial_spot
+      - Tomato___Early_blight
+      - Tomato___Late_blight
+      - Tomato___Leaf_Mold
+      - Tomato___Septoria_leaf_spot
+      - Tomato___Spider_mites Two-spotted_spider_mite
+      - Tomato___Target_Spot
+      - Tomato___Tomato_Yellow_Leaf_Curl_Virus
+      - Tomato___Tomato_mosaic_virus
+      - Tomato___healthy
+    location: [north_america, usa]
+    skip: false
+    notes: "Multi-crop; class label encodes both crop and condition separated by ___"
+
+  - agml_name: guava_disease_pakistan
+    crop: guava
+    task_type: disease
+    n_images: 306
+    classes:
+      - Canker
+      - Dot
+      - Mummification
+      - Rust
+    location: [asia, pakistan]
+    skip: false
+
+  - agml_name: plant_doc_classification
+    crop: multiple  # corn, tomato, potato, blueberry, grape, pepper, cherry, peach, soybean, strawberry, apple, squash, raspberry
+    task_type: disease
+    n_images: 2598
+    classes:
+      - Corn leaf blight
+      - Tomato Early blight leaf
+      - Potato leaf early blight
+      - Potato leaf late blight
+      - Blueberry leaf
+      - grape leaf black rot
+      - Bell_pepper leaf spot
+      - Cherry leaf
+      - Peach leaf
+      - Soyabean leaf
+      - Strawberry leaf
+      - Apple Scab Leaf
+      - Corn rust leaf
+      - Apple leaf
+      - Corn Gray leaf spot
+      - Tomato leaf mosaic virus
+      - Tomato mold leaf
+      - Tomato leaf yellow virus
+      - Tomato leaf bacterial spot
+      - Tomato leaf late blight
+      - Squash Powdery mildew leaf
+      - Bell_pepper leaf
+      - grape leaf
+      - Apple rust leaf
+      - Tomato Septoria leaf spot
+      - Tomato leaf
+      - Raspberry leaf
+      - Tomato two spotted spider mites leaf
+    location: [worldwide, worldwide]
+    skip: false
+    notes: "Some classes are healthy leaves (e.g. 'Blueberry leaf'); consider filtering at generation time"
+
+  - agml_name: corn_maize_leaf_disease
+    crop: corn
+    task_type: disease
+    n_images: 4188
+    classes:
+      - Blight
+      - Common_Rust
+      - Gray_Leaf_Spot
+      - Healthy
+    location: [worldwide, worldwide]
+    skip: false
+
+  - agml_name: tomato_leaf_disease
+    crop: tomato
+    task_type: disease
+    n_images: 11000
+    classes:
+      - Bacterial Spot
+      - Early Blight
+      - Healthy
+      - Late Blight
+      - Leaf Mold
+      - Septoria Leaf Spot
+      - Spider Mites Two-spotted Spider Mite
+      - Target Spot
+      - Tomato Mosaic Virus
+      - Tomato Yellow Leaf Curl Virus
+    location: [worldwide, worldwide]
+    skip: false
+
+  - agml_name: vine_virus_photo_dataset
+    crop: grape
+    task_type: disease
+    n_images: 3866
+    classes:
+      - Leafroll 3
+      - No Virus
+      - Other Red
+      - Red Blotch
+    location: [worldwide, worldwide]
+    skip: false
+
+  - agml_name: paddy_disease_classification
+    crop: paddy
+    task_type: disease  # note: 'hispa' is a pest, rest are diseases
+    n_images: 10407
+    classes:
+      - bacterial_leaf_blight
+      - bacterial_leaf_streak
+      - bacterial_panicle_blight
+      - blast
+      - brown_spot
+      - dead_heart
+      - downy_mildew
+      - hispa
+      - normal
+      - tungro
+    location: [asia, india]
+    skip: false
+    notes: "'hispa' is a pest (rice hispa beetle); rest are fungal/bacterial diseases"
+
+  - agml_name: onion_leaf_classification
+    crop: onion
+    task_type: disease
+    n_images: 4502
+    classes:
+      - healthy
+      - iris_yellow_virus
+      - leaf_blight
+      - purple_blotch
+    location: [asia, india]
+    skip: false
+
+  - agml_name: chilli_leaf_classification
+    crop: chilli
+    task_type: disease  # note: 'mites_and_trips' is a pest
+    n_images: 10974
+    classes:
+      - cercospora
+      - healthy
+      - mites_and_trips
+      - nutritional
+      - powdery_mildew
+    location: [asia, india]
+    skip: false
+    notes: "'mites_and_trips' is a pest class; 'nutritional' is abiotic stress"
+
+  - agml_name: orange_leaf_disease_classification
+    crop: orange
+    task_type: disease  # note: citrus_mealybugs and spiny_whitefly are pests
+    n_images: 5813
+    classes:
+      - citrus_canker
+      - citrus_greening
+      - citrus_mealybugs
+      - die_back
+      - foliage_damaged
+      - healthy_leaf
+      - powdery_mildew
+      - shot_hole
+      - spiny_whitefly
+      - yellow_dragon
+      - yellow_leaves
+    location: [asia, bangladesh]
+    skip: false
+    notes: "'citrus_mealybugs' and 'spiny_whitefly' are pest classes mixed in"
+
+  - agml_name: papaya_leaf_disease_classification
+    crop: papaya
+    task_type: disease
+    n_images: 2159
+    classes:
+      - Anthracnose
+      - BacterialSpot
+      - Curl
+      - Healthy
+      - RingSpot
+    location: [asia, bangladesh]
+    skip: false
+
+  - agml_name: blackgram_plant_leaf_disease_classification
+    crop: blackgram
+    task_type: disease
+    n_images: 1007
+    classes:
+      - anthracnose
+      - healthy
+      - leaf_crinckle
+      - powdery_mildew
+      - yellow_mosaic
+    location: [asia, india]
+    skip: false
+
+  - agml_name: arabica_coffee_leaf_disease_classification
+    crop: arabica_coffee
+    task_type: disease  # note: 'Miner' is a pest (coffee leaf miner)
+    n_images: 58549
+    classes:
+      - Cerscospora
+      - Healthy
+      - Leaf_rust
+      - Miner
+      - Phoma
+    location: [africa, kenya]
+    skip: false
+    notes: "'Miner' refers to the coffee leaf miner pest"
+
+  - agml_name: banana_leaf_disease_classification
+    crop: banana
+    task_type: disease
+    n_images: 1288
+    classes:
+      - healthy
+      - segatoka
+      - xamthomonas
+    location: [africa, ethiopia]
+    skip: false
+
+  - agml_name: coconut_tree_disease_classification
+    crop: coconut
+    task_type: disease
+    n_images: 5798
+    classes:
+      - Bud_Root_Dropping
+      - Bud_Rot
+      - Gray_Leaf_Spot
+      - Leaf_Rot
+      - Stem_Bleeding
+    location: [asia, india]
+    skip: false
+
+  - agml_name: rice_leaf_disease_classification
+    crop: rice
+    task_type: disease
+    n_images: 3829
+    classes:
+      - Bacterial_Leaf_Blight
+      - Brown_Spot
+      - Healthy_Rice_Leaf
+      - Leaf_Blast
+      - Leaf_Scald
+      - Sheath_Blight
+    location: [worldwide, worldwide]
+    skip: false
+
+  - agml_name: tea_leaf_disease_classification
+    crop: tea
+    task_type: disease  # note: 'helopeltis' is a pest
+    n_images: 5867
+    classes:
+      - algal_spot
+      - brown_blight
+      - gray_blight
+      - healthy
+      - helopeltis
+      - red_spot
+    location: [asia, india]
+    skip: false
+    notes: "'helopeltis' is a tea pest (mosquito bug)"
+
+  - agml_name: betel_leaf_disease_classification
+    crop: betel_leaf
+    task_type: disease
+    n_images: 3589
+    classes:
+      - Bacterial_Leaf_Disease
+      - Dried_Leaf
+      - Fungal_Brown_Spot_Disease
+      - Healthy_Leaf
+    location: [asia, bangladesh]
+    skip: false
+
+  - agml_name: java_plum_leaf_disease_classification
+    crop: java_plum
+    task_type: disease
+    n_images: 2400
+    classes:
+      - Bacterial_Spot
+      - Brown_Blight
+      - Dry
+      - Healthy
+      - Powdery_Mildew
+      - Sooty_Mold
+    location: [asia, bangladesh]
+    skip: false
+
+  - agml_name: sunflower_disease_classification
+    crop: sunflower
+    task_type: disease
+    n_images: 2358
+    classes:
+      - Downy_mildew
+      - Fresh_leaf
+      - Gray_mold
+      - Leaf_scars
+    location: [asia, bangladesh]
+    skip: false
+
+  - agml_name: cucumber_disease_classification
+    crop: cucumber
+    task_type: disease
+    n_images: 7689
+    classes:
+      - Anthracnose
+      - Bacterial_Wilt
+      - Belly_Rot
+      - Downy_Mildew
+      - Fresh_Cucumber
+      - Fresh_Leaf
+      - Gummy_Stem_Blight
+      - Pythium_Fruit_Rot
+    location: [asia, bangladesh]
+    skip: false
+
+  # ── Pest datasets ────────────────────────────────────────────────────────────
+
+  - agml_name: soybean_insect_classification
+    crop: soybean
+    task_type: pest
+    n_images: 6410
+    classes:
+      - Caterpillar
+      - Diabrotica_speciosa
+      - Healthy
+    location: [south_america, brazil]
+    skip: false
+
+  # ── Stress / damage datasets ─────────────────────────────────────────────────
+
+  - agml_name: sugarcane_damage_usa
+    crop: sugarcane
+    task_type: stress
+    n_images: 153
+    classes:
+      - cracked
+      - crushed
+      - no_buds
+      - two_buds
+      - single_damaged_buds
+      - no_damage
+    location: [north_america, usa]
+    skip: false
+    notes: "Physical/mechanical damage to sugarcane stalks"
+
+  # ── Weed identification datasets ─────────────────────────────────────────────
+
+  - agml_name: plant_seedlings_aarhus
+    crop: null  # mixed crop seedlings and weeds
+    task_type: weed_identification
+    n_images: 5539
+    classes:
+      - maize
+      - common_wheat
+      - sugar_beet
+      - scentless_mayweed
+      - common_chickweed
+      - shepherds_purse
+      - cleavers
+      - charlock
+      - fat_hen
+      - smallflowered_cranesbill
+      - black_grass
+      - loose_silkybent
+    location: [europe, denmark]
+    skip: false
+    notes: "Mix of crop seedlings and weed species at early growth stage"
+
+  - agml_name: soybean_weed_uav_brazil
+    crop: soybean
+    task_type: weed_identification
+    n_images: 15336
+    classes:
+      - broadleaf
+      - grass
+      - soil
+      - soybean
+    location: [south_america, brazil]
+    skip: false
+    notes: "UAV imagery; classes are broad weed categories rather than species"
+
+  - agml_name: crop_weeds_greece
+    crop: null  # cotton and tomato crops vs. weeds
+    task_type: weed_identification
+    n_images: 508
+    classes:
+      - black_nightshade
+      - velvet_leaf
+      - cotton
+      - tomato
+    location: [europe, greece]
+    skip: false
+
+  - agml_name: rangeland_weeds_australia
+    crop: null
+    task_type: weed_identification
+    n_images: 17509
+    classes:
+      - chinee_apple
+      - lantana
+      - negative
+      - parkinsonia
+      - parthenium
+      - prickly_acacia
+      - rubber_vine
+      - siam_weed
+      - snake_weed
+    location: [oceania, australia]
+    skip: false
+    notes: "Invasive weed species in Australian rangelands; 'negative' = no weed"

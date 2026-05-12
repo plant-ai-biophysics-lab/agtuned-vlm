@@ -697,7 +697,6 @@ def plot_summary(metrics_by_model: dict, output_dir: str):
     ax.set_xticklabels(models, rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("Rate / Accuracy")
-    ax.set_title("Cross-Modality Knowledge Conflict — Agricultural (AgriCoT)")
     ax.legend(fontsize=8)
     plt.tight_layout()
 
@@ -725,7 +724,6 @@ def plot_cd_distribution(metrics: dict, model_label: str, output_dir: str):
 
     ax.set_xlabel("|log(P_visual / P_textual)|")
     ax.set_ylabel("Count")
-    ax.set_title(f"CD Score Distribution — {model_label}")
     ax.legend()
     plt.tight_layout()
 
@@ -753,7 +751,6 @@ def plot_answer_heatmap(metrics: dict, model_label: str, output_dir: str):
     ax.set_xticks(range(len(opts))); ax.set_xticklabels(opts)
     ax.set_yticks(range(len(opts))); ax.set_yticklabels(opts)
     ax.set_xlabel("Textual answer");  ax.set_ylabel("Visual answer")
-    ax.set_title(f"Visual vs Textual Answers — {model_label}")
     plt.colorbar(im, ax=ax)
     for i, v in enumerate(opts):
         for j, t in enumerate(opts):
@@ -794,7 +791,7 @@ def plot_task_summary(task_metrics: dict[str, dict], model_label: str, output_di
     ax.set_xticklabels(tasks, rotation=15, ha="right")
     ax.set_ylim(0, 1.25)
     ax.set_ylabel("Rate / Accuracy")
-    ax.set_title(f"Per-Task Conflict Analysis — {model_label}")
+    ax.set_xlabel(model_label)
     ax.legend(fontsize=8)
     plt.tight_layout()
 
@@ -879,10 +876,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="Cross-modality knowledge conflict test on AgriCoT"
     )
+    _GEMMA_MODELS = {
+        "E2B":  "google/gemma-4-e2b-it",
+        "E4B":  "google/gemma-4-E4B-it",
+        "26B":  "google/gemma-4-26B-A4B-it",
+        "31B":  "google/gemma-4-31B-it",
+    }
     parser.add_argument("--model",          type=str, default="google/gemma-4-E4B-it",
-        help="Fine-tuned or base Gemma-4 model (HF ID or local path)")
+        help="HF model ID or local path (or shorthand: E2B, E4B, 26B, 31B)")
+    parser.add_argument("--model_size",     type=str, default=None,
+        choices=list(_GEMMA_MODELS.keys()),
+        help="Shorthand for Gemma-4 model size (overrides --model)")
     parser.add_argument("--baseline_model", type=str, default=None,
-        help="Optional second model to compare (e.g. a fine-tuned checkpoint)")
+        help="Optional second model to compare (HF ID, local path, or shorthand)")
     parser.add_argument("--output_dir",     type=str, default="conflict_results")
     parser.add_argument("--n_samples",      type=int, default=None)
     parser.add_argument("--batch_size",     type=int, default=8)
@@ -902,6 +908,11 @@ def main():
     parser.add_argument("--plot_only",      action="store_true",
         help="Skip inference, re-plot from saved results JSON")
     args = parser.parse_args()
+
+    if args.model_size:
+        args.model = _GEMMA_MODELS[args.model_size]
+    if args.baseline_model and args.baseline_model in _GEMMA_MODELS:
+        args.baseline_model = _GEMMA_MODELS[args.baseline_model]
 
     os.makedirs(args.output_dir, exist_ok=True)
 

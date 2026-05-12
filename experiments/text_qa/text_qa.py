@@ -49,6 +49,13 @@ PROMPT_TEMPLATE = (
     "Answer:"
 )
 
+# Used when evaluating agml_scraper output — questions are already descriptive,
+# so no preamble is needed; just pass the question directly.
+DESCRIPTIVE_PROMPT_TEMPLATE = (
+    "Question: {question}\n\n"
+    "Answer:"
+)
+
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -377,12 +384,15 @@ def main(args):
     if args.idtools_jsonl:
         samples = load_idtools_qa(args.idtools_jsonl, args.n_samples)
         dataset_label = f"IDtools:{args.idtools_jsonl}"
+        prompt_template = DESCRIPTIVE_PROMPT_TEMPLATE
     else:
         samples = load_agri_qa(args.n_samples, args.dataset_path)
         dataset_label = args.dataset_path or "KisanVaani/agriculture-qa-english-only"
+        prompt_template = PROMPT_TEMPLATE
 
-    prompts = [PROMPT_TEMPLATE.format(question=s["question"]) for s in samples]
+    prompts = [prompt_template.format(question=s["question"]) for s in samples]
 
+    print(f"\nPrompt template: {'descriptive' if args.idtools_jsonl else 'standard'}")
     print("\nSample prompt:")
     print(prompts[0])
     print(f"  Expected answer: {samples[0]['answer']}\n")
