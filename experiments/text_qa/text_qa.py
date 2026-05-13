@@ -618,20 +618,19 @@ def plot_cls_summary_per_task(
     datasets_cfg_full: dict[str, dict],
     output_dir: Path,
 ) -> None:
-    """Grouped bar chart: Accuracy / F1-macro / F1-weighted per task_type, one group per model."""
-    # Map dataset → task_type
+    """Grouped bar chart: all classification metrics per task_type, one group per model."""
     ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg_full.items()}
     task_types = sorted({t for t in ds_to_task.values()})
     if not task_types:
         return
 
     models  = list(all_cls_results.keys())
-    metrics = ["accuracy", "f1_macro", "f1_weighted"]
-    colors  = plt.cm.tab10(np.linspace(0, 0.6, len(models)))
+    metrics = ["accuracy", "contains_accuracy", "f1_macro", "mean_bertscore"]
+    colors  = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x       = np.arange(len(task_types))
     width   = 0.8 / (len(models) * len(metrics))
 
-    # Aggregate per task_type per model
+    # Aggregate per task_type per model (mean across datasets)
     task_scores: dict[str, dict[str, dict[str, list]]] = {
         model_key: {tt: {m: [] for m in metrics} for tt in task_types}
         for model_key in models
@@ -643,7 +642,7 @@ def plot_cls_summary_per_task(
                 for metric in metrics:
                     task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(8, len(task_types) * 1.5), 5), sharey=True)
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(10, len(task_types) * 2), 5), sharey=True)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, (model_key, color) in enumerate(zip(models, colors)):
@@ -793,6 +792,28 @@ def main(args):
                 print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
                       f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
                       f"{m['n_resolvable']:>4}/{m['n_total']:<4}")
+            # Per-task summary
+            ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg.items()}
+            by_task: dict[str, list] = defaultdict(list)
+            for ds, m in cls_results["per_dataset"].items():
+                tt = ds_to_task.get(ds)
+                if tt:
+                    by_task[tt].append(m)
+            if by_task:
+                print(f"\n  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'BERT':>6}")
+                print(f"  {'-'*55}")
+                for tt, ms in sorted(by_task.items()):
+                    print(f"  {tt:<25} "
+                          f"{np.mean([m['accuracy'] for m in ms]):>6.3f} "
+                          f"{np.mean([m['contains_accuracy'] for m in ms]):>6.3f} "
+                          f"{np.mean([m['f1_macro'] for m in ms]):>8.3f} "
+                          f"{np.mean([m['mean_bertscore'] for m in ms]):>6.3f}")
+                all_ms = [m for ms in by_task.values() for m in ms]
+                print(f"  {'OVERALL':<25} "
+                      f"{np.mean([m['accuracy'] for m in all_ms]):>6.3f} "
+                      f"{np.mean([m['contains_accuracy'] for m in all_ms]):>6.3f} "
+                      f"{np.mean([m['f1_macro'] for m in all_ms]):>8.3f} "
+                      f"{np.mean([m['mean_bertscore'] for m in all_ms]):>6.3f}")
 
     # --- Summary table ---
     print("\n=== Summary ===")

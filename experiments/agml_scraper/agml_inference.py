@@ -330,6 +330,47 @@ def plot_cls_by_dataset(results_b: dict, results_b_naive: dict, output_dir: Path
     print(f"  Saved: {path}")
 
 
+def plot_cls_by_task(
+    results_by_task: dict,
+    naive_by_task: dict,
+    output_dir: Path,
+) -> None:
+    task_types = list(results_by_task.keys())
+    if not task_types:
+        return
+    metrics = ["accuracy", "contains_accuracy", "f1_macro", "mean_bertscore"]
+    labels  = ["Accuracy", "Contains", "F1-macro", "BERTScore"]
+    x       = np.arange(len(task_types))
+    width   = 0.18
+    colors  = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0"]
+
+    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
+    for i, (m, label, color) in enumerate(zip(metrics, labels, colors)):
+        model_vals = [results_by_task[tt][m] for tt in task_types]
+        naive_vals = [naive_by_task.get(tt, {}).get(m, 0) for tt in task_types]
+        offset     = (i * 2) * width - (len(metrics) - 1) * width
+        bars = ax.bar(x + offset,         model_vals, width, label=label,
+                      color=color, alpha=0.85)
+        ax.bar(      x + offset + width,  naive_vals, width,
+                      color=color, alpha=0.30, hatch="///", edgecolor=color)
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                    f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Score")
+    ax.set_title("Dataset B — Classification by Task Type (solid=model, hatched=naive)")
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+    path = output_dir / "classification_by_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace) -> None:
@@ -462,34 +503,34 @@ def main(args: argparse.Namespace) -> None:
     if desc_rows:
         results_a["overall"] = dataset_rouge_summary(desc_rows)
 
-    results_b = {ds: dataset_cls_summary(rows) for ds, rows in by_ds_cls.items()}
-    results_b_naive = {ds: naive_cls_summary(rows) for ds, rows in by_ds_cls.items()}
+    results_b       = {ds: dataset_cls_summary(rows) for ds, rows in by_ds_cls.items()}
+    results_b_naive = {ds: naive_cls_summary(rows)   for ds, rows in by_ds_cls.items()}
 
-    # Overall naive across all datasets
+    # Per-task aggregation
+    ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg.items()}
+    by_task_cls:  dict[str, list] = defaultdict(list)
+    for row in cls_rows:
+        tt = ds_to_task.get(row["agml_dataset"])
+        if tt:
+            by_task_cls[tt].append(row)
+
+    results_b_by_task       = {tt: dataset_cls_summary(rows) for tt, rows in by_task_cls.items()}
+    results_b_naive_by_task = {tt: naive_cls_summary(rows)   for tt, rows in by_task_cls.items()}
+
+    # Overall across all datasets
     if cls_rows:
-        all_resolvable = [r for r in cls_rows if r["resolvable"]]
-        if all_resolvable:
-            refs     = [r["class_label"] for r in all_resolvable]
-            shuffled = refs.copy()
-            np.random.default_rng(42).shuffle(shuffled)
-            label_set = sorted(set(refs))
-            results_b_naive["overall"] = {
-                "accuracy":     round(accuracy_score(refs, shuffled), 4),
-                "f1_macro":     round(f1_score(refs, shuffled, average="macro",
-                                               labels=label_set, zero_division=0), 4),
-                "f1_weighted":  round(f1_score(refs, shuffled, average="weighted",
-                                               labels=label_set, zero_division=0), 4),
-                "n_images":     len(all_resolvable),
-                "n_resolvable": len(all_resolvable),
-            }
+        results_b["overall"]             = dataset_cls_summary(cls_rows)
+        results_b_naive["overall"]       = naive_cls_summary(cls_rows)
 
     results = {
-        "model":          args.model,
-        "total_time_s":   round(elapsed, 3),
-        "n_classes":      len(records),
-        "dataset_a":      results_a,
-        "dataset_b":      results_b,
-        "dataset_b_naive": results_b_naive,
+        "model":                  args.model,
+        "total_time_s":           round(elapsed, 3),
+        "n_classes":              len(records),
+        "dataset_a":              results_a,
+        "dataset_b":              results_b,
+        "dataset_b_naive":        results_b_naive,
+        "dataset_b_by_task":      results_b_by_task,
+        "dataset_b_naive_by_task": results_b_naive_by_task,
     }
     metrics_path = output_dir / "agml_inference_metrics.json"
     with open(metrics_path, "w") as f:
@@ -517,18 +558,36 @@ def main(args: argparse.Namespace) -> None:
                   f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
                   f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f} "
                   f"{m['n_resolvable']:>4}/{m['n_images']:<4}")
-        if "overall" in results_b_naive:
-            nv = results_b_naive["overall"]
-            print(f"\n  Naive overall  Acc={nv['accuracy']:.3f}  "
-                  f"Contains={nv['contains_accuracy']:.3f}  "
-                  f"BERTScore={nv['mean_bertscore']:.3f}")
+        if "overall" in results_b:
+            ov = results_b["overall"]
+            nv = results_b_naive.get("overall", {})
+            print(f"\n  {'OVERALL':<45} {ov['accuracy']:>6.3f} {ov['contains_accuracy']:>6.3f} "
+                  f"{ov['f1_macro']:>8.3f} {ov['mean_bertscore']:>6.3f} "
+                  f"{nv.get('accuracy', 0):>7.3f} {nv.get('mean_bertscore', 0):>7.3f} "
+                  f"{ov['n_resolvable']:>4}/{ov['n_images']:<4}")
+
+    if results_b_by_task:
+        print(f"\n=== Dataset B — By Task Type ===")
+        header = (f"  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
+                  f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7}")
+        print(header)
+        print(f"  {'-' * len(header)}")
+        for tt, m in results_b_by_task.items():
+            naive = results_b_naive_by_task.get(tt, {})
+            print(f"  {tt:<25} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
+                  f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
+                  f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
 
     print(f"\nTotal time: {elapsed:.1f}s")
 
     # ── Plots ──────────────────────────────────────────────────────────────────
     print("\nGenerating plots...")
     plot_rouge_by_dataset(results_a, output_dir)
-    plot_cls_by_dataset(results_b, results_b_naive, output_dir)
+    # exclude "overall" key from per-dataset plot
+    results_b_plot       = {k: v for k, v in results_b.items()       if k != "overall"}
+    results_b_naive_plot = {k: v for k, v in results_b_naive.items() if k != "overall"}
+    plot_cls_by_dataset(results_b_plot, results_b_naive_plot, output_dir)
+    plot_cls_by_task(results_b_by_task, results_b_naive_by_task, output_dir)
 
 
 if __name__ == "__main__":
