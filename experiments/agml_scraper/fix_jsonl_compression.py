@@ -47,35 +47,50 @@ def main(args: argparse.Namespace) -> None:
     desc_records = load_jsonl(desc_path)
     cls_records  = load_jsonl(cls_path)
 
-    fixed = 0
-    skipped = 0
+    # Fix descriptions: move compressed into messages[1].content
+    desc_fixed = 0
     for r in desc_records:
         meta       = r.get("metadata", {})
         compressed = meta.get("compressed_description")
-
         if not compressed:
-            print(f"  [warn] no compressed_description in metadata for "
-                  f"{meta.get('agml_dataset')} / {meta.get('class_label')} — skipping")
-            skipped += 1
+            print(f"  [warn] no compressed_description: "
+                  f"{meta.get('agml_dataset')} / {meta.get('class_label')}")
             continue
-
         current_answer = r["messages"][1]["content"]
         if current_answer == compressed:
-            skipped += 1
             continue
+        meta["synthesized_description"] = current_answer
+        r["messages"][1]["content"]     = compressed
+        desc_fixed += 1
 
-        meta["synthesized_description"]  = current_answer
-        r["messages"][1]["content"]      = compressed
-        fixed += 1
+    print(f"  Descriptions: {desc_fixed} fixed")
 
-    print(f"\nDescriptions: {fixed} fixed, {skipped} skipped")
+    # Fix classification: rebuild question with compressed description
+    cls_fixed = 0
+    for r in cls_records:
+        meta       = r.get("metadata", {})
+        compressed = meta.get("compressed_description")
+        if not compressed:
+            print(f"  [warn] no compressed_description: "
+                  f"{meta.get('agml_dataset')} / {meta.get('class_label')}")
+            continue
+        old_question = r["messages"][0]["content"]
+        # Replace everything after "Description: " with the compressed version
+        if "Description: " in old_question:
+            prefix = old_question[:old_question.index("Description: ") + len("Description: ")]
+            new_question = prefix + compressed
+            if new_question == old_question:
+                continue
+            r["messages"][0]["content"] = new_question
+            cls_fixed += 1
+
+    print(f"  Classification: {cls_fixed} fixed")
 
     fixed_desc_path = desc_path.with_suffix(".fixed.jsonl")
     fixed_cls_path  = cls_path.with_suffix(".fixed.jsonl")
 
     write_jsonl(fixed_desc_path, desc_records)
-    # classification JSONL already has both fields — copy as-is
-    write_jsonl(fixed_cls_path, cls_records)
+    write_jsonl(fixed_cls_path,  cls_records)
 
     print(f"\nReview then replace originals with:")
     print(f"  mv {fixed_desc_path} {desc_path}")
