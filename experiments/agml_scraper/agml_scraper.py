@@ -61,6 +61,9 @@ CAPTION_PARAMS = SamplingParams(
 SYNTHESIS_PARAMS = SamplingParams(
     temperature=0.0, max_tokens=384, repetition_penalty=1.05
 )
+COMPRESSION_PARAMS = SamplingParams(
+    temperature=0.0, max_tokens=96, repetition_penalty=1.05
+)
 
 _REPEAT_RE = re.compile(r'(\b\w+\b)(\s+\1){4,}', re.IGNORECASE)
 _THINK_RE  = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
@@ -238,6 +241,22 @@ def run_synthesis_pass(
     return _clean_response(outputs[0].outputs[0].text)
 
 
+def run_compression_pass(
+    llm: LLM,
+    tokenizer,
+    synthesized: str,
+) -> str:
+    compression_prompt = (
+        f"Compress the following visual description into exactly one concise sentence. "
+        f"Preserve the most distinctive visual features. "
+        f"Do not name or repeat any disease, pest, species, or class label.\n\n"
+        f"Description: {synthesized}"
+    )
+    prompt  = _apply_chat_template(tokenizer, compression_prompt)
+    outputs = llm.generate([prompt], sampling_params=COMPRESSION_PARAMS)
+    return _clean_response(outputs[0].outputs[0].text)
+
+
 # ── Checkpointing ──────────────────────────────────────────────────────────────
 
 def load_checkpoint(output_dir: Path) -> dict:
@@ -261,6 +280,7 @@ def make_description_record(
     visual_desc_q: str,
     visual_cls_q: str,
     synthesized: str,
+    compressed: str,
     raw_captions: list[str],
     image_paths: list[str],
     agml_name: str,
@@ -275,17 +295,19 @@ def make_description_record(
             {"role": "assistant", "content": synthesized},
         ],
         "metadata": {
-            "record_type":          "description",
-            "agml_dataset":         agml_name,
-            "crop":                 crop,
-            "class_label":          clean_cls,
-            "task_type":            task_type,
-            "visual_question":      visual_desc_q,
-            "visual_cls_question":  visual_cls_q,
-            "raw_captions":         raw_captions,
-            "image_names":          [Path(p).name for p in image_paths],
-            "n_images_used":        len(image_paths),
-            "generator_model":      model_id,
+            "record_type":              "description",
+            "agml_dataset":             agml_name,
+            "crop":                     crop,
+            "class_label":              clean_cls,
+            "task_type":                task_type,
+            "visual_question":          visual_desc_q,
+            "visual_cls_question":      visual_cls_q,
+            "synthesized_description":  synthesized,
+            "compressed_description":   compressed,
+            "raw_captions":             raw_captions,
+            "image_names":              [Path(p).name for p in image_paths],
+            "n_images_used":            len(image_paths),
+            "generator_model":          model_id,
         },
     }
 
@@ -298,6 +320,7 @@ def make_classification_record(
     task_type: str,
     model_id: str,
     synthesized_description: str,
+    compressed_description: str,
 ) -> dict:
     return {
         "messages": [
@@ -305,13 +328,14 @@ def make_classification_record(
             {"role": "assistant", "content": clean_cls},
         ],
         "metadata": {
-            "record_type":            "classification",
-            "agml_dataset":           agml_name,
-            "crop":                   crop,
-            "class_label":            clean_cls,
-            "task_type":              task_type,
-            "synthesized_description": synthesized_description,
-            "generator_model":        model_id,
+            "record_type":              "classification",
+            "agml_dataset":             agml_name,
+            "crop":                     crop,
+            "class_label":              clean_cls,
+            "task_type":                task_type,
+            "synthesized_description":  synthesized_description,
+            "compressed_description":   compressed_description,
+            "generator_model":          model_id,
         },
     }
 
@@ -401,8 +425,11 @@ def main(args: argparse.Namespace) -> None:
             # Pass 1 — per-image captions (vision)
             raw_captions = run_vision_pass(llm, tokenizer, images, questions["visual_desc"])
 
-            # Pass 2 — synthesize to single description (text-only)
+            # Pass 2 — synthesize N captions → 2-3 sentence description (text-only)
             synthesized = run_synthesis_pass(llm, tokenizer, raw_captions, clean_cls, crop)
+
+            # Pass 3 — compress synthesized description → 1 sentence (text-only)
+            compressed = run_compression_pass(llm, tokenizer, synthesized)
 
             text_cls_q = build_text_cls_question(task_type, crop, synthesized)
 
@@ -411,6 +438,7 @@ def main(args: argparse.Namespace) -> None:
                 visual_desc_q=questions["visual_desc"],
                 visual_cls_q=questions["visual_cls"],
                 synthesized=synthesized,
+                compressed=compressed,
                 raw_captions=raw_captions,
                 image_paths=image_paths,
                 agml_name=agml_name,
@@ -427,6 +455,7 @@ def main(args: argparse.Namespace) -> None:
                 task_type=task_type,
                 model_id=args.model,
                 synthesized_description=synthesized,
+                compressed_description=compressed,
             ))
 
             checkpoint[agml_name][class_key] = {
@@ -435,6 +464,7 @@ def main(args: argparse.Namespace) -> None:
                 "clean_cls":                clean_cls,
                 "task_type":                task_type,
                 "synthesized_description":  synthesized,
+                "compressed_description":   compressed,
                 "raw_captions":             raw_captions,
                 "image_paths":              image_paths,
                 "visual_desc_question":     questions["visual_desc"],
@@ -444,7 +474,8 @@ def main(args: argparse.Namespace) -> None:
             }
             save_checkpoint(output_dir, checkpoint)
             total_written += 1
-            print(f"    → {synthesized[:100]}...")
+            print(f"    → {synthesized[:80]}...")
+            print(f"    ↓ {compressed}")
 
     elapsed = time.perf_counter() - t_start
     print(f"\n{'='*60}")

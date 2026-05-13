@@ -72,12 +72,30 @@ Descriptions:
 ...
 ```
 
-The synthesized output becomes the `answer` stored in the JSONL.
+The synthesized output (2-3 sentences) becomes the `answer` stored in the JSONL and the
+ground truth for ROUGE scoring in Dataset A.
+
+**Pass 3 — Compression (text-only pass)**
+The synthesized description is compressed into a single sentence:
+
+```
+Compress the following visual description into exactly one concise sentence.
+Preserve the most distinctive visual features.
+Do not name or repeat any disease, pest, species, or class label.
+
+Description: {synthesized_description}
+```
+
+The compressed output is stored as `metadata.compressed_description` in both
+`agml_descriptions.jsonl` and `agml_classification.jsonl`. It is available as a shorter
+alternative context for classification prompts or visual inference.
 
 **Rationale**: Drawn from ShareGPT4V and LLaVA-style dataset construction — dense per-image
 captions are refined into one coherent ground truth. Synthesizing across N images reduces
 hallucination from any single frame, captures intra-class visual variance, and keeps outputs
-interpretable (individual raw captions are preserved in JSONL metadata).
+interpretable (individual raw captions are preserved in JSONL metadata). The one-sentence
+compression provides a more compact ground truth for probing whether a model can identify
+a class from minimal visual context.
 
 ---
 
@@ -185,16 +203,19 @@ question so both load directly via `text_qa.py --idtools_jsonl`.
     {"role": "assistant", "content": "The affected leaves show dark brown, target-like lesions..."}
   ],
   "metadata": {
-    "record_type":     "description",
-    "agml_dataset":    "plant_village_classification",
-    "crop":            "Tomato",
-    "class_label":     "Early Blight",
-    "task_type":       "disease",
-    "visual_question": "Can you describe visually the Early Blight that is exhibited in this image of Tomato?",
-    "raw_captions":    ["...", "..."],
-    "image_names":     ["img_001.jpg", "img_042.jpg", "..."],
-    "n_images_used":   10,
-    "generator_model": "Qwen/Qwen3.6-35B-A3B"
+    "record_type":            "description",
+    "agml_dataset":           "plant_village_classification",
+    "crop":                   "Tomato",
+    "class_label":            "Early Blight",
+    "task_type":              "disease",
+    "visual_question":        "Can you describe visually the Early Blight that is exhibited in this image of Tomato?",
+    "visual_cls_question":    "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a Tomato?",
+    "synthesized_description": "The affected leaves show dark brown, target-like lesions...",
+    "compressed_description": "The leaves show dark, target-like lesions with concentric rings and yellowing margins.",
+    "raw_captions":           ["...", "..."],
+    "image_names":            ["img_001.jpg", "img_042.jpg", "..."],
+    "n_images_used":          10,
+    "generator_model":        "Qwen/Qwen3.6-35B-A3B"
   }
 }
 ```
@@ -210,13 +231,14 @@ question so both load directly via `text_qa.py --idtools_jsonl`.
     {"role": "assistant", "content": "Early Blight"}
   ],
   "metadata": {
-    "record_type":             "classification",
-    "agml_dataset":            "plant_village_classification",
-    "crop":                    "Tomato",
-    "class_label":             "Early Blight",
-    "task_type":               "disease",
-    "synthesized_description": "The affected leaves show dark brown, target-like lesions...",
-    "generator_model":         "Qwen/Qwen3.6-35B-A3B"
+    "record_type":              "classification",
+    "agml_dataset":             "plant_village_classification",
+    "crop":                     "Tomato",
+    "class_label":              "Early Blight",
+    "task_type":                "disease",
+    "synthesized_description":  "The affected leaves show dark brown, target-like lesions...",
+    "compressed_description":   "The leaves show dark, target-like lesions with concentric rings and yellowing margins.",
+    "generator_model":          "Qwen/Qwen3.6-35B-A3B"
   }
 }
 ```
@@ -256,6 +278,7 @@ Generation state is written to `checkpoint.json` after every class.
       "clean_cls":               "Early Blight",
       "task_type":               "disease",
       "synthesized_description": "The affected leaves show dark brown...",
+      "compressed_description":  "The leaves show dark, target-like lesions with concentric rings.",
       "raw_captions":            ["...", "..."],
       "image_paths":             ["path/to/img1.jpg", "..."],
       "visual_desc_question":    "Can you describe visually...",
@@ -322,11 +345,14 @@ For each dataset (skip: false):
     Sample n_samples_per_class images (random, seeded)
     ┌─ Pass 1: VLM describes each image  ──────────────── vision pass
     │           (N raw captions + no-label instruction)
-    └─ Pass 2: LLM synthesizes N captions → one answer ── text-only pass
+    ├─ Pass 2: LLM synthesizes N captions → 2-3 sentences  text-only pass
+    └─ Pass 3: LLM compresses synthesis → 1 sentence ───── text-only pass
 
-    → Description record  → agml_descriptions.jsonl   (image_paths in metadata)
-    → Classification record (reuses synthesized answer, no extra inference)
-                          → agml_classification.jsonl  (synthesized_description in metadata)
+    → Description record  → agml_descriptions.jsonl
+         answer = synthesized (2-3 sentences)
+         metadata.compressed_description = compressed (1 sentence)
+    → Classification record (reuses both, no extra inference)
+                          → agml_classification.jsonl
      │
      ▼
 Optionally push text JSONL files → HuggingFace (--hub_repo_*)
