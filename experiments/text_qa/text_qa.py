@@ -269,6 +269,52 @@ def compute_naive_baseline(samples: list[dict]) -> dict:
     return compute_metrics(shuffled, references)
 
 
+def naive_classification_baseline(
+    samples: list[dict], datasets_cfg: dict[str, dict]
+) -> dict:
+    """Shuffle ground truth labels within each dataset — chance-level accuracy/F1."""
+    by_dataset: dict[str, list[str]] = defaultdict(list)
+    for s in samples:
+        agml_name = s.get("agml_dataset")
+        if agml_name and agml_name in datasets_cfg:
+            by_dataset[agml_name].append(s["answer"])
+
+    rng = np.random.default_rng(42)
+    per_dataset = {}
+    all_refs, all_shuffled = [], []
+
+    for ds_name, labels in by_dataset.items():
+        shuffled = labels.copy()
+        rng.shuffle(shuffled)
+        label_set = sorted(set(labels))
+        per_dataset[ds_name] = {
+            "accuracy":     round(accuracy_score(labels, shuffled), 4),
+            "f1_macro":     round(f1_score(labels, shuffled, average="macro",
+                                           labels=label_set, zero_division=0), 4),
+            "f1_weighted":  round(f1_score(labels, shuffled, average="weighted",
+                                           labels=label_set, zero_division=0), 4),
+            "n_total":      len(labels),
+            "n_resolvable": len(labels),
+        }
+        all_refs.extend(labels)
+        all_shuffled.extend(shuffled)
+
+    overall = {}
+    if all_refs:
+        label_set = sorted(set(all_refs))
+        overall = {
+            "accuracy":     round(accuracy_score(all_refs, all_shuffled), 4),
+            "f1_macro":     round(f1_score(all_refs, all_shuffled, average="macro",
+                                           labels=label_set, zero_division=0), 4),
+            "f1_weighted":  round(f1_score(all_refs, all_shuffled, average="weighted",
+                                           labels=label_set, zero_division=0), 4),
+            "n_total":      len(all_refs),
+            "n_resolvable": len(all_refs),
+        }
+
+    return {"overall": overall, "per_dataset": per_dataset}
+
+
 # ── Inference ─────────────────────────────────────────────────────────────────
 
 _SAMPLING = SamplingParams(
@@ -688,7 +734,14 @@ def main(args):
 
     # --- Classification metrics (when datasets_config provided) ---
     if datasets_cfg and args.idtools_jsonl:
+        naive_cls = naive_classification_baseline(samples, datasets_cfg)
+        results["models"]["naive"]["classification"] = naive_cls
+        ov = naive_cls.get("overall", {})
         print("\n=== Classification Metrics ===")
+        print(f"\n  naive (shuffled labels)")
+        print(f"    Overall  Acc={ov.get('accuracy', 0):.3f}  "
+              f"F1-macro={ov.get('f1_macro', 0):.3f}  "
+              f"F1-weighted={ov.get('f1_weighted', 0):.3f}")
         for key, rows in all_rows.items():
             preds = [row["response"] for row in rows]
             cls_results = score_classification(samples, preds, datasets_cfg)
@@ -741,7 +794,7 @@ def main(args):
     if datasets_cfg and args.idtools_jsonl:
         all_cls_results = {
             key: results["models"][key]["classification"]
-            for key in all_rows
+            for key in list(all_rows.keys()) + ["naive"]
             if "classification" in results["models"].get(key, {})
         }
         if all_cls_results:

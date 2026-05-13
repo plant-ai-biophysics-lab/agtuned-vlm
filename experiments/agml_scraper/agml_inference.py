@@ -215,6 +215,28 @@ def dataset_cls_summary(rows: list[dict]) -> dict:
     }
 
 
+def naive_cls_summary(rows: list[dict]) -> dict:
+    """Shuffle ground truth labels within dataset — chance-level floor."""
+    resolvable = [r for r in rows if r["resolvable"]]
+    if not resolvable:
+        return {"accuracy": 0.0, "f1_macro": 0.0, "f1_weighted": 0.0,
+                "n_images": len(rows), "n_resolvable": 0}
+    refs     = [r["class_label"] for r in resolvable]
+    shuffled = refs.copy()
+    rng      = np.random.default_rng(42)
+    rng.shuffle(shuffled)
+    labels   = sorted(set(refs))
+    return {
+        "accuracy":     round(accuracy_score(refs, shuffled), 4),
+        "f1_macro":     round(f1_score(refs, shuffled, average="macro",
+                                       labels=labels, zero_division=0), 4),
+        "f1_weighted":  round(f1_score(refs, shuffled, average="weighted",
+                                       labels=labels, zero_division=0), 4),
+        "n_images":     len(rows),
+        "n_resolvable": len(resolvable),
+    }
+
+
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
 def plot_rouge_by_dataset(results_a: dict, output_dir: Path) -> None:
@@ -244,26 +266,32 @@ def plot_rouge_by_dataset(results_a: dict, output_dir: Path) -> None:
     print(f"  Saved: {path}")
 
 
-def plot_cls_by_dataset(results_b: dict, output_dir: Path) -> None:
+def plot_cls_by_dataset(results_b: dict, results_b_naive: dict, output_dir: Path) -> None:
     datasets = list(results_b.keys())
     if not datasets:
         return
     metrics = ["accuracy", "f1_macro", "f1_weighted"]
-    x = np.arange(len(datasets))
-    width = 0.25
+    x     = np.arange(len(datasets))
+    width = 0.18
 
-    fig, ax = plt.subplots(figsize=(max(8, len(datasets) * 0.6), 5))
-    for i, m in enumerate(metrics):
-        vals = [results_b[ds][m] for ds in datasets]
-        ax.bar(x + i * width, vals, width, label=m.replace("_", " ").title())
+    fig, ax = plt.subplots(figsize=(max(8, len(datasets) * 0.8), 5))
+    colors = ["#2196F3", "#4CAF50", "#FF9800"]
+    for i, (m, color) in enumerate(zip(metrics, colors)):
+        model_vals = [results_b[ds][m] for ds in datasets]
+        naive_vals = [results_b_naive.get(ds, {}).get(m, 0) for ds in datasets]
+        offset = (i * 2) * width - (len(metrics) - 1) * width
+        ax.bar(x + offset,         model_vals, width, label=m.replace("_", " ").title(),
+               color=color, alpha=0.85)
+        ax.bar(x + offset + width, naive_vals, width, label=f"{m.replace('_', ' ').title()} (naive)",
+               color=color, alpha=0.35, hatch="///", edgecolor=color)
 
-    ax.set_xticks(x + width)
+    ax.set_xticks(x)
     ax.set_xticklabels([d.replace("_classification", "").replace("_", " ")
                         for d in datasets], rotation=45, ha="right", fontsize=7)
-    ax.set_ylim(0, 1.0)
+    ax.set_ylim(0, 1.15)
     ax.set_ylabel("Score")
-    ax.set_title("Dataset B — Classification Metrics by Dataset")
-    ax.legend()
+    ax.set_title("Dataset B — Classification Metrics by Dataset (solid=model, hatched=naive)")
+    ax.legend(fontsize=7, ncol=2)
     plt.tight_layout()
     path = output_dir / "classification_by_dataset.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -396,13 +424,33 @@ def main(args: argparse.Namespace) -> None:
         results_a["overall"] = dataset_rouge_summary(desc_rows)
 
     results_b = {ds: dataset_cls_summary(rows) for ds, rows in by_ds_cls.items()}
+    results_b_naive = {ds: naive_cls_summary(rows) for ds, rows in by_ds_cls.items()}
+
+    # Overall naive across all datasets
+    if cls_rows:
+        all_resolvable = [r for r in cls_rows if r["resolvable"]]
+        if all_resolvable:
+            refs     = [r["class_label"] for r in all_resolvable]
+            shuffled = refs.copy()
+            np.random.default_rng(42).shuffle(shuffled)
+            label_set = sorted(set(refs))
+            results_b_naive["overall"] = {
+                "accuracy":     round(accuracy_score(refs, shuffled), 4),
+                "f1_macro":     round(f1_score(refs, shuffled, average="macro",
+                                               labels=label_set, zero_division=0), 4),
+                "f1_weighted":  round(f1_score(refs, shuffled, average="weighted",
+                                               labels=label_set, zero_division=0), 4),
+                "n_images":     len(all_resolvable),
+                "n_resolvable": len(all_resolvable),
+            }
 
     results = {
-        "model":        args.model,
-        "total_time_s": round(elapsed, 3),
-        "n_classes":    len(records),
-        "dataset_a":    results_a,
-        "dataset_b":    results_b,
+        "model":          args.model,
+        "total_time_s":   round(elapsed, 3),
+        "n_classes":      len(records),
+        "dataset_a":      results_a,
+        "dataset_b":      results_b,
+        "dataset_b_naive": results_b_naive,
     }
     metrics_path = output_dir / "agml_inference_metrics.json"
     with open(metrics_path, "w") as f:
@@ -420,20 +468,26 @@ def main(args: argparse.Namespace) -> None:
 
     if results_b:
         print(f"\n=== Dataset B — Visual Classification ===")
-        header = f"  {'Dataset':<45} {'Acc':>6} {'F1-mac':>8} {'F1-wt':>7} {'Res/Tot':>10}"
+        header = f"  {'Dataset':<45} {'Acc':>6} {'F1-mac':>8} {'F1-wt':>7} {'Naive Acc':>10} {'Naive F1':>9} {'Res/Tot':>10}"
         print(header)
         print(f"  {'-' * len(header)}")
         for ds, m in results_b.items():
+            naive = results_b_naive.get(ds, {})
             print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['f1_macro']:>8.3f} "
                   f"{m['f1_weighted']:>7.3f} "
+                  f"{naive.get('accuracy', 0):>10.3f} {naive.get('f1_macro', 0):>9.3f} "
                   f"{m['n_resolvable']:>4}/{m['n_images']:<4}")
+        if "overall" in results_b_naive:
+            nv = results_b_naive["overall"]
+            print(f"\n  Naive overall  Acc={nv['accuracy']:.3f}  "
+                  f"F1-macro={nv['f1_macro']:.3f}  F1-weighted={nv['f1_weighted']:.3f}")
 
     print(f"\nTotal time: {elapsed:.1f}s")
 
     # ── Plots ──────────────────────────────────────────────────────────────────
     print("\nGenerating plots...")
     plot_rouge_by_dataset(results_a, output_dir)
-    plot_cls_by_dataset(results_b, output_dir)
+    plot_cls_by_dataset(results_b, results_b_naive, output_dir)
 
 
 if __name__ == "__main__":
