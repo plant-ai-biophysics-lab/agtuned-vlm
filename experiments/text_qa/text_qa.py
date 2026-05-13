@@ -62,13 +62,16 @@ DESCRIPTIVE_PROMPT_TEMPLATE = (
 
 # ── Classification helpers (shared with agml_inference.py) ───────────────────
 
-def load_datasets_config(config_path: Path) -> dict[str, list[str]]:
-    """Returns {agml_name: [cleaned_class_label, ...]} from datasets.yaml."""
+def load_datasets_config(config_path: Path) -> dict[str, dict]:
+    """Returns {agml_name: {task_type, classes (cleaned), ...}} from datasets.yaml."""
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     result = {}
     for d in cfg["datasets"]:
-        result[d["agml_name"]] = clean_class_list(d.get("classes", []))
+        result[d["agml_name"]] = {
+            **d,
+            "classes": clean_class_list(d.get("classes", [])),
+        }
     return result
 
 
@@ -107,7 +110,7 @@ def score_classification(
         agml_name = sample.get("agml_dataset")
         if not agml_name or agml_name not in datasets_cfg:
             continue
-        classes  = datasets_cfg[agml_name]
+        classes  = datasets_cfg[agml_name]["classes"]
         resolved = resolve_class(pred, classes)
         by_dataset[agml_name].append({
             "class_label":    sample["answer"],
@@ -483,6 +486,114 @@ def plot_response_length(all_rows: dict[str, list[dict]], output_dir: Path):
     print(f"  Saved: {path}")
 
 
+def plot_cls_summary_per_dataset(
+    all_cls_results: dict[str, dict],
+    output_dir: Path,
+) -> None:
+    """Grouped bar chart: Accuracy / F1-macro / F1-weighted per AgML dataset, one group per model."""
+    # Collect all dataset names across all models
+    all_datasets = []
+    for cls_results in all_cls_results.values():
+        for ds in cls_results["per_dataset"]:
+            if ds not in all_datasets:
+                all_datasets.append(ds)
+    if not all_datasets:
+        return
+
+    models  = list(all_cls_results.keys())
+    metrics = ["accuracy", "f1_macro", "f1_weighted"]
+    colors  = plt.cm.tab10(np.linspace(0, 0.6, len(models)))
+    x       = np.arange(len(all_datasets))
+    width   = 0.8 / (len(models) * len(metrics))
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(10, len(all_datasets) * 0.8), 5), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        for i, (model_key, color) in enumerate(zip(models, colors)):
+            per_ds = all_cls_results[model_key]["per_dataset"]
+            vals   = [per_ds.get(ds, {}).get(metric, 0.0) for ds in all_datasets]
+            offset = (i - (len(models) - 1) / 2) * width
+            ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
+            rotation=45, ha="right", fontsize=7,
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
+
+    fig.suptitle("Text Classification — Per Dataset", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "cls_summary_per_dataset.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_cls_summary_per_task(
+    all_cls_results: dict[str, dict],
+    datasets_cfg_full: dict[str, dict],
+    output_dir: Path,
+) -> None:
+    """Grouped bar chart: Accuracy / F1-macro / F1-weighted per task_type, one group per model."""
+    # Map dataset → task_type
+    ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg_full.items()}
+    task_types = sorted({t for t in ds_to_task.values()})
+    if not task_types:
+        return
+
+    models  = list(all_cls_results.keys())
+    metrics = ["accuracy", "f1_macro", "f1_weighted"]
+    colors  = plt.cm.tab10(np.linspace(0, 0.6, len(models)))
+    x       = np.arange(len(task_types))
+    width   = 0.8 / (len(models) * len(metrics))
+
+    # Aggregate per task_type per model
+    task_scores: dict[str, dict[str, dict[str, list]]] = {
+        model_key: {tt: {m: [] for m in metrics} for tt in task_types}
+        for model_key in models
+    }
+    for model_key, cls_results in all_cls_results.items():
+        for ds, m in cls_results["per_dataset"].items():
+            tt = ds_to_task.get(ds)
+            if tt:
+                for metric in metrics:
+                    task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(8, len(task_types) * 1.5), 5), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        for i, (model_key, color) in enumerate(zip(models, colors)):
+            vals = [
+                float(np.mean(task_scores[model_key][tt][metric]))
+                if task_scores[model_key][tt][metric] else 0.0
+                for tt in task_types
+            ]
+            offset = (i - (len(models) - 1) / 2) * width
+            bars = ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85)
+            for bar in bars:
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                        f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+        ax.set_xticks(x)
+        ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
+
+    fig.suptitle("Text Classification — Per Task Type", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "cls_summary_per_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main(args):
@@ -626,6 +737,17 @@ def main(args):
     plot_rougeL_distribution(all_rows, output_dir)
     plot_contains_match_overlap(all_rows, output_dir)
     plot_response_length(all_rows, output_dir)
+
+    if datasets_cfg and args.idtools_jsonl:
+        all_cls_results = {
+            key: results["models"][key]["classification"]
+            for key in all_rows
+            if "classification" in results["models"].get(key, {})
+        }
+        if all_cls_results:
+            plot_cls_summary_per_dataset(all_cls_results, output_dir)
+            plot_cls_summary_per_task(all_cls_results, datasets_cfg, output_dir)
+
     print(f"\nAll outputs saved to {output_dir}/")
 
 
