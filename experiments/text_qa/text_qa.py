@@ -38,6 +38,7 @@ import evaluate
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
+from bert_score import score as bert_score_fn
 from datasets import load_dataset
 from rouge_score import rouge_scorer as rs_scorer
 from sklearn.metrics import accuracy_score, f1_score
@@ -85,6 +86,22 @@ def clean_class_list(raw_classes: list[str]) -> list[str]:
     return cleaned
 
 
+def contains_match(prediction: str, reference: str) -> bool:
+    """True if either string is a substring of the other (case-insensitive)."""
+    p, r = prediction.lower().strip(), reference.lower().strip()
+    return p in r or r in p
+
+
+def compute_bertscore(predictions: list[str], references: list[str]) -> list[float]:
+    """Returns per-sample BERTScore F1 using distilbert (fast, no GPU required)."""
+    _, _, f1 = bert_score_fn(
+        predictions, references,
+        model_type="distilbert-base-uncased",
+        verbose=False,
+    )
+    return f1.tolist()
+
+
 def resolve_class(response: str, classes: list[str]) -> str | None:
     """Case-insensitive exact match, then single-match substring fallback."""
     resp = response.lower().strip()
@@ -125,36 +142,45 @@ def score_classification(
         resolvable = [r for r in rows if r["resolvable"]]
         if not resolvable:
             per_dataset[ds_name] = {
-                "accuracy": 0.0, "f1_macro": 0.0, "f1_weighted": 0.0,
+                "accuracy": 0.0, "contains_accuracy": 0.0, "f1_macro": 0.0,
+                "f1_weighted": 0.0, "mean_bertscore": 0.0,
                 "n_total": len(rows), "n_resolvable": 0,
             }
             continue
         refs   = [r["class_label"]    for r in resolvable]
         preds  = [r["resolved_class"] for r in resolvable]
         labels = sorted(set(refs) | set(preds))
+        contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
+        bert_scores      = compute_bertscore(preds, refs)
         per_dataset[ds_name] = {
-            "accuracy":     round(accuracy_score(refs, preds), 4),
-            "f1_macro":     round(f1_score(refs, preds, average="macro",
-                                           labels=labels, zero_division=0), 4),
-            "f1_weighted":  round(f1_score(refs, preds, average="weighted",
-                                           labels=labels, zero_division=0), 4),
-            "n_total":      len(rows),
-            "n_resolvable": len(resolvable),
+            "accuracy":          round(accuracy_score(refs, preds), 4),
+            "contains_accuracy": round(np.mean(contains_correct), 4),
+            "f1_macro":          round(f1_score(refs, preds, average="macro",
+                                               labels=labels, zero_division=0), 4),
+            "f1_weighted":       round(f1_score(refs, preds, average="weighted",
+                                               labels=labels, zero_division=0), 4),
+            "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
+            "n_total":           len(rows),
+            "n_resolvable":      len(resolvable),
         }
         all_refs.extend(refs)
         all_preds.extend(preds)
 
     overall = {}
     if all_refs:
-        labels = sorted(set(all_refs) | set(all_preds))
+        labels       = sorted(set(all_refs) | set(all_preds))
+        contains_all = [int(contains_match(p, r)) for p, r in zip(all_preds, all_refs)]
+        bert_all     = compute_bertscore(all_preds, all_refs)
         overall = {
-            "accuracy":     round(accuracy_score(all_refs, all_preds), 4),
-            "f1_macro":     round(f1_score(all_refs, all_preds, average="macro",
-                                           labels=labels, zero_division=0), 4),
-            "f1_weighted":  round(f1_score(all_refs, all_preds, average="weighted",
-                                           labels=labels, zero_division=0), 4),
-            "n_total":      len(all_refs),
-            "n_resolvable": len(all_refs),
+            "accuracy":          round(accuracy_score(all_refs, all_preds), 4),
+            "contains_accuracy": round(np.mean(contains_all), 4),
+            "f1_macro":          round(f1_score(all_refs, all_preds, average="macro",
+                                               labels=labels, zero_division=0), 4),
+            "f1_weighted":       round(f1_score(all_refs, all_preds, average="weighted",
+                                               labels=labels, zero_division=0), 4),
+            "mean_bertscore":    round(float(np.mean(bert_all)), 4),
+            "n_total":           len(all_refs),
+            "n_resolvable":      len(all_refs),
         }
 
     return {"overall": overall, "per_dataset": per_dataset}
@@ -284,32 +310,40 @@ def naive_classification_baseline(
     all_refs, all_shuffled = [], []
 
     for ds_name, labels in by_dataset.items():
-        shuffled = labels.copy()
+        shuffled  = labels.copy()
         rng.shuffle(shuffled)
-        label_set = sorted(set(labels))
+        label_set        = sorted(set(labels))
+        contains_correct = [int(contains_match(p, r)) for p, r in zip(shuffled, labels)]
+        bert_scores      = compute_bertscore(shuffled, labels)
         per_dataset[ds_name] = {
-            "accuracy":     round(accuracy_score(labels, shuffled), 4),
-            "f1_macro":     round(f1_score(labels, shuffled, average="macro",
-                                           labels=label_set, zero_division=0), 4),
-            "f1_weighted":  round(f1_score(labels, shuffled, average="weighted",
-                                           labels=label_set, zero_division=0), 4),
-            "n_total":      len(labels),
-            "n_resolvable": len(labels),
+            "accuracy":          round(accuracy_score(labels, shuffled), 4),
+            "contains_accuracy": round(np.mean(contains_correct), 4),
+            "f1_macro":          round(f1_score(labels, shuffled, average="macro",
+                                               labels=label_set, zero_division=0), 4),
+            "f1_weighted":       round(f1_score(labels, shuffled, average="weighted",
+                                               labels=label_set, zero_division=0), 4),
+            "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
+            "n_total":           len(labels),
+            "n_resolvable":      len(labels),
         }
         all_refs.extend(labels)
         all_shuffled.extend(shuffled)
 
     overall = {}
     if all_refs:
-        label_set = sorted(set(all_refs))
+        label_set    = sorted(set(all_refs))
+        contains_all = [int(contains_match(p, r)) for p, r in zip(all_shuffled, all_refs)]
+        bert_all     = compute_bertscore(all_shuffled, all_refs)
         overall = {
-            "accuracy":     round(accuracy_score(all_refs, all_shuffled), 4),
-            "f1_macro":     round(f1_score(all_refs, all_shuffled, average="macro",
-                                           labels=label_set, zero_division=0), 4),
-            "f1_weighted":  round(f1_score(all_refs, all_shuffled, average="weighted",
-                                           labels=label_set, zero_division=0), 4),
-            "n_total":      len(all_refs),
-            "n_resolvable": len(all_refs),
+            "accuracy":          round(accuracy_score(all_refs, all_shuffled), 4),
+            "contains_accuracy": round(np.mean(contains_all), 4),
+            "f1_macro":          round(f1_score(all_refs, all_shuffled, average="macro",
+                                               labels=label_set, zero_division=0), 4),
+            "f1_weighted":       round(f1_score(all_refs, all_shuffled, average="weighted",
+                                               labels=label_set, zero_division=0), 4),
+            "mean_bertscore":    round(float(np.mean(bert_all)), 4),
+            "n_total":           len(all_refs),
+            "n_resolvable":      len(all_refs),
         }
 
     return {"overall": overall, "per_dataset": per_dataset}
@@ -749,14 +783,15 @@ def main(args):
             ov = cls_results.get("overall", {})
             print(f"\n  {key}")
             print(f"    Overall  Acc={ov.get('accuracy', 0):.3f}  "
+                  f"Contains={ov.get('contains_accuracy', 0):.3f}  "
                   f"F1-macro={ov.get('f1_macro', 0):.3f}  "
-                  f"F1-weighted={ov.get('f1_weighted', 0):.3f}  "
+                  f"BERTScore={ov.get('mean_bertscore', 0):.3f}  "
                   f"({ov.get('n_resolvable', 0)}/{ov.get('n_total', 0)} resolvable)")
-            print(f"  {'Dataset':<45} {'Acc':>6} {'F1-mac':>8} {'F1-wt':>7} {'Res/Tot':>10}")
-            print(f"  {'-'*80}")
+            print(f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'BERT':>6} {'Res/Tot':>9}")
+            print(f"  {'-'*84}")
             for ds, m in cls_results["per_dataset"].items():
-                print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['f1_macro']:>8.3f} "
-                      f"{m['f1_weighted']:>7.3f} "
+                print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
+                      f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
                       f"{m['n_resolvable']:>4}/{m['n_total']:<4}")
 
     # --- Summary table ---

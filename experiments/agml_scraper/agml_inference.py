@@ -29,6 +29,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
+from bert_score import score as bert_score_fn
 from PIL import Image as PILImage
 from rouge_score import rouge_scorer as rs_scorer
 from sklearn.metrics import accuracy_score, classification_report, f1_score
@@ -196,22 +197,45 @@ def dataset_rouge_summary(rows: list[dict]) -> dict:
     }
 
 
+def contains_match(prediction: str, reference: str) -> bool:
+    """True if either string is a substring of the other (case-insensitive)."""
+    p, r = prediction.lower().strip(), reference.lower().strip()
+    return p in r or r in p
+
+
+def compute_bertscore(predictions: list[str], references: list[str]) -> list[float]:
+    """Returns per-sample BERTScore F1 using distilbert (fast, no GPU required)."""
+    _, _, f1 = bert_score_fn(
+        predictions, references,
+        model_type="distilbert-base-uncased",
+        verbose=False,
+    )
+    return f1.tolist()
+
+
 def dataset_cls_summary(rows: list[dict]) -> dict:
     resolvable = [r for r in rows if r["resolvable"]]
     if not resolvable:
-        return {"accuracy": 0.0, "f1_macro": 0.0, "f1_weighted": 0.0,
+        return {"accuracy": 0.0, "contains_accuracy": 0.0, "f1_macro": 0.0,
+                "f1_weighted": 0.0, "mean_bertscore": 0.0,
                 "n_images": len(rows), "n_resolvable": 0}
     refs   = [r["class_label"]    for r in resolvable]
     preds  = [r["resolved_class"] for r in resolvable]
     labels = sorted(set(refs) | set(preds))
+
+    contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
+    bert_scores      = compute_bertscore(preds, refs)
+
     return {
-        "accuracy":     round(accuracy_score(refs, preds), 4),
-        "f1_macro":     round(f1_score(refs, preds, average="macro",
-                                       labels=labels, zero_division=0), 4),
-        "f1_weighted":  round(f1_score(refs, preds, average="weighted",
-                                       labels=labels, zero_division=0), 4),
-        "n_images":     len(rows),
-        "n_resolvable": len(resolvable),
+        "accuracy":          round(accuracy_score(refs, preds), 4),
+        "contains_accuracy": round(np.mean(contains_correct), 4),
+        "f1_macro":          round(f1_score(refs, preds, average="macro",
+                                            labels=labels, zero_division=0), 4),
+        "f1_weighted":       round(f1_score(refs, preds, average="weighted",
+                                            labels=labels, zero_division=0), 4),
+        "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
+        "n_images":          len(rows),
+        "n_resolvable":      len(resolvable),
     }
 
 
@@ -219,21 +243,28 @@ def naive_cls_summary(rows: list[dict]) -> dict:
     """Shuffle ground truth labels within dataset — chance-level floor."""
     resolvable = [r for r in rows if r["resolvable"]]
     if not resolvable:
-        return {"accuracy": 0.0, "f1_macro": 0.0, "f1_weighted": 0.0,
+        return {"accuracy": 0.0, "contains_accuracy": 0.0, "f1_macro": 0.0,
+                "f1_weighted": 0.0, "mean_bertscore": 0.0,
                 "n_images": len(rows), "n_resolvable": 0}
     refs     = [r["class_label"] for r in resolvable]
     shuffled = refs.copy()
     rng      = np.random.default_rng(42)
     rng.shuffle(shuffled)
     labels   = sorted(set(refs))
+
+    contains_correct = [int(contains_match(p, r)) for p, r in zip(shuffled, refs)]
+    bert_scores      = compute_bertscore(shuffled, refs)
+
     return {
-        "accuracy":     round(accuracy_score(refs, shuffled), 4),
-        "f1_macro":     round(f1_score(refs, shuffled, average="macro",
-                                       labels=labels, zero_division=0), 4),
-        "f1_weighted":  round(f1_score(refs, shuffled, average="weighted",
-                                       labels=labels, zero_division=0), 4),
-        "n_images":     len(rows),
-        "n_resolvable": len(resolvable),
+        "accuracy":          round(accuracy_score(refs, shuffled), 4),
+        "contains_accuracy": round(np.mean(contains_correct), 4),
+        "f1_macro":          round(f1_score(refs, shuffled, average="macro",
+                                            labels=labels, zero_division=0), 4),
+        "f1_weighted":       round(f1_score(refs, shuffled, average="weighted",
+                                            labels=labels, zero_division=0), 4),
+        "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
+        "n_images":          len(rows),
+        "n_resolvable":      len(resolvable),
     }
 
 
@@ -374,11 +405,17 @@ def main(args: argparse.Namespace) -> None:
             clean_classes = clean_class_list(raw_classes)
             cls_question  = visual_cls_q + CLS_SUFFIX
 
-            cls_preds = run_batch(llm, tokenizer, images, cls_question, CLS_PARAMS)
-            for pred, img_name in zip(cls_preds, valid_names):
-                resolved = resolve_class(pred, clean_classes)
-                correct  = (resolved is not None and
-                            resolved.lower() == class_label.lower())
+            cls_preds  = run_batch(llm, tokenizer, images, cls_question, CLS_PARAMS)
+            resolved_list = [resolve_class(p, clean_classes) for p in cls_preds]
+            bert_scores   = compute_bertscore(
+                [r or p for r, p in zip(resolved_list, cls_preds)],
+                [class_label] * len(cls_preds),
+            )
+            for pred, img_name, resolved, bs in zip(
+                cls_preds, valid_names, resolved_list, bert_scores
+            ):
+                correct   = resolved is not None and resolved.lower() == class_label.lower()
+                contains  = contains_match(resolved or pred, class_label)
                 cls_rows.append({
                     "agml_dataset":   agml_name,
                     "class_label":    class_label,
@@ -388,6 +425,8 @@ def main(args: argparse.Namespace) -> None:
                     "raw_prediction": pred,
                     "resolved_class": resolved or "",
                     "correct":        int(correct),
+                    "contains_match": int(contains),
+                    "bertscore":      round(bs, 4),
                     "resolvable":     int(resolved is not None),
                 })
 
@@ -468,19 +507,21 @@ def main(args: argparse.Namespace) -> None:
 
     if results_b:
         print(f"\n=== Dataset B — Visual Classification ===")
-        header = f"  {'Dataset':<45} {'Acc':>6} {'F1-mac':>8} {'F1-wt':>7} {'Naive Acc':>10} {'Naive F1':>9} {'Res/Tot':>10}"
+        header = (f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
+                  f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7} {'Res/Tot':>9}")
         print(header)
         print(f"  {'-' * len(header)}")
         for ds, m in results_b.items():
             naive = results_b_naive.get(ds, {})
-            print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['f1_macro']:>8.3f} "
-                  f"{m['f1_weighted']:>7.3f} "
-                  f"{naive.get('accuracy', 0):>10.3f} {naive.get('f1_macro', 0):>9.3f} "
+            print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
+                  f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
+                  f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f} "
                   f"{m['n_resolvable']:>4}/{m['n_images']:<4}")
         if "overall" in results_b_naive:
             nv = results_b_naive["overall"]
             print(f"\n  Naive overall  Acc={nv['accuracy']:.3f}  "
-                  f"F1-macro={nv['f1_macro']:.3f}  F1-weighted={nv['f1_weighted']:.3f}")
+                  f"Contains={nv['contains_accuracy']:.3f}  "
+                  f"BERTScore={nv['mean_bertscore']:.3f}")
 
     print(f"\nTotal time: {elapsed:.1f}s")
 
