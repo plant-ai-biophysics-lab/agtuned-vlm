@@ -72,8 +72,7 @@ Descriptions:
 ...
 ```
 
-The synthesized output (2-3 sentences) becomes the `answer` stored in the JSONL and the
-ground truth for ROUGE scoring in Dataset A.
+The synthesized output (2-3 sentences) is stored in `metadata.synthesized_description`.
 
 **Pass 3 — Compression (text-only pass)**
 The synthesized description is compressed into a single sentence:
@@ -86,9 +85,9 @@ Do not name or repeat any disease, pest, species, or class label.
 Description: {synthesized_description}
 ```
 
-The compressed output is stored as `metadata.compressed_description` in both
-`agml_descriptions.jsonl` and `agml_classification.jsonl`. It is available as a shorter
-alternative context for classification prompts or visual inference.
+The compressed output becomes the `answer` in `messages[1].content` — the ground truth
+for ROUGE scoring in Dataset A — and is also stored as `metadata.compressed_description`
+for convenience. The full 2-3 sentence synthesis remains in `metadata.synthesized_description`.
 
 **Rationale**: Drawn from ShareGPT4V and LLaVA-style dataset construction — dense per-image
 captions are refined into one coherent ground truth. Synthesizing across N images reduces
@@ -349,8 +348,8 @@ For each dataset (skip: false):
     └─ Pass 3: LLM compresses synthesis → 1 sentence ───── text-only pass
 
     → Description record  → agml_descriptions.jsonl
-         answer = synthesized (2-3 sentences)
-         metadata.compressed_description = compressed (1 sentence)
+         answer = compressed (1 sentence)
+         metadata.synthesized_description = synthesized (2-3 sentences)
     → Classification record (reuses both, no extra inference)
                           → agml_classification.jsonl
      │

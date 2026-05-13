@@ -292,7 +292,7 @@ def make_description_record(
     return {
         "messages": [
             {"role": "user",      "content": text_desc_q},
-            {"role": "assistant", "content": synthesized},
+            {"role": "assistant", "content": compressed},
         ],
         "metadata": {
             "record_type":              "description",
