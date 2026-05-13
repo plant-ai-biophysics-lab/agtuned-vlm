@@ -59,14 +59,13 @@ def main(args: argparse.Namespace) -> None:
             skipped += 1
             continue
 
-        if meta.get("synthesized_description"):
-            # already fixed
+        current_answer = r["messages"][1]["content"]
+        if current_answer == compressed:
             skipped += 1
             continue
 
-        synthesized                      = r["messages"][1]["content"]
+        meta["synthesized_description"]  = current_answer
         r["messages"][1]["content"]      = compressed
-        meta["synthesized_description"]  = synthesized
         fixed += 1
 
     print(f"\nDescriptions: {fixed} fixed, {skipped} skipped")
