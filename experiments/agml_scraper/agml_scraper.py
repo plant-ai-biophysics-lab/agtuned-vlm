@@ -281,6 +281,7 @@ def make_description_record(
             "task_type":       task_type,
             "visual_question": visual_desc_q,
             "raw_captions":    raw_captions,
+            "image_names":     [Path(p).name for p in image_paths],
             "n_images_used":   len(image_paths),
             "generator_model": model_id,
         },
@@ -427,9 +428,16 @@ def main(args: argparse.Namespace) -> None:
 
             checkpoint[agml_name][class_key] = {
                 "status":                   "done",
+                "crop":                     crop,
+                "clean_cls":                clean_cls,
+                "task_type":                task_type,
                 "synthesized_description":  synthesized,
                 "raw_captions":             raw_captions,
                 "image_paths":              image_paths,
+                "visual_desc_question":     questions["visual_desc"],
+                "visual_cls_question":      questions["visual_cls"],
+                "text_desc_question":       questions["text_desc"],
+                "text_cls_question":        text_cls_q,
             }
             save_checkpoint(output_dir, checkpoint)
             total_written += 1
@@ -442,11 +450,11 @@ def main(args: argparse.Namespace) -> None:
     print(f"  Classification: {cls_path}")
 
     if args.hub_repo_descriptions:
-        print(f"\nPushing descriptions → {args.hub_repo_descriptions}")
+        print(f"\nPushing text descriptions → {args.hub_repo_descriptions}")
         push_to_hub(desc_path, args.hub_repo_descriptions)
 
     if args.hub_repo_classification:
-        print(f"\nPushing classification → {args.hub_repo_classification}")
+        print(f"\nPushing text classification → {args.hub_repo_classification}")
         push_to_hub(cls_path, args.hub_repo_classification)
 
 
