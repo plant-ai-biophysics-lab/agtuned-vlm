@@ -31,13 +31,16 @@ import csv
 import json
 import re
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import evaluate
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 from datasets import load_dataset
 from rouge_score import rouge_scorer as rs_scorer
+from sklearn.metrics import accuracy_score, f1_score
 from vllm import LLM, SamplingParams
 
 rouge = evaluate.load("rouge")
@@ -55,6 +58,103 @@ DESCRIPTIVE_PROMPT_TEMPLATE = (
     "Question: {question}\n\n"
     "Answer:"
 )
+
+
+# ── Classification helpers (shared with agml_inference.py) ───────────────────
+
+def load_datasets_config(config_path: Path) -> dict[str, list[str]]:
+    """Returns {agml_name: [cleaned_class_label, ...]} from datasets.yaml."""
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    result = {}
+    for d in cfg["datasets"]:
+        result[d["agml_name"]] = clean_class_list(d.get("classes", []))
+    return result
+
+
+def clean_class_list(raw_classes: list[str]) -> list[str]:
+    cleaned = []
+    for c in raw_classes:
+        if "___" in c:
+            cleaned.append(c.split("___", 1)[1].replace("_", " ").strip())
+        else:
+            cleaned.append(c.replace("_", " ").strip())
+    return cleaned
+
+
+def resolve_class(response: str, classes: list[str]) -> str | None:
+    """Case-insensitive exact match, then single-match substring fallback."""
+    resp = response.lower().strip()
+    for cls in classes:
+        if cls.lower() == resp:
+            return cls
+    matches = [cls for cls in classes if cls.lower() in resp]
+    return matches[0] if len(matches) == 1 else None
+
+
+def score_classification(
+    samples: list[dict],
+    predictions: list[str],
+    datasets_cfg: dict[str, list[str]],
+) -> dict:
+    """
+    Compute accuracy, F1-macro, F1-weighted for classification JSONL.
+    Groups by agml_dataset, resolves each prediction against known classes,
+    then aggregates. Unresolvable predictions are excluded from metrics.
+    """
+    by_dataset: dict[str, list] = defaultdict(list)
+    for sample, pred in zip(samples, predictions):
+        agml_name = sample.get("agml_dataset")
+        if not agml_name or agml_name not in datasets_cfg:
+            continue
+        classes  = datasets_cfg[agml_name]
+        resolved = resolve_class(pred, classes)
+        by_dataset[agml_name].append({
+            "class_label":    sample["answer"],
+            "resolved_class": resolved or "",
+            "resolvable":     resolved is not None,
+        })
+
+    per_dataset = {}
+    all_refs, all_preds = [], []
+
+    for ds_name, rows in by_dataset.items():
+        resolvable = [r for r in rows if r["resolvable"]]
+        if not resolvable:
+            per_dataset[ds_name] = {
+                "accuracy": 0.0, "f1_macro": 0.0, "f1_weighted": 0.0,
+                "n_total": len(rows), "n_resolvable": 0,
+            }
+            continue
+        refs   = [r["class_label"]    for r in resolvable]
+        preds  = [r["resolved_class"] for r in resolvable]
+        labels = sorted(set(refs) | set(preds))
+        per_dataset[ds_name] = {
+            "accuracy":     round(accuracy_score(refs, preds), 4),
+            "f1_macro":     round(f1_score(refs, preds, average="macro",
+                                           labels=labels, zero_division=0), 4),
+            "f1_weighted":  round(f1_score(refs, preds, average="weighted",
+                                           labels=labels, zero_division=0), 4),
+            "n_total":      len(rows),
+            "n_resolvable": len(resolvable),
+        }
+        all_refs.extend(refs)
+        all_preds.extend(preds)
+
+    overall = {}
+    if all_refs:
+        labels = sorted(set(all_refs) | set(all_preds))
+        overall = {
+            "accuracy":     round(accuracy_score(all_refs, all_preds), 4),
+            "f1_macro":     round(f1_score(all_refs, all_preds, average="macro",
+                                           labels=labels, zero_division=0), 4),
+            "f1_weighted":  round(f1_score(all_refs, all_preds, average="weighted",
+                                           labels=labels, zero_division=0), 4),
+            "n_total":      len(all_refs),
+            "n_resolvable": len(all_refs),
+        }
+
+    return {"overall": overall, "per_dataset": per_dataset}
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -96,7 +196,12 @@ def load_idtools_qa(jsonl_path: str, n_samples: int | None = None) -> list[dict]
             question = msgs[0].get("content", "").strip()
             answer   = msgs[1].get("content", "").strip()
             if question and answer:
-                samples.append({"question": question, "answer": answer})
+                meta = record.get("metadata", {})
+                samples.append({
+                    "question":    question,
+                    "answer":      answer,
+                    "agml_dataset": meta.get("agml_dataset"),
+                })
     if n_samples:
         samples = samples[:n_samples]
     print(f"  {len(samples)} samples")
@@ -381,6 +486,11 @@ def plot_response_length(all_rows: dict[str, list[dict]], output_dir: Path):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main(args):
+    datasets_cfg = None
+    if args.datasets_config:
+        datasets_cfg = load_datasets_config(Path(args.datasets_config))
+        print(f"Datasets config: {args.datasets_config} ({len(datasets_cfg)} datasets)")
+
     if args.idtools_jsonl:
         samples = load_idtools_qa(args.idtools_jsonl, args.n_samples)
         dataset_label = f"IDtools:{args.idtools_jsonl}"
@@ -465,6 +575,26 @@ def main(args):
         all_rows[args.finetuned_model] = rows
         del llm, tokenizer
 
+    # --- Classification metrics (when datasets_config provided) ---
+    if datasets_cfg and args.idtools_jsonl:
+        print("\n=== Classification Metrics ===")
+        for key, rows in all_rows.items():
+            preds = [row["response"] for row in rows]
+            cls_results = score_classification(samples, preds, datasets_cfg)
+            results["models"][key]["classification"] = cls_results
+            ov = cls_results.get("overall", {})
+            print(f"\n  {key}")
+            print(f"    Overall  Acc={ov.get('accuracy', 0):.3f}  "
+                  f"F1-macro={ov.get('f1_macro', 0):.3f}  "
+                  f"F1-weighted={ov.get('f1_weighted', 0):.3f}  "
+                  f"({ov.get('n_resolvable', 0)}/{ov.get('n_total', 0)} resolvable)")
+            print(f"  {'Dataset':<45} {'Acc':>6} {'F1-mac':>8} {'F1-wt':>7} {'Res/Tot':>10}")
+            print(f"  {'-'*80}")
+            for ds, m in cls_results["per_dataset"].items():
+                print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['f1_macro']:>8.3f} "
+                      f"{m['f1_weighted']:>7.3f} "
+                      f"{m['n_resolvable']:>4}/{m['n_total']:<4}")
+
     # --- Summary table ---
     print("\n=== Summary ===")
     print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10}")
@@ -513,6 +643,8 @@ if __name__ == "__main__":
                         help="Path to dataset saved with download_data.py (for offline cluster use)")
     parser.add_argument("--idtools_jsonl", type=str, default=None,
                         help="Path to scrape_idtools.py JSONL output — uses IDtools visual-descriptor QA instead of KisanVaani")
+    parser.add_argument("--datasets_config", type=str, default=None,
+                        help="Path to datasets.yaml — enables accuracy/F1 classification metrics when used with --idtools_jsonl")
     parser.add_argument("--n_samples", type=int, default=None,
                         help="Limit number of samples (default: all 22615)")
     parser.add_argument("--output_dir", type=str, default="results")
