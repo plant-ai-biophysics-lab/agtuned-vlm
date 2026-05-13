@@ -334,6 +334,79 @@ Optionally push text JSONL files → HuggingFace (--hub_repo_*)
 
 ---
 
+## Visual Inference (`agml_inference.py`)
+
+Evaluates a VLM directly on images using the JSONL files produced by `agml_scraper.py`.
+Images are loaded from AgML using `agml_dataset` + `image_names` stored in the description
+JSONL metadata — no images are embedded anywhere.
+
+### Dataset A — Visual Description
+
+For each record in `agml_descriptions.jsonl`:
+1. Load images by matching `image_names` against the AgML filename index (`build_name_map`).
+2. Send each image + `visual_question` (from `metadata.visual_question`) to the VLM.
+3. Score each predicted description against the `synthesized_description` (ground truth) using
+   **ROUGE-1, ROUGE-2, ROUGE-L** (F-measure, stemming enabled).
+
+Ground truth = the synthesized description stored in `messages[1].content`.
+
+### Dataset B — Visual Classification
+
+For each record in `agml_descriptions.jsonl`:
+1. Load the same images.
+2. Append a classification constraint suffix to the visual classification question
+   (`metadata.visual_cls_question`):
+   ```
+   " Respond with only the class name, nothing else."
+   ```
+3. Run inference with short `max_tokens=32` and stop tokens `["\n", ".", ",", ";"]` to
+   suppress prose output.
+4. Resolve the raw response to a known class via case-insensitive exact match, then
+   single-match substring fallback against the cleaned class list from `datasets.yaml`.
+5. Score resolved predictions against `class_label` using **Accuracy, F1-macro, F1-weighted**
+   (sklearn). Unresolvable responses are excluded from metric computation but counted.
+
+The `visual_cls_question` is stored in `metadata.visual_cls_question` of each description
+record — no separate classification JSONL is needed for visual inference.
+
+### Output Files
+
+| File | Contents |
+|------|----------|
+| `agml_inference_descriptions.csv` | Per-image ROUGE scores (prediction, ground_truth, rouge1/2/L, dataset, class) |
+| `agml_inference_classification.csv` | Per-image classification results (raw_prediction, resolved_class, correct, resolvable) |
+| `agml_inference_metrics.json` | Aggregated ROUGE and classification metrics per dataset + overall |
+| `rouge_by_dataset.png` | Bar chart: ROUGE-1/2/L per AgML dataset |
+| `classification_by_dataset.png` | Bar chart: Accuracy/F1-macro/F1-weighted per AgML dataset |
+
+### Sampling Parameters
+
+| Pass | `temperature` | `max_tokens` | `repetition_penalty` | Stop tokens |
+|------|--------------|-------------|---------------------|-------------|
+| Description | 0.0 | 256 | 1.1 | — |
+| Classification | 0.0 | 32 | 1.1 | `\n . , ;` |
+
+### CLI
+
+```bash
+uv run python agml_inference.py \
+  --model Qwen/Qwen3.6-35B-A3B \
+  --descriptions_jsonl outputs/agml_descriptions.jsonl \
+  --datasets_config datasets.yaml \
+  --output_dir inference_results/ \
+  [--n_samples 3]
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model` | `Qwen/Qwen3.6-35B-A3B` | vLLM-compatible VLM |
+| `--descriptions_jsonl` | `outputs/agml_descriptions.jsonl` | JSONL produced by `agml_scraper.py` |
+| `--datasets_config` | `datasets.yaml` | Controls which datasets are evaluated (skip flags respected) |
+| `--output_dir` | `inference_results/` | Directory for CSV, JSON, and plots |
+| `--n_samples` | `None` (all) | Max images per class to evaluate |
+
+---
+
 ## Connecting to `text_qa.py`
 
 Both JSONL files are drop-in replacements for KisanVaani in the text QA evaluation pipeline.

@@ -259,6 +259,7 @@ def _append_jsonl(path: Path, record: dict) -> None:
 def make_description_record(
     text_desc_q: str,
     visual_desc_q: str,
+    visual_cls_q: str,
     synthesized: str,
     raw_captions: list[str],
     image_paths: list[str],
@@ -274,16 +275,17 @@ def make_description_record(
             {"role": "assistant", "content": synthesized},
         ],
         "metadata": {
-            "record_type":     "description",
-            "agml_dataset":    agml_name,
-            "crop":            crop,
-            "class_label":     clean_cls,
-            "task_type":       task_type,
-            "visual_question": visual_desc_q,
-            "raw_captions":    raw_captions,
-            "image_names":     [Path(p).name for p in image_paths],
-            "n_images_used":   len(image_paths),
-            "generator_model": model_id,
+            "record_type":          "description",
+            "agml_dataset":         agml_name,
+            "crop":                 crop,
+            "class_label":          clean_cls,
+            "task_type":            task_type,
+            "visual_question":      visual_desc_q,
+            "visual_cls_question":  visual_cls_q,
+            "raw_captions":         raw_captions,
+            "image_names":          [Path(p).name for p in image_paths],
+            "n_images_used":        len(image_paths),
+            "generator_model":      model_id,
         },
     }
 
@@ -407,6 +409,7 @@ def main(args: argparse.Namespace) -> None:
             _append_jsonl(desc_path, make_description_record(
                 text_desc_q=questions["text_desc"],
                 visual_desc_q=questions["visual_desc"],
+                visual_cls_q=questions["visual_cls"],
                 synthesized=synthesized,
                 raw_captions=raw_captions,
                 image_paths=image_paths,
