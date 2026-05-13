@@ -2,15 +2,14 @@
 #
 # task_type options:
 #   disease            - leaf/plant disease classification
-#   pest               - insect / pest classification
-#   stress             - physical damage, abiotic stress, or mixed damage types
+#   pest_damage        - insect/pest classification or physical/abiotic damage
 #   weed_identification - weed or mixed crop/weed species classification
 #   crop_identification - crop ripeness or growth-stage classification
 #
 # skip: true          - exclude dataset entirely from generation
 #
-# Q3/Q4 (disease/stress description questions) are only generated for
-# task_type: disease | pest | stress.
+# Q3/Q4 (description questions) are only generated for
+# task_type: disease | pest_damage.
 # Datasets with task_type: weed_identification | crop_identification
 # get Q1/Q2 only.
 
@@ -380,11 +379,11 @@ datasets:
     location: [asia, bangladesh]
     skip: false
 
-  # ── Pest datasets ────────────────────────────────────────────────────────────
+  # ── Pest / damage datasets ───────────────────────────────────────────────────
 
   - agml_name: soybean_insect_classification
     crop: soybean
-    task_type: pest
+    task_type: pest_damage
     n_images: 6410
     classes:
       - Caterpillar
@@ -393,11 +392,9 @@ datasets:
     location: [south_america, brazil]
     skip: false
 
-  # ── Stress / damage datasets ─────────────────────────────────────────────────
-
   - agml_name: sugarcane_damage_usa
     crop: sugarcane
-    task_type: stress
+    task_type: pest_damage
     n_images: 153
     classes:
       - cracked

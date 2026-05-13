@@ -36,13 +36,23 @@ from pathlib import Path
 
 import evaluate
 import matplotlib.pyplot as plt
+import nltk
 import numpy as np
 import yaml
 from bert_score import score as bert_score_fn
 from datasets import load_dataset
+from functools import lru_cache
+from nltk.corpus import wordnet
 from rouge_score import rouge_scorer as rs_scorer
 from sklearn.metrics import accuracy_score, f1_score
 from vllm import LLM, SamplingParams
+
+# Download WordNet data if not already present
+for _corpus in ("wordnet", "omw-1.4"):
+    try:
+        nltk.data.find(f"corpora/{_corpus}")
+    except LookupError:
+        nltk.download(_corpus, quiet=True)
 
 rouge = evaluate.load("rouge")
 exact_match = evaluate.load("exact_match")
@@ -239,6 +249,34 @@ def load_idtools_qa(jsonl_path: str, n_samples: int | None = None) -> list[dict]
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=16384)
+def _synonyms(word: str) -> frozenset[str]:
+    """Return word + all WordNet lemma names as a cached frozenset."""
+    syns = {word}
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            syns.add(lemma.name().replace("_", " ").lower())
+    return frozenset(syns)
+
+
+def rouge_ss_score(prediction: str, reference: str) -> float:
+    """ROUGE-SS: unigram F1 with WordNet synonym expansion on both sides."""
+    pred_tokens = prediction.lower().split()
+    ref_tokens  = reference.lower().split()
+    if not pred_tokens or not ref_tokens:
+        return 0.0
+
+    ref_expanded  = set().union(*[_synonyms(t) for t in ref_tokens])
+    pred_expanded = set().union(*[_synonyms(t) for t in pred_tokens])
+
+    precision = sum(1 for t in pred_tokens if t in ref_expanded)  / len(pred_tokens)
+    recall    = sum(1 for t in ref_tokens  if t in pred_expanded) / len(ref_tokens)
+
+    if precision + recall == 0:
+        return 0.0
+    return round(2 * precision * recall / (precision + recall), 4)
+
+
 def per_sample_rougeL(predictions: list[str], references: list[str]) -> list[float]:
     scorer = rs_scorer.RougeScorer(["rougeL"], use_stemmer=True)
     return [scorer.score(ref, pred)["rougeL"].fmeasure for pred, ref in zip(predictions, references)]
@@ -253,13 +291,15 @@ def compute_metrics(predictions: list[str], references: list[str]) -> dict:
     contains_match = sum(
         r.lower() in p.lower() for p, r in zip(predictions, references)
     ) / len(predictions)
+    rss = np.mean([rouge_ss_score(p, r) for p, r in zip(predictions, references)])
 
     return {
         "contains_match": round(contains_match, 4),
-        "exact_match": round(em_scores["exact_match"], 4),
-        "rouge1_raw": round(rouge_scores["rouge1"], 4),
-        "rouge2_raw": round(rouge_scores["rouge2"], 4),
-        "rougeL_raw": round(rouge_scores["rougeL"], 4),
+        "exact_match":    round(em_scores["exact_match"], 4),
+        "rouge1_raw":     round(rouge_scores["rouge1"], 4),
+        "rouge2_raw":     round(rouge_scores["rouge2"], 4),
+        "rougeL_raw":     round(rouge_scores["rougeL"], 4),
+        "rouge_ss_raw":   round(float(rss), 4),
     }
 
 
@@ -361,6 +401,12 @@ _SAMPLING = SamplingParams(
 _REPEAT_RE  = re.compile(r'(\b\w+\b)(\s+\1){4,}', re.IGNORECASE)
 _THINK_RE   = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 
+_TASK_LABELS = {"pest_damage": "pest/damage"}
+
+
+def _task_label(tt: str) -> str:
+    return _TASK_LABELS.get(tt, tt.replace("_", " "))
+
 
 def _clean_response(text: str) -> str:
     """Strip degenerate and thinking outputs from instruct model responses."""
@@ -438,9 +484,10 @@ def load_llm(model_id: str):
 METRIC_LABELS = {
     "contains_match": "Contains Match",
     "exact_match": "Exact Match",
-    "rouge1_raw": "ROUGE-1",
-    "rouge2_raw": "ROUGE-2",
-    "rougeL_raw": "ROUGE-L",
+    "rouge1_raw":   "ROUGE-1",
+    "rouge2_raw":   "ROUGE-2",
+    "rougeL_raw":   "ROUGE-L",
+    "rouge_ss_raw": "ROUGE-SS",
 }
 
 
@@ -620,7 +667,7 @@ def plot_cls_summary_per_task(
 ) -> None:
     """Grouped bar chart: all classification metrics per task_type, one group per model."""
     ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg_full.items()}
-    task_types = sorted({t for t in ds_to_task.values()})
+    task_types = sorted(set(ds_to_task.values()))
     if not task_types:
         return
 
@@ -658,7 +705,7 @@ def plot_cls_summary_per_task(
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
         ax.set_xticks(x)
-        ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
         ax.set_ylabel("Score" if mi == 0 else "")
@@ -803,7 +850,7 @@ def main(args):
                 print(f"\n  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'BERT':>6}")
                 print(f"  {'-'*55}")
                 for tt, ms in sorted(by_task.items()):
-                    print(f"  {tt:<25} "
+                    print(f"  {_task_label(tt):<25} "
                           f"{np.mean([m['accuracy'] for m in ms]):>6.3f} "
                           f"{np.mean([m['contains_accuracy'] for m in ms]):>6.3f} "
                           f"{np.mean([m['f1_macro'] for m in ms]):>8.3f} "
@@ -817,10 +864,10 @@ def main(args):
 
     # --- Summary table ---
     print("\n=== Summary ===")
-    print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10}")
+    print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10} {'ROUGE-SS':>10}")
     print(f"  {'-'*94}")
     for key, m in results["models"].items():
-        print(f"  {key:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f}")
+        print(f"  {key:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f} {m.get('rouge_ss_raw', 0):>10.4f}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

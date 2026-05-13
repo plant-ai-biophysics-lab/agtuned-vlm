@@ -28,13 +28,23 @@ from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import nltk
 import numpy as np
 import yaml
 from bert_score import score as bert_score_fn
+from functools import lru_cache
+from nltk.corpus import wordnet
 from PIL import Image as PILImage
 from rouge_score import rouge_scorer as rs_scorer
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from vllm import LLM, SamplingParams
+
+# Download WordNet data if not already present
+for _corpus in ("wordnet", "omw-1.4"):
+    try:
+        nltk.data.find(f"corpora/{_corpus}")
+    except LookupError:
+        nltk.download(_corpus, quiet=True)
 
 # ── Sampling params ────────────────────────────────────────────────────────────
 
@@ -51,6 +61,13 @@ CLS_SUFFIX = " Respond with only the class name, nothing else."
 
 _REPEAT_RE = re.compile(r'(\b\w+\b)(\s+\1){4,}', re.IGNORECASE)
 _THINK_RE  = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+
+_TASK_LABELS = {"pest_damage": "pest/damage"}
+
+
+def _task_label(tt: str) -> str:
+    return _TASK_LABELS.get(tt, tt.replace("_", " "))
+
 
 
 # ── Response cleaning (adapted from text_qa.py) ───────────────────────────────
@@ -179,21 +196,51 @@ def run_batch(
 
 # ── Metrics ────────────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=16384)
+def _synonyms(word: str) -> frozenset[str]:
+    """Return word + all WordNet lemma names as a cached frozenset."""
+    syns = {word}
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            syns.add(lemma.name().replace("_", " ").lower())
+    return frozenset(syns)
+
+
+def rouge_ss_score(prediction: str, reference: str) -> float:
+    """ROUGE-SS: unigram F1 with WordNet synonym expansion on both sides."""
+    pred_tokens = prediction.lower().split()
+    ref_tokens  = reference.lower().split()
+    if not pred_tokens or not ref_tokens:
+        return 0.0
+
+    ref_expanded  = set().union(*[_synonyms(t) for t in ref_tokens])
+    pred_expanded = set().union(*[_synonyms(t) for t in pred_tokens])
+
+    precision = sum(1 for t in pred_tokens if t in ref_expanded)  / len(pred_tokens)
+    recall    = sum(1 for t in ref_tokens  if t in pred_expanded) / len(ref_tokens)
+
+    if precision + recall == 0:
+        return 0.0
+    return round(2 * precision * recall / (precision + recall), 4)
+
+
 def rouge_scores(prediction: str, reference: str) -> dict[str, float]:
     scorer = rs_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     s = scorer.score(reference, prediction)
     return {
-        "rouge1": round(s["rouge1"].fmeasure, 4),
-        "rouge2": round(s["rouge2"].fmeasure, 4),
-        "rougeL": round(s["rougeL"].fmeasure, 4),
+        "rouge1":   round(s["rouge1"].fmeasure, 4),
+        "rouge2":   round(s["rouge2"].fmeasure, 4),
+        "rougeL":   round(s["rougeL"].fmeasure, 4),
+        "rouge_ss": rouge_ss_score(prediction, reference),
     }
 
 
 def dataset_rouge_summary(rows: list[dict]) -> dict:
     return {
-        "rouge1":   round(np.mean([r["rouge1"] for r in rows]), 4),
-        "rouge2":   round(np.mean([r["rouge2"] for r in rows]), 4),
-        "rougeL":   round(np.mean([r["rougeL"] for r in rows]), 4),
+        "rouge1":   round(np.mean([r["rouge1"]   for r in rows]), 4),
+        "rouge2":   round(np.mean([r["rouge2"]   for r in rows]), 4),
+        "rougeL":   round(np.mean([r["rougeL"]   for r in rows]), 4),
+        "rouge_ss": round(np.mean([r["rouge_ss"] for r in rows]), 4),
         "n_images": len(rows),
     }
 
@@ -212,6 +259,24 @@ def compute_bertscore(predictions: list[str], references: list[str]) -> list[flo
         verbose=False,
     )
     return f1.tolist()
+
+
+def naive_rouge_summary(rows: list[dict]) -> dict:
+    """Shuffle ground truth descriptions — chance-level ROUGE floor."""
+    if not rows:
+        return {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0, "rouge_ss": 0.0, "n_images": 0}
+    refs     = [r["ground_truth"] for r in rows]
+    rng      = np.random.default_rng(42)
+    shuffled = refs.copy()
+    rng.shuffle(shuffled)
+    scores_per_row = [rouge_scores(s, r) for s, r in zip(shuffled, refs)]
+    return {
+        "rouge1":   round(np.mean([s["rouge1"]   for s in scores_per_row]), 4),
+        "rouge2":   round(np.mean([s["rouge2"]   for s in scores_per_row]), 4),
+        "rougeL":   round(np.mean([s["rougeL"]   for s in scores_per_row]), 4),
+        "rouge_ss": round(np.mean([s["rouge_ss"] for s in scores_per_row]), 4),
+        "n_images": len(rows),
+    }
 
 
 def dataset_cls_summary(rows: list[dict]) -> dict:
@@ -271,26 +336,33 @@ def naive_cls_summary(rows: list[dict]) -> dict:
 
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
-def plot_rouge_by_dataset(results_a: dict, output_dir: Path) -> None:
+def plot_rouge_by_dataset(results_a: dict, results_a_naive: dict, output_dir: Path) -> None:
     datasets = [k for k in results_a if k != "overall"]
     if not datasets:
         return
-    metrics = ["rouge1", "rouge2", "rougeL"]
-    x = np.arange(len(datasets))
-    width = 0.25
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    labels  = ["ROUGE-1", "ROUGE-2", "ROUGE-L", "ROUGE-SS"]
+    x      = np.arange(len(datasets))
+    width  = 0.13
+    colors = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0"]
 
-    fig, ax = plt.subplots(figsize=(max(8, len(datasets) * 0.6), 5))
-    for i, m in enumerate(metrics):
-        vals = [results_a[ds][m] for ds in datasets]
-        ax.bar(x + i * width, vals, width, label=m.upper())
+    fig, ax = plt.subplots(figsize=(max(10, len(datasets) * 1.0), 5))
+    for i, (m, lbl, color) in enumerate(zip(metrics, labels, colors)):
+        model_vals = [results_a[ds][m] for ds in datasets]
+        naive_vals = [results_a_naive.get(ds, {}).get(m, 0) for ds in datasets]
+        offset     = (i * 2) * width - (len(metrics) - 1) * width
+        ax.bar(x + offset,         model_vals, width, label=lbl,
+               color=color, alpha=0.85)
+        ax.bar(x + offset + width, naive_vals, width, label=f"{lbl} (naive)",
+               color=color, alpha=0.35, hatch="///", edgecolor=color)
 
-    ax.set_xticks(x + width)
+    ax.set_xticks(x)
     ax.set_xticklabels([d.replace("_classification", "").replace("_", " ")
                         for d in datasets], rotation=45, ha="right", fontsize=7)
     ax.set_ylim(0, 1.0)
     ax.set_ylabel("Score")
-    ax.set_title("Dataset A — ROUGE by Dataset")
-    ax.legend()
+    ax.set_title("Dataset A — ROUGE by Dataset (solid=model, hatched=naive)")
+    ax.legend(fontsize=7, ncol=2)
     plt.tight_layout()
     path = output_dir / "rouge_by_dataset.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -331,30 +403,36 @@ def plot_cls_by_dataset(results_b: dict, results_b_naive: dict, output_dir: Path
     print(f"  Saved: {path}")
 
 
-def plot_rouge_by_task(results_a_by_task: dict, output_dir: Path) -> None:
+def plot_rouge_by_task(results_a_by_task: dict, naive_by_task: dict, output_dir: Path) -> None:
     task_types = list(results_a_by_task.keys())
     if not task_types:
         return
-    metrics = ["rouge1", "rouge2", "rougeL"]
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    labels  = ["ROUGE-1", "ROUGE-2", "ROUGE-L", "ROUGE-SS"]
     x       = np.arange(len(task_types))
-    width   = 0.25
-    colors  = ["#2196F3", "#4CAF50", "#FF9800"]
+    width   = 0.13
+    colors  = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0"]
 
-    fig, ax = plt.subplots(figsize=(max(6, len(task_types) * 1.5), 5))
-    for i, (m, color) in enumerate(zip(metrics, colors)):
-        vals = [results_a_by_task[tt][m] for tt in task_types]
-        bars = ax.bar(x + i * width, vals, width, label=m.upper(), color=color, alpha=0.85)
+    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2.5), 5))
+    for i, (m, lbl, color) in enumerate(zip(metrics, labels, colors)):
+        model_vals = [results_a_by_task[tt][m] for tt in task_types]
+        naive_vals = [naive_by_task.get(tt, {}).get(m, 0) for tt in task_types]
+        offset     = (i * 2) * width - (len(metrics) - 1) * width
+        bars = ax.bar(x + offset,         model_vals, width, label=lbl,
+                      color=color, alpha=0.85)
+        ax.bar(       x + offset + width, naive_vals, width, label=f"{lbl} (naive)",
+                      color=color, alpha=0.35, hatch="///", edgecolor=color)
         for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                     f"{h:.2f}", ha="center", va="bottom", fontsize=8)
 
-    ax.set_xticks(x + width)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticks(x)
+    ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.0)
     ax.set_ylabel("Score")
-    ax.set_title("Dataset A — ROUGE by Task Type")
-    ax.legend()
+    ax.set_title("Dataset A — ROUGE by Task Type (solid=model, hatched=naive)")
+    ax.legend(fontsize=7, ncol=2)
     plt.tight_layout()
     path = output_dir / "rouge_by_task.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -391,7 +469,7 @@ def plot_cls_by_task(
                     f"{h:.2f}", ha="center", va="bottom", fontsize=7)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("Score")
     ax.set_title("Dataset B — Classification by Task Type (solid=model, hatched=naive)")
@@ -554,9 +632,11 @@ def main(args: argparse.Namespace) -> None:
 
     ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg.items()}
 
-    results_a = {ds: dataset_rouge_summary(rows) for ds, rows in by_ds_desc.items()}
+    results_a       = {ds: dataset_rouge_summary(rows) for ds, rows in by_ds_desc.items()}
+    results_a_naive = {ds: naive_rouge_summary(rows)   for ds, rows in by_ds_desc.items()}
     if desc_rows:
-        results_a["overall"] = dataset_rouge_summary(desc_rows)
+        results_a["overall"]       = dataset_rouge_summary(desc_rows)
+        results_a_naive["overall"] = naive_rouge_summary(desc_rows)
 
     # Per-task ROUGE aggregation
     by_task_desc: dict[str, list] = defaultdict(list)
@@ -564,7 +644,8 @@ def main(args: argparse.Namespace) -> None:
         tt = ds_to_task.get(row["agml_dataset"])
         if tt:
             by_task_desc[tt].append(row)
-    results_a_by_task = {tt: dataset_rouge_summary(rows) for tt, rows in by_task_desc.items()}
+    results_a_by_task       = {tt: dataset_rouge_summary(rows) for tt, rows in by_task_desc.items()}
+    results_a_naive_by_task = {tt: naive_rouge_summary(rows)   for tt, rows in by_task_desc.items()}
 
     results_b       = {ds: dataset_cls_summary(rows) for ds, rows in by_ds_cls.items()}
     results_b_naive = {ds: naive_cls_summary(rows)   for ds, rows in by_ds_cls.items()}
@@ -589,7 +670,9 @@ def main(args: argparse.Namespace) -> None:
         "total_time_s":            round(elapsed, 3),
         "n_classes":               len(records),
         "dataset_a":               results_a,
+        "dataset_a_naive":         results_a_naive,
         "dataset_a_by_task":       results_a_by_task,
+        "dataset_a_naive_by_task": results_a_naive_by_task,
         "dataset_b":               results_b,
         "dataset_b_naive":         results_b_naive,
         "dataset_b_by_task":       results_b_by_task,
@@ -606,23 +689,37 @@ def main(args: argparse.Namespace) -> None:
     try:
         if results_a:
             print(f"\n=== Dataset A — Visual Description ===")
-            header = f"  {'Dataset':<45} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'N':>6}"
+            header = (f"  {'Dataset':<45} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'R-SS':>6} "
+                      f"{'N-R1':>7} {'N-R2':>7} {'N-RL':>7} {'N-SS':>7} {'N':>6}")
             print(header)
             print(f"  {'-' * len(header)}")
             for ds, m in results_a.items():
                 if ds == "overall":
                     continue
+                naive = results_a_naive.get(ds, {})
                 print(f"  {ds:<45} {m['rouge1']:>6.3f} {m['rouge2']:>6.3f} "
-                      f"{m['rougeL']:>6.3f} {m['n_images']:>6}")
+                      f"{m['rougeL']:>6.3f} {m['rouge_ss']:>6.3f} "
+                      f"{naive.get('rouge1', 0):>7.3f} {naive.get('rouge2', 0):>7.3f} "
+                      f"{naive.get('rougeL', 0):>7.3f} {naive.get('rouge_ss', 0):>7.3f} "
+                      f"{m['n_images']:>6}")
             if results_a_by_task:
-                print(f"\n  {'Task':<25} {'R-1':>6} {'R-2':>6} {'R-L':>6}")
-                print(f"  {'-'*45}")
+                print(f"\n  {'Task':<25} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'R-SS':>6} "
+                      f"{'N-R1':>7} {'N-R2':>7} {'N-RL':>7} {'N-SS':>7}")
+                print(f"  {'-'*80}")
                 for tt, m in sorted(results_a_by_task.items()):
-                    print(f"  {tt:<25} {m['rouge1']:>6.3f} {m['rouge2']:>6.3f} {m['rougeL']:>6.3f}")
+                    naive = results_a_naive_by_task.get(tt, {})
+                    print(f"  {_task_label(tt):<25} {m['rouge1']:>6.3f} {m['rouge2']:>6.3f} "
+                          f"{m['rougeL']:>6.3f} {m['rouge_ss']:>6.3f} "
+                          f"{naive.get('rouge1', 0):>7.3f} {naive.get('rouge2', 0):>7.3f} "
+                          f"{naive.get('rougeL', 0):>7.3f} {naive.get('rouge_ss', 0):>7.3f}")
             if "overall" in results_a:
-                ov = results_a["overall"]
+                ov    = results_a["overall"]
+                naive = results_a_naive.get("overall", {})
                 print(f"\n  {'OVERALL':<25} {ov['rouge1']:>6.3f} {ov['rouge2']:>6.3f} "
-                      f"{ov['rougeL']:>6.3f}  ({ov['n_images']} images)")
+                      f"{ov['rougeL']:>6.3f} {ov['rouge_ss']:>6.3f} "
+                      f"{naive.get('rouge1', 0):>7.3f} {naive.get('rouge2', 0):>7.3f} "
+                      f"{naive.get('rougeL', 0):>7.3f} {naive.get('rouge_ss', 0):>7.3f} "
+                      f"({ov['n_images']} images)")
 
         if results_b:
             print(f"\n=== Dataset B — Visual Classification ===")
@@ -654,7 +751,7 @@ def main(args: argparse.Namespace) -> None:
             print(f"  {'-' * len(header)}")
             for tt, m in results_b_by_task.items():
                 naive = results_b_naive_by_task.get(tt, {})
-                print(f"  {tt:<25} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
+                print(f"  {_task_label(tt):<25} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
                       f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
                       f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
 
@@ -663,9 +760,10 @@ def main(args: argparse.Namespace) -> None:
 
         # ── Plots ──────────────────────────────────────────────────────────────
         print("\nGenerating plots...")
-        results_a_plot = {k: v for k, v in results_a.items() if k != "overall"}
-        plot_rouge_by_dataset(results_a_plot, output_dir)
-        plot_rouge_by_task(results_a_by_task, output_dir)
+        results_a_plot       = {k: v for k, v in results_a.items()       if k != "overall"}
+        results_a_naive_plot = {k: v for k, v in results_a_naive.items() if k != "overall"}
+        plot_rouge_by_dataset(results_a_plot, results_a_naive_plot, output_dir)
+        plot_rouge_by_task(results_a_by_task, results_a_naive_by_task, output_dir)
         results_b_plot       = {k: v for k, v in results_b.items()       if k != "overall"}
         results_b_naive_plot = {k: v for k, v in results_b_naive.items() if k != "overall"}
         plot_cls_by_dataset(results_b_plot, results_b_naive_plot, output_dir)
