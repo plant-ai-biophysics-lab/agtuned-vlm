@@ -22,6 +22,7 @@ import argparse
 import csv
 import json
 import re
+import sys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -330,6 +331,37 @@ def plot_cls_by_dataset(results_b: dict, results_b_naive: dict, output_dir: Path
     print(f"  Saved: {path}")
 
 
+def plot_rouge_by_task(results_a_by_task: dict, output_dir: Path) -> None:
+    task_types = list(results_a_by_task.keys())
+    if not task_types:
+        return
+    metrics = ["rouge1", "rouge2", "rougeL"]
+    x       = np.arange(len(task_types))
+    width   = 0.25
+    colors  = ["#2196F3", "#4CAF50", "#FF9800"]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(task_types) * 1.5), 5))
+    for i, (m, color) in enumerate(zip(metrics, colors)):
+        vals = [results_a_by_task[tt][m] for tt in task_types]
+        bars = ax.bar(x + i * width, vals, width, label=m.upper(), color=color, alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                    f"{h:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x + width)
+    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_ylim(0, 1.0)
+    ax.set_ylabel("Score")
+    ax.set_title("Dataset A — ROUGE by Task Type")
+    ax.legend()
+    plt.tight_layout()
+    path = output_dir / "rouge_by_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 def plot_cls_by_task(
     results_by_task: dict,
     naive_by_task: dict,
@@ -369,6 +401,27 @@ def plot_cls_by_task(
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+# ── Tee: mirror stdout to file ────────────────────────────────────────────────
+
+class _Tee:
+    """Write to both stdout and a file simultaneously."""
+    def __init__(self, path: Path):
+        self._file   = open(path, "w", encoding="utf-8")
+        self._stdout = sys.stdout
+
+    def write(self, data: str):
+        self._stdout.write(data)
+        self._file.write(data)
+
+    def flush(self):
+        self._stdout.flush()
+        self._file.flush()
+
+    def close(self):
+        sys.stdout = self._stdout
+        self._file.close()
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -499,15 +552,24 @@ def main(args: argparse.Namespace) -> None:
     for row in cls_rows:
         by_ds_cls[row["agml_dataset"]].append(row)
 
+    ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg.items()}
+
     results_a = {ds: dataset_rouge_summary(rows) for ds, rows in by_ds_desc.items()}
     if desc_rows:
         results_a["overall"] = dataset_rouge_summary(desc_rows)
 
+    # Per-task ROUGE aggregation
+    by_task_desc: dict[str, list] = defaultdict(list)
+    for row in desc_rows:
+        tt = ds_to_task.get(row["agml_dataset"])
+        if tt:
+            by_task_desc[tt].append(row)
+    results_a_by_task = {tt: dataset_rouge_summary(rows) for tt, rows in by_task_desc.items()}
+
     results_b       = {ds: dataset_cls_summary(rows) for ds, rows in by_ds_cls.items()}
     results_b_naive = {ds: naive_cls_summary(rows)   for ds, rows in by_ds_cls.items()}
 
-    # Per-task aggregation
-    ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg.items()}
+    # Per-task classification aggregation
     by_task_cls:  dict[str, list] = defaultdict(list)
     for row in cls_rows:
         tt = ds_to_task.get(row["agml_dataset"])
@@ -523,13 +585,14 @@ def main(args: argparse.Namespace) -> None:
         results_b_naive["overall"]       = naive_cls_summary(cls_rows)
 
     results = {
-        "model":                  args.model,
-        "total_time_s":           round(elapsed, 3),
-        "n_classes":              len(records),
-        "dataset_a":              results_a,
-        "dataset_b":              results_b,
-        "dataset_b_naive":        results_b_naive,
-        "dataset_b_by_task":      results_b_by_task,
+        "model":                   args.model,
+        "total_time_s":            round(elapsed, 3),
+        "n_classes":               len(records),
+        "dataset_a":               results_a,
+        "dataset_a_by_task":       results_a_by_task,
+        "dataset_b":               results_b,
+        "dataset_b_naive":         results_b_naive,
+        "dataset_b_by_task":       results_b_by_task,
         "dataset_b_naive_by_task": results_b_naive_by_task,
     }
     metrics_path = output_dir / "agml_inference_metrics.json"
@@ -537,57 +600,79 @@ def main(args: argparse.Namespace) -> None:
         json.dump(results, f, indent=2)
     print(f"Saved: {metrics_path}")
 
-    # ── Summary ────────────────────────────────────────────────────────────────
-    if results_a:
-        ov = results_a.get("overall", {})
-        print(f"\n=== Dataset A — Visual Description ===")
-        print(f"  Overall  ROUGE-1={ov.get('rouge1', 0):.3f}  "
-              f"ROUGE-2={ov.get('rouge2', 0):.3f}  "
-              f"ROUGE-L={ov.get('rougeL', 0):.3f}  "
-              f"({ov.get('n_images', 0)} images)")
+    # ── Summary (mirrored to summary.txt) ─────────────────────────────────────
+    tee = _Tee(output_dir / "summary.txt")
+    sys.stdout = tee
+    try:
+        if results_a:
+            print(f"\n=== Dataset A — Visual Description ===")
+            header = f"  {'Dataset':<45} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'N':>6}"
+            print(header)
+            print(f"  {'-' * len(header)}")
+            for ds, m in results_a.items():
+                if ds == "overall":
+                    continue
+                print(f"  {ds:<45} {m['rouge1']:>6.3f} {m['rouge2']:>6.3f} "
+                      f"{m['rougeL']:>6.3f} {m['n_images']:>6}")
+            if results_a_by_task:
+                print(f"\n  {'Task':<25} {'R-1':>6} {'R-2':>6} {'R-L':>6}")
+                print(f"  {'-'*45}")
+                for tt, m in sorted(results_a_by_task.items()):
+                    print(f"  {tt:<25} {m['rouge1']:>6.3f} {m['rouge2']:>6.3f} {m['rougeL']:>6.3f}")
+            if "overall" in results_a:
+                ov = results_a["overall"]
+                print(f"\n  {'OVERALL':<25} {ov['rouge1']:>6.3f} {ov['rouge2']:>6.3f} "
+                      f"{ov['rougeL']:>6.3f}  ({ov['n_images']} images)")
 
-    if results_b:
-        print(f"\n=== Dataset B — Visual Classification ===")
-        header = (f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
-                  f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7} {'Res/Tot':>9}")
-        print(header)
-        print(f"  {'-' * len(header)}")
-        for ds, m in results_b.items():
-            naive = results_b_naive.get(ds, {})
-            print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
-                  f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
-                  f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f} "
-                  f"{m['n_resolvable']:>4}/{m['n_images']:<4}")
-        if "overall" in results_b:
-            ov = results_b["overall"]
-            nv = results_b_naive.get("overall", {})
-            print(f"\n  {'OVERALL':<45} {ov['accuracy']:>6.3f} {ov['contains_accuracy']:>6.3f} "
-                  f"{ov['f1_macro']:>8.3f} {ov['mean_bertscore']:>6.3f} "
-                  f"{nv.get('accuracy', 0):>7.3f} {nv.get('mean_bertscore', 0):>7.3f} "
-                  f"{ov['n_resolvable']:>4}/{ov['n_images']:<4}")
+        if results_b:
+            print(f"\n=== Dataset B — Visual Classification ===")
+            header = (f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
+                      f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7} {'Res/Tot':>9}")
+            print(header)
+            print(f"  {'-' * len(header)}")
+            for ds, m in results_b.items():
+                if ds == "overall":
+                    continue
+                naive = results_b_naive.get(ds, {})
+                print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
+                      f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
+                      f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f} "
+                      f"{m['n_resolvable']:>4}/{m['n_images']:<4}")
+            if "overall" in results_b:
+                ov = results_b["overall"]
+                nv = results_b_naive.get("overall", {})
+                print(f"\n  {'OVERALL':<45} {ov['accuracy']:>6.3f} {ov['contains_accuracy']:>6.3f} "
+                      f"{ov['f1_macro']:>8.3f} {ov['mean_bertscore']:>6.3f} "
+                      f"{nv.get('accuracy', 0):>7.3f} {nv.get('mean_bertscore', 0):>7.3f} "
+                      f"{ov['n_resolvable']:>4}/{ov['n_images']:<4}")
 
-    if results_b_by_task:
-        print(f"\n=== Dataset B — By Task Type ===")
-        header = (f"  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
-                  f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7}")
-        print(header)
-        print(f"  {'-' * len(header)}")
-        for tt, m in results_b_by_task.items():
-            naive = results_b_naive_by_task.get(tt, {})
-            print(f"  {tt:<25} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
-                  f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
-                  f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
+        if results_b_by_task:
+            print(f"\n=== Dataset B — By Task Type ===")
+            header = (f"  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
+                      f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7}")
+            print(header)
+            print(f"  {'-' * len(header)}")
+            for tt, m in results_b_by_task.items():
+                naive = results_b_naive_by_task.get(tt, {})
+                print(f"  {tt:<25} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
+                      f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
+                      f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
 
-    print(f"\nTotal time: {elapsed:.1f}s")
+        print(f"\nTotal time: {elapsed:.1f}s")
+        print(f"Model:      {args.model}")
 
-    # ── Plots ──────────────────────────────────────────────────────────────────
-    print("\nGenerating plots...")
-    plot_rouge_by_dataset(results_a, output_dir)
-    # exclude "overall" key from per-dataset plot
-    results_b_plot       = {k: v for k, v in results_b.items()       if k != "overall"}
-    results_b_naive_plot = {k: v for k, v in results_b_naive.items() if k != "overall"}
-    plot_cls_by_dataset(results_b_plot, results_b_naive_plot, output_dir)
-    plot_cls_by_task(results_b_by_task, results_b_naive_by_task, output_dir)
+        # ── Plots ──────────────────────────────────────────────────────────────
+        print("\nGenerating plots...")
+        results_a_plot = {k: v for k, v in results_a.items() if k != "overall"}
+        plot_rouge_by_dataset(results_a_plot, output_dir)
+        plot_rouge_by_task(results_a_by_task, output_dir)
+        results_b_plot       = {k: v for k, v in results_b.items()       if k != "overall"}
+        results_b_naive_plot = {k: v for k, v in results_b_naive.items() if k != "overall"}
+        plot_cls_by_dataset(results_b_plot, results_b_naive_plot, output_dir)
+        plot_cls_by_task(results_b_by_task, results_b_naive_by_task, output_dir)
+    finally:
+        tee.close()
+    print(f"Summary saved to {output_dir / 'summary.txt'}")
 
 
 if __name__ == "__main__":
