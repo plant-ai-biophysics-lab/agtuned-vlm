@@ -253,8 +253,14 @@ _CGIAR_DATASETS = [
 ]
 
 
-def _load_cgiar_cache() -> list[str]:
-    """Load CGIAR GARDIAN context chunks for in-memory keyword search."""
+def _load_cgiar_cache(max_rows_per_dataset: int = 5000) -> list[str]:
+    """
+    Load CGIAR GARDIAN context chunks for in-memory keyword search.
+
+    Uses streaming=True to avoid Arrow deserialization issues with older cached files.
+    Each row has a 'contexts' field (list of strings — 288-word document chunks).
+    Caps at max_rows_per_dataset rows per dataset to keep startup time reasonable.
+    """
     try:
         from datasets import load_dataset
     except ImportError:
@@ -264,13 +270,18 @@ def _load_cgiar_cache() -> list[str]:
     contexts: list[str] = []
     for ds_id in _CGIAR_DATASETS:
         try:
-            ds = load_dataset(ds_id, split="train", trust_remote_code=True)
+            ds = load_dataset(ds_id, split="train", streaming=True)
+            n_rows = 0
             before = len(contexts)
             for row in ds:
-                ctx = row.get("context") or ""
-                if ctx:
-                    contexts.append(ctx)
-            log.info("CGIAR %s: %d chunks loaded", ds_id, len(contexts) - before)
+                # 'contexts' is a list of chunk strings per row
+                for ctx in (row.get("contexts") or []):
+                    if ctx:
+                        contexts.append(ctx)
+                n_rows += 1
+                if n_rows >= max_rows_per_dataset:
+                    break
+            log.info("CGIAR %s: %d rows → %d chunks", ds_id, n_rows, len(contexts) - before)
         except Exception as e:
             log.warning("CGIAR load '%s': %s", ds_id, e)
 
