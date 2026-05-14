@@ -16,10 +16,11 @@ from bs4 import BeautifulSoup
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
-EXCERPT_MAX  = 800
-TIMEOUT      = 15
-SLEEP        = 0.5
-WIKI_RETRY_DELAYS = [2, 5, 10]  # backoff on 429
+EXCERPT_MAX       = 800
+TIMEOUT           = 15
+SLEEP             = 0.5
+WIKI_SLEEP        = 2.0   # polite gap between every Wikipedia request
+WIKI_RETRY_DELAYS = [5, 15, 30]  # backoff on 429 — longer gaps to clear rate limit
 
 # Class labels that indicate a healthy/normal sample — skip disease-symptom queries
 _HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected"}
@@ -52,15 +53,17 @@ def _search_query(class_label: str, crop: str, task_type: str) -> str:
 
 
 def _wiki_get(url: str, params: dict) -> requests.Response:
-    """GET with automatic retry on 429."""
+    """GET with polite sleep and automatic retry on 429."""
     for attempt, delay in enumerate([0] + WIKI_RETRY_DELAYS):
         if delay:
-            log.info("Wikipedia 429 — retrying in %ds (attempt %d)", delay, attempt + 1)
+            log.debug("Wikipedia 429 — retrying in %ds (attempt %d)", delay, attempt + 1)
             time.sleep(delay)
         r = requests.get(url, params=params, headers=_HEADERS, timeout=TIMEOUT)
+        time.sleep(WIKI_SLEEP)
         if r.status_code != 429:
             return r
-    return r  # return final response even if still 429
+    log.debug("Wikipedia still 429 after %d retries — skipping", len(WIKI_RETRY_DELAYS))
+    return r
 
 
 # ── Source 1: Wikipedia ────────────────────────────────────────────────────────
@@ -76,8 +79,8 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
             {"action": "query", "list": "search", "srsearch": query,
              "format": "json", "srlimit": 3},
         )
-        resp.raise_for_status()
-        time.sleep(SLEEP)
+        if resp.status_code != 200:
+            return sources
         for hit in resp.json().get("query", {}).get("search", [])[:2]:
             title = hit["title"]
             try:
@@ -86,8 +89,8 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
                     {"action": "query", "titles": title, "prop": "extracts",
                      "exintro": True, "format": "json", "explaintext": True},
                 )
-                ex.raise_for_status()
-                time.sleep(SLEEP)
+                if ex.status_code != 200:
+                    continue
                 pages   = ex.json().get("query", {}).get("pages", {})
                 extract = next(iter(pages.values())).get("extract", "").strip()
                 if not extract:
@@ -102,9 +105,9 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
                     "search_query":  query,
                 })
             except Exception as e:
-                log.warning("Wikipedia extract '%s': %s", title, e)
+                log.debug("Wikipedia extract '%s': %s", title, e)
     except Exception as e:
-        log.warning("Wikipedia search '%s': %s", query, e)
+        log.debug("Wikipedia search '%s': %s", query, e)
     return sources
 
 
