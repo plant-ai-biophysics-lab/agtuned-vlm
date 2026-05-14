@@ -4,8 +4,12 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "agml>=0.7.4",
+    "beautifulsoup4>=4.12",
     "bert-score>=0.3.13",
+    "lxml>=4.9",
     "nltk>=3.8",
+    "requests>=2.31",
+    "streamlit>=1.35",
     "datasets>=3.0.0",
     "matplotlib>=3.8.0",
     "pillow>=10.0.0",
