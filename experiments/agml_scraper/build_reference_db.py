@@ -253,35 +253,39 @@ _CGIAR_DATASETS = [
 ]
 
 
-def _load_cgiar_cache(max_rows_per_dataset: int = 5000) -> list[str]:
+def _load_cgiar_cache() -> list[str]:
     """
-    Load CGIAR GARDIAN context chunks for in-memory keyword search.
+    Load CGIAR GARDIAN context chunks by reading the Arrow data file directly via pyarrow.
 
-    Uses streaming=True to avoid Arrow deserialization issues with older cached files.
-    Each row has a 'contexts' field (list of strings — 288-word document chunks).
-    Caps at max_rows_per_dataset rows per dataset to keep startup time reasonable.
+    Bypasses the HF datasets library (which has broken cache/index files for these datasets)
+    and reads 'data-00000-of-00001.arrow' straight from the HF Hub.
+    Each row has a 'contexts' column: list of 288-word document chunks.
     """
     try:
-        from datasets import load_dataset
-    except ImportError:
-        log.warning("'datasets' package not installed — CGIAR source disabled")
+        import pyarrow.ipc as pa_ipc
+        from huggingface_hub import hf_hub_download
+    except ImportError as e:
+        log.warning("CGIAR disabled — missing dependency: %s", e)
         return []
 
     contexts: list[str] = []
     for ds_id in _CGIAR_DATASETS:
         try:
-            ds = load_dataset(ds_id, split="train", streaming=True)
-            n_rows = 0
+            path = hf_hub_download(
+                repo_id=ds_id,
+                filename="data-00000-of-00001.arrow",
+                repo_type="dataset",
+            )
+            reader = pa_ipc.open_stream(path)
+            table  = reader.read_all()
             before = len(contexts)
-            for row in ds:
-                # 'contexts' is a list of chunk strings per row
-                for ctx in (row.get("contexts") or []):
-                    if ctx:
-                        contexts.append(ctx)
-                n_rows += 1
-                if n_rows >= max_rows_per_dataset:
-                    break
-            log.info("CGIAR %s: %d rows → %d chunks", ds_id, n_rows, len(contexts) - before)
+            ctx_col = table.column("contexts").to_pylist()
+            for cell in ctx_col:
+                if isinstance(cell, list):
+                    contexts.extend(c for c in cell if c)
+                elif cell:
+                    contexts.append(cell)
+            log.info("CGIAR %s: %d rows → %d chunks", ds_id, len(ctx_col), len(contexts) - before)
         except Exception as e:
             log.warning("CGIAR load '%s': %s", ds_id, e)
 
