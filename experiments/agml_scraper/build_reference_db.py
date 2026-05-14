@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 EXCERPT_MAX  = 800
 TIMEOUT      = 15
 SLEEP        = 0.5
+WIKI_RETRY_DELAYS = [2, 5, 10]  # backoff on 429
+
+# Class labels that indicate a healthy/normal sample — skip disease-symptom queries
+_HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected"}
 
 _HEADERS = {"User-Agent": "AgMLResearch/1.0 (research; academic non-commercial use)"}
 _BROWSER_HEADERS = {
@@ -37,34 +41,50 @@ def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
     return f"{_slug(agml_dataset)}__{_slug(class_label)}__{_slug(crop)}"
 
 
+def _is_healthy(class_label: str) -> bool:
+    return class_label.strip().lower() in _HEALTHY_LABELS
+
+
 def _search_query(class_label: str, crop: str, task_type: str) -> str:
     if task_type in ("weed_identification", "crop_identification"):
         return f"{class_label} plant weed visual"
     return f"{class_label} {crop} plant disease symptoms"
 
 
+def _wiki_get(url: str, params: dict) -> requests.Response:
+    """GET with automatic retry on 429."""
+    for attempt, delay in enumerate([0] + WIKI_RETRY_DELAYS):
+        if delay:
+            log.info("Wikipedia 429 — retrying in %ds (attempt %d)", delay, attempt + 1)
+            time.sleep(delay)
+        r = requests.get(url, params=params, headers=_HEADERS, timeout=TIMEOUT)
+        if r.status_code != 429:
+            return r
+    return r  # return final response even if still 429
+
+
 # ── Source 1: Wikipedia ────────────────────────────────────────────────────────
 
 def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
+    if _is_healthy(class_label):
+        return []
     query   = _search_query(class_label, crop, task_type)
     sources = []
     try:
-        resp = requests.get(
+        resp = _wiki_get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "list": "search", "srsearch": query,
-                    "format": "json", "srlimit": 3},
-            headers=_HEADERS, timeout=TIMEOUT,
+            {"action": "query", "list": "search", "srsearch": query,
+             "format": "json", "srlimit": 3},
         )
         resp.raise_for_status()
         time.sleep(SLEEP)
         for hit in resp.json().get("query", {}).get("search", [])[:2]:
             title = hit["title"]
             try:
-                ex = requests.get(
+                ex = _wiki_get(
                     "https://en.wikipedia.org/w/api.php",
-                    params={"action": "query", "titles": title, "prop": "extracts",
-                            "exintro": True, "format": "json", "explaintext": True},
-                    headers=_HEADERS, timeout=TIMEOUT,
+                    {"action": "query", "titles": title, "prop": "extracts",
+                     "exintro": True, "format": "json", "explaintext": True},
                 )
                 ex.raise_for_status()
                 time.sleep(SLEEP)
@@ -220,65 +240,63 @@ def _search_idtools(
     return sources
 
 
-# ── Source 3: CGIAR HuggingFace dataset cards ─────────────────────────────────
+# ── Source 3: CGIAR GARDIAN research document chunks ──────────────────────────
+# Uses the two public GARDIAN QA datasets which contain ~44K context chunks
+# extracted from CGIAR research publications (288-word windows, full text).
 
-def _load_cgiar_cache() -> dict[str, str]:
-    """Fetch all CGIAR HF dataset READMEs once. Returns {dataset_id: readme_text}."""
-    cache: dict[str, str] = {}
+_CGIAR_DATASETS = [
+    "CGIAR/ragas_gardian_evaluation_non_overlapping",
+    "CGIAR/ragas_gardian_evaluation_overlapping",
+]
+
+
+def _load_cgiar_cache() -> list[str]:
+    """Load CGIAR GARDIAN context chunks for in-memory keyword search."""
     try:
-        resp = requests.get(
-            "https://huggingface.co/api/datasets",
-            params={"author": "CGIAR", "limit": 100},
-            headers=_HEADERS, timeout=TIMEOUT,
-        )
-        resp.raise_for_status()
-        datasets = resp.json()
-    except Exception as e:
-        log.warning("CGIAR HF dataset list: %s", e)
-        return cache
+        from datasets import load_dataset
+    except ImportError:
+        log.warning("'datasets' package not installed — CGIAR source disabled")
+        return []
 
-    for ds in datasets:
-        ds_id = ds.get("id", "")
-        if not ds_id:
-            continue
+    contexts: list[str] = []
+    for ds_id in _CGIAR_DATASETS:
         try:
-            r = requests.get(
-                f"https://huggingface.co/datasets/{ds_id}/raw/main/README.md",
-                headers=_HEADERS, timeout=TIMEOUT,
-            )
-            if r.status_code == 200:
-                cache[ds_id] = r.text
-            time.sleep(SLEEP)
+            ds = load_dataset(ds_id, split="train", trust_remote_code=True)
+            before = len(contexts)
+            for row in ds:
+                ctx = row.get("context") or ""
+                if ctx:
+                    contexts.append(ctx)
+            log.info("CGIAR %s: %d chunks loaded", ds_id, len(contexts) - before)
         except Exception as e:
-            log.warning("CGIAR HF README '%s': %s", ds_id, e)
-    log.info("CGIAR HF cache: %d dataset READMEs loaded", len(cache))
-    return cache
+            log.warning("CGIAR load '%s': %s", ds_id, e)
+
+    log.info("CGIAR total: %d document chunks cached", len(contexts))
+    return contexts
 
 
-def _search_cgiar(class_label: str, crop: str, cgiar_cache: dict[str, str]) -> list[dict]:
-    """Search cached CGIAR READMEs for class/crop mentions."""
-    terms   = [t.lower() for t in [class_label, crop] if len(t) > 3]
+def _search_cgiar(class_label: str, crop: str, cgiar_contexts: list[str]) -> list[dict]:
+    """Search CGIAR GARDIAN document chunks for class/crop mentions."""
+    if not cgiar_contexts:
+        return []
+    terms = [t.lower() for t in [class_label, crop] if len(t) > 3]
+    if not terms:
+        return []
+
     sources = []
-    for ds_id, readme in cgiar_cache.items():
-        readme_lower = readme.lower()
-        if not any(t in readme_lower for t in terms):
+    for ctx in cgiar_contexts:
+        if not any(t in ctx.lower() for t in terms):
             continue
-        for term in terms:
-            idx = readme_lower.find(term)
-            if idx < 0:
-                continue
-            start   = max(0, idx - 150)
-            end     = min(len(readme), idx + 450)
-            excerpt = readme[start:end].strip()
-            sources.append({
-                "organization":  "CGIAR",
-                "title":         ds_id,
-                "url":           f"https://huggingface.co/datasets/{ds_id}",
-                "type":          "dataset_card",
-                "accessed_date": str(date.today()),
-                "excerpt":       excerpt[:EXCERPT_MAX],
-                "search_query":  f"{class_label} {crop}",
-            })
+        sources.append({
+            "organization":  "CGIAR GARDIAN",
+            "title":         "CGIAR GARDIAN Research Corpus",
+            "url":           "https://huggingface.co/datasets/CGIAR/ragas_gardian_evaluation_non_overlapping",
+            "type":          "research_document",
+            "accessed_date": str(date.today()),
+            "excerpt":       ctx[:EXCERPT_MAX],
+            "search_query":  f"{class_label} {crop}",
+        })
+        if len(sources) >= 2:
             break
     return sources
 
@@ -303,8 +321,8 @@ def main(args: argparse.Namespace) -> None:
     print("Loading USDA APHIS IDtools index...")
     idtools_index = _load_idtools_index()
 
-    print("Loading CGIAR HuggingFace dataset cache...")
-    cgiar_cache = _load_cgiar_cache()
+    print("Loading CGIAR GARDIAN document chunks (may take a moment on first run)...")
+    cgiar_contexts = _load_cgiar_cache()
 
     entries = dict(existing_entries)
     total   = len(seen)
@@ -314,10 +332,20 @@ def main(args: argparse.Namespace) -> None:
             print(f"  {n}/{total} [skip] {meta['class_label']} ({meta['crop']})")
             continue
 
+        if _is_healthy(meta["class_label"]):
+            entries[key] = {**meta, "status": "healthy_skip", "sources": []}
+            print(f"  {n}/{total} [healthy] {meta['class_label']} ({meta['crop']}) — skipped")
+            dst.write_text(
+                json.dumps({"schema_version": "1.2", "built_date": str(date.today()),
+                            "entries": entries}, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            continue
+
         sources = (
             _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
             + _search_idtools(meta["class_label"], meta["crop"], idtools_index)
-            + _search_cgiar(meta["class_label"], meta["crop"], cgiar_cache)
+            + _search_cgiar(meta["class_label"], meta["crop"], cgiar_contexts)
         )
         status = "found" if any(s.get("excerpt") for s in sources) else "no_source_found"
 

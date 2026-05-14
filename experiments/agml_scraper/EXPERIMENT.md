@@ -480,7 +480,7 @@ For each unique `(class_label, crop)`, queries **three free sources** (all open,
 |---|--------|-------------|-------------------|------------|
 | 1 | **Wikipedia** | [Wikipedia REST API](https://en.wikipedia.org/w/api.php) — search + extract endpoints | Introductory plain-text extract of the best-matching article (up to 800 chars) | General encyclopaedia; may lack visual symptom specificity |
 | 2 | **USDA APHIS IDtools** | Crawl [idtools.org](https://idtools.org) package index pages → subject→URL map; scrape visual sections of matching fact sheets | Visual identification / symptom / description sections from USDA APHIS Identification Technology Program fact sheets | Coverage is strongest for citrus pests and diseases, phytophthora, aphids, and thrips; limited for other crops |
-| 3 | **CGIAR HuggingFace** | [HuggingFace Hub API](https://huggingface.co/api/datasets?author=CGIAR) — dataset list + `README.md` per dataset | Snippet from dataset card README around the first mention of the class/crop | Mostly language/text datasets; matches opportunistic. GARDIAN AI-ready docs most likely to contain plant pathology content |
+| 3 | **CGIAR GARDIAN** | HuggingFace `datasets` library — loads `CGIAR/ragas_gardian_evaluation_non_overlapping` and `CGIAR/ragas_gardian_evaluation_overlapping` at startup (~44K × 288-word chunks from CGIAR research publications); keyword search over `context` column | Actual document text from CGIAR agricultural research papers, returned as up to 2 matching chunks per class | ~44K chunks cached in memory at startup (~1–2 min first run, then HF cache); gated datasets (gardian-ai-ready-docs etc.) excluded |
 
 IDtools content is produced by USDA APHIS PPQ in collaboration with university partners and is in the public domain under 17 U.S.C. § 105 (US government works). The index is built once at startup by crawling package index pages (e.g. `?packageID=63`) which list all fact sheet links; individual fact sheets are fetched only for classes that match a subject name.
 
@@ -523,12 +523,12 @@ Entries are written to disk after every class so partial runs are safe. Resume w
           "search_query": "Early Blight Tomato"
         },
         {
-          "organization": "CGIAR",
-          "title": "CGIAR/potato-disease-dataset",
-          "url": "https://huggingface.co/datasets/CGIAR/potato-disease-dataset",
-          "type": "dataset_card",
+          "organization": "CGIAR GARDIAN",
+          "title": "CGIAR GARDIAN Research Corpus",
+          "url": "https://huggingface.co/datasets/CGIAR/ragas_gardian_evaluation_non_overlapping",
+          "type": "research_document",
           "accessed_date": "2026-05-14",
-          "excerpt": "...early blight caused by Alternaria solani appears as...",
+          "excerpt": "...early blight caused by Alternaria solani appears as dark, target-like lesions...",
           "search_query": "Early Blight Tomato"
         }
       ]
