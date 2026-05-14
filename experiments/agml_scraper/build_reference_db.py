@@ -1,13 +1,14 @@
-"""Build a JSON reference database from Wikipedia, PubMed, CrossRef, and CGIAR HuggingFace."""
+"""Build a JSON reference database from Wikipedia, USDA APHIS IDtools, and CGIAR HuggingFace."""
 
 import argparse
 import csv
 import json
 import logging
+import re
 import time
-import warnings
 from datetime import date
 from pathlib import Path
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -19,19 +20,15 @@ EXCERPT_MAX  = 800
 TIMEOUT      = 15
 SLEEP        = 0.5
 
-# PubMed journal filters — these journals are indexed in PubMed and return full abstracts
-JOURNAL_FILTERS = [
-    ("Plant Phenomics",                       "Plant Phenomics[Journal]"),
-    ("Computers and Electronics in Agriculture", "Comput Electron Agric[Journal]"),
-]
-
-# CrossRef ISSNs for article discovery (titles/DOIs even when abstract not in PubMed)
-CROSSREF_ISSNS = [
-    ("Plant Phenomics",                        "2643-6515"),
-    ("Computers and Electronics in Agriculture", "0168-1699"),
-]
-
 _HEADERS = {"User-Agent": "AgMLResearch/1.0 (research; academic non-commercial use)"}
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; AgMLResearch/1.0; "
+        "academic data collection for agricultural AI research)"
+    ),
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
@@ -91,116 +88,139 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
     return sources
 
 
-# ── Source 2: PubMed general + journal-filtered ────────────────────────────────
+# ── Source 2: USDA APHIS IDtools ───────────────────────────────────────────────
 
-def _pubmed_fetch(term: str, organization: str, extra: dict | None = None) -> list[dict]:
-    """Run one PubMed esearch + efetch, return source dicts."""
-    sources = []
-    try:
-        ids = requests.get(
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-            params={"db": "pubmed", "term": term, "retmax": 2, "retmode": "json"},
-            headers=_HEADERS, timeout=TIMEOUT,
-        )
-        ids.raise_for_status()
-        time.sleep(SLEEP)
-        pmids = ids.json().get("esearchresult", {}).get("idlist", [])
-        if not pmids:
-            return sources
+# Package index pages that list all individual fact sheet links
+_IDTOOLS_PACKAGE_INDEXES = [
+    "https://idtools.org/citrus_pests/index.cfm?packageID=63",
+    "https://idtools.org/citrus_diseases/index.cfm?packageID=14",
+    "https://idtools.org/phytophthora/index.cfm?packageID=1131",
+    "https://idtools.org/aphid/index.cfm",
+    "https://idtools.org/thrips/index.cfm",
+    "https://idtools.org/sawfly/index.cfm",
+    "https://idtools.org/tortricid/index.cfm",
+]
 
-        fetch = requests.get(
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
-            params={"db": "pubmed", "id": ",".join(pmids), "retmode": "xml", "rettype": "abstract"},
-            headers=_HEADERS, timeout=TIMEOUT,
-        )
-        fetch.raise_for_status()
-        time.sleep(SLEEP)
+# Section headings that contain visual / identification content
+_VISUAL_HEADINGS = {
+    "symptom", "symptoms", "description", "identification", "visual",
+    "appearance", "morphology", "diagnostic", "characteristics",
+    "field identification", "signs", "damage symptoms", "overview",
+}
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            soup = BeautifulSoup(fetch.text, "lxml-xml")
-
-        for art in soup.find_all("PubmedArticle"):
-            pmid     = (art.find("PMID") or soup.new_tag("x")).get_text(strip=True)
-            title    = (art.find("ArticleTitle") or soup.new_tag("x")).get_text(strip=True)
-            abstract = (art.find("AbstractText") or soup.new_tag("x")).get_text(strip=True)
-            journal  = (art.find("Title") or soup.new_tag("x")).get_text(strip=True)
-            if not abstract:
-                continue
-            entry = {
-                "organization":  organization,
-                "title":         title,
-                "journal":       journal,
-                "pmid":          pmid,
-                "url":           f"https://pubmed.ncbi.nlm.nih.gov/{pmid}",
-                "type":          "journal_abstract",
-                "accessed_date": str(date.today()),
-                "excerpt":       abstract[:EXCERPT_MAX],
-                "search_query":  term,
-            }
-            if extra:
-                entry.update(extra)
-            sources.append(entry)
-    except Exception as e:
-        log.warning("PubMed '%s': %s", term, e)
-    return sources
+# Section headings to skip
+_SKIP_HEADINGS = {
+    "management", "control", "chemical control", "biological control",
+    "treatment", "biology", "life cycle", "distribution", "references",
+    "links", "contact", "navigation", "footer", "disclaimer",
+}
 
 
-def _fetch_pubmed(class_label: str, crop: str, task_type: str) -> list[dict]:
-    query   = _search_query(class_label, crop, task_type)
-    sources = _pubmed_fetch(f"{query}[Title/Abstract]", "PubMed")
-    # Journal-specific queries for Plant Phenomics and C&E in Ag
-    for journal_display, journal_filter in JOURNAL_FILTERS:
-        sources += _pubmed_fetch(
-            f"{query}[Title/Abstract] AND {journal_filter}",
-            organization=journal_display,
-        )
-    return sources
+def _load_idtools_index(delay: float = 1.0) -> dict[str, dict]:
+    """Crawl IDtools package index pages → {subject_lower: {url, subject}} map."""
+    index: dict[str, dict] = {}
 
-
-# ── Source 3: CrossRef (article discovery / provenance) ───────────────────────
-
-def _fetch_crossref(class_label: str, crop: str, task_type: str) -> list[dict]:
-    """Searches CrossRef for titles and DOIs. Abstracts often absent; records kept for provenance."""
-    query   = _search_query(class_label, crop, task_type)
-    sources = []
-    for journal_name, issn in CROSSREF_ISSNS:
+    for seed_url in _IDTOOLS_PACKAGE_INDEXES:
         try:
-            resp = requests.get(
-                "https://api.crossref.org/works",
-                params={
-                    "query":  query,
-                    "filter": f"issn:{issn}",
-                    "rows":   2,
-                    "select": "DOI,title,abstract,published,container-title",
-                },
-                headers=_HEADERS, timeout=TIMEOUT,
-            )
-            resp.raise_for_status()
-            time.sleep(SLEEP)
-            for item in resp.json().get("message", {}).get("items", []):
-                title    = (item.get("title") or [""])[0]
-                doi      = item.get("DOI", "")
-                # Strip JATS XML tags if abstract present
-                raw_abs  = item.get("abstract", "")
-                abstract = BeautifulSoup(raw_abs, "html.parser").get_text().strip() if raw_abs else ""
-                sources.append({
-                    "organization":  journal_name,
-                    "title":         title,
-                    "doi":           doi,
-                    "url":           f"https://doi.org/{doi}" if doi else "",
-                    "type":          "journal_article",
-                    "journal":       (item.get("container-title") or [""])[0],
-                    "accessed_date": str(date.today()),
-                    "excerpt":       abstract[:EXCERPT_MAX] if abstract else "",
-                    "search_query":  query,
-                })
+            r = requests.get(seed_url, headers=_BROWSER_HEADERS, timeout=TIMEOUT)
+            if r.status_code != 200:
+                log.debug("IDtools index %s → HTTP %d", seed_url, r.status_code)
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            base = r.url
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith(("#", "mailto:", "javascript:")):
+                    continue
+                abs_url = urljoin(base, href).split("#")[0]
+                if "idtools.org" not in abs_url or "entityID" not in abs_url:
+                    continue
+                subject = a.get_text(strip=True)
+                if subject and 3 < len(subject) < 100:
+                    index[subject.lower()] = {"url": abs_url, "subject": subject}
+            time.sleep(delay)
         except Exception as e:
-            log.warning("CrossRef '%s' (%s): %s", query, journal_name, e)
+            log.warning("IDtools index '%s': %s", seed_url, e)
+
+    log.info("IDtools index: %d fact sheets indexed", len(index))
+    return index
+
+
+def _scrape_idtools_factsheet(url: str) -> str:
+    """Fetch an IDtools fact sheet and extract visual description text."""
+    try:
+        r = requests.get(url, headers=_BROWSER_HEADERS, timeout=TIMEOUT)
+        if r.status_code != 200:
+            return ""
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+            tag.decompose()
+
+        visual_parts = []
+        for heading in soup.find_all(re.compile(r"^h[1-4]$")):
+            h_text = heading.get_text(strip=True).lower().rstrip(":")
+            h_clean = re.sub(r"[^a-z ]", "", h_text).strip()
+
+            if any(skip in h_clean for skip in _SKIP_HEADINGS):
+                continue
+            if not any(vis in h_clean for vis in _VISUAL_HEADINGS):
+                continue
+
+            section_parts = []
+            for sib in heading.find_next_siblings():
+                if sib.name and re.match(r"^h[1-4]$", sib.name):
+                    break
+                text = sib.get_text(separator=" ", strip=True)
+                if text and len(text) > 15:
+                    section_parts.append(text)
+
+            if section_parts:
+                visual_parts.append(" ".join(section_parts))
+
+        return " ".join(visual_parts).strip()
+    except Exception as e:
+        log.warning("IDtools scrape '%s': %s", url, e)
+        return ""
+
+
+def _search_idtools(
+    class_label: str, crop: str, idtools_index: dict[str, dict]
+) -> list[dict]:
+    """Match class label against IDtools subject index; scrape visual text from match."""
+    if not idtools_index:
+        return []
+
+    terms = [t.lower() for t in class_label.split() if len(t) > 3]
+    if not terms:
+        return []
+
+    matches = [
+        entry for subj, entry in idtools_index.items()
+        if any(t in subj for t in terms)
+    ]
+    if not matches:
+        return []
+
+    sources = []
+    for match in matches[:1]:
+        excerpt = _scrape_idtools_factsheet(match["url"])
+        if not excerpt:
+            continue
+        sources.append({
+            "organization":  "USDA APHIS IDtools",
+            "title":         match["subject"],
+            "url":           match["url"],
+            "type":          "fact_sheet",
+            "accessed_date": str(date.today()),
+            "excerpt":       excerpt[:EXCERPT_MAX],
+            "search_query":  f"{class_label} {crop}",
+        })
+        time.sleep(SLEEP)
+
     return sources
 
 
-# ── Source 4: CGIAR HuggingFace dataset cards ─────────────────────────────────
+# ── Source 3: CGIAR HuggingFace dataset cards ─────────────────────────────────
 
 def _load_cgiar_cache() -> dict[str, str]:
     """Fetch all CGIAR HF dataset READMEs once. Returns {dataset_id: readme_text}."""
@@ -280,7 +300,10 @@ def main(args: argparse.Namespace) -> None:
             if key not in seen:
                 seen[key] = {k: row[k] for k in ("agml_dataset", "crop", "class_label", "task_type")}
 
-    print(f"Loading CGIAR HuggingFace dataset cache...")
+    print("Loading USDA APHIS IDtools index...")
+    idtools_index = _load_idtools_index()
+
+    print("Loading CGIAR HuggingFace dataset cache...")
     cgiar_cache = _load_cgiar_cache()
 
     entries = dict(existing_entries)
@@ -291,10 +314,9 @@ def main(args: argparse.Namespace) -> None:
             print(f"  {n}/{total} [skip] {meta['class_label']} ({meta['crop']})")
             continue
 
-        sources  = (
+        sources = (
             _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
-            + _fetch_pubmed(meta["class_label"], meta["crop"], meta["task_type"])
-            + _fetch_crossref(meta["class_label"], meta["crop"], meta["task_type"])
+            + _search_idtools(meta["class_label"], meta["crop"], idtools_index)
             + _search_cgiar(meta["class_label"], meta["crop"], cgiar_cache)
         )
         status = "found" if any(s.get("excerpt") for s in sources) else "no_source_found"
@@ -304,7 +326,7 @@ def main(args: argparse.Namespace) -> None:
               f"[{len(sources)} sources]")
 
         dst.write_text(
-            json.dumps({"schema_version": "1.1", "built_date": str(date.today()),
+            json.dumps({"schema_version": "1.2", "built_date": str(date.today()),
                         "entries": entries}, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
@@ -315,7 +337,7 @@ def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Build reference DB from Wikipedia, PubMed, CrossRef, and CGIAR HuggingFace."
+        description="Build reference DB from Wikipedia, USDA APHIS IDtools, and CGIAR HuggingFace."
     )
     parser.add_argument("--descriptions_csv", default="outputs/descriptions_export.csv")
     parser.add_argument("--output_db",        default="outputs/reference_db.json")

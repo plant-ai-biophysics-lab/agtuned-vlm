@@ -445,7 +445,7 @@ open-source and incurs no API costs.
 | Script | Input | Output | Purpose |
 |--------|-------|--------|---------|
 | `export_descriptions_csv.py` | `agml_descriptions.jsonl` | `descriptions_export.csv` | Flatten JSONL to reviewable CSV |
-| `build_reference_db.py` | `descriptions_export.csv` | `reference_db.json` | Query Wikipedia, PubMed, CrossRef, CGIAR HuggingFace per class |
+| `build_reference_db.py` | `descriptions_export.csv` | `reference_db.json` | Query Wikipedia, USDA APHIS IDtools, CGIAR HuggingFace per class |
 | `verify_descriptions.py` | CSV + reference DB | `descriptions_corrected.csv` | LLM-refine descriptions using references |
 | `update_jsonl.py` | corrected CSV + JSONL files | `*_verified.jsonl` | Apply corrections back to JSONL |
 | `app.py` | reference DB + corrected CSV | — | Streamlit review UI |
@@ -474,23 +474,15 @@ uv run python build_reference_db.py \
   --skip_existing
 ```
 
-For each unique `(class_label, crop)`, queries **six free sources** (all open, no API keys required):
+For each unique `(class_label, crop)`, queries **three free sources** (all open, no API keys required):
 
 | # | Source | API / Method | What is extracted | Limitation |
 |---|--------|-------------|-------------------|------------|
 | 1 | **Wikipedia** | [Wikipedia REST API](https://en.wikipedia.org/w/api.php) — search + extract endpoints | Introductory plain-text extract of the best-matching article (up to 800 chars) | General encyclopaedia; may lack visual symptom specificity |
-| 2 | **PubMed (general)** | [NCBI E-utilities](https://www.ncbi.nlm.nih.gov/home/develop/api/) — `esearch` + `efetch`, no key | Full abstract text for top 2 results across all PubMed-indexed journals | **Abstracts only** — no full text, figures, or results sections |
-| 3 | **Plant Phenomics** | Same NCBI E-utilities, filtered by `Plant Phenomics[Journal]` | Full abstract text from this open-access AAAS journal | **Abstracts only**; full-text access requires direct journal scraping (not yet implemented) |
-| 4 | **Computers and Electronics in Agriculture** | Same NCBI E-utilities, filtered by `Comput Electron Agric[Journal]` | Full abstract text from this Elsevier journal | **Abstracts only**; full text behind paywall for non-OA articles |
-| 5 | **CrossRef** | [CrossRef REST API](https://api.crossref.org/) — ISSN-filtered for Plant Phenomics (2643-6515) and C&E Ag (0168-1699) | Article title, DOI, journal — abstract when present in CrossRef metadata (rare for these journals) | **Usually no abstract** — used for article discovery and citation provenance only |
-| 6 | **CGIAR HuggingFace** | [HuggingFace Hub API](https://huggingface.co/api/datasets?author=CGIAR) — dataset list + `README.md` per dataset | Snippet from dataset card README around the first mention of the class/crop | Mostly language/text datasets; matches opportunistic. GARDIAN AI-ready docs most likely to contain plant pathology content |
+| 2 | **USDA APHIS IDtools** | Crawl [idtools.org](https://idtools.org) package index pages → subject→URL map; scrape visual sections of matching fact sheets | Visual identification / symptom / description sections from USDA APHIS Identification Technology Program fact sheets | Coverage is strongest for citrus pests and diseases, phytophthora, aphids, and thrips; limited for other crops |
+| 3 | **CGIAR HuggingFace** | [HuggingFace Hub API](https://huggingface.co/api/datasets?author=CGIAR) — dataset list + `README.md` per dataset | Snippet from dataset card README around the first mention of the class/crop | Mostly language/text datasets; matches opportunistic. GARDIAN AI-ready docs most likely to contain plant pathology content |
 
-> **Note on full text:** Sources 2–4 currently provide **abstracts only**. Detailed visual
-> symptom characterization (lesion morphology, colour ranges, spatial distribution) is
-> typically in the Methods/Results sections and figures of the original papers. If the
-> AgML Journal Ingestion pipeline (to be integrated) provides full-text access, the
-> `excerpt` field in the reference DB can be replaced with richer content without changing
-> any downstream scripts.
+IDtools content is produced by USDA APHIS PPQ in collaboration with university partners and is in the public domain under 17 U.S.C. § 105 (US government works). The index is built once at startup by crawling package index pages (e.g. `?packageID=63`) which list all fact sheet links; individual fact sheets are fetched only for classes that match a subject name.
 
 Entries are written to disk after every class so partial runs are safe. Resume with
 `--skip_existing`.
@@ -499,10 +491,10 @@ Entries are written to disk after every class so partial runs are safe. Resume w
 - `"found"` — at least one source returned a non-empty excerpt
 - `"no_source_found"` — all sources returned nothing; pipeline continues gracefully
 
-**Reference DB schema** (`schema_version: "1.1"`):
+**Reference DB schema** (`schema_version: "1.2"`):
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "built_date": "2026-05-14",
   "entries": {
     "plant_village_classification__early_blight__tomato": {
@@ -522,37 +514,22 @@ Entries are written to disk after every class so partial runs are safe. Resume w
           "search_query": "Early Blight Tomato plant disease symptoms"
         },
         {
-          "organization": "PubMed",
-          "title": "Characterization of Alternaria solani...",
-          "pmid": "12345678",
-          "url": "https://pubmed.ncbi.nlm.nih.gov/12345678",
-          "journal": "Phytopathology",
-          "type": "journal_abstract",
+          "organization": "USDA APHIS IDtools",
+          "title": "Early Blight",
+          "url": "https://idtools.org/citrus_diseases/index.cfm?packageID=14&entityID=123",
+          "type": "fact_sheet",
           "accessed_date": "2026-05-14",
-          "excerpt": "Lesions were circular to irregular, dark brown...",
-          "search_query": "Early Blight Tomato plant disease symptoms[Title/Abstract]"
+          "excerpt": "Symptoms: Dark brown to black lesions with concentric rings...",
+          "search_query": "Early Blight Tomato"
         },
         {
-          "organization": "Plant Phenomics",
-          "title": "Deep learning for plant disease detection...",
-          "pmid": "23456789",
-          "url": "https://pubmed.ncbi.nlm.nih.gov/23456789",
-          "journal": "Plant Phenomics",
-          "type": "journal_abstract",
+          "organization": "CGIAR",
+          "title": "CGIAR/potato-disease-dataset",
+          "url": "https://huggingface.co/datasets/CGIAR/potato-disease-dataset",
+          "type": "dataset_card",
           "accessed_date": "2026-05-14",
-          "excerpt": "...",
-          "search_query": "Early Blight Tomato plant disease symptoms[Title/Abstract] AND Plant Phenomics[Journal]"
-        },
-        {
-          "organization": "Computers and Electronics in Agriculture",
-          "title": "...",
-          "doi": "10.1016/j.compag.2021.xxxxx",
-          "url": "https://doi.org/10.1016/j.compag.2021.xxxxx",
-          "type": "journal_article",
-          "journal": "Computers and Electronics in Agriculture",
-          "accessed_date": "2026-05-14",
-          "excerpt": "",
-          "search_query": "..."
+          "excerpt": "...early blight caused by Alternaria solani appears as...",
+          "search_query": "Early Blight Tomato"
         }
       ]
     }
@@ -629,7 +606,7 @@ uv run python export_descriptions_csv.py \
   --descriptions_jsonl outputs/agml_descriptions.jsonl \
   --output_csv outputs/descriptions_export.csv
 
-# 2. Build reference database (all 6 sources)
+# 2. Build reference database (Wikipedia + USDA APHIS IDtools + CGIAR HuggingFace)
 #    First run: ~5–15 min depending on number of classes and network latency
 uv run python build_reference_db.py \
   --descriptions_csv outputs/descriptions_export.csv \
