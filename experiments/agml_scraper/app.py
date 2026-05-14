@@ -1,13 +1,25 @@
 import json
 import re
 import string
+import sys
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(layout="wide", page_title="Description Verifier")
 
-DEFAULT_REF_DB = "experiments/agml_scraper/outputs/reference_db.json"
-DEFAULT_CSV = "experiments/agml_scraper/outputs/descriptions_corrected.csv"
+# Allow --output_dir to be passed on the command line:
+#   streamlit run app.py -- --output_dir /path/to/outputs
+_DEFAULT_OUTPUT_DIR = "outputs"
+_args = sys.argv[1:]
+if "--output_dir" in _args:
+    _idx = _args.index("--output_dir")
+    _DEFAULT_OUTPUT_DIR = _args[_idx + 1] if _idx + 1 < len(_args) else _DEFAULT_OUTPUT_DIR
+
+_output_dir = Path(_DEFAULT_OUTPUT_DIR)
+DEFAULT_REF_DB = str(_output_dir / "reference_db.json")
+DEFAULT_CSV    = str(_output_dir / "descriptions_corrected.csv")
 
 
 @st.cache_data
@@ -57,9 +69,16 @@ def word_set_from(text: str) -> set:
 
 
 # --- Sidebar ---
-st.sidebar.header("File Paths")
-ref_path = st.sidebar.text_input("reference_db.json", value=DEFAULT_REF_DB)
-csv_path = st.sidebar.text_input("descriptions_corrected.csv", value=DEFAULT_CSV)
+st.sidebar.header("Output Directory")
+output_dir_input = st.sidebar.text_input(
+    "outputs/ path", value=str(_output_dir),
+    help="Directory containing reference_db.json and descriptions_corrected.csv",
+)
+_resolved = Path(output_dir_input)
+ref_path = str(_resolved / "reference_db.json")
+csv_path = str(_resolved / "descriptions_corrected.csv")
+st.sidebar.caption(f"`reference_db.json` → `{ref_path}`")
+st.sidebar.caption(f"`descriptions_corrected.csv` → `{csv_path}`")
 
 tab1, tab2, tab3 = st.tabs(["Reference Database", "Corrected Descriptions", "Stats"])
 
@@ -111,7 +130,7 @@ with tab1:
             sources = entry.get("sources", [])
             if not sources:
                 st.info("No sources found for this entry.")
-            for src in sources:
+            for i, src in enumerate(sources):
                 org = src.get("organization", "Unknown")
                 title = src.get("title", "No title")
                 url = src.get("url", "")
@@ -124,7 +143,7 @@ with tab1:
                     if url:
                         st.markdown(f"[{url}]({url})")
                     if excerpt:
-                        st.text_area("Excerpt", value=excerpt, height=150, disabled=True, key=f"exc_{key}_{org}")
+                        st.text_area("Excerpt", value=excerpt, height=150, disabled=True, key=f"exc_{key}_{i}")
 
 # ===========================================================================
 # TAB 2: Corrected Descriptions
@@ -235,3 +254,30 @@ with tab3:
             st.subheader("Count by AgML Dataset")
             dataset_counts = df_stats["agml_dataset"].value_counts()
             st.bar_chart(dataset_counts)
+
+        st.markdown("---")
+        st.subheader("Paper-ready summary")
+        pct_corrected = n_corrected / total * 100 if total else 0
+        pct_no_source = n_no_source / total * 100 if total else 0
+
+        lines = [
+            f"Total classes: {total}",
+            f"Corrected via reference sources: {n_corrected} ({pct_corrected:.1f}%)",
+            f"No source found (original kept): {n_no_source} ({pct_no_source:.1f}%)",
+        ]
+        if "task_type" in df_stats.columns and "status" in df_stats.columns:
+            lines.append("")
+            lines.append("By task type:")
+            for tt, grp in df_stats.groupby("task_type"):
+                n_c = (grp["status"] == "corrected").sum()
+                n_t = len(grp)
+                lines.append(f"  {tt}: {n_c}/{n_t} corrected ({n_c/n_t*100:.1f}%)")
+        if "agml_dataset" in df_stats.columns and "status" in df_stats.columns:
+            lines.append("")
+            lines.append("By dataset:")
+            for ds, grp in df_stats.groupby("agml_dataset"):
+                n_c = (grp["status"] == "corrected").sum()
+                n_t = len(grp)
+                lines.append(f"  {ds}: {n_c}/{n_t} corrected ({n_c/n_t*100:.1f}%)")
+
+        st.code("\n".join(lines), language=None)

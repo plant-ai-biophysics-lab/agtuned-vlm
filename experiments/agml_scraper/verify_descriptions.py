@@ -162,10 +162,43 @@ def main(args: argparse.Namespace) -> None:
         writer.writeheader()
         writer.writerows(out_rows)
 
+    total     = len(out_rows)
     corrected = sum(1 for r in out_rows if r["status"] == "corrected")
     no_source = sum(1 for r in out_rows if r["status"] == "no_source")
-    print(f"Corrected: {corrected}  |  No source: {no_source}  |  Total: {len(out_rows)}")
-    print(f"Saved → {out_path}")
+    error     = sum(1 for r in out_rows if r["status"] == "error")
+
+    print(f"\n=== Verification Summary ===")
+    print(f"  Total entries : {total}")
+    print(f"  Corrected     : {corrected} ({corrected/total*100:.1f}%)")
+    print(f"  No source     : {no_source} ({no_source/total*100:.1f}%)")
+    print(f"  Error         : {error} ({error/total*100:.1f}%)")
+
+    # Per task type
+    from collections import defaultdict
+    by_task: dict = defaultdict(lambda: {"corrected": 0, "total": 0})
+    for r in out_rows:
+        tt = r.get("task_type", "unknown")
+        by_task[tt]["total"] += 1
+        if r["status"] == "corrected":
+            by_task[tt]["corrected"] += 1
+    print(f"\n  By task type:")
+    for tt, counts in sorted(by_task.items()):
+        pct = counts["corrected"] / counts["total"] * 100 if counts["total"] else 0
+        print(f"    {tt:<35} {counts['corrected']:>4}/{counts['total']:<4} ({pct:.1f}%)")
+
+    # Per dataset
+    by_ds: dict = defaultdict(lambda: {"corrected": 0, "total": 0})
+    for r in out_rows:
+        ds = r.get("agml_dataset", "unknown")
+        by_ds[ds]["total"] += 1
+        if r["status"] == "corrected":
+            by_ds[ds]["corrected"] += 1
+    print(f"\n  By dataset:")
+    for ds, counts in sorted(by_ds.items()):
+        pct = counts["corrected"] / counts["total"] * 100 if counts["total"] else 0
+        print(f"    {ds:<45} {counts['corrected']:>4}/{counts['total']:<4} ({pct:.1f}%)")
+
+    print(f"\nSaved → {out_path}")
 
 
 if __name__ == "__main__":

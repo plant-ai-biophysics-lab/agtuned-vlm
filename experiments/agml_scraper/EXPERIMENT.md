@@ -650,10 +650,12 @@ uv run python verify_descriptions.py \
   --output_csv outputs/descriptions_corrected.csv
 
 # 4. Review in browser before applying changes
-uv run streamlit run app.py \
-  -- \
-  --reference_db outputs/reference_db.json \
-  --corrected_csv outputs/descriptions_corrected.csv
+#    Pass --output_dir to point at your outputs folder (contains reference_db.json
+#    and descriptions_corrected.csv). The sidebar also has a text input to change it at runtime.
+uv run streamlit run app.py -- --output_dir outputs/
+
+# Custom path example
+uv run streamlit run app.py -- --output_dir /data/agtuned/my_outputs/
 
 # 5. Apply corrections to JSONL files (originals never modified)
 uv run python update_jsonl.py \
