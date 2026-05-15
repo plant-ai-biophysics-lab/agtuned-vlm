@@ -4,12 +4,9 @@ import argparse
 import csv
 import json
 import logging
-import re
 import time
 from datetime import date
 from pathlib import Path
-from urllib.parse import urljoin
-
 import requests
 from bs4 import BeautifulSoup
 
@@ -26,14 +23,6 @@ WIKI_RETRY_DELAYS = [5, 15, 30]  # backoff on 429 — longer gaps to clear rate 
 _HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected"}
 
 _HEADERS = {"User-Agent": "AgMLResearch/1.0 (research; academic non-commercial use)"}
-_BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; AgMLResearch/1.0; "
-        "academic data collection for agricultural AI research)"
-    ),
-    "Accept": "text/html,application/xhtml+xml",
-    "Accept-Language": "en-US,en;q=0.9",
-}
 
 
 def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
@@ -112,130 +101,100 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
 
 
 # ── Source 2: USDA APHIS IDtools ───────────────────────────────────────────────
+# Reuses scrape_idtools.py from experiments/web_scraper/ for discovery and scraping.
+# That script has the full SEED_URLS list, two-level crawler, and section-aware
+# visual content extractor — no duplication here.
 
-# Package index pages that list all individual fact sheet links
-_IDTOOLS_PACKAGE_INDEXES = [
-    "https://idtools.org/citrus_pests/index.cfm?packageID=63",
-    "https://idtools.org/citrus_diseases/index.cfm?packageID=14",
-    "https://idtools.org/phytophthora/index.cfm?packageID=1131",
-    "https://idtools.org/aphid/index.cfm",
-    "https://idtools.org/thrips/index.cfm",
-    "https://idtools.org/sawfly/index.cfm",
-    "https://idtools.org/tortricid/index.cfm",
-]
-
-# Section headings that contain visual / identification content
-_VISUAL_HEADINGS = {
-    "symptom", "symptoms", "description", "identification", "visual",
-    "appearance", "morphology", "diagnostic", "characteristics",
-    "field identification", "signs", "damage symptoms", "overview",
-}
-
-# Section headings to skip
-_SKIP_HEADINGS = {
-    "management", "control", "chemical control", "biological control",
-    "treatment", "biology", "life cycle", "distribution", "references",
-    "links", "contact", "navigation", "footer", "disclaimer",
-}
+_WEB_SCRAPER_DIR = Path(__file__).parent.parent / "web_scraper"
+_IDTOOLS_DB      = _WEB_SCRAPER_DIR / "idtools_scraper.db"
 
 
-def _load_idtools_index(delay: float = 1.0) -> dict[str, dict]:
-    """Crawl IDtools package index pages → {subject_lower: {url, subject}} map."""
-    index: dict[str, dict] = {}
+def _load_idtools_index() -> dict[str, dict]:
+    """
+    Build {subject_lower: {url, subject}} map using scrape_idtools.py infrastructure.
 
-    for seed_url in _IDTOOLS_PACKAGE_INDEXES:
-        try:
-            r = requests.get(seed_url, headers=_BROWSER_HEADERS, timeout=TIMEOUT)
-            if r.status_code != 200:
-                log.debug("IDtools index %s → HTTP %d", seed_url, r.status_code)
-                continue
-            soup = BeautifulSoup(r.text, "html.parser")
-            base = r.url
-            for a in soup.find_all("a", href=True):
-                href = a["href"].strip()
-                if not href or href.startswith(("#", "mailto:", "javascript:")):
-                    continue
-                abs_url = urljoin(base, href).split("#")[0]
-                if "idtools.org" not in abs_url or "entityID" not in abs_url:
-                    continue
-                subject = a.get_text(strip=True)
-                if subject and 3 < len(subject) < 100:
-                    index[subject.lower()] = {"url": abs_url, "subject": subject}
-            time.sleep(delay)
-        except Exception as e:
-            log.warning("IDtools index '%s': %s", seed_url, e)
-
-    log.info("IDtools index: %d fact sheets indexed", len(index))
-    return index
-
-
-def _scrape_idtools_factsheet(url: str) -> str:
-    """Fetch an IDtools fact sheet and extract visual description text."""
+    If idtools_scraper.db already exists: read subjects from SQLite instantly.
+    If not: run URL discovery (same crawler as scrape_idtools.py) and save to DB.
+    Either way the DB is shared with scrape_idtools.py — running that script first
+    with --discover-only gives the most complete index (~1500 fact sheets).
+    """
+    import sys
+    sys.path.insert(0, str(_WEB_SCRAPER_DIR))
     try:
-        r = requests.get(url, headers=_BROWSER_HEADERS, timeout=TIMEOUT)
-        if r.status_code != 200:
-            return ""
-        soup = BeautifulSoup(r.text, "html.parser")
-        for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
-            tag.decompose()
+        from scrape_idtools import init_db
+    except ImportError as e:
+        log.warning("Cannot import scrape_idtools — IDtools disabled: %s", e)
+        return {}
 
-        visual_parts = []
-        for heading in soup.find_all(re.compile(r"^h[1-4]$")):
-            h_text = heading.get_text(strip=True).lower().rstrip(":")
-            h_clean = re.sub(r"[^a-z ]", "", h_text).strip()
+    conn = init_db(str(_IDTOOLS_DB))
+    known = conn.execute("SELECT COUNT(*) FROM urls").fetchone()[0]
 
-            if any(skip in h_clean for skip in _SKIP_HEADINGS):
-                continue
-            if not any(vis in h_clean for vis in _VISUAL_HEADINGS):
-                continue
+    if known < 50:
+        log.warning(
+            "IDtools DB is empty. Run discovery first:\n"
+            "  cd experiments/web_scraper && uv run python scrape_idtools.py --discover-only\n"
+            "Skipping IDtools source for this run."
+        )
+        conn.close()
+        return {}
 
-            section_parts = []
-            for sib in heading.find_next_siblings():
-                if sib.name and re.match(r"^h[1-4]$", sib.name):
-                    break
-                text = sib.get_text(separator=" ", strip=True)
-                if text and len(text) > 15:
-                    section_parts.append(text)
+    log.info("IDtools DB: %d URLs discovered", known)
 
-            if section_parts:
-                visual_parts.append(" ".join(section_parts))
+    rows = conn.execute(
+        "SELECT url, subject FROM urls WHERE subject IS NOT NULL AND subject != ''"
+    ).fetchall()
+    conn.close()
 
-        return " ".join(visual_parts).strip()
-    except Exception as e:
-        log.warning("IDtools scrape '%s': %s", url, e)
-        return ""
+    index = {
+        row[1].lower(): {"url": row[0], "subject": row[1]}
+        for row in rows if row[1] and 3 < len(row[1]) < 100
+    }
+    log.info("IDtools index ready: %d subjects", len(index))
+    return index
 
 
 def _search_idtools(
     class_label: str, crop: str, idtools_index: dict[str, dict]
 ) -> list[dict]:
-    """Match class label against IDtools subject index; scrape visual text from match."""
+    """Match class label against IDtools subjects; scrape visual section of best match."""
     if not idtools_index:
         return []
 
-    terms = [t.lower() for t in class_label.split() if len(t) > 3]
+    import sys
+    sys.path.insert(0, str(_WEB_SCRAPER_DIR))
+    try:
+        from scrape_idtools import scrape_factsheet
+    except ImportError:
+        return []
+
+    # Use both class label and crop words so "apple scab" + "apple" matches better
+    terms = [t.lower() for t in (class_label + " " + crop).split() if len(t) > 3]
     if not terms:
         return []
 
-    matches = [
-        entry for subj, entry in idtools_index.items()
-        if any(t in subj for t in terms)
-    ]
-    if not matches:
+    # Score by number of matching terms so the best subject ranks first
+    scored = sorted(
+        ((sum(t in subj for t in terms), entry)
+         for subj, entry in idtools_index.items()
+         if any(t in subj for t in terms)),
+        key=lambda x: x[0], reverse=True,
+    )
+    if not scored:
         return []
 
     sources = []
-    for match in matches[:1]:
-        excerpt = _scrape_idtools_factsheet(match["url"])
-        if not excerpt:
+    for _score, match in scored[:2]:
+        result = scrape_factsheet(match["url"])
+        if result is None:
             continue
+        _subject, content = result
         sources.append({
             "organization":  "USDA APHIS IDtools",
             "title":         match["subject"],
             "url":           match["url"],
             "type":          "fact_sheet",
             "accessed_date": str(date.today()),
-            "excerpt":       excerpt[:EXCERPT_MAX],
+            "excerpt":       content[:EXCERPT_MAX],
             "search_query":  f"{class_label} {crop}",
         })
         time.sleep(SLEEP)
@@ -243,24 +202,21 @@ def _search_idtools(
     return sources
 
 
-# ── Source 3: CGIAR GARDIAN research document chunks ──────────────────────────
-# Uses the two public GARDIAN QA datasets which contain ~44K context chunks
-# extracted from CGIAR research publications (288-word windows, full text).
+# ── Source 3: CGIAR GARDIAN research document chunks (RAG) ────────────────────
+# ~219K context chunks from CGIAR research publications embedded once and cached.
+# Retrieval uses cosine similarity — far faster than linear substring search.
 
 _CGIAR_DATASETS = [
     "CGIAR/ragas_gardian_evaluation_non_overlapping",
     "CGIAR/ragas_gardian_evaluation_overlapping",
 ]
+_CGIAR_EMB_MODEL  = "BAAI/bge-small-en-v1.5"   # 384-dim, fast, strong retrieval
+_CGIAR_EMB_CACHE  = "cgiar_embeddings.npy"
+_CGIAR_TEXT_CACHE = "cgiar_chunks.json"
 
 
-def _load_cgiar_cache() -> list[str]:
-    """
-    Load CGIAR GARDIAN context chunks by reading the Arrow data file directly via pyarrow.
-
-    Bypasses the HF datasets library (which has broken cache/index files for these datasets)
-    and reads 'data-00000-of-00001.arrow' straight from the HF Hub.
-    Each row has a 'contexts' column: list of 288-word document chunks.
-    """
+def _fetch_cgiar_chunks() -> list[str]:
+    """Download CGIAR Arrow files and extract all context chunks."""
     try:
         import pyarrow.ipc as pa_ipc
         from huggingface_hub import hf_hub_download
@@ -268,55 +224,112 @@ def _load_cgiar_cache() -> list[str]:
         log.warning("CGIAR disabled — missing dependency: %s", e)
         return []
 
-    contexts: list[str] = []
+    chunks: list[str] = []
     for ds_id in _CGIAR_DATASETS:
         try:
             path = hf_hub_download(
-                repo_id=ds_id,
-                filename="data-00000-of-00001.arrow",
-                repo_type="dataset",
+                repo_id=ds_id, filename="data-00000-of-00001.arrow", repo_type="dataset"
             )
-            reader = pa_ipc.open_stream(path)
-            table  = reader.read_all()
-            before = len(contexts)
+            reader  = pa_ipc.open_stream(path)
+            table   = reader.read_all()
             ctx_col = table.column("contexts").to_pylist()
+            before  = len(chunks)
             for cell in ctx_col:
                 if isinstance(cell, list):
-                    contexts.extend(c for c in cell if c)
+                    chunks.extend(c for c in cell if c)
                 elif cell:
-                    contexts.append(cell)
-            log.info("CGIAR %s: %d rows → %d chunks", ds_id, len(ctx_col), len(contexts) - before)
+                    chunks.append(cell)
+            log.info("CGIAR %s: %d rows → %d chunks", ds_id, len(ctx_col), len(chunks) - before)
         except Exception as e:
             log.warning("CGIAR load '%s': %s", ds_id, e)
-
-    log.info("CGIAR total: %d document chunks cached", len(contexts))
-    return contexts
+    return chunks
 
 
-def _search_cgiar(class_label: str, crop: str, cgiar_contexts: list[str]) -> list[dict]:
-    """Search CGIAR GARDIAN document chunks for class/crop mentions."""
-    if not cgiar_contexts:
+def _load_cgiar_index(cache_dir: Path) -> tuple | None:
+    """
+    Returns (model, embeddings, chunks) for RAG retrieval.
+
+    First run: downloads chunks, encodes with bge-small-en-v1.5, saves to cache_dir.
+    Subsequent runs: loads from cache in seconds.
+    """
+    import numpy as np
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        log.warning("sentence-transformers not installed — CGIAR RAG disabled")
+        return None
+
+    emb_path   = cache_dir / _CGIAR_EMB_CACHE
+    text_path  = cache_dir / _CGIAR_TEXT_CACHE
+
+    if emb_path.exists() and text_path.exists():
+        log.info("Loading CGIAR embeddings from cache...")
+        embeddings = np.load(str(emb_path))
+        chunks     = json.loads(text_path.read_text(encoding="utf-8"))
+        log.info("CGIAR index ready: %d chunks, dim=%d", len(chunks), embeddings.shape[1])
+        model = SentenceTransformer(_CGIAR_EMB_MODEL)
+        return model, embeddings, chunks
+
+    chunks = _fetch_cgiar_chunks()
+    if not chunks:
+        return None
+
+    log.info("Encoding %d CGIAR chunks with %s (cached after this)...", len(chunks), _CGIAR_EMB_MODEL)
+    model      = SentenceTransformer(_CGIAR_EMB_MODEL)
+    embeddings = model.encode(
+        chunks, batch_size=512, show_progress_bar=True, normalize_embeddings=True
+    )
+
+    np.save(str(emb_path), embeddings)
+    text_path.write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
+    log.info("CGIAR index saved → %s", cache_dir)
+
+    return model, embeddings, chunks
+
+
+def _search_cgiar(
+    class_label: str, crop: str, task_type: str,
+    compressed_description: str,
+    cgiar_index: tuple | None, top_k: int = 3,
+) -> list[dict]:
+    """
+    Retrieve top-k CGIAR chunks by cosine similarity.
+
+    Query combines the LLM-generated compressed description with class + crop so
+    we find documents whose visual language is closest to what the model originally
+    produced — enabling direct comparison between LLM output and reference text.
+    """
+    if cgiar_index is None:
         return []
-    terms = [t.lower() for t in [class_label, crop] if len(t) > 3]
-    if not terms:
-        return []
 
-    sources = []
-    for ctx in cgiar_contexts:
-        if not any(t in ctx.lower() for t in terms):
-            continue
-        sources.append({
+    import numpy as np
+    model, embeddings, chunks = cgiar_index
+
+    # Anchor on LLM description + structured label so retrieval targets
+    # documents that describe the same visual appearance the model captured
+    if task_type in ("weed_identification", "crop_identification"):
+        query = f"{compressed_description} visual appearance {class_label} plant identification"
+    else:
+        query = f"{compressed_description} visual symptoms {class_label} {crop} disease"
+
+    q_emb  = model.encode([query], normalize_embeddings=True)
+    scores = (embeddings @ q_emb.T).flatten()
+    top_idx = np.argsort(scores)[-top_k:][::-1]
+
+    return [
+        {
             "organization":  "CGIAR GARDIAN",
             "title":         "CGIAR GARDIAN Research Corpus",
             "url":           "https://huggingface.co/datasets/CGIAR/ragas_gardian_evaluation_non_overlapping",
             "type":          "research_document",
             "accessed_date": str(date.today()),
-            "excerpt":       ctx[:EXCERPT_MAX],
-            "search_query":  f"{class_label} {crop}",
-        })
-        if len(sources) >= 2:
-            break
-    return sources
+            "excerpt":       chunks[i][:EXCERPT_MAX],
+            "search_query":  query,
+            "score":         round(float(scores[i]), 4),
+        }
+        for i in top_idx
+        if scores[i] > 0.3
+    ]
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -334,13 +347,14 @@ def main(args: argparse.Namespace) -> None:
         for row in csv.DictReader(f):
             key = _make_key(row["agml_dataset"], row["class_label"], row["crop"])
             if key not in seen:
-                seen[key] = {k: row[k] for k in ("agml_dataset", "crop", "class_label", "task_type")}
+                seen[key] = {k: row[k] for k in
+                             ("agml_dataset", "crop", "class_label", "task_type", "compressed_description")}
 
     print("Loading USDA APHIS IDtools index...")
     idtools_index = _load_idtools_index()
 
-    print("Loading CGIAR GARDIAN document chunks (may take a moment on first run)...")
-    cgiar_contexts = _load_cgiar_cache()
+    print("Loading CGIAR GARDIAN index (encoding on first run, cached after)...")
+    cgiar_index = _load_cgiar_index(dst.parent)
 
     entries = dict(existing_entries)
     total   = len(seen)
@@ -363,7 +377,8 @@ def main(args: argparse.Namespace) -> None:
         sources = (
             _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
             + _search_idtools(meta["class_label"], meta["crop"], idtools_index)
-            + _search_cgiar(meta["class_label"], meta["crop"], cgiar_contexts)
+            + _search_cgiar(meta["class_label"], meta["crop"], meta["task_type"],
+                            meta["compressed_description"], cgiar_index)
         )
         status = "found" if any(s.get("excerpt") for s in sources) else "no_source_found"
 
