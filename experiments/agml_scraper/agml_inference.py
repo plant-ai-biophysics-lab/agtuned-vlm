@@ -280,17 +280,16 @@ def naive_rouge_summary(rows: list[dict]) -> dict:
 
 
 def dataset_cls_summary(rows: list[dict]) -> dict:
+    # Unresolvable predictions count as incorrect (resolved_class == "")
+    refs   = [r["class_label"]    for r in rows]
+    preds  = [r["resolved_class"] for r in rows]  # "" for unresolvable
+    labels = sorted(set(refs) | set(p for p in preds if p))
     resolvable = [r for r in rows if r["resolvable"]]
-    if not resolvable:
-        return {"accuracy": 0.0, "contains_accuracy": 0.0, "f1_macro": 0.0,
-                "f1_weighted": 0.0, "mean_bertscore": 0.0,
-                "n_images": len(rows), "n_resolvable": 0}
-    refs   = [r["class_label"]    for r in resolvable]
-    preds  = [r["resolved_class"] for r in resolvable]
-    labels = sorted(set(refs) | set(preds))
 
     contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
-    bert_scores      = compute_bertscore(preds, refs)
+    bert_scores      = compute_bertscore(
+        [p if p else r for p, r in zip(preds, refs)], refs
+    )
 
     return {
         "accuracy":          round(accuracy_score(refs, preds), 4),
@@ -307,12 +306,11 @@ def dataset_cls_summary(rows: list[dict]) -> dict:
 
 def naive_cls_summary(rows: list[dict]) -> dict:
     """Shuffle ground truth labels within dataset — chance-level floor."""
-    resolvable = [r for r in rows if r["resolvable"]]
-    if not resolvable:
+    if not rows:
         return {"accuracy": 0.0, "contains_accuracy": 0.0, "f1_macro": 0.0,
                 "f1_weighted": 0.0, "mean_bertscore": 0.0,
-                "n_images": len(rows), "n_resolvable": 0}
-    refs     = [r["class_label"] for r in resolvable]
+                "n_images": 0, "n_resolvable": 0}
+    refs     = [r["class_label"] for r in rows]
     shuffled = refs.copy()
     rng      = np.random.default_rng(42)
     rng.shuffle(shuffled)
@@ -330,7 +328,7 @@ def naive_cls_summary(rows: list[dict]) -> dict:
                                             labels=labels, zero_division=0), 4),
         "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
         "n_images":          len(rows),
-        "n_resolvable":      len(resolvable),
+        "n_resolvable":      len(rows),  # naive shuffles within label set, always resolvable
     }
 
 
