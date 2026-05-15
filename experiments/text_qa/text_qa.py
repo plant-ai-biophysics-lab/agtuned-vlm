@@ -976,20 +976,44 @@ def main(args):
 
     # --- Summary table (mirrored to summary.txt) ---
     tee = _Tee(output_dir / "summary.txt")
-    tee.print("\n=== Summary ===")
+
+    tee.print("\n=== Generation Metrics ===")
     tee.print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10} {'ROUGE-SS':>10}")
     tee.print(f"  {'-'*94}")
     for key, m in results["models"].items():
         tag = " (naive)" if key == "naive" else ""
         tee.print(f"  {key + tag:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f} {m.get('rouge_ss_raw', 0):>10.4f}")
 
-    if args.judge_model and any("judge_accuracy" in m for m in results["models"].values()):
-        tee.print(f"\n  [judged] — judge: {args.judge_model}")
-        tee.print(f"  {'Model':<40} {'J-Acc':>10}")
-        tee.print(f"  {'-'*52}")
+    # Classification metrics (only present when --datasets_config + --idtools_jsonl)
+    has_cls = any("classification" in m for m in results["models"].values())
+    if has_cls:
+        tee.print(f"\n=== Classification Metrics ===")
+        tee.print(f"  {'Model':<40} {'Accuracy':>10} {'F1-macro':>10} {'F1-wtd':>10} {'BERTScore':>11}")
+        tee.print(f"  {'-'*83}")
         for key, m in results["models"].items():
-            if key != "naive" and "judge_accuracy" in m:
-                tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f}")
+            cls = m.get("classification", {})
+            ov  = cls.get("overall", {}) if isinstance(cls, dict) else {}
+            tag = " (naive)" if key == "naive" else ""
+            tee.print(f"  {key + tag:<40} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f} {ov.get('f1_weighted', 0):>10.4f} {ov.get('mean_bertscore', 0):>11.4f}")
+
+    # Judge results
+    if args.judge_model and any("judge_accuracy" in m for m in results["models"].values()):
+        tee.print(f"\n=== LLM Judge Results [judged] — {args.judge_model} ===")
+        if has_cls:
+            tee.print(f"  {'Model':<40} {'J-Acc':>10} {'Accuracy':>10} {'F1-macro':>10}")
+            tee.print(f"  {'-'*72}")
+            for key, m in results["models"].items():
+                if key == "naive" or "judge_accuracy" not in m:
+                    continue
+                ov = m.get("classification", {}).get("overall", {})
+                tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f}")
+        else:
+            tee.print(f"  {'Model':<40} {'J-Acc':>10}")
+            tee.print(f"  {'-'*52}")
+            for key, m in results["models"].items():
+                if key != "naive" and "judge_accuracy" in m:
+                    tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f}")
+
     tee.close()
 
     has_judged = any("judged_correct" in (rows[0] if rows else {}) for rows in all_rows.values())
