@@ -483,7 +483,7 @@ def plot_cls_by_task(
 
 # ── LLM-as-a-judge ────────────────────────────────────────────────────────────
 
-_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=300)
+_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=1024)
 
 _JUDGE_SYSTEM = (
     "You are an expert agricultural scientist evaluating model predictions "
@@ -575,7 +575,7 @@ def _apply_judge(
         updated.append({
             **row,
             "judged_correct":  _parse_judge_response(raw, threshold=confidence_threshold),
-            "judge_reasoning": cleaned[:300],
+            "judge_reasoning": cleaned[:600],
         })
     return updated
 

@@ -143,8 +143,8 @@ def score_classification(
 ) -> dict:
     """
     Compute accuracy, F1-macro, F1-weighted for classification JSONL.
-    Groups by agml_dataset, resolves each prediction against known classes,
-    then aggregates. Unresolvable predictions are excluded from metrics.
+    Unresolvable predictions are counted as incorrect (not excluded), so
+    accuracy reflects true performance over all samples.
     """
     by_dataset: dict[str, list] = defaultdict(list)
     for sample, pred in zip(samples, predictions):
@@ -163,19 +163,15 @@ def score_classification(
     all_refs, all_preds = [], []
 
     for ds_name, rows in by_dataset.items():
+        # Use all rows; unresolvable predictions get empty string → always wrong
+        refs   = [r["class_label"]    for r in rows]
+        preds  = [r["resolved_class"] for r in rows]  # "" for unresolvable
+        labels = sorted(set(refs) | set(p for p in preds if p))
         resolvable = [r for r in rows if r["resolvable"]]
-        if not resolvable:
-            per_dataset[ds_name] = {
-                "accuracy": 0.0, "contains_accuracy": 0.0, "f1_macro": 0.0,
-                "f1_weighted": 0.0, "mean_bertscore": 0.0,
-                "n_total": len(rows), "n_resolvable": 0,
-            }
-            continue
-        refs   = [r["class_label"]    for r in resolvable]
-        preds  = [r["resolved_class"] for r in resolvable]
-        labels = sorted(set(refs) | set(preds))
         contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
-        bert_scores      = compute_bertscore(preds, refs)
+        bert_scores      = compute_bertscore(
+            [p if p else r_["class_label"] for p, r_ in zip(preds, rows)], refs
+        )
         per_dataset[ds_name] = {
             "accuracy":          round(accuracy_score(refs, preds), 4),
             "contains_accuracy": round(np.mean(contains_correct), 4),
@@ -192,9 +188,11 @@ def score_classification(
 
     overall = {}
     if all_refs:
-        labels       = sorted(set(all_refs) | set(all_preds))
+        labels       = sorted(set(all_refs) | set(p for p in all_preds if p))
         contains_all = [int(contains_match(p, r)) for p, r in zip(all_preds, all_refs)]
-        bert_all     = compute_bertscore(all_preds, all_refs)
+        bert_all     = compute_bertscore(
+            [p if p else r for p, r in zip(all_preds, all_refs)], all_refs
+        )
         overall = {
             "accuracy":          round(accuracy_score(all_refs, all_preds), 4),
             "contains_accuracy": round(np.mean(contains_all), 4),
@@ -204,7 +202,7 @@ def score_classification(
                                                labels=labels, zero_division=0), 4),
             "mean_bertscore":    round(float(np.mean(bert_all)), 4),
             "n_total":           len(all_refs),
-            "n_resolvable":      len(all_refs),
+            "n_resolvable":      sum(1 for p in all_preds if p),
         }
 
     return {"overall": overall, "per_dataset": per_dataset}
@@ -509,7 +507,7 @@ _QA_JUDGE_TMPL = (
     "confidence: 0=not confident, 1=somewhat confident, 2=very confident"
 )
 
-_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=300)
+_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=1024)
 
 _THINK_RE_JUDGE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 
@@ -565,7 +563,7 @@ def _apply_judge_qa(
         updated.append({
             **row,
             "judged_correct":  _parse_judge_response(raw, threshold=confidence_threshold),
-            "judge_reasoning": cleaned[:300],
+            "judge_reasoning": cleaned[:600],
         })
     return updated
 
