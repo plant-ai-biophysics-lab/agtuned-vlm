@@ -481,6 +481,66 @@ def plot_cls_by_task(
     print(f"  Saved: {path}")
 
 
+# ── LLM-as-a-judge ────────────────────────────────────────────────────────────
+
+_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=8)
+
+_DESC_JUDGE_TMPL = (
+    "Compare two visual plant condition descriptions.\n"
+    "Reference: {gt}\n"
+    "Prediction: {pred}\n"
+    "Does the prediction capture the same key visual features (colors, patterns, "
+    "lesions, textures, symptoms) as the reference? Answer YES or NO only."
+)
+
+_CLS_JUDGE_TMPL = (
+    "Reference class: {gt}\n"
+    "Prediction: {pred}\n"
+    "Is the prediction referring to the same disease, pest, or plant condition? "
+    "Answer YES or NO only."
+)
+
+
+def _apply_judge(rows: list[dict], mode: str, llm: LLM, tokenizer) -> list[dict]:
+    """Apply judge LLM to rows; adds judged_correct (0/1) to each row."""
+    if mode == "description":
+        raw_prompts = [
+            _DESC_JUDGE_TMPL.format(gt=r["ground_truth"][:400], pred=r["prediction"][:400])
+            for r in rows
+        ]
+    else:
+        raw_prompts = [
+            _CLS_JUDGE_TMPL.format(
+                gt=r["class_label"],
+                pred=(r.get("resolved_class") or r.get("raw_prediction", ""))[:200],
+            )
+            for r in rows
+        ]
+
+    def _fmt(text: str) -> str:
+        msgs = [{"role": "user", "content": text}]
+        try:
+            return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        except Exception:
+            return text
+
+    outputs = llm.generate([_fmt(p) for p in raw_prompts], sampling_params=_JUDGE_PARAMS)
+    return [
+        {**row, "judged_correct": int(out.outputs[0].text.strip().upper().startswith("YES"))}
+        for row, out in zip(rows, outputs)
+    ]
+
+
+def judged_summary(rows: list[dict]) -> dict:
+    judged = [r for r in rows if "judged_correct" in r]
+    if not judged:
+        return {}
+    return {
+        "judge_accuracy": round(sum(r["judged_correct"] for r in judged) / len(judged), 4),
+        "n_judged": len(judged),
+    }
+
+
 # ── Tee: mirror stdout to file ────────────────────────────────────────────────
 
 class _Tee:
@@ -604,6 +664,27 @@ def main(args: argparse.Namespace) -> None:
 
     elapsed = time.perf_counter() - t_start
 
+    # ── Free main model before loading judge ──────────────────────────────────
+    del llm, tokenizer
+    import gc; gc.collect()
+
+    # ── LLM-as-a-judge (before CSV save so judged_correct col is included) ────
+    if args.judge_model:
+        print(f"\n=== LLM Judge: {args.judge_model} ===")
+        judge_llm = LLM(
+            model=args.judge_model, dtype="bfloat16",
+            max_model_len=1024, gpu_memory_utilization=0.85,
+        )
+        judge_tok = judge_llm.get_tokenizer()
+        if desc_rows:
+            print(f"  Judging {len(desc_rows)} description rows...")
+            desc_rows = _apply_judge(desc_rows, "description", judge_llm, judge_tok)
+        if cls_rows:
+            print(f"  Judging {len(cls_rows)} classification rows...")
+            cls_rows = _apply_judge(cls_rows, "classification", judge_llm, judge_tok)
+        del judge_llm, judge_tok
+        gc.collect()
+
     # ── Save per-image CSVs ────────────────────────────────────────────────────
     if desc_rows:
         desc_csv = output_dir / "agml_inference_descriptions.csv"
@@ -665,18 +746,34 @@ def main(args: argparse.Namespace) -> None:
         results_b["overall"]             = dataset_cls_summary(cls_rows)
         results_b_naive["overall"]       = naive_cls_summary(cls_rows)
 
+    # ── Judged aggregation (only populated when --judge_model is set) ──────────
+    results_a_judged         = {ds: judged_summary(rows) for ds, rows in by_ds_desc.items()}
+    results_a_judged_by_task = {tt: judged_summary(rows) for tt, rows in by_task_desc.items()}
+    if desc_rows:
+        results_a_judged["overall"] = judged_summary(desc_rows)
+
+    results_b_judged         = {ds: judged_summary(rows) for ds, rows in by_ds_cls.items()}
+    results_b_judged_by_task = {tt: judged_summary(rows) for tt, rows in by_task_cls.items()}
+    if cls_rows:
+        results_b_judged["overall"] = judged_summary(cls_rows)
+
     results = {
-        "model":                   args.model,
-        "total_time_s":            round(elapsed, 3),
-        "n_classes":               len(records),
-        "dataset_a":               results_a,
-        "dataset_a_naive":         results_a_naive,
-        "dataset_a_by_task":       results_a_by_task,
-        "dataset_a_naive_by_task": results_a_naive_by_task,
-        "dataset_b":               results_b,
-        "dataset_b_naive":         results_b_naive,
-        "dataset_b_by_task":       results_b_by_task,
-        "dataset_b_naive_by_task": results_b_naive_by_task,
+        "model":                     args.model,
+        "judge_model":               args.judge_model,
+        "total_time_s":              round(elapsed, 3),
+        "n_classes":                 len(records),
+        "dataset_a":                 results_a,
+        "dataset_a_naive":           results_a_naive,
+        "dataset_a_by_task":         results_a_by_task,
+        "dataset_a_naive_by_task":   results_a_naive_by_task,
+        "dataset_a_judged":          results_a_judged,
+        "dataset_a_judged_by_task":  results_a_judged_by_task,
+        "dataset_b":                 results_b,
+        "dataset_b_naive":           results_b_naive,
+        "dataset_b_by_task":         results_b_by_task,
+        "dataset_b_naive_by_task":   results_b_naive_by_task,
+        "dataset_b_judged":          results_b_judged,
+        "dataset_b_judged_by_task":  results_b_judged_by_task,
     }
     metrics_path = output_dir / "agml_inference_metrics.json"
     with open(metrics_path, "w") as f:
@@ -755,6 +852,45 @@ def main(args: argparse.Namespace) -> None:
                       f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
                       f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
 
+        # ── LLM Judge summary (only when --judge_model was set) ───────────────
+        if args.judge_model and (any(results_a_judged.values()) or any(results_b_judged.values())):
+            print(f"\n=== LLM Judge Results [judged] — {args.judge_model} ===")
+            if results_a_judged:
+                print(f"\n  Dataset A — Description Judge Accuracy")
+                print(f"  {'Dataset':<45} {'J-Acc':>7} {'N':>6}")
+                print(f"  {'-'*62}")
+                for ds, jm in results_a_judged.items():
+                    if ds == "overall" or not jm:
+                        continue
+                    print(f"  {ds:<45} {jm['judge_accuracy']:>7.3f} {jm['n_judged']:>6}")
+                if results_a_judged_by_task:
+                    print(f"\n  {'Task':<25} {'J-Acc':>7}")
+                    print(f"  {'-'*34}")
+                    for tt, jm in sorted(results_a_judged_by_task.items()):
+                        if jm:
+                            print(f"  {_task_label(tt):<25} {jm['judge_accuracy']:>7.3f}")
+                ov = results_a_judged.get("overall", {})
+                if ov:
+                    print(f"\n  {'OVERALL':<45} {ov['judge_accuracy']:>7.3f} {ov['n_judged']:>6}")
+
+            if results_b_judged:
+                print(f"\n  Dataset B — Classification Judge Accuracy")
+                print(f"  {'Dataset':<45} {'J-Acc':>7} {'N':>6}")
+                print(f"  {'-'*62}")
+                for ds, jm in results_b_judged.items():
+                    if ds == "overall" or not jm:
+                        continue
+                    print(f"  {ds:<45} {jm['judge_accuracy']:>7.3f} {jm['n_judged']:>6}")
+                if results_b_judged_by_task:
+                    print(f"\n  {'Task':<25} {'J-Acc':>7}")
+                    print(f"  {'-'*34}")
+                    for tt, jm in sorted(results_b_judged_by_task.items()):
+                        if jm:
+                            print(f"  {_task_label(tt):<25} {jm['judge_accuracy']:>7.3f}")
+                ov = results_b_judged.get("overall", {})
+                if ov:
+                    print(f"\n  {'OVERALL':<45} {ov['judge_accuracy']:>7.3f} {ov['n_judged']:>6}")
+
         print(f"\nTotal time: {elapsed:.1f}s")
         print(f"Model:      {args.model}")
 
@@ -796,6 +932,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_samples", type=int, default=None,
         help="Max images per class to evaluate (default: all from image_names)",
+    )
+    parser.add_argument(
+        "--judge_model", default=None,
+        help="LLM-as-a-judge model (e.g. Qwen/Qwen2.5-20B-Instruct). "
+             "Loaded after main inference; adds judged_correct column and J-Acc summary.",
     )
     args = parser.parse_args()
     main(args)

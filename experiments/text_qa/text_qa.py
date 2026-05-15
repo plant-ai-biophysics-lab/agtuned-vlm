@@ -71,6 +71,20 @@ DESCRIPTIVE_PROMPT_TEMPLATE = (
 )
 
 
+class _Tee:
+    """Mirror print() output to a file and stdout simultaneously."""
+    def __init__(self, path: Path):
+        self._f = open(path, "w", encoding="utf-8")
+
+    def print(self, *args, **kwargs):
+        import builtins
+        builtins.print(*args, **kwargs)
+        builtins.print(*args, **{**kwargs, "file": self._f, "flush": True})
+
+    def close(self):
+        self._f.close()
+
+
 # ── Classification helpers (shared with agml_inference.py) ───────────────────
 
 def load_datasets_config(config_path: Path) -> dict[str, dict]:
@@ -479,6 +493,38 @@ def load_llm(model_id: str):
     return llm, tokenizer
 
 
+# ── LLM-as-a-judge ────────────────────────────────────────────────────────────
+
+_QA_JUDGE_TMPL = (
+    "Reference answer: {gt}\n"
+    "Model answer: {pred}\n"
+    "Is the model answer semantically correct given the reference? "
+    "Answer YES or NO only."
+)
+
+_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=8)
+
+
+def _apply_judge_qa(rows: list[dict], llm: LLM, tokenizer) -> list[dict]:
+    """Apply judge LLM to QA rows; adds judged_correct (0/1) to each row."""
+    def _fmt(text: str) -> str:
+        msgs = [{"role": "user", "content": text}]
+        try:
+            return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        except Exception:
+            return text
+
+    prompts = [
+        _fmt(_QA_JUDGE_TMPL.format(gt=r["ground_truth"][:300], pred=r["response"][:300]))
+        for r in rows
+    ]
+    outputs = llm.generate(prompts, sampling_params=_JUDGE_PARAMS)
+    return [
+        {**row, "judged_correct": int(out.outputs[0].text.strip().upper().startswith("YES"))}
+        for row, out in zip(rows, outputs)
+    ]
+
+
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
 METRIC_LABELS = {
@@ -862,22 +908,51 @@ def main(args):
                       f"{np.mean([m['f1_macro'] for m in all_ms]):>8.3f} "
                       f"{np.mean([m['mean_bertscore'] for m in all_ms]):>6.3f}")
 
-    # --- Summary table ---
-    print("\n=== Summary ===")
-    print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10} {'ROUGE-SS':>10}")
-    print(f"  {'-'*94}")
-    for key, m in results["models"].items():
-        print(f"  {key:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f} {m.get('rouge_ss_raw', 0):>10.4f}")
+    # ── LLM-as-a-judge ─────────────────────────────────────────────────────────
+    # All eval models have been deleted by this point; safe to load judge.
+    if args.judge_model:
+        print(f"\n=== LLM Judge: {args.judge_model} ===")
+        judge_llm, judge_tok = load_llm(args.judge_model)
+        for key in (k for k in all_rows if k != "naive"):
+            rows = all_rows[key]
+            print(f"  Judging {key} ({len(rows)} samples)...")
+            updated = _apply_judge_qa(rows, judge_llm, judge_tok)
+            all_rows[key] = updated
+            results["models"][key]["judge_accuracy"] = round(
+                sum(r["judged_correct"] for r in updated) / len(updated), 4
+            )
+        del judge_llm, judge_tok
+        import gc; gc.collect()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- Summary table (mirrored to summary.txt) ---
+    tee = _Tee(output_dir / "summary.txt")
+    tee.print("\n=== Summary ===")
+    tee.print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10} {'ROUGE-SS':>10}")
+    tee.print(f"  {'-'*94}")
+    for key, m in results["models"].items():
+        tag = " (naive)" if key == "naive" else ""
+        tee.print(f"  {key + tag:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f} {m.get('rouge_ss_raw', 0):>10.4f}")
+
+    if args.judge_model and any("judge_accuracy" in m for m in results["models"].values()):
+        tee.print(f"\n  [judged] — judge: {args.judge_model}")
+        tee.print(f"  {'Model':<40} {'J-Acc':>10}")
+        tee.print(f"  {'-'*52}")
+        for key, m in results["models"].items():
+            if key != "naive" and "judge_accuracy" in m:
+                tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f}")
+    tee.close()
+
+    has_judged = any("judged_correct" in (rows[0] if rows else {}) for rows in all_rows.values())
+    base_fields = ["question", "ground_truth", "response", "contains_match", "rougeL"]
+    csv_fields = base_fields + (["judged_correct"] if has_judged else [])
+
     for key, rows in all_rows.items():
         csv_path = output_dir / f"text_qa_{_safe_name(key)}.csv"
         with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(
-                f, fieldnames=["question", "ground_truth", "response", "contains_match", "rougeL"]
-            )
+            writer = csv.DictWriter(f, fieldnames=csv_fields, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(rows)
         print(f"Saved: {csv_path}")
@@ -904,6 +979,7 @@ def main(args):
             plot_cls_summary_per_dataset(all_cls_results, output_dir)
             plot_cls_summary_per_task(all_cls_results, datasets_cfg, output_dir)
 
+    print(f"Summary saved to {output_dir / 'summary.txt'}")
     print(f"\nAll outputs saved to {output_dir}/")
 
 
@@ -926,6 +1002,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_samples", type=int, default=None,
                         help="Limit number of samples (default: all 22615)")
     parser.add_argument("--output_dir", type=str, default="results")
+    parser.add_argument("--judge_model", type=str, default=None,
+                        help="LLM-as-a-judge model (e.g. Qwen/Qwen2.5-20B-Instruct). "
+                             "Loaded after all eval models; adds judged_correct and J-Acc to summary.")
     args = parser.parse_args()
 
     if args.lang_model and args.lang_model.lower() == "none":

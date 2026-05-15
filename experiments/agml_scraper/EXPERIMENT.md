@@ -642,13 +642,59 @@ uv run python update_jsonl.py \
   --output_descriptions_jsonl outputs/agml_descriptions_verified.jsonl \
   --output_classification_jsonl outputs/agml_classification_verified.jsonl
 
-# 6. Evaluate verified JSONL with text_qa.py
+# 6. Evaluate verified descriptions with text_qa.py (text-only, no images)
 uv run python ../text_qa/text_qa.py \
   --idtools_jsonl outputs/agml_descriptions_verified.jsonl \
   --datasets_config datasets.yaml \
   --model google/gemma-4-E2B-it \
   --output_dir results/agml_descriptions_verified/
+
+# 7. Run agml_inference.py on verified description JSONL (VLM + images, Dataset A + B)
+uv run python agml_inference.py \
+  --model Qwen/Qwen3.6-35B-A3B \
+  --descriptions_jsonl outputs/agml_descriptions_verified.jsonl \
+  --datasets_config datasets.yaml \
+  --output_dir inference_results/verified/
+
+# 7b. Compare against unverified baseline
+uv run python agml_inference.py \
+  --model Qwen/Qwen3.6-35B-A3B \
+  --descriptions_jsonl outputs/agml_descriptions.jsonl \
+  --datasets_config datasets.yaml \
+  --output_dir inference_results/baseline/
+
+# 8. Run agml_inference.py on verified classification JSONL (Dataset B only)
+#    The classification JSONL embeds the description in the question, so Dataset B
+#    scores directly reflect whether the corrected descriptions improve class prediction.
+uv run python agml_inference.py \
+  --model Qwen/Qwen3.6-35B-A3B \
+  --descriptions_jsonl outputs/agml_descriptions_verified.jsonl \
+  --datasets_config datasets.yaml \
+  --output_dir inference_results/verified_cls/
+
+# 9. [Optional] LLM-as-a-judge — re-run steps 7/8 with --judge_model
+#    The judge loads after the main VLM is freed (no extra GPU overhead at inference time).
+#    Adds judged_correct column to CSVs and a [judged] J-Acc section to summary.txt.
+uv run python agml_inference.py \
+  --model Qwen/Qwen3.6-35B-A3B \
+  --descriptions_jsonl outputs/agml_descriptions_verified.jsonl \
+  --datasets_config datasets.yaml \
+  --output_dir inference_results/verified_judged/ \
+  --judge_model Qwen/Qwen2.5-20B-Instruct
+
+# 9b. text_qa.py also supports --judge_model for text-only QA
+uv run python ../text_qa/text_qa.py \
+  --idtools_jsonl outputs/agml_descriptions_verified.jsonl \
+  --datasets_config datasets.yaml \
+  --model google/gemma-4-E2B-it \
+  --output_dir results/agml_descriptions_judged/ \
+  --judge_model Qwen/Qwen2.5-20B-Instruct
 ```
+
+> **Note:** `agml_inference.py` always reads `agml_descriptions_verified.jsonl` (or the
+> unverified equivalent) for both Dataset A and Dataset B — the classification questions and
+> ground-truth labels are derived from the description JSONL metadata at inference time.
+> There is no separate `--classification_jsonl` flag; pass `--descriptions_jsonl` only.
 
 ### Description Constraint
 
@@ -659,6 +705,45 @@ All descriptions — original and corrected — must satisfy:
 
 This constraint is enforced by the LLM prompt in `verify_descriptions.py` and checked visually
 in the Streamlit review UI before `update_jsonl.py` is run.
+
+---
+
+## LLM-as-a-Judge Evaluation
+
+Both `agml_inference.py` and `text_qa.py` support an optional `--judge_model` argument that
+loads a second LLM after the main inference model is freed and uses it as an automatic judge.
+
+### How it works
+
+The judge is given a (ground truth, prediction) pair and asked to respond **YES** or **NO**:
+
+| Mode | Prompt | Ground truth | Prediction |
+|------|--------|-------------|------------|
+| Description (A) | Do these descriptions capture the same visual features? | synthesized description | model's visual description |
+| Classification (B) | Is this prediction the correct disease/pest/class? | class label | model's resolved class |
+| Text QA | Is this answer semantically correct given the reference? | KisanVaani answer | model's QA answer |
+
+### Execution order
+
+The judge runs **after** the main model is deleted from GPU memory — it never runs in parallel
+with the main model, so there is no additional peak GPU requirement. Timing for the judge is
+separate from `total_time_s`.
+
+### Output
+
+| Item | Where |
+|------|-------|
+| `judged_correct` (0/1) | appended column in `agml_inference_descriptions.csv`, `agml_inference_classification.csv`, and `text_qa_*.csv` |
+| `judge_accuracy` per dataset/task | `dataset_a_judged`, `dataset_b_judged` keys in `agml_inference_metrics.json`; `judge_accuracy` key per model in `text_qa_metrics.json` |
+| `[judged]` section in `summary.txt` | clearly separated from automatic ROUGE/accuracy metrics |
+
+Automatic metrics (ROUGE, accuracy, BERTScore) and judged metrics are always reported separately
+so results remain comparable to runs without a judge.
+
+### Default judge model
+
+`Qwen/Qwen2.5-20B-Instruct` — 20B open-source model, strong instruction following, runs on the
+same GPU as the main models. Any vLLM-compatible text model can be substituted.
 
 ---
 
