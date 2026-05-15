@@ -483,26 +483,65 @@ def plot_cls_by_task(
 
 # ── LLM-as-a-judge ────────────────────────────────────────────────────────────
 
-_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=8)
+_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=300)
+
+_JUDGE_SYSTEM = (
+    "You are an expert agricultural scientist evaluating model predictions "
+    "on plant disease and pest identification tasks."
+)
 
 _DESC_JUDGE_TMPL = (
-    "Compare two visual plant condition descriptions.\n"
+    "Evaluate whether the predicted visual description captures the same key "
+    "visual features as the reference description of a plant condition.\n\n"
     "Reference: {gt}\n"
-    "Prediction: {pred}\n"
-    "Does the prediction capture the same key visual features (colors, patterns, "
-    "lesions, textures, symptoms) as the reference? Answer YES or NO only."
+    "Prediction: {pred}\n\n"
+    "Respond with JSON only:\n"
+    '{{ "is_match": true/false, "reasoning": "brief explanation", "confidence": 0-2 }}\n'
+    "confidence: 0=not confident, 1=somewhat confident, 2=very confident"
 )
 
 _CLS_JUDGE_TMPL = (
+    "Evaluate whether the predicted label correctly identifies the plant condition "
+    "in the reference.\n\n"
     "Reference class: {gt}\n"
-    "Prediction: {pred}\n"
-    "Is the prediction referring to the same disease, pest, or plant condition? "
-    "Answer YES or NO only."
+    "Prediction: {pred}\n\n"
+    "Respond with JSON only:\n"
+    '{{ "is_match": true/false, "reasoning": "brief explanation", "confidence": 0-2 }}\n'
+    "confidence: 0=not confident, 1=somewhat confident, 2=very confident"
 )
 
+_THINK_RE_JUDGE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 
-def _apply_judge(rows: list[dict], mode: str, llm: LLM, tokenizer) -> list[dict]:
-    """Apply judge LLM to rows; adds judged_correct (0/1) to each row."""
+
+def _parse_judge_response(text: str, threshold: int = 1) -> int:
+    """Extract is_match + confidence from JSON judge response. Returns 0/1."""
+    text = _THINK_RE_JUDGE.sub('', text).strip()
+    start, end = text.find('{'), text.rfind('}')
+    if start != -1 and end != -1:
+        try:
+            data = json.loads(text[start:end + 1])
+            is_match = data.get('is_match', False)
+            confidence = int(data.get('confidence', 0))
+            if isinstance(is_match, str):
+                is_match = is_match.lower() in ('true', 'yes')
+            return int(bool(is_match) and confidence >= threshold)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    # Regex fallback for malformed JSON
+    for pattern in [r'"is_match"\s*:\s*(true|false)', r'"match"\s*:\s*(true|false)']:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return int(m.group(1).lower() == 'true')
+    return 0
+
+
+def _apply_judge(
+    rows: list[dict], mode: str, llm: LLM, tokenizer,
+    reasoning_level: str = "medium", confidence_threshold: int = 1,
+) -> list[dict]:
+    """Apply judge LLM to rows; adds judged_correct (0/1) and judge_reasoning to each row."""
+    system = _JUDGE_SYSTEM + (f" Reasoning: {reasoning_level}" if reasoning_level else "")
+
     if mode == "description":
         raw_prompts = [
             _DESC_JUDGE_TMPL.format(gt=r["ground_truth"][:400], pred=r["prediction"][:400])
@@ -518,17 +557,27 @@ def _apply_judge(rows: list[dict], mode: str, llm: LLM, tokenizer) -> list[dict]
         ]
 
     def _fmt(text: str) -> str:
-        msgs = [{"role": "user", "content": text}]
+        msgs = [{"role": "system", "content": system}, {"role": "user", "content": text}]
         try:
             return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         except Exception:
-            return text
+            msgs = [{"role": "user", "content": f"{system}\n\n{text}"}]
+            try:
+                return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+            except Exception:
+                return text
 
     outputs = llm.generate([_fmt(p) for p in raw_prompts], sampling_params=_JUDGE_PARAMS)
-    return [
-        {**row, "judged_correct": int(out.outputs[0].text.strip().upper().startswith("YES"))}
-        for row, out in zip(rows, outputs)
-    ]
+    updated = []
+    for row, out in zip(rows, outputs):
+        raw = out.outputs[0].text
+        cleaned = _THINK_RE_JUDGE.sub('', raw).strip()
+        updated.append({
+            **row,
+            "judged_correct":  _parse_judge_response(raw, threshold=confidence_threshold),
+            "judge_reasoning": cleaned[:300],
+        })
+    return updated
 
 
 def judged_summary(rows: list[dict]) -> dict:
@@ -678,10 +727,14 @@ def main(args: argparse.Namespace) -> None:
         judge_tok = judge_llm.get_tokenizer()
         if desc_rows:
             print(f"  Judging {len(desc_rows)} description rows...")
-            desc_rows = _apply_judge(desc_rows, "description", judge_llm, judge_tok)
+            desc_rows = _apply_judge(desc_rows, "description", judge_llm, judge_tok,
+                                     reasoning_level=args.judge_reasoning,
+                                     confidence_threshold=args.judge_confidence_threshold)
         if cls_rows:
             print(f"  Judging {len(cls_rows)} classification rows...")
-            cls_rows = _apply_judge(cls_rows, "classification", judge_llm, judge_tok)
+            cls_rows = _apply_judge(cls_rows, "classification", judge_llm, judge_tok,
+                                    reasoning_level=args.judge_reasoning,
+                                    confidence_threshold=args.judge_confidence_threshold)
         del judge_llm, judge_tok
         gc.collect()
 
@@ -937,6 +990,14 @@ if __name__ == "__main__":
         "--judge_model", default=None,
         help="LLM-as-a-judge model (e.g. Qwen/Qwen2.5-20B-Instruct). "
              "Loaded after main inference; adds judged_correct column and J-Acc summary.",
+    )
+    parser.add_argument(
+        "--judge_reasoning", default="medium", choices=["low", "medium", "high"],
+        help="Reasoning level appended to judge system prompt (controls gpt-oss thinking budget).",
+    )
+    parser.add_argument(
+        "--judge_confidence_threshold", type=int, default=1,
+        help="Minimum confidence (0-2) required alongside is_match=true to count as correct.",
     )
     args = parser.parse_args()
     main(args)
