@@ -582,10 +582,19 @@ def judged_summary(rows: list[dict]) -> dict:
     judged = [r for r in rows if "judged_correct" in r]
     if not judged:
         return {}
-    return {
+    result = {
         "judge_accuracy": round(sum(r["judged_correct"] for r in judged) / len(judged), 4),
         "n_judged": len(judged),
     }
+    # F1-macro only available for cls rows (have resolved_class + class_label)
+    if "resolved_class" in judged[0] and "class_label" in judged[0]:
+        refs   = [r["class_label"] for r in judged]
+        preds  = [r["resolved_class"] if r["judged_correct"] else "" for r in judged]
+        labels = sorted(set(refs))
+        result["judge_f1_macro"] = round(
+            f1_score(refs, preds, average="macro", labels=labels, zero_division=0), 4
+        )
+    return result
 
 
 # ── Tee: mirror stdout to file ────────────────────────────────────────────────
@@ -903,6 +912,28 @@ def main(args: argparse.Namespace) -> None:
                       f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
                       f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
 
+        # ── Overall model vs naive comparison ────────────────────────────────
+        ov_a  = results_a.get("overall", {})
+        nv_a  = results_a_naive.get("overall", {})
+        ov_b  = results_b.get("overall", {})
+        nv_b  = results_b_naive.get("overall", {})
+        if ov_a or ov_b:
+            print(f"\n=== Overall — Model vs Naive ===")
+        if ov_a:
+            print(f"\n  {'Source':<12} {'R-1':>7} {'R-2':>7} {'R-L':>7} {'R-SS':>7}")
+            print(f"  {'-'*42}")
+            print(f"  {'model':<12} {ov_a['rouge1']:>7.3f} {ov_a['rouge2']:>7.3f} "
+                  f"{ov_a['rougeL']:>7.3f} {ov_a['rouge_ss']:>7.3f}")
+            print(f"  {'naive':<12} {nv_a.get('rouge1',0):>7.3f} {nv_a.get('rouge2',0):>7.3f} "
+                  f"{nv_a.get('rougeL',0):>7.3f} {nv_a.get('rouge_ss',0):>7.3f}")
+        if ov_b:
+            print(f"\n  {'Source':<12} {'Acc':>7} {'F1-mac':>8} {'F1-wtd':>8} {'BERT':>7}")
+            print(f"  {'-'*46}")
+            print(f"  {'model':<12} {ov_b['accuracy']:>7.3f} {ov_b['f1_macro']:>8.3f} "
+                  f"{ov_b['f1_weighted']:>8.3f} {ov_b['mean_bertscore']:>7.3f}")
+            print(f"  {'naive':<12} {nv_b.get('accuracy',0):>7.3f} {nv_b.get('f1_macro',0):>8.3f} "
+                  f"{nv_b.get('f1_weighted',0):>8.3f} {nv_b.get('mean_bertscore',0):>7.3f}")
+
         # ── LLM Judge summary (only when --judge_model was set) ───────────────
         if args.judge_model and (any(results_a_judged.values()) or any(results_b_judged.values())):
             print(f"\n=== LLM Judge Results [judged] — {args.judge_model} ===")
@@ -926,21 +957,24 @@ def main(args: argparse.Namespace) -> None:
 
             if results_b_judged:
                 print(f"\n  Dataset B — Classification Judge Accuracy")
-                print(f"  {'Dataset':<45} {'J-Acc':>7} {'N':>6}")
-                print(f"  {'-'*62}")
+                print(f"  {'Dataset':<45} {'J-Acc':>7} {'J-F1':>7} {'N':>6}")
+                print(f"  {'-'*70}")
                 for ds, jm in results_b_judged.items():
                     if ds == "overall" or not jm:
                         continue
-                    print(f"  {ds:<45} {jm['judge_accuracy']:>7.3f} {jm['n_judged']:>6}")
+                    print(f"  {ds:<45} {jm['judge_accuracy']:>7.3f} "
+                          f"{jm.get('judge_f1_macro', 0):>7.3f} {jm['n_judged']:>6}")
                 if results_b_judged_by_task:
-                    print(f"\n  {'Task':<25} {'J-Acc':>7}")
-                    print(f"  {'-'*34}")
+                    print(f"\n  {'Task':<25} {'J-Acc':>7} {'J-F1':>7}")
+                    print(f"  {'-'*42}")
                     for tt, jm in sorted(results_b_judged_by_task.items()):
                         if jm:
-                            print(f"  {_task_label(tt):<25} {jm['judge_accuracy']:>7.3f}")
+                            print(f"  {_task_label(tt):<25} {jm['judge_accuracy']:>7.3f} "
+                                  f"{jm.get('judge_f1_macro', 0):>7.3f}")
                 ov = results_b_judged.get("overall", {})
                 if ov:
-                    print(f"\n  {'OVERALL':<45} {ov['judge_accuracy']:>7.3f} {ov['n_judged']:>6}")
+                    print(f"\n  {'OVERALL':<45} {ov['judge_accuracy']:>7.3f} "
+                          f"{ov.get('judge_f1_macro', 0):>7.3f} {ov['n_judged']:>6}")
 
         print(f"\nTotal time: {elapsed:.1f}s")
         print(f"Model:      {args.model}")

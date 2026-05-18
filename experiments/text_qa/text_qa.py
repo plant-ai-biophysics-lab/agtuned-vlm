@@ -966,6 +966,23 @@ def main(args):
             results["models"][key]["judge_accuracy"] = round(
                 sum(r["judged_correct"] for r in updated) / len(updated), 4
             )
+            # Judged F1-macro: resolve each response against its dataset's class list
+            if datasets_cfg:
+                refs, preds = [], []
+                for row, sample in zip(updated, samples):
+                    agml_name = sample.get("agml_dataset")
+                    if not agml_name or agml_name not in datasets_cfg:
+                        continue
+                    classes  = datasets_cfg[agml_name]["classes"]
+                    resolved = resolve_class(row["response"], classes)
+                    refs.append(row["ground_truth"])
+                    preds.append(resolved or "" if row["judged_correct"] else "")
+                if refs:
+                    jlabels = sorted(set(refs))
+                    results["models"][key]["judge_f1_macro"] = round(
+                        f1_score(refs, preds, average="macro",
+                                 labels=jlabels, zero_division=0), 4
+                    )
         del judge_llm, judge_tok
         import gc; gc.collect()
 
@@ -998,13 +1015,23 @@ def main(args):
     if args.judge_model and any("judge_accuracy" in m for m in results["models"].values()):
         tee.print(f"\n=== LLM Judge Results [judged] — {args.judge_model} ===")
         if has_cls:
-            tee.print(f"  {'Model':<40} {'J-Acc':>10} {'Accuracy':>10} {'F1-macro':>10}")
-            tee.print(f"  {'-'*72}")
-            for key, m in results["models"].items():
-                if key == "naive" or "judge_accuracy" not in m:
-                    continue
-                ov = m.get("classification", {}).get("overall", {})
-                tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f}")
+            has_jf1 = any("judge_f1_macro" in m for m in results["models"].values())
+            if has_jf1:
+                tee.print(f"  {'Model':<40} {'J-Acc':>10} {'J-F1':>10} {'Accuracy':>10} {'F1-macro':>10}")
+                tee.print(f"  {'-'*82}")
+                for key, m in results["models"].items():
+                    if key == "naive" or "judge_accuracy" not in m:
+                        continue
+                    ov = m.get("classification", {}).get("overall", {})
+                    tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f} {m.get('judge_f1_macro', 0):>10.4f} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f}")
+            else:
+                tee.print(f"  {'Model':<40} {'J-Acc':>10} {'Accuracy':>10} {'F1-macro':>10}")
+                tee.print(f"  {'-'*72}")
+                for key, m in results["models"].items():
+                    if key == "naive" or "judge_accuracy" not in m:
+                        continue
+                    ov = m.get("classification", {}).get("overall", {})
+                    tee.print(f"  {key:<40} {m['judge_accuracy']:>10.4f} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f}")
         else:
             tee.print(f"  {'Model':<40} {'J-Acc':>10}")
             tee.print(f"  {'-'*52}")
