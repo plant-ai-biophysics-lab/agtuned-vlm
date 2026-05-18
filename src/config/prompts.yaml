@@ -3,7 +3,7 @@ visual_description_disease: "Can you describe visually the disease, pest, damage
 text_description_disease: "Can you describe visually the {cls} of a {crop}?"
 visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 text_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this description of a {crop}?\n\nDescription: {description}"
-visual_description_weed: "Can you describe visually the {species} exhibited in this image?"
+visual_description_weed: "Can you describe visually the plant or weed exhibited in this image?"
 text_description_weed: "Can you describe visually the {species}?"
 visual_classification_weed: "What plant or weed is exhibited in this image?"
 text_classification_weed: "What plant or weed is exhibited in this description?\n\nDescription: {description}"
