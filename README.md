@@ -29,6 +29,7 @@ python main.py probe --help    # show options for a specific stage
 ```
 
 ### Stage 1a — Generate descriptions
+Default model: `Qwen/Qwen3.6-35B-A3B`. Override with `--model`.
 ```bash
 python main.py generate \
   --config     src/config/datasets.yaml \
