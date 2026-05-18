@@ -4,11 +4,12 @@ import runpy
 import sys
 
 STAGES = {
-    "generate":  "src.data_generation.generate",
-    "build-db":  "src.data_generation.build_reference_db",
-    "probe":     "src.linear_probe.probe",
-    "language":  "src.language_assessment.assess",
-    "vision":    "src.vision_assessment.assess",
+    "generate": "src.data_generation.generate",
+    "build-db": "src.data_generation.build_reference_db",
+    "verify":   "src.data_generation.verify",
+    "probe":    "src.linear_probe.probe",
+    "language": "src.language_assessment.assess",
+    "vision":   "src.vision_assessment.assess",
 }
 
 _HELP = """
@@ -19,20 +20,27 @@ Usage:
 
 Stages:
     generate    Stage 1a — generate synthetic descriptions from AgML images
-    build-db    Stage 1b — build reference DB (Wikipedia / IDtools / CGIAR)
+    build-db    Stage 1b — export CSV + build reference DB (Wikipedia / IDtools / CGIAR)
+    verify      Stage 1c — rewrite descriptions grounded in reference sources
     probe       Stage 2  — linear probe across all AgML datasets
     language    Stage 3  — language assessment (text-only models)
     vision      Stage 4  — vision assessment (multimodal models)
 
 Examples:
     python main.py generate \\
-        --config src/config/datasets.yaml \\
-        --prompts src/config/prompts.yaml \\
+        --model      Qwen/Qwen3.6-27B \\
+        --config     src/config/datasets.yaml \\
+        --prompts    src/config/prompts.yaml \\
         --output_dir outputs/data_generation/
 
     python main.py build-db \\
+        --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \\
+        --output_db          outputs/data_generation/reference_db.json
+
+    python main.py verify \\
         --descriptions_csv outputs/data_generation/descriptions_export.csv \\
-        --output_db outputs/data_generation/reference_db.json
+        --reference_db     outputs/data_generation/reference_db.json \\
+        --output_csv       outputs/data_generation/descriptions_corrected.csv
 
     python main.py probe \\
         --config src/config/datasets.yaml \\

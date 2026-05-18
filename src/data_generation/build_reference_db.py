@@ -319,21 +319,50 @@ def _search_cgiar(
     ]
 
 
+def _export_csv(jsonl_path: Path, csv_path: Path) -> list[dict]:
+    """Read descriptions JSONL and write a flat CSV. Returns the rows."""
+    rows: list[dict] = []
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            meta = record.get("metadata", {})
+            rows.append({
+                "agml_dataset":           meta.get("agml_dataset", ""),
+                "crop":                   meta.get("crop", ""),
+                "class_label":            meta.get("class_label", ""),
+                "task_type":              meta.get("task_type", ""),
+                "compressed_description": record["messages"][1]["content"],
+            })
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["agml_dataset", "crop", "class_label", "task_type", "compressed_description"]
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Exported {len(rows)} records → {csv_path}")
+    return rows
+
+
 def main(args: argparse.Namespace) -> None:
-    src = Path(args.descriptions_csv)
     dst = Path(args.output_db)
     dst.parent.mkdir(parents=True, exist_ok=True)
+
+    csv_path = dst.parent / "descriptions_export.csv"
+    rows = _export_csv(Path(args.descriptions_jsonl), csv_path)
 
     existing_db = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else {}
     existing_entries = existing_db.get("entries", {})
 
     seen: dict[str, dict] = {}
-    with open(src, encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            key = _make_key(row["agml_dataset"], row["class_label"], row["crop"])
-            if key not in seen:
-                seen[key] = {k: row[k] for k in
-                             ("agml_dataset", "crop", "class_label", "task_type", "compressed_description")}
+    for row in rows:
+        key = _make_key(row["agml_dataset"], row["class_label"], row["crop"])
+        if key not in seen:
+            seen[key] = {k: row[k] for k in
+                         ("agml_dataset", "crop", "class_label", "task_type", "compressed_description")}
 
     print("Loading USDA APHIS IDtools index...")
     idtools_index = _load_idtools_index()
@@ -380,7 +409,8 @@ if __name__ == "__main__":
         description="Build reference DB from Wikipedia, USDA APHIS IDtools, and CGIAR HuggingFace."
     )
     parser.add_argument(
-        "--descriptions_csv", default="outputs/data_generation/descriptions_export.csv",
+        "--descriptions_jsonl", default="outputs/data_generation/agml_descriptions.jsonl",
+        help="Path to agml_descriptions.jsonl produced by generate.py",
     )
     parser.add_argument(
         "--output_db", default="outputs/data_generation/reference_db.json",
