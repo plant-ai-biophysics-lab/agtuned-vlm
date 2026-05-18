@@ -11,6 +11,28 @@ no_label_suffix: " Focus only on visual characteristics you can observe (color, 
 synthesis: "You are given {n} visual descriptions of {context}, each written from a separate photograph. Synthesize these into one clear, representative 2-3 sentence description that captures the consensus visual features (color, texture, shape, pattern, size, location on plant). Ignore noise or one-off observations. Do not name or repeat the disease, pest, species, or class label — describe only what can be visually observed.\n\nDescriptions:\n{numbered_list}"
 compression: "Compress the following visual description into exactly one concise sentence. Preserve the most distinctive visual features. Do not name or repeat any disease, pest, species, or class label.\n\nDescription: {description}"
 
+# Reference DB verification prompt
+verify_rewrite: |
+  You are a plant pathology expert writing visual descriptions for a machine learning image dataset.
+
+  Your task: rewrite the description below as a single sentence that is grounded in the reference text.
+
+  Rules:
+  - Adapt terminology and phrasing directly from the reference text where possible — prefer its language over the original description
+  - Focus ONLY on observable visual symptoms: colors, textures, shapes, patterns, lesions, spots, discoloration, size, location on plant
+  - Do NOT mention the disease name, pest name, pathogen name, or any direct class identifier
+  - Do NOT mention the crop, plant species, or genus name
+  - Be specific enough to distinguish this condition from other diseases visually
+  - Output only the single sentence, nothing else
+
+  Reference text:
+  {reference_text}
+
+  Current description:
+  {compressed_description}
+
+  Improved visual description:
+
 # Assessment prompts
 assessment_descriptive: "Question: {question}\n\nAnswer:"
 classification_suffix: " Respond with only the class name, nothing else."

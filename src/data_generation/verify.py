@@ -69,25 +69,7 @@ def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
 
 
 def _build_rewrite_prompt(prompts: dict, reference_text: str, compressed_description: str) -> str:
-    template = prompts.get(
-        "verify_rewrite",
-        (
-            "You are a plant pathology expert writing visual descriptions for a machine learning "
-            "image dataset.\n\n"
-            "Your task: rewrite the description below as a single sentence based on the reference text.\n\n"
-            "Rules:\n"
-            "- Focus ONLY on observable visual symptoms: colors, textures, shapes, patterns, "
-            "lesions, spots, discoloration, size, location on plant\n"
-            "- Do NOT mention the disease name, pest name, pathogen name, or any direct class identifier\n"
-            "- Do NOT mention the crop, plant species, or genus name\n"
-            "- Be specific enough to distinguish this condition from other diseases visually\n"
-            "- Output only the single sentence, nothing else\n\n"
-            "Reference text:\n{reference_text}\n\n"
-            "Current description:\n{compressed_description}\n\n"
-            "Improved visual description:"
-        ),
-    )
-    return template.format(
+    return prompts["verify_rewrite"].format(
         reference_text=reference_text,
         compressed_description=compressed_description,
     )
@@ -99,7 +81,7 @@ def main(args: argparse.Namespace) -> None:
     out_path = Path(args.output_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    prompts = load_prompts(Path(args.prompts)) if args.prompts else {}
+    prompts = load_prompts(Path(args.prompts))
 
     db_entries = json.loads(db_path.read_text(encoding="utf-8")).get("entries", {})
 
@@ -208,5 +190,5 @@ if __name__ == "__main__":
     parser.add_argument("--reference_db",      default="outputs/data_generation/reference_db.json")
     parser.add_argument("--output_csv",        default="outputs/data_generation/descriptions_corrected.csv")
     parser.add_argument("--prompts",           default="src/config/prompts.yaml",
-                        help="Path to prompts.yaml (optional — falls back to built-in template)")
+                        help="Path to prompts.yaml")
     main(parser.parse_args())
