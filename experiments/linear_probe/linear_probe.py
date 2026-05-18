@@ -434,7 +434,7 @@ def main(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Stores (X_all, labels_all) per backbone for t-SNE
+    # Stores (X_test, y_test_labels) per backbone for t-SNE (test set only)
     embeddings_store: dict[str, tuple[np.ndarray, list[str]]] = {}
     # Stores sklearn report dicts per backbone for per-class F1 chart
     report_store: dict[str, dict] = {}
@@ -450,7 +450,7 @@ def main(args):
             X[train_idx], X[test_idx], y_train, y_test, le, "dinov3"
         )
         results["backbones"]["dinov3"] = metrics
-        embeddings_store["dinov3"] = (X, labels_all)
+        embeddings_store["dinov3"] = (X[test_idx], y_test_lbl)
         report_store["dinov3"] = metrics["per_class_report_dict"]
         pred_store["dinov3"] = (y_test_lbl, y_pred_lbl)
         unload(dino_model)
@@ -463,7 +463,7 @@ def main(args):
             X[train_idx], X[test_idx], y_train, y_test, le, args.yolo_model
         )
         results["backbones"]["yolo"] = metrics
-        embeddings_store["yolo"] = (X, labels_all)
+        embeddings_store["yolo"] = (X[test_idx], y_test_lbl)
         report_store["yolo"] = metrics["per_class_report_dict"]
         pred_store["yolo"] = (y_test_lbl, y_pred_lbl)
 
@@ -476,7 +476,7 @@ def main(args):
             X[train_idx], X[test_idx], y_train, y_test, le, args.baseline_model
         )
         results["backbones"]["gemma4_base"] = metrics
-        embeddings_store["gemma4_base"] = (X, labels_all)
+        embeddings_store["gemma4_base"] = (X[test_idx], y_test_lbl)
         report_store["gemma4_base"] = metrics["per_class_report_dict"]
         pred_store["gemma4_base"] = (y_test_lbl, y_pred_lbl)
         unload(model)
@@ -490,7 +490,7 @@ def main(args):
             X[train_idx], X[test_idx], y_train, y_test, le, args.model
         )
         results["backbones"]["gemma4_finetuned"] = metrics
-        embeddings_store["gemma4_finetuned"] = (X, labels_all)
+        embeddings_store["gemma4_finetuned"] = (X[test_idx], y_test_lbl)
         report_store["gemma4_finetuned"] = metrics["per_class_report_dict"]
         pred_store["gemma4_finetuned"] = (y_test_lbl, y_pred_lbl)
         unload(model)
