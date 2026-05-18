@@ -88,7 +88,8 @@ def main(args: argparse.Namespace) -> None:
     with open(csv_path, encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
-    llm       = LLM(model=args.model, dtype="bfloat16", max_model_len=4096, gpu_memory_utilization=0.9)
+    llm       = LLM(model=args.model, dtype="bfloat16", max_model_len=4096,
+                    gpu_memory_utilization=0.9, max_num_seqs=128)
     tokenizer = llm.get_tokenizer()
 
     to_rewrite: list[int] = []

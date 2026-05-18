@@ -107,6 +107,7 @@ def load_llm(model_id: str) -> tuple[LLM, object]:
         dtype="bfloat16",
         max_model_len=2048,
         gpu_memory_utilization=0.9,
+        max_num_seqs=128,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     return llm, tokenizer
