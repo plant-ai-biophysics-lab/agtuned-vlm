@@ -1,5 +1,77 @@
-def main():
-    print("Hello from agtuned-vlm!")
+"""Pipeline entry point — delegates to individual stage scripts."""
+
+import runpy
+import sys
+
+STAGES = {
+    "generate":  "src.data_generation.generate",
+    "build-db":  "src.data_generation.build_reference_db",
+    "probe":     "src.linear_probe.probe",
+    "language":  "src.language_assessment.assess",
+    "vision":    "src.vision_assessment.assess",
+}
+
+_HELP = """
+AgML VLM Pipeline
+
+Usage:
+    python main.py <stage> [stage-args...]
+
+Stages:
+    generate    Stage 1a — generate synthetic descriptions from AgML images
+    build-db    Stage 1b — build reference DB (Wikipedia / IDtools / CGIAR)
+    probe       Stage 2  — linear probe across all AgML datasets
+    language    Stage 3  — language assessment (text-only models)
+    vision      Stage 4  — vision assessment (multimodal models)
+
+Examples:
+    python main.py generate \\
+        --config src/config/datasets.yaml \\
+        --prompts src/config/prompts.yaml \\
+        --output_dir outputs/data_generation/
+
+    python main.py build-db \\
+        --descriptions_csv outputs/data_generation/descriptions_export.csv \\
+        --output_db outputs/data_generation/reference_db.json
+
+    python main.py probe \\
+        --config src/config/datasets.yaml \\
+        --output_dir outputs/linear_probe/
+
+    python main.py language \\
+        --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \\
+        --classification_jsonl outputs/data_generation/agml_classification.jsonl \\
+        --config src/config/datasets.yaml \\
+        --prompts src/config/prompts.yaml \\
+        --models openai/gpt-oss-20b meta-llama/Llama-4-Scout-17B-16E-Instruct \\
+        --output_dir outputs/language_assessment/
+
+    python main.py vision \\
+        --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \\
+        --config src/config/datasets.yaml \\
+        --prompts src/config/prompts.yaml \\
+        --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \\
+        --output_dir outputs/vision_assessment/
+
+Pass --help after the stage name for all available options:
+    python main.py probe --help
+"""
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(_HELP.strip())
+        sys.exit(0)
+
+    stage = sys.argv[1]
+    if stage not in STAGES:
+        print(f"Unknown stage: {stage!r}")
+        print(f"Valid stages: {', '.join(STAGES)}")
+        sys.exit(1)
+
+    # Remove the stage name so the delegated script sees only its own args
+    sys.argv = [sys.argv[0]] + sys.argv[2:]
+    runpy.run_module(STAGES[stage], run_name="__main__", alter_sys=True)
 
 
 if __name__ == "__main__":

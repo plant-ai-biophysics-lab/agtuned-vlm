@@ -20,9 +20,17 @@ uv sync
 
 ## Running the Pipeline
 
+All stages are accessible from the repo root via `main.py`:
+
+```bash
+python main.py <stage> [args...]
+python main.py --help          # show all stages and examples
+python main.py probe --help    # show options for a specific stage
+```
+
 ### Stage 1a — Generate descriptions
 ```bash
-uv run python src/data_generation/generate.py \
+python main.py generate \
   --config     src/config/datasets.yaml \
   --prompts    src/config/prompts.yaml \
   --output_dir outputs/data_generation/
@@ -30,7 +38,7 @@ uv run python src/data_generation/generate.py \
 
 ### Stage 1b — Build reference database
 ```bash
-uv run python src/data_generation/build_reference_db.py \
+python main.py build-db \
   --descriptions_csv outputs/data_generation/descriptions_export.csv \
   --output_db        outputs/data_generation/reference_db.json
 ```
@@ -42,14 +50,14 @@ streamlit run src/data_generation/app.py -- --output_dir outputs/data_generation
 
 ### Stage 2 — Linear probe
 ```bash
-uv run python src/linear_probe/probe.py \
+python main.py probe \
   --config     src/config/datasets.yaml \
   --output_dir outputs/linear_probe/
 ```
 
 ### Stage 3 — Language assessment
 ```bash
-uv run python src/language_assessment/assess.py \
+python main.py language \
   --descriptions_jsonl   outputs/data_generation/agml_descriptions.jsonl \
   --classification_jsonl outputs/data_generation/agml_classification.jsonl \
   --config               src/config/datasets.yaml \
@@ -60,11 +68,12 @@ uv run python src/language_assessment/assess.py \
 
 ### Stage 4 — Vision assessment
 ```bash
-uv run python src/vision_assessment/assess.py \
-  --config     src/config/datasets.yaml \
-  --prompts    src/config/prompts.yaml \
+python main.py vision \
+  --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \
+  --config             src/config/datasets.yaml \
+  --prompts            src/config/prompts.yaml \
   --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
-  --output_dir outputs/vision_assessment/
+  --output_dir         outputs/vision_assessment/
 ```
 
 ## Outputs
