@@ -39,7 +39,6 @@ import matplotlib.pyplot as plt
 import nltk
 import numpy as np
 import yaml
-from bert_score import score as bert_score_fn
 from datasets import load_dataset
 from functools import lru_cache
 from nltk.corpus import wordnet
@@ -116,16 +115,6 @@ def contains_match(prediction: str, reference: str) -> bool:
     return p in r or r in p
 
 
-def compute_bertscore(predictions: list[str], references: list[str]) -> list[float]:
-    """Returns per-sample BERTScore F1 using distilbert (fast, no GPU required)."""
-    _, _, f1 = bert_score_fn(
-        predictions, references,
-        model_type="distilbert-base-uncased",
-        verbose=False,
-    )
-    return f1.tolist()
-
-
 def resolve_class(response: str, classes: list[str]) -> str | None:
     """Case-insensitive exact match, then single-match substring fallback."""
     resp = response.lower().strip()
@@ -169,9 +158,6 @@ def score_classification(
         labels = sorted(set(refs) | set(p for p in preds if p))
         resolvable = [r for r in rows if r["resolvable"]]
         contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
-        bert_scores      = compute_bertscore(
-            [p if p else r_["class_label"] for p, r_ in zip(preds, rows)], refs
-        )
         per_dataset[ds_name] = {
             "accuracy":          round(accuracy_score(refs, preds), 4),
             "contains_accuracy": round(np.mean(contains_correct), 4),
@@ -179,7 +165,6 @@ def score_classification(
                                                labels=labels, zero_division=0), 4),
             "f1_weighted":       round(f1_score(refs, preds, average="weighted",
                                                labels=labels, zero_division=0), 4),
-            "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
             "n_total":           len(rows),
             "n_resolvable":      len(resolvable),
         }
@@ -190,9 +175,6 @@ def score_classification(
     if all_refs:
         labels       = sorted(set(all_refs) | set(p for p in all_preds if p))
         contains_all = [int(contains_match(p, r)) for p, r in zip(all_preds, all_refs)]
-        bert_all     = compute_bertscore(
-            [p if p else r for p, r in zip(all_preds, all_refs)], all_refs
-        )
         overall = {
             "accuracy":          round(accuracy_score(all_refs, all_preds), 4),
             "contains_accuracy": round(np.mean(contains_all), 4),
@@ -200,7 +182,6 @@ def score_classification(
                                                labels=labels, zero_division=0), 4),
             "f1_weighted":       round(f1_score(all_refs, all_preds, average="weighted",
                                                labels=labels, zero_division=0), 4),
-            "mean_bertscore":    round(float(np.mean(bert_all)), 4),
             "n_total":           len(all_refs),
             "n_resolvable":      sum(1 for p in all_preds if p),
         }
@@ -366,7 +347,6 @@ def naive_classification_baseline(
         rng.shuffle(shuffled)
         label_set        = sorted(set(labels))
         contains_correct = [int(contains_match(p, r)) for p, r in zip(shuffled, labels)]
-        bert_scores      = compute_bertscore(shuffled, labels)
         per_dataset[ds_name] = {
             "accuracy":          round(accuracy_score(labels, shuffled), 4),
             "contains_accuracy": round(np.mean(contains_correct), 4),
@@ -374,7 +354,6 @@ def naive_classification_baseline(
                                                labels=label_set, zero_division=0), 4),
             "f1_weighted":       round(f1_score(labels, shuffled, average="weighted",
                                                labels=label_set, zero_division=0), 4),
-            "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
             "n_total":           len(labels),
             "n_resolvable":      len(labels),
         }
@@ -385,7 +364,6 @@ def naive_classification_baseline(
     if all_refs:
         label_set    = sorted(set(all_refs))
         contains_all = [int(contains_match(p, r)) for p, r in zip(all_shuffled, all_refs)]
-        bert_all     = compute_bertscore(all_shuffled, all_refs)
         overall = {
             "accuracy":          round(accuracy_score(all_refs, all_shuffled), 4),
             "contains_accuracy": round(np.mean(contains_all), 4),
@@ -393,7 +371,6 @@ def naive_classification_baseline(
                                                labels=label_set, zero_division=0), 4),
             "f1_weighted":       round(f1_score(all_refs, all_shuffled, average="weighted",
                                                labels=label_set, zero_division=0), 4),
-            "mean_bertscore":    round(float(np.mean(bert_all)), 4),
             "n_total":           len(all_refs),
             "n_resolvable":      len(all_refs),
         }
@@ -761,7 +738,7 @@ def plot_cls_summary_per_task(
         return
 
     models  = list(all_cls_results.keys())
-    metrics = ["accuracy", "contains_accuracy", "f1_macro", "mean_bertscore"]
+    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
     colors  = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x       = np.arange(len(task_types))
     width   = 0.8 / (len(models) * len(metrics))
@@ -920,13 +897,12 @@ def main(args):
             print(f"    Overall  Acc={ov.get('accuracy', 0):.3f}  "
                   f"Contains={ov.get('contains_accuracy', 0):.3f}  "
                   f"F1-macro={ov.get('f1_macro', 0):.3f}  "
-                  f"BERTScore={ov.get('mean_bertscore', 0):.3f}  "
                   f"({ov.get('n_resolvable', 0)}/{ov.get('n_total', 0)} resolvable)")
-            print(f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'BERT':>6} {'Res/Tot':>9}")
-            print(f"  {'-'*84}")
+            print(f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'Res/Tot':>9}")
+            print(f"  {'-'*76}")
             for ds, m in cls_results["per_dataset"].items():
                 print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
-                      f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
+                      f"{m['f1_macro']:>8.3f} "
                       f"{m['n_resolvable']:>4}/{m['n_total']:<4}")
             # Per-task summary
             ds_to_task = {name: cfg["task_type"] for name, cfg in datasets_cfg.items()}
@@ -936,24 +912,22 @@ def main(args):
                 if tt:
                     by_task[tt].append(m)
             if by_task:
-                print(f"\n  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'BERT':>6}")
-                print(f"  {'-'*55}")
+                print(f"\n  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8}")
+                print(f"  {'-'*47}")
                 for tt, ms in sorted(by_task.items()):
                     print(f"  {_task_label(tt):<25} "
                           f"{np.mean([m['accuracy'] for m in ms]):>6.3f} "
                           f"{np.mean([m['contains_accuracy'] for m in ms]):>6.3f} "
-                          f"{np.mean([m['f1_macro'] for m in ms]):>8.3f} "
-                          f"{np.mean([m['mean_bertscore'] for m in ms]):>6.3f}")
+                          f"{np.mean([m['f1_macro'] for m in ms]):>8.3f}")
                 all_ms = [m for ms in by_task.values() for m in ms]
                 print(f"  {'OVERALL':<25} "
                       f"{np.mean([m['accuracy'] for m in all_ms]):>6.3f} "
                       f"{np.mean([m['contains_accuracy'] for m in all_ms]):>6.3f} "
-                      f"{np.mean([m['f1_macro'] for m in all_ms]):>8.3f} "
-                      f"{np.mean([m['mean_bertscore'] for m in all_ms]):>6.3f}")
+                      f"{np.mean([m['f1_macro'] for m in all_ms]):>8.3f}")
 
     # ── LLM-as-a-judge ─────────────────────────────────────────────────────────
-    # All eval models have been deleted by this point; safe to load judge.
-    if args.judge_model:
+    # Only run judge for classification task (--idtools_jsonl + --datasets_config).
+    if args.judge_model and datasets_cfg and args.idtools_jsonl:
         print(f"\n=== LLM Judge: {args.judge_model} ===")
         judge_llm, judge_tok = load_llm(args.judge_model)
         for key in (k for k in all_rows if k != "naive"):
@@ -1003,13 +977,13 @@ def main(args):
     has_cls = any("classification" in m for m in results["models"].values())
     if has_cls:
         tee.print(f"\n=== Classification Metrics ===")
-        tee.print(f"  {'Model':<40} {'Accuracy':>10} {'F1-macro':>10} {'F1-wtd':>10} {'BERTScore':>11}")
-        tee.print(f"  {'-'*83}")
+        tee.print(f"  {'Model':<40} {'Accuracy':>10} {'F1-macro':>10} {'F1-wtd':>10}")
+        tee.print(f"  {'-'*72}")
         for key, m in results["models"].items():
             cls = m.get("classification", {})
             ov  = cls.get("overall", {}) if isinstance(cls, dict) else {}
             tag = " (naive)" if key == "naive" else ""
-            tee.print(f"  {key + tag:<40} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f} {ov.get('f1_weighted', 0):>10.4f} {ov.get('mean_bertscore', 0):>11.4f}")
+            tee.print(f"  {key + tag:<40} {ov.get('accuracy', 0):>10.4f} {ov.get('f1_macro', 0):>10.4f} {ov.get('f1_weighted', 0):>10.4f}")
 
     # Judge results
     if args.judge_model and any("judge_accuracy" in m for m in results["models"].values()):

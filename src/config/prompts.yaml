@@ -1,0 +1,22 @@
+# Data generation prompts
+visual_description_disease: "Can you describe visually the {cls} that is exhibited in this image of {crop}?"
+text_description_disease: "Can you describe visually the {cls} of a {crop}?"
+visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
+text_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this description of a {crop}?\n\nDescription: {description}"
+visual_description_weed: "Can you describe visually the {species} exhibited in this image?"
+text_description_weed: "Can you describe visually the {species}?"
+visual_classification_weed: "What plant or weed is exhibited in this image?"
+text_classification_weed: "What plant or weed is exhibited in this description?\n\nDescription: {description}"
+no_label_suffix: " Focus only on visual characteristics you can observe (color, texture, shape, pattern, size, location on plant). Do not name or repeat the disease, pest, species, or class label in your response."
+synthesis: "You are given {n} visual descriptions of {context}, each written from a separate photograph. Synthesize these into one clear, representative 2-3 sentence description that captures the consensus visual features (color, texture, shape, pattern, size, location on plant). Ignore noise or one-off observations. Do not name or repeat the disease, pest, species, or class label — describe only what can be visually observed.\n\nDescriptions:\n{numbered_list}"
+compression: "Compress the following visual description into exactly one concise sentence. Preserve the most distinctive visual features. Do not name or repeat any disease, pest, species, or class label.\n\nDescription: {description}"
+
+# Assessment prompts
+assessment_descriptive: "Question: {question}\n\nAnswer:"
+classification_suffix: " Respond with only the class name, nothing else."
+
+# LLM judge prompts
+judge_system_language: "You are an expert agricultural scientist evaluating model answers on agricultural knowledge questions."
+judge_system_vision: "You are an expert agricultural scientist evaluating model predictions on plant disease and pest identification tasks."
+judge_classification_template: "Evaluate whether the predicted label correctly identifies the plant condition in the reference.\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+judge_description_template: "Evaluate whether the predicted visual description captures the same key visual features as the reference description of a plant condition.\n\nReference: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"

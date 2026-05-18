@@ -31,7 +31,6 @@ import matplotlib.pyplot as plt
 import nltk
 import numpy as np
 import yaml
-from bert_score import score as bert_score_fn
 from functools import lru_cache
 from nltk.corpus import wordnet
 from PIL import Image as PILImage
@@ -251,16 +250,6 @@ def contains_match(prediction: str, reference: str) -> bool:
     return p in r or r in p
 
 
-def compute_bertscore(predictions: list[str], references: list[str]) -> list[float]:
-    """Returns per-sample BERTScore F1 using distilbert (fast, no GPU required)."""
-    _, _, f1 = bert_score_fn(
-        predictions, references,
-        model_type="distilbert-base-uncased",
-        verbose=False,
-    )
-    return f1.tolist()
-
-
 def naive_rouge_summary(rows: list[dict]) -> dict:
     """Shuffle ground truth descriptions — chance-level ROUGE floor."""
     if not rows:
@@ -287,9 +276,6 @@ def dataset_cls_summary(rows: list[dict]) -> dict:
     resolvable = [r for r in rows if r["resolvable"]]
 
     contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
-    bert_scores      = compute_bertscore(
-        [p if p else r for p, r in zip(preds, refs)], refs
-    )
 
     return {
         "accuracy":          round(accuracy_score(refs, preds), 4),
@@ -298,7 +284,6 @@ def dataset_cls_summary(rows: list[dict]) -> dict:
                                             labels=labels, zero_division=0), 4),
         "f1_weighted":       round(f1_score(refs, preds, average="weighted",
                                             labels=labels, zero_division=0), 4),
-        "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
         "n_images":          len(rows),
         "n_resolvable":      len(resolvable),
     }
@@ -317,7 +302,6 @@ def naive_cls_summary(rows: list[dict]) -> dict:
     labels   = sorted(set(refs))
 
     contains_correct = [int(contains_match(p, r)) for p, r in zip(shuffled, refs)]
-    bert_scores      = compute_bertscore(shuffled, refs)
 
     return {
         "accuracy":          round(accuracy_score(refs, shuffled), 4),
@@ -326,7 +310,6 @@ def naive_cls_summary(rows: list[dict]) -> dict:
                                             labels=labels, zero_division=0), 4),
         "f1_weighted":       round(f1_score(refs, shuffled, average="weighted",
                                             labels=labels, zero_division=0), 4),
-        "mean_bertscore":    round(float(np.mean(bert_scores)), 4),
         "n_images":          len(rows),
         "n_resolvable":      len(rows),  # naive shuffles within label set, always resolvable
     }
@@ -446,11 +429,11 @@ def plot_cls_by_task(
     task_types = list(results_by_task.keys())
     if not task_types:
         return
-    metrics = ["accuracy", "contains_accuracy", "f1_macro", "mean_bertscore"]
-    labels  = ["Accuracy", "Contains", "F1-macro", "BERTScore"]
+    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+    labels  = ["Accuracy", "Contains", "F1-macro"]
     x       = np.arange(len(task_types))
-    width   = 0.18
-    colors  = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0"]
+    width   = 0.22
+    colors  = ["#2196F3", "#4CAF50", "#FF9800"]
 
     fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
     for i, (m, label, color) in enumerate(zip(metrics, labels, colors)):
@@ -695,15 +678,9 @@ def main(args: argparse.Namespace) -> None:
 
             cls_preds  = run_batch(llm, tokenizer, images, cls_question, CLS_PARAMS)
             resolved_list = [resolve_class(p, clean_classes) for p in cls_preds]
-            bert_scores   = compute_bertscore(
-                [r or p for r, p in zip(resolved_list, cls_preds)],
-                [class_label] * len(cls_preds),
-            )
-            for pred, img_name, resolved, bs in zip(
-                cls_preds, valid_names, resolved_list, bert_scores
-            ):
-                correct   = resolved is not None and resolved.lower() == class_label.lower()
-                contains  = contains_match(resolved or pred, class_label)
+            for pred, img_name, resolved in zip(cls_preds, valid_names, resolved_list):
+                correct  = resolved is not None and resolved.lower() == class_label.lower()
+                contains = contains_match(resolved or pred, class_label)
                 cls_rows.append({
                     "agml_dataset":   agml_name,
                     "class_label":    class_label,
@@ -714,7 +691,6 @@ def main(args: argparse.Namespace) -> None:
                     "resolved_class": resolved or "",
                     "correct":        int(correct),
                     "contains_match": int(contains),
-                    "bertscore":      round(bs, 4),
                     "resolvable":     int(resolved is not None),
                 })
 
@@ -725,23 +701,17 @@ def main(args: argparse.Namespace) -> None:
     import gc; gc.collect()
 
     # ── LLM-as-a-judge (before CSV save so judged_correct col is included) ────
-    if args.judge_model:
+    if args.judge_model and cls_rows:
         print(f"\n=== LLM Judge: {args.judge_model} ===")
         judge_llm = LLM(
             model=args.judge_model, dtype="bfloat16",
             max_model_len=1024, gpu_memory_utilization=0.85,
         )
         judge_tok = judge_llm.get_tokenizer()
-        if desc_rows:
-            print(f"  Judging {len(desc_rows)} description rows...")
-            desc_rows = _apply_judge(desc_rows, "description", judge_llm, judge_tok,
-                                     reasoning_level=args.judge_reasoning,
-                                     confidence_threshold=args.judge_confidence_threshold)
-        if cls_rows:
-            print(f"  Judging {len(cls_rows)} classification rows...")
-            cls_rows = _apply_judge(cls_rows, "classification", judge_llm, judge_tok,
-                                    reasoning_level=args.judge_reasoning,
-                                    confidence_threshold=args.judge_confidence_threshold)
+        print(f"  Judging {len(cls_rows)} classification rows...")
+        cls_rows = _apply_judge(cls_rows, "classification", judge_llm, judge_tok,
+                                reasoning_level=args.judge_reasoning,
+                                confidence_threshold=args.judge_confidence_threshold)
         del judge_llm, judge_tok
         gc.collect()
 
@@ -807,11 +777,6 @@ def main(args: argparse.Namespace) -> None:
         results_b_naive["overall"]       = naive_cls_summary(cls_rows)
 
     # ── Judged aggregation (only populated when --judge_model is set) ──────────
-    results_a_judged         = {ds: judged_summary(rows) for ds, rows in by_ds_desc.items()}
-    results_a_judged_by_task = {tt: judged_summary(rows) for tt, rows in by_task_desc.items()}
-    if desc_rows:
-        results_a_judged["overall"] = judged_summary(desc_rows)
-
     results_b_judged         = {ds: judged_summary(rows) for ds, rows in by_ds_cls.items()}
     results_b_judged_by_task = {tt: judged_summary(rows) for tt, rows in by_task_cls.items()}
     if cls_rows:
@@ -826,8 +791,6 @@ def main(args: argparse.Namespace) -> None:
         "dataset_a_naive":           results_a_naive,
         "dataset_a_by_task":         results_a_by_task,
         "dataset_a_naive_by_task":   results_a_naive_by_task,
-        "dataset_a_judged":          results_a_judged,
-        "dataset_a_judged_by_task":  results_a_judged_by_task,
         "dataset_b":                 results_b,
         "dataset_b_naive":           results_b_naive,
         "dataset_b_by_task":         results_b_by_task,
@@ -881,7 +844,7 @@ def main(args: argparse.Namespace) -> None:
         if results_b:
             print(f"\n=== Dataset B — Visual Classification ===")
             header = (f"  {'Dataset':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
-                      f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7} {'Res/Tot':>9}")
+                      f"{'N-Acc':>7} {'Res/Tot':>9}")
             print(header)
             print(f"  {'-' * len(header)}")
             for ds, m in results_b.items():
@@ -889,28 +852,27 @@ def main(args: argparse.Namespace) -> None:
                     continue
                 naive = results_b_naive.get(ds, {})
                 print(f"  {ds:<45} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
-                      f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
-                      f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f} "
+                      f"{m['f1_macro']:>8.3f} "
+                      f"{naive.get('accuracy', 0):>7.3f} "
                       f"{m['n_resolvable']:>4}/{m['n_images']:<4}")
             if "overall" in results_b:
                 ov = results_b["overall"]
                 nv = results_b_naive.get("overall", {})
                 print(f"\n  {'OVERALL':<45} {ov['accuracy']:>6.3f} {ov['contains_accuracy']:>6.3f} "
-                      f"{ov['f1_macro']:>8.3f} {ov['mean_bertscore']:>6.3f} "
-                      f"{nv.get('accuracy', 0):>7.3f} {nv.get('mean_bertscore', 0):>7.3f} "
+                      f"{ov['f1_macro']:>8.3f} "
+                      f"{nv.get('accuracy', 0):>7.3f} "
                       f"{ov['n_resolvable']:>4}/{ov['n_images']:<4}")
 
         if results_b_by_task:
             print(f"\n=== Dataset B — By Task Type ===")
-            header = (f"  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} "
-                      f"{'BERT':>6} {'N-Acc':>7} {'N-BERT':>7}")
+            header = (f"  {'Task':<25} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'N-Acc':>7}")
             print(header)
             print(f"  {'-' * len(header)}")
             for tt, m in results_b_by_task.items():
                 naive = results_b_naive_by_task.get(tt, {})
                 print(f"  {_task_label(tt):<25} {m['accuracy']:>6.3f} {m['contains_accuracy']:>6.3f} "
-                      f"{m['f1_macro']:>8.3f} {m['mean_bertscore']:>6.3f} "
-                      f"{naive.get('accuracy', 0):>7.3f} {naive.get('mean_bertscore', 0):>7.3f}")
+                      f"{m['f1_macro']:>8.3f} "
+                      f"{naive.get('accuracy', 0):>7.3f}")
 
         # ── Overall model vs naive comparison ────────────────────────────────
         ov_a  = results_a.get("overall", {})
@@ -927,34 +889,16 @@ def main(args: argparse.Namespace) -> None:
             print(f"  {'naive':<12} {nv_a.get('rouge1',0):>7.3f} {nv_a.get('rouge2',0):>7.3f} "
                   f"{nv_a.get('rougeL',0):>7.3f} {nv_a.get('rouge_ss',0):>7.3f}")
         if ov_b:
-            print(f"\n  {'Source':<12} {'Acc':>7} {'F1-mac':>8} {'F1-wtd':>8} {'BERT':>7}")
-            print(f"  {'-'*46}")
+            print(f"\n  {'Source':<12} {'Acc':>7} {'F1-mac':>8} {'F1-wtd':>8}")
+            print(f"  {'-'*37}")
             print(f"  {'model':<12} {ov_b['accuracy']:>7.3f} {ov_b['f1_macro']:>8.3f} "
-                  f"{ov_b['f1_weighted']:>8.3f} {ov_b['mean_bertscore']:>7.3f}")
+                  f"{ov_b['f1_weighted']:>8.3f}")
             print(f"  {'naive':<12} {nv_b.get('accuracy',0):>7.3f} {nv_b.get('f1_macro',0):>8.3f} "
-                  f"{nv_b.get('f1_weighted',0):>8.3f} {nv_b.get('mean_bertscore',0):>7.3f}")
+                  f"{nv_b.get('f1_weighted',0):>8.3f}")
 
         # ── LLM Judge summary (only when --judge_model was set) ───────────────
-        if args.judge_model and (any(results_a_judged.values()) or any(results_b_judged.values())):
+        if args.judge_model and any(results_b_judged.values()):
             print(f"\n=== LLM Judge Results [judged] — {args.judge_model} ===")
-            if results_a_judged:
-                print(f"\n  Dataset A — Description Judge Accuracy")
-                print(f"  {'Dataset':<45} {'J-Acc':>7} {'N':>6}")
-                print(f"  {'-'*62}")
-                for ds, jm in results_a_judged.items():
-                    if ds == "overall" or not jm:
-                        continue
-                    print(f"  {ds:<45} {jm['judge_accuracy']:>7.3f} {jm['n_judged']:>6}")
-                if results_a_judged_by_task:
-                    print(f"\n  {'Task':<25} {'J-Acc':>7}")
-                    print(f"  {'-'*34}")
-                    for tt, jm in sorted(results_a_judged_by_task.items()):
-                        if jm:
-                            print(f"  {_task_label(tt):<25} {jm['judge_accuracy']:>7.3f}")
-                ov = results_a_judged.get("overall", {})
-                if ov:
-                    print(f"\n  {'OVERALL':<45} {ov['judge_accuracy']:>7.3f} {ov['n_judged']:>6}")
-
             if results_b_judged:
                 print(f"\n  Dataset B — Classification Judge Accuracy")
                 print(f"  {'Dataset':<45} {'J-Acc':>7} {'J-F1':>7} {'N':>6}")
