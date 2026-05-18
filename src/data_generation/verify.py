@@ -184,8 +184,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Verify and rewrite descriptions using reference sources."
     )
-    parser.add_argument("--model",             default="Qwen/Qwen3.6-27B",
-                        help="vLLM model for rewriting (default: Qwen/Qwen3.6-27B)")
+    parser.add_argument("--model",             default="Qwen/Qwen3.6-35B-A3B",
+                        help="vLLM model for rewriting (default: Qwen/Qwen3.6-35B-A3B)")
     parser.add_argument("--descriptions_csv",  default="outputs/data_generation/descriptions_export.csv")
     parser.add_argument("--reference_db",      default="outputs/data_generation/reference_db.json")
     parser.add_argument("--output_csv",        default="outputs/data_generation/descriptions_corrected.csv")

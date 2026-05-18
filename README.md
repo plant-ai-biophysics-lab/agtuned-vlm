@@ -47,7 +47,7 @@ python main.py build-db \
 ```
 
 ### Stage 1c — Verify and rewrite descriptions
-Default model: `Qwen/Qwen3.6-27B`. Override with `--model`.
+Default model: `Qwen/Qwen3.6-35B-A3B` (same as generate). Override with `--model`.
 ```bash
 python main.py verify \
   --descriptions_csv outputs/data_generation/descriptions_export.csv \
