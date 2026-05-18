@@ -1,5 +1,5 @@
 # Data generation prompts
-visual_description_disease: "Can you describe visually the {cls} that is exhibited in this image of {crop}?"
+visual_description_disease: "Can you describe visually the disease, pest, damage type, or other stress, if any, that is exhibited in this image of {crop}?"
 text_description_disease: "Can you describe visually the {cls} of a {crop}?"
 visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 text_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this description of a {crop}?\n\nDescription: {description}"
