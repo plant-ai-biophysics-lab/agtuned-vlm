@@ -295,9 +295,40 @@ def push_to_hub(jsonl_path: Path, hub_repo: str) -> None:
     print(f"  Pushed {len(records)} records → {hub_repo}")
 
 
+def backfill_images(output_dir: Path) -> None:
+    checkpoint = load_checkpoint(output_dir)
+    saved = skipped = missing = 0
+    for agml_name, classes in checkpoint.items():
+        for class_key, meta in classes.items():
+            if meta.get("status") != "done":
+                continue
+            clean_cls = meta.get("clean_cls", class_key)
+            image_paths = meta.get("image_paths", [])
+            if not image_paths:
+                missing += 1
+                continue
+            sample_dir = output_dir / "sample_images" / agml_name
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            dest = sample_dir / f"{_class_slug(clean_cls)}.jpg"
+            if dest.exists():
+                skipped += 1
+                continue
+            try:
+                PILImage.open(image_paths[0]).convert("RGB").save(dest, "JPEG", quality=85)
+                saved += 1
+            except Exception as e:
+                print(f"  [warn] {agml_name}/{clean_cls}: {e}")
+                missing += 1
+    print(f"Backfill done — saved={saved}  skipped={skipped}  missing={missing}")
+
+
 def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.backfill_images:
+        backfill_images(output_dir)
+        return
 
     desc_path = output_dir / "agml_descriptions.jsonl"
     cls_path = output_dir / "agml_classification.jsonl"
@@ -457,6 +488,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed", type=int, default=42,
         help="Random seed for image sampling (default: 42)",
+    )
+    parser.add_argument(
+        "--backfill_images", action="store_true",
+        help="Save sample images from checkpoint without rerunning inference",
     )
     args = parser.parse_args()
     main(args)
