@@ -64,7 +64,8 @@ streamlit run src/data_generation/app.py -- --output_dir outputs/data_generation
 ```bash
 python main.py probe \
   --config     src/config/datasets.yaml \
-  --output_dir outputs/linear_probe/
+  --output_dir outputs/linear_probe/ \
+  -- n_samples 300
 ```
 
 ### Stage 3 — Language assessment

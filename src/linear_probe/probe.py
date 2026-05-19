@@ -127,17 +127,16 @@ def extract_gemma4_embedding(inputs: dict, mm_root) -> np.ndarray:
 
 
 def extract_gemma4_embeddings(samples, processor, mm_root, device) -> tuple[np.ndarray, list[str]]:
+    from tqdm import tqdm
     vision_device = next(mm_root.vision_tower.parameters()).device
     embeddings, labels = [], []
-    for i, sample in enumerate(samples):
+    for sample in tqdm(samples, desc="  Gemma4 embeddings", unit="img", leave=False):
         image = PILImage.open(sample["path"]).convert("RGB")
         inputs = processor(text="<image>", images=image, return_tensors="pt")
         inputs = {k: v.to(vision_device) for k, v in inputs.items()}
         emb = extract_gemma4_embedding(inputs, mm_root)
         embeddings.append(emb)
         labels.append(sample["label"])
-        if (i + 1) % 50 == 0 or (i + 1) == len(samples):
-            print(f"  [{i+1}/{len(samples)}] extracted")
     return np.stack(embeddings), labels
 
 
@@ -160,6 +159,7 @@ def load_gemma4(model_id: str, device: str):
 # ── YOLO backbone ──────────────────────────────────────────────────────────────
 
 def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.ndarray:
+    from tqdm import tqdm
     from ultralytics import YOLO
     import torchvision.transforms as T
 
@@ -184,14 +184,12 @@ def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.nd
 
     embeddings = []
     with torch.no_grad():
-        for i, sample in enumerate(samples):
+        for sample in tqdm(samples, desc="  YOLO embeddings", unit="img", leave=False):
             captured.clear()
             image = PILImage.open(sample["path"]).convert("RGB")
             x = transform(image).unsqueeze(0).to(device)
             yolo.model(x)
             embeddings.append(captured[0].numpy())
-            if (i + 1) % 50 == 0 or (i + 1) == len(samples):
-                print(f"  [{i+1}/{len(samples)}] extracted")
 
     handle.remove()
     del yolo
@@ -212,8 +210,9 @@ def load_dino(model_id: str, device: str):
 
 @torch.no_grad()
 def extract_dino_embeddings(samples, processor, model, device) -> tuple[np.ndarray, list[str]]:
+    from tqdm import tqdm
     embeddings, labels = [], []
-    for i, sample in enumerate(samples):
+    for sample in tqdm(samples, desc="  DINOv3 embeddings", unit="img", leave=False):
         image = PILImage.open(sample["path"]).convert("RGB")
         inputs = processor(images=image, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -221,8 +220,6 @@ def extract_dino_embeddings(samples, processor, model, device) -> tuple[np.ndarr
         emb = outputs.last_hidden_state[0, 0, :].cpu().float().numpy()
         embeddings.append(emb)
         labels.append(sample["label"])
-        if (i + 1) % 50 == 0 or (i + 1) == len(samples):
-            print(f"  [{i+1}/{len(samples)}] extracted")
     return np.stack(embeddings), labels
 
 
@@ -463,31 +460,34 @@ def main(args):
 
     # DINOv3 pass
     if args.dino_model:
+        from tqdm import tqdm
         print(f"\n{'='*60}\nDINOv3: {args.dino_model}\n{'='*60}")
         dino_processor, dino_model = load_dino(args.dino_model, device)
         all_embeddings["dinov3"] = {}
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in all_embeddings["_samples"].items():
-            print(f"\n  Extracting DINOv3 embeddings: {agml_name}")
+        ds_items = list(all_embeddings["_samples"].items())
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
             X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
             all_embeddings["dinov3"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
         unload(dino_model)
 
     # YOLO pass
     if args.yolo_model:
+        from tqdm import tqdm
         print(f"\n{'='*60}\nYOLO: {args.yolo_model}\n{'='*60}")
         all_embeddings["yolo"] = {}
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in all_embeddings["_samples"].items():
-            print(f"\n  Extracting YOLO embeddings: {agml_name}")
+        ds_items = list(all_embeddings["_samples"].items())
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
             X = extract_yolo_embeddings(samples, args.yolo_model, device)
             all_embeddings["yolo"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
     # Gemma4 pass
     if args.model:
+        from tqdm import tqdm
         print(f"\n{'='*60}\nGemma4: {args.model}\n{'='*60}")
         processor, model, mm_root = load_gemma4(args.model, device)
         all_embeddings["gemma4"] = {}
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in all_embeddings["_samples"].items():
-            print(f"\n  Extracting Gemma4 embeddings: {agml_name}")
+        ds_items = list(all_embeddings["_samples"].items())
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="Gemma4 datasets", unit="ds"):
             X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
             all_embeddings["gemma4"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
         unload(model)
