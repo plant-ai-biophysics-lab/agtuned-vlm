@@ -76,12 +76,22 @@ def subsample_stratified(samples: list[dict], n_samples: int) -> list[dict]:
 # ── Gemma4 backbone ────────────────────────────────────────────────────────────
 
 def resolve_mm_root(model):
-    if hasattr(model, "vision_tower"):
-        return model
-    if hasattr(model, "model") and hasattr(model.model, "vision_tower"):
-        return model.model
+    """Return the sub-module that holds the vision encoder.
+
+    Gemma4: vision_tower lives on model or model.model
+    Qwen VL: vision encoder lives as model.visual or model.model.visual
+    """
+    for root in (model, getattr(model, "model", None)):
+        if root is None:
+            continue
+        if hasattr(root, "vision_tower"):
+            return root
+        if hasattr(root, "visual"):
+            # Wrap so callers can always access root.vision_tower
+            root.vision_tower = root.visual
+            return root
     available = [n for n, _ in model.named_children()]
-    raise AttributeError(f"Could not locate vision_tower. Top-level: {available}")
+    raise AttributeError(f"Could not locate vision encoder. Top-level: {available}")
 
 
 @torch.no_grad()
