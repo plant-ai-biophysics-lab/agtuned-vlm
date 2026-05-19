@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
 import gc
-import inspect
 import os
 from collections import Counter, defaultdict
 from typing import Any, Dict, cast
@@ -94,59 +93,59 @@ def resolve_mm_root(model):
     raise AttributeError(f"Could not locate vision encoder. Top-level: {available}")
 
 
-@torch.no_grad()
-def extract_gemma4_embedding(inputs: dict, mm_root) -> np.ndarray:
-    pixel_values = inputs.get("pixel_values")
-    if pixel_values is None:
-        raise ValueError("No pixel_values in inputs.")
+def extract_vlm_embeddings(samples, processor, model, mm_root, desc: str = "VLM embeddings") -> tuple[np.ndarray, list[str]]:
+    """
+    Architecture-agnostic vision embedding extraction via forward hook.
 
-    if pixel_values.dim() == 5:
-        pixel_values = pixel_values.squeeze(0)
-    if pixel_values.dim() == 4 and pixel_values.shape[0] > 1:
-        pixel_values = pixel_values[0:1]
-
-    REMAP = {"image_position_ids": "pixel_position_ids"}
-    VISION_KEYS = {"pixel_values", "pixel_position_ids", "pixel_attention_mask",
-                   "image_position_ids", "spatial_shapes", "image_sizes"}
-    forward_params = set(inspect.signature(mm_root.vision_tower.forward).parameters.keys())
-
-    vision_kwargs = {"pixel_values": pixel_values}
-    for k, v in inputs.items():
-        if k == "pixel_values" or k not in VISION_KEYS:
-            continue
-        forward_key = REMAP.get(k, k)
-        if forward_key in forward_params:
-            vision_kwargs[forward_key] = v
-
-    if "return_dict" in forward_params:
-        vision_kwargs["return_dict"] = True
-
-    vision_out = mm_root.vision_tower(**vision_kwargs)
-
-    if hasattr(vision_out, "last_hidden_state"):
-        hidden = vision_out.last_hidden_state
-    elif isinstance(vision_out, tuple):
-        hidden = vision_out[0]
-    else:
-        hidden = vision_out
-
-    if hidden.dim() == 3:
-        hidden = hidden[0]
-
-    return hidden.mean(dim=0).cpu().float().numpy()
-
-
-def extract_gemma4_embeddings(samples, processor, mm_root, device) -> tuple[np.ndarray, list[str]]:
+    Registers a hook on mm_root.vision_tower, runs a full forward pass for each
+    image, and mean-pools the captured feature map. Works for Gemma4, Qwen VL,
+    and any model whose vision encoder is reachable via mm_root.vision_tower.
+    """
     from tqdm import tqdm
-    vision_device = next(mm_root.vision_tower.parameters()).device
+
+    model_device = next(model.parameters()).device
     embeddings, labels = [], []
-    for sample in tqdm(samples, desc="  Gemma4 embeddings", unit="img", leave=False):
+
+    for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
         image = PILImage.open(sample["path"]).convert("RGB")
-        inputs = processor(text="<image>", images=image, return_tensors="pt")
-        inputs = {k: v.to(vision_device) for k, v in inputs.items()}
-        emb = extract_gemma4_embedding(inputs, mm_root)
+
+        # Build a minimal chat-formatted input so the processor handles
+        # image preprocessing correctly for each architecture
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
+        try:
+            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+            inputs = processor(text=[text], images=[image], return_tensors="pt")
+        except Exception:
+            inputs = processor(text="<image>", images=image, return_tensors="pt")
+
+        inputs = {k: v.to(model_device) for k, v in inputs.items()}
+
+        captured: list[torch.Tensor] = []
+
+        def _hook(module, input, output):
+            t = output.last_hidden_state if hasattr(output, "last_hidden_state") else output
+            if isinstance(t, (list, tuple)):
+                t = t[0]
+            if isinstance(t, torch.Tensor):
+                captured.append(t.detach().float().cpu())
+
+        handle = mm_root.vision_tower.register_forward_hook(_hook)
+        try:
+            with torch.no_grad():
+                model(**inputs)
+        finally:
+            handle.remove()
+
+        if not captured:
+            raise RuntimeError(f"Vision hook captured nothing for {sample['path']}")
+
+        feat = captured[0]
+        if feat.dim() == 3:
+            feat = feat[0]          # [batch, seq, dim] → [seq, dim]
+        emb = feat.mean(dim=0).numpy()   # mean-pool over sequence → [dim]
         embeddings.append(emb)
         labels.append(sample["label"])
+
     return np.stack(embeddings), labels
 
 
@@ -522,7 +521,7 @@ def main(args):
         all_embeddings[backbone_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
-            X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
+            X, _ = extract_vlm_embeddings(samples, processor, vlm, mm_root, desc=backbone_key)
             all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
         unload(vlm)
 
