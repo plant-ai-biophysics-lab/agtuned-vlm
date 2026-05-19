@@ -58,6 +58,12 @@ def highlight_words_in_text(text: str, word_set: set, tag: str = "mark", style: 
     return "".join(result)
 
 
+def _find_sample_image(output_dir: Path, agml_dataset: str, class_label: str):
+    slug = re.sub(r"[^a-z0-9]+", "_", class_label.strip().lower()).strip("_")
+    path = output_dir / "sample_images" / agml_dataset / f"{slug}.jpg"
+    return path if path.exists() else None
+
+
 def word_set_from(text: str) -> set:
     if not text or (isinstance(text, float)):
         return set()
@@ -126,7 +132,15 @@ with tab1:
             key = df_filtered.iloc[idx]["_key"]
             entry = entries[key]
             st.markdown("---")
-            st.subheader(f"{entry.get('crop', '')} — {entry.get('class_label', '')}")
+            img_col, info_col = st.columns([1, 3])
+            with img_col:
+                img_path = _find_sample_image(_resolved, entry.get("agml_dataset", ""), entry.get("class_label", ""))
+                if img_path:
+                    st.image(str(img_path), use_container_width=True)
+                else:
+                    st.caption("No sample image")
+            with info_col:
+                st.subheader(f"{entry.get('crop', '')} — {entry.get('class_label', '')}")
             sources = entry.get("sources", [])
             if not sources:
                 st.info("No sources found for this entry.")
@@ -183,7 +197,15 @@ with tab2:
             row = df_desc_filtered.iloc[idx2]
 
             st.markdown("---")
-            st.subheader(f"{row.get('crop', '')} — {row.get('class_label', '')}")
+            img_col2, info_col2 = st.columns([1, 3])
+            with img_col2:
+                img_path2 = _find_sample_image(_resolved, str(row.get("agml_dataset", "")), str(row.get("class_label", "")))
+                if img_path2:
+                    st.image(str(img_path2), use_container_width=True)
+                else:
+                    st.caption("No sample image")
+            with info_col2:
+                st.subheader(f"{row.get('crop', '')} — {row.get('class_label', '')}")
 
             original = str(row.get("compressed_description", "")) if pd.notna(row.get("compressed_description")) else ""
             corrected = str(row.get("corrected_description", "")) if pd.notna(row.get("corrected_description")) else ""

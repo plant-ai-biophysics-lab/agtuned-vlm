@@ -38,6 +38,11 @@ DISEASE_TASK_TYPES = {"disease", "pest_damage"}
 import re
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _class_slug(s: str) -> str:
+    return _SLUG_RE.sub("_", s.strip().lower()).strip("_")
 
 
 def _clean_response(text: str) -> str:
@@ -340,6 +345,12 @@ def main(args: argparse.Namespace) -> None:
 
             questions = build_questions(task_type, crop, clean_cls, prompts)
             images = [PILImage.open(p).convert("RGB") for p in image_paths]
+
+            sample_dir = output_dir / "sample_images" / agml_name
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            sample_path = sample_dir / f"{_class_slug(clean_cls)}.jpg"
+            if not sample_path.exists():
+                images[0].save(sample_path, "JPEG", quality=85)
 
             raw_captions = run_vision_pass(
                 llm, tokenizer, images, questions["visual_desc"], prompts["no_label_suffix"]

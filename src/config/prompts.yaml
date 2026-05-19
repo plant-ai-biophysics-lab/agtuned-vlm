@@ -19,11 +19,12 @@ verify_rewrite: |
 
   Rules:
   - Adapt terminology and phrasing directly from the reference text where possible — prefer its language over the original description
+  - If the reference text does not describe the same condition as the current description, ignore the reference and return the current description unchanged
   - Focus ONLY on observable visual symptoms: colors, textures, shapes, patterns, lesions, spots, discoloration, size, location on plant
   - Do NOT mention the disease name, pest name, pathogen name, or any direct class identifier
   - Do NOT mention the crop, plant species, or genus name
   - Be specific enough to distinguish this condition from other diseases visually
-  - Output only the single sentence, nothing else
+  - Output only the single sentence — no preamble, no commentary about the reference text, no explanation
 
   Reference text:
   {reference_text}
