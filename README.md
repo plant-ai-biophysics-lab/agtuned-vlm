@@ -65,7 +65,8 @@ streamlit run src/data_generation/app.py -- --output_dir outputs/data_generation
 python main.py probe \
   --config     src/config/datasets.yaml \
   --output_dir outputs/linear_probe/ \
-  -- n_samples 300
+  --n_samples 300 \
+  --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B
 ```
 
 ### Stage 3 — Language assessment

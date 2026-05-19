@@ -425,6 +425,8 @@ def main(args):
 
     if args.dino_model and args.dino_model.lower() == "none":
         args.dino_model = None
+    if not hasattr(args, "models"):
+        args.models = None
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -490,17 +492,18 @@ def main(args):
             X = extract_yolo_embeddings(samples, args.yolo_model, device)
             all_embeddings["yolo"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
-    # Gemma4 pass
-    if args.model:
+    # VLM passes (one per --models entry, loaded and unloaded sequentially)
+    for model_id in (args.models or []):
         from tqdm import tqdm
-        print(f"\n{'='*60}\nGemma4: {args.model}\n{'='*60}")
-        processor, model, mm_root = load_gemma4(args.model, device)
-        all_embeddings["gemma4"] = {}
+        backbone_key = model_id.split("/")[-1]
+        print(f"\n{'='*60}\nVLM: {model_id}\n{'='*60}")
+        processor, vlm, mm_root = load_gemma4(model_id, device)
+        all_embeddings[backbone_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="Gemma4 datasets", unit="ds"):
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
             X, _ = extract_gemma4_embeddings(samples, processor, mm_root, device)
-            all_embeddings["gemma4"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
-        unload(model)
+            all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+        unload(vlm)
 
     available_backbones = [k for k in all_embeddings if k != "_samples"]
     if not available_backbones:
@@ -626,8 +629,8 @@ if __name__ == "__main__":
         help="Path to datasets.yaml",
     )
     parser.add_argument(
-        "--model", type=str, default=None,
-        help="Gemma4 model (HF ID or local path). Omit to skip.",
+        "--models", type=str, nargs="+", default=None,
+        help="One or more VLM models (HF ID or local path). Each is loaded, evaluated, then unloaded.",
     )
     parser.add_argument(
         "--dino_model", type=str, default="facebook/dinov3-vitb16-pretrain-lvd1689m",
