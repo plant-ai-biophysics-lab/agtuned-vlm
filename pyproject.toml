@@ -41,6 +41,7 @@ dependencies = [
     "pyyaml>=6.0",
     "matplotlib>=3.8.0",
     "streamlit>=1.35",
+    "tqdm>=4.66",
 ]
 
 [tool.uv]
