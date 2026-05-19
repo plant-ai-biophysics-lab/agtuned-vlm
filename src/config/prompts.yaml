@@ -33,6 +33,26 @@ verify_rewrite: |
 
   Improved visual description:
 
+# Label sanitization prompt (second pass in verify.py)
+verify_sanitize: |
+  You are editing a visual description for a machine learning image dataset.
+
+  The description below may contain the disease name, pest name, crop name, pathogen name,
+  or other direct hints to the class label. Remove all such references while keeping the
+  visual content intact.
+
+  Rules:
+  - Remove or replace any word that directly names or strongly implies the condition or crop
+  - Keep all purely visual language: colors, textures, shapes, patterns, lesions, spots, sizes, locations
+  - The result must still be a complete, natural sentence
+  - Output only the rewritten sentence, nothing else
+
+  Label to remove: {class_label}
+  Crop to remove: {crop}
+  Description: {description}
+
+  Sanitized description:
+
 # Assessment prompts
 assessment_descriptive: "Question: {question}\n\nAnswer:"
 classification_suffix: " Respond with only the class name, nothing else."
