@@ -116,12 +116,22 @@ def main(args: argparse.Namespace) -> None:
                     gpu_memory_utilization=0.9, max_num_seqs=128)
     tokenizer = llm.get_tokenizer()
 
+    # ── Pass 0: override healthy classes ─────────────────────────────────────
+
+    healthy_overrides: dict[int, str] = {
+        i: "This leaf/plant is healthy."
+        for i, row in enumerate(rows)
+        if "healthy" in row["class_label"].lower()
+    }
+
     # ── Pass 1: rewrite descriptions that have reference sources ──────────────
 
     to_rewrite: list[int] = []
     rewrite_prompts: list[str] = []
 
     for i, row in enumerate(rows):
+        if i in healthy_overrides:
+            continue
         key   = _make_key(row["agml_dataset"], row["class_label"], row["crop"])
         entry = db_entries.get(key)
         if not entry or entry.get("status") != "found":
@@ -153,7 +163,20 @@ def main(args: argparse.Namespace) -> None:
         key   = _make_key(row["agml_dataset"], row["class_label"], row["crop"])
         entry = db_entries.get(key)
 
-        if i in rewritten:
+        if i in healthy_overrides:
+            out_rows.append({
+                "agml_dataset":           row["agml_dataset"],
+                "crop":                   row["crop"],
+                "class_label":            row["class_label"],
+                "task_type":              row["task_type"],
+                "compressed_description": row["compressed_description"],
+                "corrected_description":  healthy_overrides[i],
+                "status":                 "healthy_override",
+                "source_orgs":            "",
+                "source_urls":            "",
+                "excerpt_used":           "",
+            })
+        elif i in rewritten:
             sources = entry["sources"]
             excerpt = _build_excerpt(sources)
             out_rows.append({
@@ -188,6 +211,8 @@ def main(args: argparse.Namespace) -> None:
     sanitize_prompts: list[str] = []
 
     for i, row in enumerate(out_rows):
+        if row["status"] == "healthy_override":
+            continue
         words = _label_words(row["class_label"], row["crop"])
         if words and _contains_label(row["corrected_description"], words):
             prompt = prompts["verify_sanitize"].format(
