@@ -287,21 +287,41 @@ def _search_cgiar(
     compressed_description: str,
     cgiar_index: tuple | None, top_k: int = 3,
 ) -> list[dict]:
-    """Retrieve top-k CGIAR chunks by cosine similarity."""
+    """
+    Grep-then-rank: keep only chunks that contain the class label as a substring
+    (and the crop, unless crop is the generic 'plant'), then re-rank survivors by
+    cosine similarity and return the top-k.
+    """
     if cgiar_index is None:
         return []
 
     import numpy as np
     model, embeddings, chunks = cgiar_index
 
+    label_lower = class_label.lower()
+    crop_lower  = crop.lower() if crop else ""
+    require_crop = crop_lower and crop_lower != "plant"
+
+    # ── grep filter ────────────────────────────────────────────────────────────
+    candidate_idx = [
+        i for i, chunk in enumerate(chunks)
+        if label_lower in chunk.lower()
+        and (not require_crop or crop_lower in chunk.lower())
+    ]
+
+    if not candidate_idx:
+        return []
+
+    # ── cosine re-rank among candidates ───────────────────────────────────────
     if task_type in ("weed_identification", "crop_identification"):
         query = f"{compressed_description} visual appearance {class_label} plant identification"
     else:
         query = f"{compressed_description} visual symptoms {class_label} {crop} disease"
 
-    q_emb = model.encode([query], normalize_embeddings=True)
-    scores = (embeddings @ q_emb.T).flatten()
-    top_idx = np.argsort(scores)[-top_k:][::-1]
+    q_emb       = model.encode([query], normalize_embeddings=True)
+    cand_embs   = embeddings[candidate_idx]
+    scores      = (cand_embs @ q_emb.T).flatten()
+    top_local   = np.argsort(scores)[-top_k:][::-1]
 
     return [
         {
@@ -310,12 +330,12 @@ def _search_cgiar(
             "url": "https://huggingface.co/datasets/CGIAR/ragas_gardian_evaluation_non_overlapping",
             "type": "research_document",
             "accessed_date": str(date.today()),
-            "excerpt": chunks[i][:EXCERPT_MAX],
+            "excerpt": chunks[candidate_idx[j]][:EXCERPT_MAX],
             "search_query": query,
-            "score": round(float(scores[i]), 4),
+            "score": round(float(scores[j]), 4),
         }
-        for i in top_idx
-        if scores[i] > 0.3
+        for j in top_local
+        if scores[j] > 0.0
     ]
 
 
