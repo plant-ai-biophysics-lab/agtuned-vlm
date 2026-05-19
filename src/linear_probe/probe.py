@@ -23,7 +23,7 @@ import argparse
 import gc
 import inspect
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any, Dict, cast
 
 import matplotlib.pyplot as plt
@@ -448,6 +448,16 @@ def main(args):
         if args.n_samples and args.n_samples < len(samples):
             samples = subsample_stratified(samples, args.n_samples)
             print(f"  Subsampled to {len(samples)} images")
+
+        # Drop classes with fewer than 2 samples — StratifiedShuffleSplit requires ≥2
+        label_counts = Counter(s["label"] for s in samples)
+        samples = [s for s in samples if label_counts[s["label"]] >= 2]
+        if not samples:
+            print(f"  [skip] {agml_name} — no classes with ≥2 samples after filtering")
+            continue
+        dropped = sum(1 for c, n in label_counts.items() if n < 2)
+        if dropped:
+            print(f"  [warn] {agml_name} — dropped {dropped} singleton class(es)")
 
         labels_all = [s["label"] for s in samples]
         le = LabelEncoder()
