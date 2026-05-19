@@ -4,12 +4,13 @@ import runpy
 import sys
 
 STAGES = {
-    "generate": "src.data_generation.generate",
-    "build-db": "src.data_generation.build_reference_db",
-    "verify":   "src.data_generation.verify",
-    "probe":    "src.linear_probe.probe",
-    "language": "src.language_assessment.assess",
-    "vision":   "src.vision_assessment.assess",
+    "generate":      "src.data_generation.generate",
+    "build-db":      "src.data_generation.build_reference_db",
+    "verify":        "src.data_generation.verify",
+    "patch-healthy": "src.data_generation.patch_healthy",
+    "probe":         "src.linear_probe.probe",
+    "language":      "src.language_assessment.assess",
+    "vision":        "src.vision_assessment.assess",
 }
 
 _HELP = """
@@ -22,6 +23,7 @@ Stages:
     generate    Stage 1a — generate synthetic descriptions from AgML images
     build-db    Stage 1b — export CSV + build reference DB (Wikipedia / IDtools / CGIAR)
     verify      Stage 1c — rewrite descriptions grounded in reference sources
+    patch-healthy       — patch healthy classes in descriptions_corrected.csv in-place
     probe       Stage 2  — linear probe across all AgML datasets
     language    Stage 3  — language assessment (text-only models)
     vision      Stage 4  — vision assessment (multimodal models)
