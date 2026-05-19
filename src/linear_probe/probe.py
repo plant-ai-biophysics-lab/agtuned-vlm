@@ -150,15 +150,26 @@ def extract_gemma4_embeddings(samples, processor, mm_root, device) -> tuple[np.n
     return np.stack(embeddings), labels
 
 
-def load_gemma4(model_id: str, device: str):
+def load_gemma4(model_id: str, device: str, quantize: str | None = None):
     local = os.path.abspath(model_id)
     if os.path.exists(local):
         model_id = local
-    print(f"Loading Gemma4: {model_id}")
+    print(f"Loading VLM: {model_id}" + (f" [{quantize}]" if quantize else ""))
     processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map="auto"
-    )
+
+    load_kwargs: dict = {"device_map": "auto"}
+    if quantize == "4bit":
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16
+        )
+    elif quantize == "8bit":
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+    else:
+        load_kwargs["dtype"] = torch.bfloat16
+
+    model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
     model.eval()
     mm_root = resolve_mm_root(model)
     vision_device = next(mm_root.vision_tower.parameters()).device
@@ -507,7 +518,7 @@ def main(args):
         from tqdm import tqdm
         backbone_key = model_id.split("/")[-1]
         print(f"\n{'='*60}\nVLM: {model_id}\n{'='*60}")
-        processor, vlm, mm_root = load_gemma4(model_id, device)
+        processor, vlm, mm_root = load_gemma4(model_id, device, quantize=args.quantize)
         all_embeddings[backbone_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
@@ -656,6 +667,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_samples", type=int, default=None,
         help="Max samples per dataset (stratified). Default: all.",
+    )
+    parser.add_argument(
+        "--quantize", choices=["4bit", "8bit"], default=None,
+        help="Load VLMs in 4-bit or 8-bit quantization (requires bitsandbytes). Use 4bit for 48GB GPUs.",
     )
     args = parser.parse_args()
 
