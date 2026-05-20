@@ -105,17 +105,35 @@ def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
 def load_llm(
     model_id: str,
     quantization: str | None = None,
-    max_num_seqs: int = 32,
+    max_num_seqs: int = 128,
 ) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
-    llm = LLM(
-        model=model_id,
-        dtype="bfloat16",
-        max_model_len=2048,
-        gpu_memory_utilization=0.7,
-        max_num_seqs=max_num_seqs,
-        quantization=quantization,
-    )
+
+    def _try_load(n_seqs: int) -> LLM:
+        return LLM(
+            model=model_id,
+            dtype="bfloat16",
+            max_model_len=2048,
+            gpu_memory_utilization=0.7,
+            max_num_seqs=n_seqs,
+            quantization=quantization,
+        )
+
+    try:
+        llm = _try_load(max_num_seqs)
+    except ValueError as e:
+        # Mamba-architecture models have a hard cap on max_num_seqs equal to
+        # the number of available Mamba cache blocks. Parse the cap from the
+        # error message and retry automatically.
+        import re as _re
+        m = _re.search(r"lower max_num_seqs to at most (\d+)", str(e))
+        if m:
+            cap = int(m.group(1))
+            print(f"  [load_llm] Mamba cache limit: retrying with max_num_seqs={cap}")
+            llm = _try_load(cap)
+        else:
+            raise
+
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     return llm, tokenizer
 
@@ -784,8 +802,8 @@ if __name__ == "__main__":
         help="vLLM quantization method for loading models (use 'bitsandbytes' for large MoE models on 80GB)",
     )
     parser.add_argument(
-        "--max_num_seqs", type=int, default=32,
-        help="Max concurrent sequences for vLLM (default 32 is safe for Mamba models; raise for throughput)",
+        "--max_num_seqs", type=int, default=128,
+        help="Max concurrent sequences for vLLM (auto-lowered for Mamba models)",
     )
     args = parser.parse_args()
     main(args)
