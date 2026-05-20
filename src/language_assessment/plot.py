@@ -69,17 +69,21 @@ def main() -> None:
         print("ERROR: no model results found in metrics JSON.")
         sys.exit(1)
 
+    naive = results.get("naive", {})
+    naive_desc_metrics = naive.get("description", None)
+    naive_cls_metrics  = naive.get("classification", None)
+
     print(f"Loaded metrics for {len(all_model_desc_metrics)} model(s): "
           f"{', '.join(all_model_desc_metrics)}")
     if multimodal_set:
         print(f"Multimodal (hatched): {', '.join(multimodal_set)}")
 
     print("\n=== Generating plots ===")
-    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set)
-    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set)
-    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set)
-    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set)
+    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_metrics)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_metrics)
+    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_desc_metrics)
+    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_desc_metrics)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_metrics)
 
     print(f"\nDone. Charts saved to {output_dir}/")
 

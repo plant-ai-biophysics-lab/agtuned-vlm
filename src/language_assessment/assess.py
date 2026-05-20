@@ -284,25 +284,24 @@ def _hatch(model_key: str, multimodal_models: set[str]) -> str:
     return "///" if model_key in multimodal_models else ""
 
 
-def _modality_legend(ax, multimodal_models: set[str], models: list[str], fontsize: int = 7) -> None:
-    """Append solid/hatched proxy patches to the legend if the model list is mixed."""
-    has_vlm = any(m in multimodal_models for m in models)
-    has_lm  = any(m not in multimodal_models for m in models)
-    if not (has_vlm and has_lm):
+def _naive_mean(naive_metrics: dict[str, dict], metric: str) -> float | None:
+    """Mean of a metric across all datasets in the naive baseline dict."""
+    vals = [m.get(metric, None) for m in naive_metrics.values() if m.get(metric) is not None]
+    return float(np.mean(vals)) if vals else None
+
+
+def _draw_naive_line(ax, value: float | None, label: bool = False) -> None:
+    if value is None:
         return
-    import matplotlib.patches as mpatches
-    handles, labels = ax.get_legend_handles_labels()
-    handles += [
-        mpatches.Patch(facecolor="white", edgecolor="black", label="text-only"),
-        mpatches.Patch(facecolor="white", edgecolor="black", hatch="///", label="multimodal (VLM)"),
-    ]
-    ax.legend(handles=handles, fontsize=fontsize)
+    ax.axhline(value, color="red", linestyle="--", linewidth=1.2,
+               label="naive baseline" if label else "_nolegend_")
 
 
 def plot_cls_summary_per_dataset(
     all_cls_results: dict[str, dict[str, dict]],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
+    naive_cls_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Grouped bar chart: classification metrics per AgML dataset, one group per model."""
     multimodal_models = multimodal_models or set()
@@ -318,9 +317,9 @@ def plot_cls_summary_per_dataset(
     metrics = ["accuracy", "f1_macro", "f1_weighted"]
     colors = plt.cm.tab10(np.linspace(0, 0.6, len(models)))
     x = np.arange(len(all_datasets))
-    width = 0.8 / (len(models) * len(metrics))
+    width = 0.8 / len(models)
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(10, len(all_datasets) * 0.8), 5), sharey=True)
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(12, len(all_datasets) * len(models) * 0.5), 5), sharey=True)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, (model_key, color) in enumerate(zip(models, colors)):
@@ -329,6 +328,8 @@ def plot_cls_summary_per_dataset(
             offset = (i - (len(models) - 1) / 2) * width
             ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85,
                    hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+        if naive_cls_metrics:
+            _draw_naive_line(ax, _naive_mean(naive_cls_metrics, metric), label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels(
             [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
@@ -339,7 +340,6 @@ def plot_cls_summary_per_dataset(
         ax.set_ylabel("Score" if mi == 0 else "")
         if mi == 0:
             ax.legend(fontsize=7)
-            _modality_legend(ax, multimodal_models, models)
 
     fig.suptitle("Language Assessment — Classification Per Dataset", fontsize=11)
     plt.tight_layout()
@@ -354,6 +354,7 @@ def plot_cls_summary_per_task(
     ds_to_task: dict[str, str],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
+    naive_cls_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Grouped bar chart: classification metrics per task_type, one group per model."""
     multimodal_models = multimodal_models or set()
@@ -365,7 +366,7 @@ def plot_cls_summary_per_task(
     metrics = ["accuracy", "contains_accuracy", "f1_macro"]
     colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(task_types))
-    width = 0.8 / (len(models) * len(metrics))
+    width = 0.8 / len(models)
 
     task_scores: dict[str, dict[str, dict[str, list]]] = {
         model_key: {tt: {m: [] for m in metrics} for tt in task_types}
@@ -378,7 +379,9 @@ def plot_cls_summary_per_task(
                 for metric in metrics:
                     task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(10, len(task_types) * 2), 5), sharey=True)
+    subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, (model_key, color) in enumerate(zip(models, colors)):
@@ -394,14 +397,15 @@ def plot_cls_summary_per_task(
                 h = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+        if naive_cls_metrics:
+            _draw_naive_line(ax, _naive_mean(naive_cls_metrics, metric), label=(mi == 0))
         ax.set_xticks(x)
-        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
+        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
         ax.set_ylabel("Score" if mi == 0 else "")
         if mi == 0:
             ax.legend(fontsize=7)
-            _modality_legend(ax, multimodal_models, models)
 
     fig.suptitle("Language Assessment — Classification Per Task Type", fontsize=11)
     plt.tight_layout()
@@ -416,6 +420,7 @@ def plot_desc_summary_per_task(
     ds_to_task: dict[str, str],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
+    naive_desc_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Grouped bar chart: ROUGE metrics per task_type for the description task."""
     multimodal_models = multimodal_models or set()
@@ -427,7 +432,7 @@ def plot_desc_summary_per_task(
     metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
     colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(task_types))
-    width = 0.8 / (len(models) * len(metrics))
+    width = 0.8 / len(models)
 
     task_scores: dict[str, dict[str, dict[str, list]]] = {
         mk: {tt: {m: [] for m in metrics} for tt in task_types}
@@ -441,7 +446,9 @@ def plot_desc_summary_per_task(
                     task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
 
     metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(12, len(task_types) * 2.5), 5), sharey=True)
+    subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, (model_key, color) in enumerate(zip(models, colors)):
@@ -457,14 +464,15 @@ def plot_desc_summary_per_task(
                 h = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+        if naive_desc_metrics:
+            _draw_naive_line(ax, _naive_mean(naive_desc_metrics, metric), label=(mi == 0))
         ax.set_xticks(x)
-        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
+        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
         ax.set_title(metric_labels.get(metric, metric))
         ax.set_ylabel("Score" if mi == 0 else "")
         if mi == 0:
             ax.legend(fontsize=7)
-            _modality_legend(ax, multimodal_models, models)
 
     fig.suptitle("Language Assessment — Description ROUGE Per Task Type", fontsize=11)
     plt.tight_layout()
@@ -478,6 +486,7 @@ def plot_overall_desc_summary(
     all_desc_results: dict[str, dict[str, dict]],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
+    naive_desc_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Bar chart: overall ROUGE scores per model averaged across all datasets."""
     multimodal_models = multimodal_models or set()
@@ -489,8 +498,11 @@ def plot_overall_desc_summary(
     metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
     colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(models))
+    bar_w = 0.7
+    subplot_w = max(3.5, len(models) * 1.5)
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(8, len(models) * 2), 5), sharey=True)
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         vals = [
@@ -499,19 +511,21 @@ def plot_overall_desc_summary(
             for mk in models
         ]
         for xi, (mk, color, v) in enumerate(zip(models, colors, vals)):
-            bar = ax.bar(xi, v, 0.6, color=color, alpha=0.85,
-                         hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
-                         label=mk)
-            ax.text(xi, v + 0.005, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+            ax.bar(xi, v, bar_w, color=color, alpha=0.85,
+                   hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
+                   label=mk)
+            ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        if naive_desc_metrics:
+            _draw_naive_line(ax, _naive_mean(naive_desc_metrics, metric), label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels(
-            [mk.split("/")[-1] for mk in models], rotation=20, ha="right", fontsize=8
+            [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
         )
         ax.set_ylim(0, 1.15)
         ax.set_title(metric_labels.get(metric, metric))
         ax.set_ylabel("Score" if mi == 0 else "")
         if mi == 0:
-            _modality_legend(ax, multimodal_models, models, fontsize=8)
+            ax.legend(fontsize=7)
 
     fig.suptitle("Language Assessment — Overall Description ROUGE", fontsize=11)
     plt.tight_layout()
@@ -525,6 +539,7 @@ def plot_overall_cls_summary(
     all_cls_results: dict[str, dict[str, dict]],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
+    naive_cls_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Bar chart: overall classification scores per model averaged across all datasets."""
     multimodal_models = multimodal_models or set()
@@ -535,8 +550,11 @@ def plot_overall_cls_summary(
     metrics = ["accuracy", "contains_accuracy", "f1_macro"]
     colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(models))
+    bar_w = 0.7
+    subplot_w = max(3.5, len(models) * 1.5)
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(8, len(models) * 2), 5), sharey=True)
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         vals = [
@@ -545,19 +563,21 @@ def plot_overall_cls_summary(
             for mk in models
         ]
         for xi, (mk, color, v) in enumerate(zip(models, colors, vals)):
-            ax.bar(xi, v, 0.6, color=color, alpha=0.85,
+            ax.bar(xi, v, bar_w, color=color, alpha=0.85,
                    hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
                    label=mk)
-            ax.text(xi, v + 0.005, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+            ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        if naive_cls_metrics:
+            _draw_naive_line(ax, _naive_mean(naive_cls_metrics, metric), label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels(
-            [mk.split("/")[-1] for mk in models], rotation=20, ha="right", fontsize=8
+            [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
         )
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
         ax.set_ylabel("Score" if mi == 0 else "")
         if mi == 0:
-            _modality_legend(ax, multimodal_models, models, fontsize=8)
+            ax.legend(fontsize=7)
 
     fig.suptitle("Language Assessment — Overall Classification", fontsize=11)
     plt.tight_layout()
@@ -793,11 +813,11 @@ def main(args: argparse.Namespace) -> None:
     # Plots
     multimodal_set = set(args.multimodal_models or [])
     print("\n=== Generating plots ===")
-    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set)
-    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set)
-    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set)
-    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set)
+    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_metrics)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_metrics)
+    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_desc_metrics)
+    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_desc_metrics)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_metrics)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
