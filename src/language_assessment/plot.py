@@ -120,9 +120,12 @@ def main() -> None:
     all_model_desc_metrics: dict[str, dict[str, dict]] = {}
     all_model_cls_metrics: dict[str, dict[str, dict]] = {}
 
+    all_judge_metrics: dict[str, dict] = {}
     for model_id, m in results.get("models", {}).items():
         all_model_desc_metrics[model_id] = m.get("description_per_dataset", {})
         all_model_cls_metrics[model_id] = m.get("classification_per_dataset", {})
+        if m.get("judge"):
+            all_judge_metrics[model_id] = m["judge"]
 
     if not all_model_desc_metrics:
         print("ERROR: no model results found in metrics JSON.")
@@ -158,7 +161,7 @@ def main() -> None:
     plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
-    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics)
 
     print(f"\nDone. Charts saved to {output_dir}/")
 

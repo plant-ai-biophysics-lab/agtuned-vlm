@@ -316,6 +316,19 @@ def _draw_naive_line(ax, naive_overall: dict | None, metric: str, label: bool = 
                label="naive baseline" if label else "_nolegend_")
 
 
+# Maps bar metric name → judge metric key in judged_summary output
+_JUDGE_METRIC_MAP = {"accuracy": "judge_accuracy", "f1_macro": "judge_f1_macro"}
+
+
+def _draw_judge_marker(ax, bar, value: float, label: bool = False) -> None:
+    """Draw a thick horizontal tick across a bar at the judge score."""
+    x0 = bar.get_x()
+    w = bar.get_width()
+    ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
+            solid_capstyle="butt", zorder=5,
+            label="judge score" if label else "_nolegend_")
+
+
 def plot_cls_summary_per_dataset(
     all_cls_results: dict[str, dict[str, dict]],
     output_dir: Path,
@@ -559,9 +572,11 @@ def plot_overall_cls_summary(
     output_dir: Path,
     multimodal_models: set[str] | None = None,
     naive_cls_metrics: dict[str, dict] | None = None,
+    all_judge_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Bar chart: overall classification scores per model averaged across all datasets."""
     multimodal_models = multimodal_models or set()
+    all_judge_metrics = all_judge_metrics or {}
     models = list(all_cls_results.keys())
     if not models:
         return
@@ -574,18 +589,25 @@ def plot_overall_cls_summary(
 
     fig, axes = plt.subplots(1, len(metrics),
                              figsize=(subplot_w * len(metrics), 6), sharey=True)
+    judge_label_drawn = False
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
+        judge_key = _JUDGE_METRIC_MAP.get(metric)
         vals = [
             float(np.mean([m.get(metric, 0.0) for m in all_cls_results[mk].values()]))
             if all_cls_results[mk] else 0.0
             for mk in models
         ]
         for xi, (mk, color, v) in enumerate(zip(models, colors, vals)):
-            ax.bar(xi, v, bar_w, color=color, alpha=0.85,
-                   hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
-                   label=mk)
+            bar = ax.bar(xi, v, bar_w, color=color, alpha=0.85,
+                         hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
+                         label=mk)[0]
             ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+            if judge_key:
+                jval = all_judge_metrics.get(mk, {}).get(judge_key)
+                if jval is not None:
+                    _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
+                    judge_label_drawn = True
         if naive_cls_metrics:
             _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
@@ -836,11 +858,12 @@ def main(args: argparse.Namespace) -> None:
     # Plots
     multimodal_set = set(args.multimodal_models or [])
     print("\n=== Generating plots ===")
+    judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
     plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
-    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"

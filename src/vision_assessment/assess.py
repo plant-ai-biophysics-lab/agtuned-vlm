@@ -62,6 +62,8 @@ _TASK_LABELS = {"pest_damage": "pest/damage"}
 
 _HEALTHY_DESCRIPTION = "This leaf/plant is healthy."
 
+_JUDGE_METRIC_MAP = {"f1_macro": "judge_f1_macro", "accuracy": "judge_accuracy"}
+
 
 def _apply_healthy_override(records: list[dict]) -> list[dict]:
     out = []
@@ -331,6 +333,15 @@ def compute_cls_metrics_per_dataset(cls_rows: list[dict]) -> dict[str, dict]:
 
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
+def _draw_judge_marker(ax, bar, value: float, label: bool = False) -> None:
+    """Draw a thick horizontal tick across a bar at the judge score."""
+    x0 = bar.get_x()
+    w = bar.get_width()
+    ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
+            solid_capstyle="butt", zorder=5,
+            label="judge score" if label else "_nolegend_")
+
+
 def plot_rouge_by_dataset(
     all_desc_metrics: dict[str, dict[str, dict]],
     naive_desc_metrics: dict[str, dict],
@@ -374,6 +385,7 @@ def plot_cls_by_task(
     all_cls_by_task: dict[str, dict[str, dict]],
     naive_cls_by_task: dict[str, dict],
     output_dir: Path,
+    all_judge_metrics: dict[str, dict] | None = None,
 ) -> None:
     task_types = sorted(set(
         tt for m in all_cls_by_task.values() for tt in m
@@ -381,19 +393,25 @@ def plot_cls_by_task(
     if not task_types:
         return
 
+    all_judge_metrics = all_judge_metrics or {}
     models = list(all_cls_by_task.keys())
     x = np.arange(len(task_types))
     width = 0.8 / len(models)
+    judge_label_drawn = False
 
     fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
     for i, model_id in enumerate(models):
         vals = [all_cls_by_task[model_id].get(tt, {}).get("f1_macro", 0.0) for tt in task_types]
         offset = (i - (len(models) - 1) / 2) * width
         bars = ax.bar(x + offset, vals, width, label=model_id, alpha=0.85)
+        jval = all_judge_metrics.get(model_id, {}).get("judge_f1_macro")
         for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                     f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+            if jval is not None:
+                _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
+                judge_label_drawn = True
 
     ax.set_xticks(x)
     ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
@@ -622,7 +640,8 @@ def main(args: argparse.Namespace) -> None:
     # Plots
     print("\n=== Generating plots ===")
     plot_rouge_by_dataset(all_model_desc_metrics, naive_desc_metrics, output_dir)
-    plot_cls_by_task(all_model_cls_metrics, naive_cls_by_task, output_dir)
+    judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
+    plot_cls_by_task(all_model_cls_metrics, naive_cls_by_task, output_dir, judge_metrics)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
