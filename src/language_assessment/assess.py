@@ -284,13 +284,11 @@ def _hatch(model_key: str, multimodal_models: set[str]) -> str:
     return "///" if model_key in multimodal_models else ""
 
 
-def _naive_mean(naive_metrics: dict[str, dict], metric: str) -> float | None:
-    """Mean of a metric across all datasets in the naive baseline dict."""
-    vals = [m.get(metric, None) for m in naive_metrics.values() if m.get(metric) is not None]
-    return float(np.mean(vals)) if vals else None
-
-
-def _draw_naive_line(ax, value: float | None, label: bool = False) -> None:
+def _draw_naive_line(ax, naive_overall: dict | None, metric: str, label: bool = False) -> None:
+    """Draw a horizontal dashed red line at the naive baseline value for this metric."""
+    if not naive_overall:
+        return
+    value = naive_overall.get(metric)
     if value is None:
         return
     ax.axhline(value, color="red", linestyle="--", linewidth=1.2,
@@ -329,7 +327,7 @@ def plot_cls_summary_per_dataset(
             ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85,
                    hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
         if naive_cls_metrics:
-            _draw_naive_line(ax, _naive_mean(naive_cls_metrics, metric), label=(mi == 0))
+            _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels(
             [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
@@ -398,7 +396,7 @@ def plot_cls_summary_per_task(
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
         if naive_cls_metrics:
-            _draw_naive_line(ax, _naive_mean(naive_cls_metrics, metric), label=(mi == 0))
+            _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
@@ -465,7 +463,7 @@ def plot_desc_summary_per_task(
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
         if naive_desc_metrics:
-            _draw_naive_line(ax, _naive_mean(naive_desc_metrics, metric), label=(mi == 0))
+            _draw_naive_line(ax, naive_desc_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
@@ -516,7 +514,7 @@ def plot_overall_desc_summary(
                    label=mk)
             ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
         if naive_desc_metrics:
-            _draw_naive_line(ax, _naive_mean(naive_desc_metrics, metric), label=(mi == 0))
+            _draw_naive_line(ax, naive_desc_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels(
             [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
@@ -568,7 +566,7 @@ def plot_overall_cls_summary(
                    label=mk)
             ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
         if naive_cls_metrics:
-            _draw_naive_line(ax, _naive_mean(naive_cls_metrics, metric), label=(mi == 0))
+            _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
         ax.set_xticklabels(
             [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
@@ -748,11 +746,20 @@ def main(args: argparse.Namespace) -> None:
         del judge_llm, judge_tok
         gc.collect()
 
+    # Overall naive baselines (same computation as the summary table — flat aggregate over all rows)
+    naive_ov_desc = aggregate_rouge([
+        row for rows in naive_desc_per_ds.values() for row in rows
+    ]) if naive_desc_per_ds else {}
+    naive_cls_all_refs = [r["messages"][1]["content"] for r in cls_records]
+    naive_cls_overall = naive_classification_baseline(naive_cls_all_refs)
+
     # Save metrics JSON
     full_results = {
         "naive": {
             "description": naive_desc_metrics,
+            "description_overall": naive_ov_desc,
             "classification": naive_cls_metrics,
+            "classification_overall": naive_cls_overall,
         },
         "models": summary_metrics,
     }
@@ -764,9 +771,6 @@ def main(args: argparse.Namespace) -> None:
     tee.print("\n=== Language Assessment — Description ROUGE ===")
     tee.print(f"  {'Model':<45} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'R-SS':>6}")
     tee.print(f"  {'-'*66}")
-    naive_ov_desc = aggregate_rouge([
-        row for rows in naive_desc_per_ds.values() for row in rows
-    ]) if naive_desc_per_ds else {}
     tee.print(f"  {'naive':<45} "
               f"{naive_ov_desc.get('rouge1', 0):>6.3f} {naive_ov_desc.get('rouge2', 0):>6.3f} "
               f"{naive_ov_desc.get('rougeL', 0):>6.3f} {naive_ov_desc.get('rouge_ss', 0):>6.3f}")
@@ -781,8 +785,6 @@ def main(args: argparse.Namespace) -> None:
     tee.print(f"  {'-'*77}")
     for ds, m in naive_cls_metrics.items():
         pass
-    naive_cls_all_refs = [r["messages"][1]["content"] for r in cls_records]
-    naive_cls_overall = naive_classification_baseline(naive_cls_all_refs)
     tee.print(f"  {'naive':<45} "
               f"{naive_cls_overall.get('accuracy', 0):>6.3f} "
               f"{naive_cls_overall.get('contains_accuracy', 0):>6.3f} "
@@ -813,11 +815,11 @@ def main(args: argparse.Namespace) -> None:
     # Plots
     multimodal_set = set(args.multimodal_models or [])
     print("\n=== Generating plots ===")
-    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_metrics)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_metrics)
-    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_desc_metrics)
-    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_desc_metrics)
-    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_metrics)
+    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall)
+    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
+    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
