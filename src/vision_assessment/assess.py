@@ -97,16 +97,34 @@ def _apply_chat_template(tokenizer, prompt: str) -> str:
         )
 
 
-def load_llm(model_id: str) -> tuple[LLM, object]:
+def load_llm(model_id: str, quantization: str | None = None) -> tuple[LLM, object]:
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
         max_model_len=16384,
-        gpu_memory_utilization=0.9,
+        gpu_memory_utilization=0.7,
         max_num_seqs=64,
         limit_mm_per_prompt={"image": 1},
+        quantization=quantization,
     )
     return llm, llm.get_tokenizer()
+
+
+def destroy_llm(llm) -> None:
+    import torch
+    try:
+        llm.llm_engine.engine_core.shutdown()
+    except Exception:
+        pass
+    try:
+        from vllm.distributed.parallel_state import destroy_model_parallel
+        destroy_model_parallel()
+    except Exception:
+        pass
+    del llm
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
 
 
 def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> dict:
@@ -151,7 +169,7 @@ def run_model(
     output_dir: Path,
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
-    llm, tokenizer = load_llm(model_id)
+    llm, tokenizer = load_llm(model_id, quantization=args.quantization)
 
     desc_rows: list[dict] = []
     cls_rows: list[dict] = []
@@ -233,11 +251,8 @@ def run_model(
     elapsed = time.perf_counter() - t_start
     print(f"\nInference time: {elapsed:.1f}s")
 
-    import torch
-    llm.llm_engine.engine_core.shutdown()
-    del llm, tokenizer
-    gc.collect()
-    torch.cuda.empty_cache()
+    destroy_llm(llm)
+    del tokenizer
 
     return desc_rows, cls_rows
 
@@ -568,6 +583,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--judge_confidence_threshold", type=int, default=1,
         help="Minimum confidence (0-2) required to count as correct (default: 1)",
+    )
+    parser.add_argument(
+        "--quantization", default=None, choices=["awq", "gptq", "fp8", "bitsandbytes"],
+        help="vLLM quantization method (use 'bitsandbytes' for large MoE models on 80GB)",
     )
     args = parser.parse_args()
     main(args)

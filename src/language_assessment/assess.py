@@ -100,17 +100,35 @@ def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
         )
 
 
-def load_llm(model_id: str) -> tuple[LLM, object]:
+def load_llm(model_id: str, quantization: str | None = None) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
         max_model_len=2048,
-        gpu_memory_utilization=0.9,
+        gpu_memory_utilization=0.7,
         max_num_seqs=128,
+        quantization=quantization,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     return llm, tokenizer
+
+
+def destroy_llm(llm) -> None:
+    import torch
+    try:
+        llm.llm_engine.engine_core.shutdown()
+    except Exception:
+        pass
+    try:
+        from vllm.distributed.parallel_state import destroy_model_parallel
+        destroy_model_parallel()
+    except Exception:
+        pass
+    del llm
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
 
 
 def run_inference(
@@ -377,18 +395,15 @@ def main(args: argparse.Namespace) -> None:
         print(f"Model: {model_id}")
         print(f"{'='*60}")
 
-        llm, tokenizer = load_llm(model_id)
+        llm, tokenizer = load_llm(model_id, quantization=args.quantization)
 
         desc_rows = run_descriptions(llm, tokenizer, desc_records, prompt_template)
         cls_rows = run_classifications(
             llm, tokenizer, cls_records, prompt_template, classification_suffix, datasets_cfg
         )
 
-        import torch
-        llm.llm_engine.engine_core.shutdown()
-        del llm, tokenizer
-        gc.collect()
-        torch.cuda.empty_cache()
+        del tokenizer
+        destroy_llm(llm)
 
         desc_per_ds = compute_desc_metrics_per_dataset(desc_rows)
         cls_per_ds = compute_cls_metrics_per_dataset(cls_rows)
@@ -565,6 +580,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--judge_confidence_threshold", type=int, default=1,
         help="Minimum confidence (0-2) required to count as correct (default: 1)",
+    )
+    parser.add_argument(
+        "--quantization", default=None, choices=["awq", "gptq", "fp8", "bitsandbytes"],
+        help="vLLM quantization method for loading models (use 'bitsandbytes' for large MoE models on 80GB)",
     )
     args = parser.parse_args()
     main(args)
