@@ -123,12 +123,20 @@ _MAMBA_MAX_NUM_SEQS = 32
 
 
 def _is_mamba(model_id: str) -> bool:
-    """Check the HF config before loading vLLM to detect Mamba-family architectures."""
+    """Detect Mamba/SSM layers before loading vLLM to avoid EngineCore crash.
+
+    Covers both pure Mamba models (model_type in _MAMBA_MODEL_TYPES) and hybrid
+    architectures like Qwen3 MoE that embed Mamba layers but use a different
+    model_type — detected by scanning config keys for 'mamba' or 'ssm'.
+    """
     try:
         from transformers import AutoConfig
         cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
         model_type = getattr(cfg, "model_type", "").lower()
-        return any(mt in model_type for mt in _MAMBA_MODEL_TYPES)
+        if any(mt in model_type for mt in _MAMBA_MODEL_TYPES):
+            return True
+        cfg_dict = cfg.to_dict() if hasattr(cfg, "to_dict") else {}
+        return any("mamba" in k.lower() or "ssm" in k.lower() for k in cfg_dict)
     except Exception:
         return False
 
