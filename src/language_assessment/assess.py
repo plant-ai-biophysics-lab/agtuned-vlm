@@ -118,6 +118,21 @@ def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
         )
 
 
+_MAMBA_MODEL_TYPES = {"mamba", "mamba2", "jamba", "zamba", "falcon_mamba", "bamba"}
+_MAMBA_MAX_NUM_SEQS = 32
+
+
+def _is_mamba(model_id: str) -> bool:
+    """Check the HF config before loading vLLM to detect Mamba-family architectures."""
+    try:
+        from transformers import AutoConfig
+        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        model_type = getattr(cfg, "model_type", "").lower()
+        return any(mt in model_type for mt in _MAMBA_MODEL_TYPES)
+    except Exception:
+        return False
+
+
 def load_llm(
     model_id: str,
     quantization: str | None = None,
@@ -125,31 +140,20 @@ def load_llm(
 ) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
 
-    def _try_load(n_seqs: int) -> LLM:
-        return LLM(
-            model=model_id,
-            dtype="bfloat16",
-            max_model_len=2048,
-            gpu_memory_utilization=0.7,
-            max_num_seqs=n_seqs,
-            quantization=quantization,
-        )
+    if _is_mamba(model_id):
+        effective_seqs = min(max_num_seqs, _MAMBA_MAX_NUM_SEQS)
+        if effective_seqs < max_num_seqs:
+            print(f"  [load_llm] Mamba architecture detected — capping max_num_seqs at {effective_seqs}")
+        max_num_seqs = effective_seqs
 
-    try:
-        llm = _try_load(max_num_seqs)
-    except ValueError as e:
-        # Mamba-architecture models have a hard cap on max_num_seqs equal to
-        # the number of available Mamba cache blocks. Parse the cap from the
-        # error message and retry automatically.
-        import re as _re
-        m = _re.search(r"lower max_num_seqs to at most (\d+)", str(e))
-        if m:
-            cap = int(m.group(1))
-            print(f"  [load_llm] Mamba cache limit: retrying with max_num_seqs={cap}")
-            llm = _try_load(cap)
-        else:
-            raise
-
+    llm = LLM(
+        model=model_id,
+        dtype="bfloat16",
+        max_model_len=2048,
+        gpu_memory_utilization=0.7,
+        max_num_seqs=max_num_seqs,
+        quantization=quantization,
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     return llm, tokenizer
 

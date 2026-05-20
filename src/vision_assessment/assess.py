@@ -115,11 +115,32 @@ def _apply_chat_template(tokenizer, prompt: str) -> str:
         )
 
 
+_MAMBA_MODEL_TYPES = {"mamba", "mamba2", "jamba", "zamba", "falcon_mamba", "bamba"}
+_MAMBA_MAX_NUM_SEQS = 32
+
+
+def _is_mamba(model_id: str) -> bool:
+    """Check the HF config before loading vLLM to detect Mamba-family architectures."""
+    try:
+        from transformers import AutoConfig
+        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        model_type = getattr(cfg, "model_type", "").lower()
+        return any(mt in model_type for mt in _MAMBA_MODEL_TYPES)
+    except Exception:
+        return False
+
+
 def load_llm(
     model_id: str,
     quantization: str | None = None,
     max_num_seqs: int = 64,
 ) -> tuple[LLM, object]:
+    if _is_mamba(model_id):
+        effective_seqs = min(max_num_seqs, _MAMBA_MAX_NUM_SEQS)
+        if effective_seqs < max_num_seqs:
+            print(f"  [load_llm] Mamba architecture detected — capping max_num_seqs at {effective_seqs}")
+        max_num_seqs = effective_seqs
+
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
