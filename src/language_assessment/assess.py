@@ -105,7 +105,7 @@ def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
 def load_llm(
     model_id: str,
     quantization: str | None = None,
-    max_num_seqs: int = 128,
+    max_num_seqs: int = 32,
 ) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
     llm = LLM(
@@ -639,8 +639,8 @@ if __name__ == "__main__":
         help="vLLM quantization method for loading models (use 'bitsandbytes' for large MoE models on 80GB)",
     )
     parser.add_argument(
-        "--max_num_seqs", type=int, default=128,
-        help="Max concurrent sequences for vLLM (lower to ≤35 for Mamba-architecture models)",
+        "--max_num_seqs", type=int, default=32,
+        help="Max concurrent sequences for vLLM (default 32 is safe for Mamba models; raise for throughput)",
     )
     args = parser.parse_args()
     main(args)

@@ -76,9 +76,8 @@ python main.py language \
   --classification_jsonl outputs/data_generation/agml_classification.jsonl \
   --config               src/config/datasets.yaml \
   --prompts              src/config/prompts.yaml \
-  --models openai/gpt-oss-20b meta-llama/Llama-4-Scout-17B-16E-Instruct \
-  --output_dir           outputs/language_assessment/ \
-  --quantization fp8
+  --models openai/gpt-oss-20b google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --output_dir           outputs/language_assessment/
 ```
 
 ### Stage 4 — Vision assessment
