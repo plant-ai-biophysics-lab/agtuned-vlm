@@ -163,6 +163,7 @@ def load_llm(
     model_id: str,
     quantization: str | None = None,
     max_num_seqs: int = 128,
+    gpu_memory_utilization: float = 0.7,
 ) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
 
@@ -176,7 +177,7 @@ def load_llm(
         model=model_id,
         dtype="bfloat16",
         max_model_len=2048,
-        gpu_memory_utilization=0.7,
+        gpu_memory_utilization=gpu_memory_utilization,
         max_num_seqs=max_num_seqs,
         quantization=quantization,
     )
@@ -792,7 +793,11 @@ def main(args: argparse.Namespace) -> None:
     # LLM judge (classification only)
     if args.judge_model:
         print(f"\n=== LLM Judge: {args.judge_model} ===")
-        judge_llm, judge_tok = load_llm(args.judge_model)
+        judge_llm, judge_tok = load_llm(
+            args.judge_model,
+            quantization=args.judge_quantization,
+            gpu_memory_utilization=0.9,
+        )
 
         for model_id in args.models:
             cls_csv = output_dir / f"cls_{_safe_name(model_id)}.csv"
@@ -943,6 +948,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--judge_model", default=None,
         help="LLM-as-a-judge model (runs after all eval models; classification only)",
+    )
+    parser.add_argument(
+        "--judge_quantization", default=None, choices=["awq", "gptq", "fp8", "bitsandbytes"],
+        help="Quantization method for the judge model (optional)",
     )
     parser.add_argument(
         "--output_dir", default="outputs/language_assessment/",
