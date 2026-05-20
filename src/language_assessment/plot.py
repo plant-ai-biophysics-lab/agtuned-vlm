@@ -41,6 +41,52 @@ def _macro_average(per_dataset: dict, metrics: list[str]) -> dict | None:
     }
 
 
+def _parse_summary_naive(summary_path: Path) -> tuple[dict | None, dict | None]:
+    """
+    Parse the naive baseline rows from summary.txt.
+
+    Description section row format (whitespace-separated after 'naive' label):
+        naive   R-1   R-2   R-L   R-SS
+
+    Classification section row format:
+        naive   Acc   Cont  F1-mac   Res/Tot
+    """
+    if not summary_path.exists():
+        return None, None
+
+    import re
+    text = summary_path.read_text()
+
+    desc_naive = cls_naive = None
+
+    # Find the description ROUGE section
+    m = re.search(
+        r"Description ROUGE.*?naive\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)",
+        text, re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        desc_naive = {
+            "rouge1": float(m.group(1)),
+            "rouge2": float(m.group(2)),
+            "rougeL": float(m.group(3)),
+            "rouge_ss": float(m.group(4)),
+        }
+
+    # Find the classification section — naive row ends with Res/Tot (digits/digits)
+    m = re.search(
+        r"Classification.*?naive\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\d+/\d+",
+        text, re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        cls_naive = {
+            "accuracy": float(m.group(1)),
+            "contains_accuracy": float(m.group(2)),
+            "f1_macro": float(m.group(3)),
+        }
+
+    return desc_naive, cls_naive
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Regenerate language assessment charts from saved metrics JSON."
@@ -84,13 +130,20 @@ def main() -> None:
 
     naive = results.get("naive", {})
 
-    # Prefer pre-computed overall (written by new code); fall back to macro-average
-    # across datasets for JSONs saved by older runs.
-    naive_ov_desc = naive.get("description_overall") or _macro_average(
-        naive.get("description", {}), ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    # 1. Prefer pre-computed overall saved by new runs
+    # 2. Fall back to parsing summary.txt (exact same values as the table)
+    # 3. Last resort: macro-average across datasets (only ROUGE; cls is unreliable this way)
+    summary_desc, summary_cls = _parse_summary_naive(output_dir / "summary.txt")
+
+    naive_ov_desc = (
+        naive.get("description_overall")
+        or summary_desc
+        or _macro_average(naive.get("description", {}), ["rouge1", "rouge2", "rougeL", "rouge_ss"])
     )
-    naive_cls_overall = naive.get("classification_overall") or _macro_average(
-        naive.get("classification", {}), ["accuracy", "contains_accuracy", "f1_macro"]
+    naive_cls_overall = (
+        naive.get("classification_overall")
+        or summary_cls
+        or _macro_average(naive.get("classification", {}), ["accuracy", "contains_accuracy", "f1_macro"])
     )
 
     print(f"Loaded metrics for {len(all_model_desc_metrics)} model(s): "
