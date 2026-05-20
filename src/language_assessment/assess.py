@@ -56,6 +56,13 @@ _SAMPLING = SamplingParams(
 
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
+_GREETING_RE = re.compile(
+    r"^(what (a )?(great|good|excellent|interesting|wonderful|nice)|"
+    r"sure[!,.]?|great[!,.]?|of course[!,.]?|absolutely[!,.]?|"
+    r"certainly[!,.]?|hello[!,.]?|hi[!,.]?|yes[!,.]?)\s*$",
+    re.IGNORECASE,
+)
 
 _TASK_LABELS = {"pest_damage": "pest/damage"}
 
@@ -85,17 +92,40 @@ def _parse_model_quantization(entries: list[str]) -> dict[str, str]:
 
 
 def _clean_response(text: str) -> str:
+    # Strip think blocks
     text = _THINK_RE.sub("", text).strip()
     think_start = text.lower().find("<think>")
     if think_start != -1:
         text = text[:think_start].strip()
+
+    # Strip answer/bracket artifacts
     bracket = text.find("[Answer")
     if bracket != -1:
         text = text[:bracket].strip()
+
+    # Strip markdown (headers, bold/italic, bullet markers) — keep inner text
+    text = _MARKDOWN_RE.sub(r"\1", text)
+
+    # Remove greeting-only lines at the start
+    lines = text.splitlines()
+    while lines and _GREETING_RE.match(lines[0].strip()):
+        lines.pop(0)
+    text = "\n".join(lines)
+
+    # Take first non-empty paragraph (stop at blank line)
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if paragraphs:
+        text = paragraphs[0]
+
+    # Collapse internal whitespace / newlines within the paragraph
+    text = " ".join(text.split())
+
+    # Cut repetition loops
     m = _REPEAT_RE.search(text)
     if m:
         text = text[:m.start()].strip()
-    return text
+
+    return text.strip()
 
 
 def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
