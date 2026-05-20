@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
 import gc
+import json
+import multiprocessing
 import re
 import time
 from collections import defaultdict
@@ -346,6 +348,44 @@ def plot_cls_summary_per_task(
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _worker_language(kwargs: dict) -> None:
+    """Runs in a subprocess — loads one model, runs inference, saves results, exits."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+    from src.common.dataset_config import DatasetConfig
+
+    model_id     = kwargs["model_id"]
+    quantization = kwargs["quantization"]
+    out_path     = kwargs["out_path"]
+
+    # Reconstruct DatasetConfig objects from plain dicts
+    datasets_cfg = {k: DatasetConfig(**v) for k, v in kwargs["datasets_cfg"].items()}
+
+    llm, tokenizer = load_llm(model_id, quantization=quantization)
+    desc_rows = run_descriptions(llm, tokenizer, kwargs["desc_records"], kwargs["prompt_template"])
+    cls_rows  = run_classifications(
+        llm, tokenizer, kwargs["cls_records"],
+        kwargs["prompt_template"], kwargs["classification_suffix"],
+        datasets_cfg,
+    )
+    del tokenizer, llm
+
+    with open(out_path, "w") as f:
+        json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
+
+
+def _run_in_subprocess(fn, kwargs: dict) -> None:
+    """Spawns fn(kwargs) in a fresh process and waits for it to finish."""
+    ctx = multiprocessing.get_context("spawn")
+    p = ctx.Process(target=fn, args=(kwargs,))
+    p.start()
+    p.join()
+    if p.exitcode != 0:
+        raise RuntimeError(f"Worker process exited with code {p.exitcode}")
+
+
 def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -395,15 +435,22 @@ def main(args: argparse.Namespace) -> None:
         print(f"Model: {model_id}")
         print(f"{'='*60}")
 
-        llm, tokenizer = load_llm(model_id, quantization=args.quantization)
-
-        desc_rows = run_descriptions(llm, tokenizer, desc_records, prompt_template)
-        cls_rows = run_classifications(
-            llm, tokenizer, cls_records, prompt_template, classification_suffix, datasets_cfg
-        )
-
-        del tokenizer
-        destroy_llm(llm)
+        # Run each model in a subprocess so the OS fully reclaims GPU memory on exit
+        worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"
+        _run_in_subprocess(_worker_language, dict(
+            model_id=model_id,
+            quantization=args.quantization,
+            desc_records=desc_records,
+            cls_records=cls_records,
+            prompt_template=prompt_template,
+            classification_suffix=classification_suffix,
+            datasets_cfg={k: vars(v) for k, v in datasets_cfg.items()},
+            out_path=str(worker_out),
+        ))
+        worker_result = json.loads(worker_out.read_text())
+        worker_out.unlink()
+        desc_rows = worker_result["desc_rows"]
+        cls_rows  = worker_result["cls_rows"]
 
         desc_per_ds = compute_desc_metrics_per_dataset(desc_rows)
         cls_per_ds = compute_cls_metrics_per_dataset(cls_rows)

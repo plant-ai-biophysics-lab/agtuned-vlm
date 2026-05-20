@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
 import gc
+import json
+import multiprocessing
 import re
 import time
 from collections import defaultdict
@@ -167,9 +169,10 @@ def run_model(
     classification_suffix: str,
     n_samples: int | None,
     output_dir: Path,
+    quantization: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
-    llm, tokenizer = load_llm(model_id, quantization=args.quantization)
+    llm, tokenizer = load_llm(model_id, quantization=quantization)
 
     desc_rows: list[dict] = []
     cls_rows: list[dict] = []
@@ -358,6 +361,37 @@ def plot_cls_by_task(
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _worker_vision(kwargs: dict) -> None:
+    """Runs in a subprocess — loads one model, runs inference, saves results, exits."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+    from src.common.dataset_config import DatasetConfig
+
+    datasets_cfg = {k: DatasetConfig(**v) for k, v in kwargs["datasets_cfg"].items()}
+    desc_rows, cls_rows = run_model(
+        model_id=kwargs["model_id"],
+        records=kwargs["records"],
+        datasets_cfg=datasets_cfg,
+        classification_suffix=kwargs["classification_suffix"],
+        n_samples=kwargs["n_samples"],
+        output_dir=Path(kwargs["output_dir"]),
+        quantization=kwargs["quantization"],
+    )
+    with open(kwargs["out_path"], "w") as f:
+        json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
+
+
+def _run_in_subprocess(fn, kwargs: dict) -> None:
+    ctx = multiprocessing.get_context("spawn")
+    p = ctx.Process(target=fn, args=(kwargs,))
+    p.start()
+    p.join()
+    if p.exitcode != 0:
+        raise RuntimeError(f"Worker process exited with code {p.exitcode}")
+
+
 def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -384,14 +418,21 @@ def main(args: argparse.Namespace) -> None:
         print(f"Model: {model_id}")
         print(f"{'='*60}")
 
-        desc_rows, cls_rows = run_model(
+        worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"
+        _run_in_subprocess(_worker_vision, dict(
             model_id=model_id,
             records=records,
-            datasets_cfg=datasets_cfg,
+            datasets_cfg={k: vars(v) for k, v in datasets_cfg.items()},
             classification_suffix=classification_suffix,
             n_samples=args.n_samples,
-            output_dir=output_dir,
-        )
+            output_dir=str(output_dir),
+            quantization=args.quantization,
+            out_path=str(worker_out),
+        ))
+        worker_result = json.loads(worker_out.read_text())
+        worker_out.unlink()
+        desc_rows = worker_result["desc_rows"]
+        cls_rows  = worker_result["cls_rows"]
 
         desc_per_ds = compute_desc_metrics_per_dataset(desc_rows)
         cls_per_ds = compute_cls_metrics_per_dataset(cls_rows)
