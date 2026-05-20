@@ -233,8 +233,11 @@ def run_model(
     elapsed = time.perf_counter() - t_start
     print(f"\nInference time: {elapsed:.1f}s")
 
+    import torch
+    llm.llm_engine.engine_core.shutdown()
     del llm, tokenizer
     gc.collect()
+    torch.cuda.empty_cache()
 
     return desc_rows, cls_rows
 

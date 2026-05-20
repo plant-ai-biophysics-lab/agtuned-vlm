@@ -384,8 +384,11 @@ def main(args: argparse.Namespace) -> None:
             llm, tokenizer, cls_records, prompt_template, classification_suffix, datasets_cfg
         )
 
+        import torch
+        llm.llm_engine.engine_core.shutdown()
         del llm, tokenizer
         gc.collect()
+        torch.cuda.empty_cache()
 
         desc_per_ds = compute_desc_metrics_per_dataset(desc_rows)
         cls_per_ds = compute_cls_metrics_per_dataset(cls_rows)
