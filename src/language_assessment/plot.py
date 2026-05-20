@@ -16,6 +16,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.common.dataset_config import datasets_by_name
@@ -26,6 +28,17 @@ from src.language_assessment.assess import (
     plot_overall_cls_summary,
     plot_overall_desc_summary,
 )
+
+
+def _macro_average(per_dataset: dict, metrics: list[str]) -> dict | None:
+    """Macro-average a per-dataset metrics dict into a single flat dict."""
+    if not per_dataset:
+        return None
+    return {
+        m: float(np.mean([v[m] for v in per_dataset.values() if m in v]))
+        for m in metrics
+        if any(m in v for v in per_dataset.values())
+    }
 
 
 def main() -> None:
@@ -70,11 +83,20 @@ def main() -> None:
         sys.exit(1)
 
     naive = results.get("naive", {})
-    naive_ov_desc    = naive.get("description_overall", None)
-    naive_cls_overall = naive.get("classification_overall", None)
+
+    # Prefer pre-computed overall (written by new code); fall back to macro-average
+    # across datasets for JSONs saved by older runs.
+    naive_ov_desc = naive.get("description_overall") or _macro_average(
+        naive.get("description", {}), ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    )
+    naive_cls_overall = naive.get("classification_overall") or _macro_average(
+        naive.get("classification", {}), ["accuracy", "contains_accuracy", "f1_macro"]
+    )
 
     print(f"Loaded metrics for {len(all_model_desc_metrics)} model(s): "
           f"{', '.join(all_model_desc_metrics)}")
+    print(f"Naive desc baseline:  { {k: round(v,3) for k,v in (naive_ov_desc or {}).items()} }")
+    print(f"Naive cls  baseline:  { {k: round(v,3) for k,v in (naive_cls_overall or {}).items()} }")
     if multimodal_set:
         print(f"Multimodal (hatched): {', '.join(multimodal_set)}")
 
