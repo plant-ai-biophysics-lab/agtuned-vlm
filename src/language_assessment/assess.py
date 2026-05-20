@@ -350,6 +350,148 @@ def plot_cls_summary_per_task(
     print(f"  Saved: {path}")
 
 
+def plot_desc_summary_per_task(
+    all_desc_results: dict[str, dict[str, dict]],
+    ds_to_task: dict[str, str],
+    output_dir: Path,
+) -> None:
+    """Grouped bar chart: ROUGE metrics per task_type for the description task."""
+    task_types = sorted(set(ds_to_task.values()))
+    if not task_types:
+        return
+
+    models = list(all_desc_results.keys())
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
+    x = np.arange(len(task_types))
+    width = 0.8 / (len(models) * len(metrics))
+
+    task_scores: dict[str, dict[str, dict[str, list]]] = {
+        mk: {tt: {m: [] for m in metrics} for tt in task_types}
+        for mk in models
+    }
+    for model_key, per_ds in all_desc_results.items():
+        for ds, m in per_ds.items():
+            tt = ds_to_task.get(ds)
+            if tt:
+                for metric in metrics:
+                    task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
+
+    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(12, len(task_types) * 2.5), 5), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        for i, (model_key, color) in enumerate(zip(models, colors)):
+            vals = [
+                float(np.mean(task_scores[model_key][tt][metric]))
+                if task_scores[model_key][tt][metric] else 0.0
+                for tt in task_types
+            ]
+            offset = (i - (len(models) - 1) / 2) * width
+            bars = ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85)
+            for bar in bars:
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                        f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+        ax.set_xticks(x)
+        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric_labels.get(metric, metric))
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
+
+    fig.suptitle("Language Assessment — Description ROUGE Per Task Type", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "desc_summary_per_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_overall_desc_summary(
+    all_desc_results: dict[str, dict[str, dict]],
+    output_dir: Path,
+) -> None:
+    """Bar chart: overall ROUGE scores per model averaged across all datasets."""
+    models = list(all_desc_results.keys())
+    if not models:
+        return
+
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
+    x = np.arange(len(models))
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(8, len(models) * 2), 5), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        vals = [
+            float(np.mean([m.get(metric, 0.0) for m in all_desc_results[mk].values()]))
+            if all_desc_results[mk] else 0.0
+            for mk in models
+        ]
+        bars = ax.bar(x, vals, 0.6, color=colors, alpha=0.85)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, v + 0.005,
+                    f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [mk.split("/")[-1] for mk in models], rotation=20, ha="right", fontsize=8
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric_labels.get(metric, metric))
+        ax.set_ylabel("Score" if mi == 0 else "")
+
+    fig.suptitle("Language Assessment — Overall Description ROUGE", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "overall_desc_summary.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_overall_cls_summary(
+    all_cls_results: dict[str, dict[str, dict]],
+    output_dir: Path,
+) -> None:
+    """Bar chart: overall classification scores per model averaged across all datasets."""
+    models = list(all_cls_results.keys())
+    if not models:
+        return
+
+    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
+    x = np.arange(len(models))
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(max(8, len(models) * 2), 5), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        vals = [
+            float(np.mean([m.get(metric, 0.0) for m in all_cls_results[mk].values()]))
+            if all_cls_results[mk] else 0.0
+            for mk in models
+        ]
+        bars = ax.bar(x, vals, 0.6, color=colors, alpha=0.85)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, v + 0.005,
+                    f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [mk.split("/")[-1] for mk in models], rotation=20, ha="right", fontsize=8
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_ylabel("Score" if mi == 0 else "")
+
+    fig.suptitle("Language Assessment — Overall Classification", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "overall_cls_summary.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def _worker_language(kwargs: dict) -> None:
@@ -574,6 +716,9 @@ def main(args: argparse.Namespace) -> None:
     print("\n=== Generating plots ===")
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir)
     plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir)
+    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir)
+    plot_overall_desc_summary(all_model_desc_metrics, output_dir)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
