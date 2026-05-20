@@ -69,6 +69,22 @@ def _safe_name(model_id: str) -> str:
     return model_id.replace("/", "_").replace(" ", "_")
 
 
+def _parse_model_quantization(entries: list[str]) -> dict[str, str]:
+    """Parse ['model_id:method', ...] into {model_id: method}."""
+    result = {}
+    valid = {"awq", "gptq", "fp8", "bitsandbytes"}
+    for entry in entries:
+        if ":" not in entry:
+            raise ValueError(
+                f"--model_quantization entry {entry!r} must be in 'model_id:method' format"
+            )
+        model_id, _, method = entry.rpartition(":")
+        if method not in valid:
+            raise ValueError(f"Unknown quantization {method!r} for {model_id!r}. Choose from: {valid}")
+        result[model_id] = method
+    return result
+
+
 def _clean_response(text: str) -> str:
     text = _THINK_RE.sub("", text).strip()
     think_start = text.lower().find("<think>")
@@ -419,9 +435,12 @@ def main(args: argparse.Namespace) -> None:
     all_model_cls_metrics: dict[str, dict[str, dict]] = {}
     summary_metrics: dict[str, dict] = {}
 
+    per_model_quant = _parse_model_quantization(args.model_quantization or [])
+
     for model_id in args.models:
+        quant = per_model_quant.get(model_id, args.quantization)
         print(f"\n{'='*60}")
-        print(f"Model: {model_id}")
+        print(f"Model: {model_id}" + (f"  [quantization={quant}]" if quant else ""))
         print(f"{'='*60}")
 
         worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"
@@ -432,7 +451,7 @@ def main(args: argparse.Namespace) -> None:
             classification_suffix=classification_suffix,
             n_samples=args.n_samples,
             output_dir=str(output_dir),
-            quantization=args.quantization,
+            quantization=quant,
             max_num_seqs=args.max_num_seqs,
             out_path=str(worker_out),
         ))
@@ -634,7 +653,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--quantization", default=None, choices=["awq", "gptq", "fp8", "bitsandbytes"],
-        help="vLLM quantization method (use 'bitsandbytes' for large MoE models on 80GB)",
+        help="vLLM quantization method applied to all models (overridden per model by --model_quantization)",
+    )
+    parser.add_argument(
+        "--model_quantization", nargs="*", default=[],
+        metavar="MODEL_ID:METHOD",
+        help="Per-model quantization overrides, e.g. meta-llama/Meta-Llama-3-70B-Instruct:bitsandbytes",
     )
     parser.add_argument(
         "--max_num_seqs", type=int, default=64,
