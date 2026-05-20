@@ -10,6 +10,7 @@ STAGES = {
     "patch-healthy": "src.data_generation.patch_healthy",
     "probe":         "src.linear_probe.probe",
     "language":      "src.language_assessment.assess",
+    "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
 }
 
@@ -26,6 +27,7 @@ Stages:
     patch-healthy       — patch healthy classes in descriptions_corrected.csv in-place
     probe       Stage 2  — linear probe across all AgML datasets
     language    Stage 3  — language assessment (text-only models)
+    language-plot       — regenerate language assessment charts from saved metrics JSON
     vision      Stage 4  — vision assessment (multimodal models)
 
 Examples:
