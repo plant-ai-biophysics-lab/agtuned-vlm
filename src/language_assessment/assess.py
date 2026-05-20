@@ -102,14 +102,18 @@ def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
         )
 
 
-def load_llm(model_id: str, quantization: str | None = None) -> tuple[LLM, object]:
+def load_llm(
+    model_id: str,
+    quantization: str | None = None,
+    max_num_seqs: int = 128,
+) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
         max_model_len=2048,
         gpu_memory_utilization=0.7,
-        max_num_seqs=128,
+        max_num_seqs=max_num_seqs,
         quantization=quantization,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -356,14 +360,15 @@ def _worker_language(kwargs: dict) -> None:
 
     from src.common.dataset_config import DatasetConfig
 
-    model_id     = kwargs["model_id"]
-    quantization = kwargs["quantization"]
-    out_path     = kwargs["out_path"]
+    model_id      = kwargs["model_id"]
+    quantization  = kwargs["quantization"]
+    max_num_seqs  = kwargs.get("max_num_seqs", 128)
+    out_path      = kwargs["out_path"]
 
     # Reconstruct DatasetConfig objects from plain dicts
     datasets_cfg = {k: DatasetConfig(**v) for k, v in kwargs["datasets_cfg"].items()}
 
-    llm, tokenizer = load_llm(model_id, quantization=quantization)
+    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs)
     desc_rows = run_descriptions(llm, tokenizer, kwargs["desc_records"], kwargs["prompt_template"])
     cls_rows  = run_classifications(
         llm, tokenizer, kwargs["cls_records"],
@@ -440,6 +445,7 @@ def main(args: argparse.Namespace) -> None:
         _run_in_subprocess(_worker_language, dict(
             model_id=model_id,
             quantization=args.quantization,
+            max_num_seqs=args.max_num_seqs,
             desc_records=desc_records,
             cls_records=cls_records,
             prompt_template=prompt_template,
@@ -631,6 +637,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--quantization", default=None, choices=["awq", "gptq", "fp8", "bitsandbytes"],
         help="vLLM quantization method for loading models (use 'bitsandbytes' for large MoE models on 80GB)",
+    )
+    parser.add_argument(
+        "--max_num_seqs", type=int, default=128,
+        help="Max concurrent sequences for vLLM (lower to ≤35 for Mamba-architecture models)",
     )
     args = parser.parse_args()
     main(args)

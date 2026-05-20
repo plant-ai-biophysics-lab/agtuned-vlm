@@ -99,13 +99,17 @@ def _apply_chat_template(tokenizer, prompt: str) -> str:
         )
 
 
-def load_llm(model_id: str, quantization: str | None = None) -> tuple[LLM, object]:
+def load_llm(
+    model_id: str,
+    quantization: str | None = None,
+    max_num_seqs: int = 64,
+) -> tuple[LLM, object]:
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
         max_model_len=16384,
         gpu_memory_utilization=0.7,
-        max_num_seqs=64,
+        max_num_seqs=max_num_seqs,
         limit_mm_per_prompt={"image": 1},
         quantization=quantization,
     )
@@ -170,9 +174,10 @@ def run_model(
     n_samples: int | None,
     output_dir: Path,
     quantization: str | None = None,
+    max_num_seqs: int = 64,
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
-    llm, tokenizer = load_llm(model_id, quantization=quantization)
+    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs)
 
     desc_rows: list[dict] = []
     cls_rows: list[dict] = []
@@ -378,6 +383,7 @@ def _worker_vision(kwargs: dict) -> None:
         n_samples=kwargs["n_samples"],
         output_dir=Path(kwargs["output_dir"]),
         quantization=kwargs["quantization"],
+        max_num_seqs=kwargs.get("max_num_seqs", 64),
     )
     with open(kwargs["out_path"], "w") as f:
         json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
@@ -427,6 +433,7 @@ def main(args: argparse.Namespace) -> None:
             n_samples=args.n_samples,
             output_dir=str(output_dir),
             quantization=args.quantization,
+            max_num_seqs=args.max_num_seqs,
             out_path=str(worker_out),
         ))
         worker_result = json.loads(worker_out.read_text())
@@ -628,6 +635,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--quantization", default=None, choices=["awq", "gptq", "fp8", "bitsandbytes"],
         help="vLLM quantization method (use 'bitsandbytes' for large MoE models on 80GB)",
+    )
+    parser.add_argument(
+        "--max_num_seqs", type=int, default=64,
+        help="Max concurrent sequences for vLLM (lower to ≤35 for Mamba-architecture models)",
     )
     args = parser.parse_args()
     main(args)

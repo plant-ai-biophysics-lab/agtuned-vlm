@@ -77,7 +77,8 @@ python main.py language \
   --config               src/config/datasets.yaml \
   --prompts              src/config/prompts.yaml \
   --models openai/gpt-oss-20b meta-llama/Llama-4-Scout-17B-16E-Instruct \
-  --output_dir           outputs/language_assessment/
+  --output_dir           outputs/language_assessment/ \
+  --quantization fp8
 ```
 
 ### Stage 4 — Vision assessment
