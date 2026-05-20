@@ -189,6 +189,27 @@ def run_inference(
     return responses, elapsed, total_tokens
 
 
+_HEALTHY_DESCRIPTION = "This leaf/plant is healthy."
+
+
+def _apply_healthy_override(records: list[dict]) -> list[dict]:
+    """Override ground-truth descriptions for healthy classes in-memory.
+
+    generate.py produced these records before the healthy-override was added,
+    so they may still carry LLM-hallucinated descriptions as ground truth.
+    Any record whose class_label contains 'healthy' gets its assistant message
+    replaced with the canonical healthy description.
+    """
+    out = []
+    for r in records:
+        label = r.get("metadata", {}).get("class_label", "")
+        if "healthy" in label.lower():
+            r = {**r, "messages": [r["messages"][0],
+                                   {**r["messages"][1], "content": _HEALTHY_DESCRIPTION}]}
+        out.append(r)
+    return out
+
+
 def run_descriptions(
     llm: LLM,
     tokenizer,
@@ -637,8 +658,8 @@ def main(args: argparse.Namespace) -> None:
     datasets_cfg = datasets_by_name(Path(args.config))
     ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
 
-    desc_records = load_jsonl(Path(args.descriptions_jsonl), args.n_samples)
-    cls_records = load_jsonl(Path(args.classification_jsonl), args.n_samples)
+    desc_records = _apply_healthy_override(load_jsonl(Path(args.descriptions_jsonl), args.n_samples))
+    cls_records  = load_jsonl(Path(args.classification_jsonl), args.n_samples)
     print(f"Description records: {len(desc_records)}")
     print(f"Classification records: {len(cls_records)}")
 

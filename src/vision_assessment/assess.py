@@ -60,6 +60,19 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 _TASK_LABELS = {"pest_damage": "pest/damage"}
 
+_HEALTHY_DESCRIPTION = "This leaf/plant is healthy."
+
+
+def _apply_healthy_override(records: list[dict]) -> list[dict]:
+    out = []
+    for r in records:
+        label = r.get("metadata", {}).get("class_label", "")
+        if "healthy" in label.lower():
+            r = {**r, "messages": [r["messages"][0],
+                                   {**r["messages"][1], "content": _HEALTHY_DESCRIPTION}]}
+        out.append(r)
+    return out
+
 
 def _task_label(tt: str) -> str:
     return _TASK_LABELS.get(tt, tt.replace("_", " "))
@@ -440,10 +453,10 @@ def main(args: argparse.Namespace) -> None:
     ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
 
     active_set = {name for name, ds in datasets_cfg.items() if not ds.skip}
-    records = [
+    records = _apply_healthy_override([
         r for r in load_jsonl(Path(args.descriptions_jsonl), args.n_samples)
         if r.get("metadata", {}).get("agml_dataset") in active_set
-    ]
+    ])
     print(f"Records: {len(records)}  |  Active datasets: {len(active_set)}")
 
     all_model_desc_metrics: dict[str, dict[str, dict]] = {}
