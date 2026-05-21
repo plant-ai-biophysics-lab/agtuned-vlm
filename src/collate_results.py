@@ -58,7 +58,7 @@ def _basename(model_id: str) -> str:
 # MoE models: "total/active", dense models: "NB" or "NM".
 _PARAMS: dict[str, str] = {
     "dinov3-vitb16-pretrain-lvd1689m": "86M",
-    "yolo11x-cls":                     "57M",
+    "yolo11x-cls":                     "30M",
     "gpt-oss-20b":                     "21B/3.6B",
     "Llama-4-Scout-17B-16E-Instruct":  "109B/17B",
     "Meta-Llama-3-70B-Instruct":       "70B",
