@@ -158,7 +158,7 @@ def main() -> None:
 
     print("\n=== Generating plots ===")
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics)

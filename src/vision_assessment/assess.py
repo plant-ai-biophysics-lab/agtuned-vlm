@@ -363,12 +363,14 @@ def compute_cls_metrics_per_dataset(cls_rows: list[dict]) -> dict[str, dict]:
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
 def _draw_judge_marker(ax, bar, value: float, label: bool = False) -> None:
-    """Draw a thick horizontal tick across a bar at the judge score."""
+    """Draw a thick horizontal tick across a bar at the judge score, with value label."""
     x0 = bar.get_x()
     w = bar.get_width()
     ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
             solid_capstyle="butt", zorder=5,
             label="judge score" if label else "_nolegend_")
+    ax.text(x0 + w / 2, value + 0.005, f"{value:.2f}",
+            ha="center", va="bottom", fontsize=6, color="black", zorder=6)
 
 
 def plot_rouge_by_dataset(

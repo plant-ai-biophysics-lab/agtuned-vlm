@@ -352,12 +352,14 @@ _JUDGE_METRIC_MAP = {"accuracy": "judge_accuracy", "f1_macro": "judge_f1_macro"}
 
 
 def _draw_judge_marker(ax, bar, value: float, label: bool = False) -> None:
-    """Draw a thick horizontal tick across a bar at the judge score."""
+    """Draw a thick horizontal tick across a bar at the judge score, with value label."""
     x0 = bar.get_x()
     w = bar.get_width()
     ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
             solid_capstyle="butt", zorder=5,
             label="judge score" if label else "_nolegend_")
+    ax.text(x0 + w / 2, value + 0.005, f"{value:.2f}",
+            ha="center", va="bottom", fontsize=6, color="black", zorder=6)
 
 
 def plot_cls_summary_per_dataset(
@@ -418,9 +420,11 @@ def plot_cls_summary_per_task(
     output_dir: Path,
     multimodal_models: set[str] | None = None,
     naive_cls_metrics: dict[str, dict] | None = None,
+    all_judge_metrics: dict[str, dict] | None = None,
 ) -> None:
     """Grouped bar chart: classification metrics per task_type, one group per model."""
     multimodal_models = multimodal_models or set()
+    all_judge_metrics = all_judge_metrics or {}
     task_types = sorted(set(ds_to_task.values()))
     if not task_types:
         return
@@ -445,8 +449,10 @@ def plot_cls_summary_per_task(
     subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
     fig, axes = plt.subplots(1, len(metrics),
                              figsize=(subplot_w * len(metrics), 6), sharey=True)
+    judge_label_drawn = False
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
+        judge_key = _JUDGE_METRIC_MAP.get(metric)
         for i, (model_key, color) in enumerate(zip(models, colors)):
             vals = [
                 float(np.mean(task_scores[model_key][tt][metric]))
@@ -456,10 +462,14 @@ def plot_cls_summary_per_task(
             offset = (i - (len(models) - 1) / 2) * width
             bars = ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85,
                           hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+            jval = all_judge_metrics.get(model_key, {}).get(judge_key) if judge_key else None
             for bar in bars:
                 h = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+                if jval is not None:
+                    _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
+                    judge_label_drawn = True
         if naive_cls_metrics:
             _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
         ax.set_xticks(x)
@@ -895,7 +905,7 @@ def main(args: argparse.Namespace) -> None:
     print("\n=== Generating plots ===")
     judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, judge_metrics)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics)
