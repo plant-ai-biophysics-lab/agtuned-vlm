@@ -13,6 +13,7 @@ STAGES = {
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
     "vision-plot":   "src.vision_assessment.plot",
+    "collate":       "src.collate_results",
 }
 
 _HELP = """
