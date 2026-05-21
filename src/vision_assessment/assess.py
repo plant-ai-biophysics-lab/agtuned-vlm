@@ -362,6 +362,23 @@ def compute_cls_metrics_per_dataset(cls_rows: list[dict]) -> dict[str, dict]:
 
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
+def _hatch(model_key: str, multimodal_models: set[str]) -> str:
+    return "///" if model_key in multimodal_models else ""
+
+
+def _draw_naive_line(ax, naive_overall: dict | None, metric: str, label: bool = False) -> None:
+    if not naive_overall:
+        return
+    value = naive_overall.get(metric)
+    if value is None:
+        return
+    ax.axhline(value, color="red", linestyle="--", linewidth=1.2,
+               label="naive baseline" if label else "_nolegend_")
+
+
+_JUDGE_METRIC_MAP = {"accuracy": "judge_accuracy", "f1_macro": "judge_f1_macro"}
+
+
 def _draw_judge_marker(ax, bar, value: float, label: bool = False) -> None:
     """Draw a thick horizontal tick across a bar at the judge score, with value label."""
     x0 = bar.get_x()
@@ -373,85 +390,302 @@ def _draw_judge_marker(ax, bar, value: float, label: bool = False) -> None:
             ha="center", va="bottom", fontsize=6, color="black", zorder=6)
 
 
-def plot_rouge_by_dataset(
-    all_desc_metrics: dict[str, dict[str, dict]],
-    naive_desc_metrics: dict[str, dict],
+def plot_cls_summary_per_dataset(
+    all_cls_results: dict[str, dict[str, dict]],
     output_dir: Path,
+    multimodal_models: set[str] | None = None,
+    naive_cls_metrics: dict | None = None,
 ) -> None:
-    all_datasets = sorted(set(
-        ds for m in all_desc_metrics.values() for ds in m
-    ))
+    multimodal_models = multimodal_models or set()
+    all_datasets = []
+    for model_results in all_cls_results.values():
+        for ds in model_results:
+            if ds not in all_datasets:
+                all_datasets.append(ds)
     if not all_datasets:
         return
 
-    models = list(all_desc_metrics.keys())
-    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    models = list(all_cls_results.keys())
+    metrics = ["accuracy", "f1_macro", "f1_weighted"]
+    colors = plt.cm.tab10(np.linspace(0, 0.6, len(models)))
     x = np.arange(len(all_datasets))
     width = 0.8 / len(models)
 
-    fig, ax = plt.subplots(figsize=(max(10, len(all_datasets) * 1.0), 5))
-    for i, model_id in enumerate(models):
-        vals = [all_desc_metrics[model_id].get(ds, {}).get("rouge_ss", 0.0) for ds in all_datasets]
-        naive_vals = [naive_desc_metrics.get(ds, {}).get("rouge_ss", 0.0) for ds in all_datasets]
-        offset = (i - (len(models) - 1) / 2) * width
-        ax.bar(x + offset, vals, width, label=model_id, alpha=0.85)
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(max(12, len(all_datasets) * len(models) * 0.5), 5), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        for i, (model_key, color) in enumerate(zip(models, colors)):
+            per_ds = all_cls_results[model_key]
+            vals = [per_ds.get(ds, {}).get(metric, 0.0) for ds in all_datasets]
+            offset = (i - (len(models) - 1) / 2) * width
+            ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85,
+                   hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+        if naive_cls_metrics:
+            _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
+            rotation=45, ha="right", fontsize=7,
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(
-        [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
-        rotation=45, ha="right", fontsize=7,
-    )
-    ax.set_ylim(0, 1.0)
-    ax.set_ylabel("ROUGE-SS")
-    ax.set_title("Vision Assessment — ROUGE-SS by Dataset")
-    ax.legend(fontsize=7)
+    fig.suptitle("Vision Assessment — Classification Per Dataset", fontsize=11)
     plt.tight_layout()
-    path = output_dir / "rouge_by_dataset.png"
+    path = output_dir / "cls_summary_per_dataset.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
 
-def plot_cls_by_task(
-    all_cls_by_task: dict[str, dict[str, dict]],
-    naive_cls_by_task: dict[str, dict],
+def plot_cls_summary_per_task(
+    all_cls_results: dict[str, dict[str, dict]],
+    ds_to_task: dict[str, str],
     output_dir: Path,
+    multimodal_models: set[str] | None = None,
+    naive_cls_metrics: dict | None = None,
     all_judge_metrics: dict[str, dict] | None = None,
 ) -> None:
-    task_types = sorted(set(
-        tt for m in all_cls_by_task.values() for tt in m
-    ))
+    multimodal_models = multimodal_models or set()
+    all_judge_metrics = all_judge_metrics or {}
+    task_types = sorted(set(ds_to_task.values()))
     if not task_types:
         return
 
-    all_judge_metrics = all_judge_metrics or {}
-    models = list(all_cls_by_task.keys())
+    models = list(all_cls_results.keys())
+    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(task_types))
     width = 0.8 / len(models)
+
+    task_scores: dict[str, dict[str, dict[str, list]]] = {
+        mk: {tt: {m: [] for m in metrics} for tt in task_types} for mk in models
+    }
+    for model_key, per_ds in all_cls_results.items():
+        for ds, m in per_ds.items():
+            tt = ds_to_task.get(ds)
+            if tt:
+                for metric in metrics:
+                    task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
+
+    subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
     judge_label_drawn = False
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        judge_key = _JUDGE_METRIC_MAP.get(metric)
+        for i, (model_key, color) in enumerate(zip(models, colors)):
+            vals = [
+                float(np.mean(task_scores[model_key][tt][metric]))
+                if task_scores[model_key][tt][metric] else 0.0
+                for tt in task_types
+            ]
+            offset = (i - (len(models) - 1) / 2) * width
+            bars = ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85,
+                          hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+            jval = all_judge_metrics.get(model_key, {}).get(judge_key) if judge_key else None
+            for bar in bars:
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                        f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+                if jval is not None:
+                    _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
+                    judge_label_drawn = True
+        if naive_cls_metrics:
+            _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
+        ax.set_xticks(x)
+        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
 
-    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
-    for i, model_id in enumerate(models):
-        vals = [all_cls_by_task[model_id].get(tt, {}).get("f1_macro", 0.0) for tt in task_types]
-        offset = (i - (len(models) - 1) / 2) * width
-        bars = ax.bar(x + offset, vals, width, label=model_id, alpha=0.85)
-        jval = all_judge_metrics.get(model_id, {}).get("judge_f1_macro")
-        for bar in bars:
-            h = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
-                    f"{h:.2f}", ha="center", va="bottom", fontsize=7)
-            if jval is not None:
-                _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
-                judge_label_drawn = True
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=15, ha="right")
-    ax.set_ylim(0, 1.15)
-    ax.set_ylabel("F1 Macro")
-    ax.set_title("Vision Assessment — Classification F1 by Task Type")
-    ax.legend(fontsize=8)
+    fig.suptitle("Vision Assessment — Classification Per Task Type", fontsize=11)
     plt.tight_layout()
-    path = output_dir / "cls_by_task.png"
+    path = output_dir / "cls_summary_per_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_desc_summary_per_task(
+    all_desc_results: dict[str, dict[str, dict]],
+    ds_to_task: dict[str, str],
+    output_dir: Path,
+    multimodal_models: set[str] | None = None,
+    naive_desc_metrics: dict | None = None,
+) -> None:
+    multimodal_models = multimodal_models or set()
+    task_types = sorted(set(ds_to_task.values()))
+    if not task_types:
+        return
+
+    models = list(all_desc_results.keys())
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
+    x = np.arange(len(task_types))
+    width = 0.8 / len(models)
+
+    task_scores: dict[str, dict[str, dict[str, list]]] = {
+        mk: {tt: {m: [] for m in metrics} for tt in task_types} for mk in models
+    }
+    for model_key, per_ds in all_desc_results.items():
+        for ds, m in per_ds.items():
+            tt = ds_to_task.get(ds)
+            if tt:
+                for metric in metrics:
+                    task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
+
+    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
+    subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        for i, (model_key, color) in enumerate(zip(models, colors)):
+            vals = [
+                float(np.mean(task_scores[model_key][tt][metric]))
+                if task_scores[model_key][tt][metric] else 0.0
+                for tt in task_types
+            ]
+            offset = (i - (len(models) - 1) / 2) * width
+            bars = ax.bar(x + offset, vals, width, label=model_key, color=color, alpha=0.85,
+                          hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+            for bar in bars:
+                h = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                        f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+        if naive_desc_metrics:
+            _draw_naive_line(ax, naive_desc_metrics, metric, label=(mi == 0))
+        ax.set_xticks(x)
+        ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric_labels.get(metric, metric))
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
+
+    fig.suptitle("Vision Assessment — Description ROUGE Per Task Type", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "desc_summary_per_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_overall_desc_summary(
+    all_desc_results: dict[str, dict[str, dict]],
+    output_dir: Path,
+    multimodal_models: set[str] | None = None,
+    naive_desc_metrics: dict | None = None,
+) -> None:
+    multimodal_models = multimodal_models or set()
+    models = list(all_desc_results.keys())
+    if not models:
+        return
+
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
+    x = np.arange(len(models))
+    bar_w = 0.7
+    subplot_w = max(3.5, len(models) * 1.5)
+
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        vals = [
+            float(np.mean([m.get(metric, 0.0) for m in all_desc_results[mk].values()]))
+            if all_desc_results[mk] else 0.0
+            for mk in models
+        ]
+        for xi, (mk, color, v) in enumerate(zip(models, colors, vals)):
+            ax.bar(xi, v, bar_w, color=color, alpha=0.85,
+                   hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
+                   label=mk)
+            ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        if naive_desc_metrics:
+            _draw_naive_line(ax, naive_desc_metrics, metric, label=(mi == 0))
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric_labels.get(metric, metric))
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
+
+    fig.suptitle("Vision Assessment — Overall Description ROUGE", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "overall_desc_summary.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_overall_cls_summary(
+    all_cls_results: dict[str, dict[str, dict]],
+    output_dir: Path,
+    multimodal_models: set[str] | None = None,
+    naive_cls_metrics: dict | None = None,
+    all_judge_metrics: dict[str, dict] | None = None,
+) -> None:
+    multimodal_models = multimodal_models or set()
+    all_judge_metrics = all_judge_metrics or {}
+    models = list(all_cls_results.keys())
+    if not models:
+        return
+
+    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+    colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
+    x = np.arange(len(models))
+    bar_w = 0.7
+    subplot_w = max(3.5, len(models) * 1.5)
+
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+    judge_label_drawn = False
+    for mi, metric in enumerate(metrics):
+        ax = axes[mi]
+        judge_key = _JUDGE_METRIC_MAP.get(metric)
+        vals = [
+            float(np.mean([m.get(metric, 0.0) for m in all_cls_results[mk].values()]))
+            if all_cls_results[mk] else 0.0
+            for mk in models
+        ]
+        for xi, (mk, color, v) in enumerate(zip(models, colors, vals)):
+            bar = ax.bar(xi, v, bar_w, color=color, alpha=0.85,
+                         hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
+                         label=mk)[0]
+            ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+            if judge_key:
+                jval = all_judge_metrics.get(mk, {}).get(judge_key)
+                if jval is not None:
+                    _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
+                    judge_label_drawn = True
+        if naive_cls_metrics:
+            _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0))
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_ylabel("Score" if mi == 0 else "")
+        if mi == 0:
+            ax.legend(fontsize=7)
+
+    fig.suptitle("Vision Assessment — Overall Classification", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "overall_cls_summary.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -673,10 +907,23 @@ def main(args: argparse.Namespace) -> None:
     tee.close()
 
     # Plots
-    print("\n=== Generating plots ===")
-    plot_rouge_by_dataset(all_model_desc_metrics, naive_desc_metrics, output_dir)
+    multimodal_set = set(args.multimodal_models or [])
+    all_model_cls_per_ds = {mid: m["classification_per_dataset"] for mid, m in summary_metrics.items()}
+    naive_ov_desc = {
+        metric: float(np.mean([v[metric] for v in naive_desc_metrics.values() if metric in v]))
+        for metric in ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+        if any(metric in v for v in naive_desc_metrics.values())
+    } if naive_desc_metrics else {}
+    naive_cls_all_refs = [r.get("metadata", {}).get("class_label", "") for r in records]
+    naive_cls_overall = naive_classification_baseline(naive_cls_all_refs)
     judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
-    plot_cls_by_task(all_model_cls_metrics, naive_cls_by_task, output_dir, judge_metrics)
+
+    print("\n=== Generating plots ===")
+    plot_cls_summary_per_dataset(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_per_ds, ds_to_task, output_dir, multimodal_set, naive_cls_overall, judge_metrics)
+    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
+    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
+    plot_overall_cls_summary(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
@@ -714,6 +961,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--models", nargs="+", required=True,
         help="Space-separated list of VLM IDs to evaluate",
+    )
+    parser.add_argument(
+        "--multimodal_models", nargs="*", default=[],
+        help="Subset of --models that are VLMs — shown with diagonal hatching in charts",
     )
     parser.add_argument(
         "--judge_model", default=None,
