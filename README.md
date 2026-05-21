@@ -207,10 +207,10 @@ Classifies every (dataset, class) pair into one of four quadrants based on per-c
 
 | Quadrant | Interpretation |
 |----------|---------------|
-| **Both pass** | Model is aligned — sees and knows |
-| **Lang only** | Language correct, vision wrong — alignment broken |
+| **Both pass** | Model is fully aligned |
+| **Lang only** | Language correct, vision wrong — textual knowledge compensates, visual alignment broken |
 | **Vision only** | Vision correct, language wrong — visual knowledge compensates |
-| **Both fail** | Both wrong — knowledge bottleneck |
+| **Both fail** | Both wrong — alignment broken (visual features are separable per LP, but the visual-to-output pathway fails) |
 
 Requires models evaluated in **both** language and vision assessment (only VLMs appear here).
 

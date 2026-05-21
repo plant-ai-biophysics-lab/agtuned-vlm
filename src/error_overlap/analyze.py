@@ -75,9 +75,9 @@ _THRESHOLD = 0.5  # accuracy above this = "pass"
 
 QUADRANT_LABELS = {
     "both_pass":   "Both pass",
-    "lang_only":   "Lang only (alignment broken)",
+    "lang_only":   "Lang only (textual knowledge compensates)",
     "vision_only": "Vision only (visual knowledge compensates)",
-    "both_fail":   "Both fail (knowledge bottleneck)",
+    "both_fail":   "Both fail (alignment broken)",
 }
 
 QUADRANT_COLORS = {
@@ -318,7 +318,7 @@ def main() -> None:
     _plot_heatmap(summaries, output_dir / "error_overlap_heatmap.png")
 
     # Print aggregate table
-    print(f"\n{'Model':<40} {'Both pass':>10} {'Lang only':>10} {'Vision only':>12} {'Both fail':>10}")
+    print(f"\n{'Model':<40} {'Both pass':>10} {'Lang only':>10} {'Vision only':>12} {'Both fail (align)':>18}")
     print(f"  {'-'*86}")
     for s in summaries:
         q = s["quadrants"]
@@ -327,7 +327,7 @@ def main() -> None:
             f" {q.get('both_pass',  {}).get('pct', 0):>10.1%}"
             f" {q.get('lang_only',  {}).get('pct', 0):>10.1%}"
             f" {q.get('vision_only',{}).get('pct', 0):>12.1%}"
-            f" {q.get('both_fail',  {}).get('pct', 0):>10.1%}"
+            f" {q.get('both_fail',  {}).get('pct', 0):>18.1%}"
         )
 
 
