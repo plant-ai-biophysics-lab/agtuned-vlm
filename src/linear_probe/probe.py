@@ -495,22 +495,24 @@ def main(args):
         from tqdm import tqdm
         print(f"\n{'='*60}\nDINOv3: {args.dino_model}\n{'='*60}")
         dino_processor, dino_model = load_dino(args.dino_model, device)
-        all_embeddings["dinov3"] = {}
+        dino_key = args.dino_model.split("/")[-1].replace(".pt", "")
+        all_embeddings[dino_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
             X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
-            all_embeddings["dinov3"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
         unload(dino_model)
 
     # YOLO pass
     if args.yolo_model:
         from tqdm import tqdm
         print(f"\n{'='*60}\nYOLO: {args.yolo_model}\n{'='*60}")
-        all_embeddings["yolo"] = {}
+        yolo_key = args.yolo_model.replace(".pt", "")
+        all_embeddings[yolo_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
             X = extract_yolo_embeddings(samples, args.yolo_model, device)
-            all_embeddings["yolo"][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
     # VLM passes (one per --models entry, loaded and unloaded sequentially)
     for model_id in (args.models or []):

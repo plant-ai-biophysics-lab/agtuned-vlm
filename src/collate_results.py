@@ -205,6 +205,8 @@ def write_latex(rows: list[dict], path: Path) -> None:
             r" & \multicolumn{2}{c}{Vision Assessment} \\"
         ),
         r"\cmidrule(lr){4-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8}",
+        r" &  &  &  & Classification & Description & Classification & Description \\",
+        r"\cmidrule(lr){5-5} \cmidrule(lr){6-6} \cmidrule(lr){7-7} \cmidrule(lr){8-8}",
         r"Type & Model & Params & F1 & F1 & ROUGE-SS & F1 & ROUGE-SS \\",
         r"\midrule",
     ]
