@@ -156,7 +156,7 @@ def judged_summary(rows: list[dict]) -> dict:
     }
     if "resolved_class" in judged[0] and "class_label" in judged[0]:
         refs = [r["class_label"] for r in judged]
-        preds = [r["resolved_class"] if r["judged_correct"] else "" for r in judged]
+        preds = [r["class_label"] if r["judged_correct"] else r["resolved_class"] for r in judged]
         labels = sorted(set(refs))
         result["judge_f1_macro"] = round(
             f1_score(refs, preds, average="macro", labels=labels, zero_division=0), 4
