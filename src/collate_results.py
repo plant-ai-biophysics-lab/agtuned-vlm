@@ -11,7 +11,17 @@ Columns:
   Language Assess.  : Cls F1 Macro | Desc ROUGE-SS
   Vision Assess.    : Cls F1 Macro | Desc ROUGE-SS
 
-Rows are grouped by stage (linear probe → language → vision), one row per model.
+Rows are grouped by which stages a model participated in. Models that appear
+in multiple stages are merged into a single row.
+
+Stage groups (in order):
+  Linear Probe only
+  Language only
+  Vision only
+  Language + Vision
+  Linear Probe + Language
+  Linear Probe + Vision
+  Linear Probe + Language + Vision
 
 Usage:
     python main.py collate \
@@ -37,68 +47,84 @@ def _load_json(path: Path) -> dict | None:
     return json.loads(path.read_text())
 
 
-def load_linear_probe(results_dir: Path) -> list[dict]:
-    """Returns [{stage, model, lp_f1}] sorted by f1 desc."""
-    data = _load_json(results_dir / "linear_probe_results.json")
-    if not data:
-        return []
-    rows = []
-    for backbone, m in data.get("overall", {}).items():
-        rows.append({
-            "stage": "Linear Probe",
-            "model": backbone,
-            "lp_f1":     round(m.get("f1_macro", float("nan")), 4),
-            "lang_cls_f1":  None,
-            "lang_desc_rss": None,
-            "vis_cls_f1":   None,
-            "vis_desc_rss": None,
-        })
-    return sorted(rows, key=lambda r: r["lp_f1"], reverse=True)
+def _empty_row(model: str) -> dict:
+    return {
+        "model":         model,
+        "lp_f1":         None,
+        "lang_cls_f1":   None,
+        "lang_desc_rss": None,
+        "vis_cls_f1":    None,
+        "vis_desc_rss":  None,
+    }
 
 
-def load_language(results_dir: Path) -> list[dict]:
-    data = _load_json(results_dir / "language_assessment_metrics.json")
-    if not data:
-        return []
-    rows = []
-    for model_id, m in data.get("models", {}).items():
-        cls_f1  = m.get("classification_overall", {}).get("f1_macro")
-        desc_ss = m.get("description_overall", {}).get("rouge_ss")
-        rows.append({
-            "stage": "Language Assessment",
-            "model": model_id,
-            "lp_f1":      None,
-            "lang_cls_f1":   round(cls_f1,  4) if cls_f1  is not None else None,
-            "lang_desc_rss": round(desc_ss, 4) if desc_ss is not None else None,
-            "vis_cls_f1":    None,
-            "vis_desc_rss":  None,
-        })
-    return rows
+def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
+    """Merge all three sources into one dict per model, then assign stage groups."""
+    by_model: dict[str, dict] = {}
 
+    # Linear probe
+    lp_data = _load_json(lp_dir / "linear_probe_results.json")
+    if lp_data:
+        for backbone, m in lp_data.get("overall", {}).items():
+            row = by_model.setdefault(backbone, _empty_row(backbone))
+            row["lp_f1"] = round(m.get("f1_macro", float("nan")), 4)
 
-def load_vision(results_dir: Path) -> list[dict]:
-    data = _load_json(results_dir / "vision_assessment_metrics.json")
-    if not data:
-        return []
-    rows = []
-    for model_id, m in data.get("models", {}).items():
-        cls_f1  = m.get("classification_overall", {}).get("f1_macro")
-        desc_ss = m.get("description_overall", {}).get("rouge_ss")
-        rows.append({
-            "stage": "Vision Assessment",
-            "model": model_id,
-            "lp_f1":      None,
-            "lang_cls_f1":   None,
-            "lang_desc_rss": None,
-            "vis_cls_f1":    round(cls_f1,  4) if cls_f1  is not None else None,
-            "vis_desc_rss":  round(desc_ss, 4) if desc_ss is not None else None,
-        })
-    return rows
+    # Language assessment
+    lang_data = _load_json(lang_dir / "language_assessment_metrics.json")
+    if lang_data:
+        for model_id, m in lang_data.get("models", {}).items():
+            row = by_model.setdefault(model_id, _empty_row(model_id))
+            cls_f1  = m.get("classification_overall", {}).get("f1_macro")
+            desc_ss = m.get("description_overall", {}).get("rouge_ss")
+            row["lang_cls_f1"]   = round(cls_f1,  4) if cls_f1  is not None else None
+            row["lang_desc_rss"] = round(desc_ss, 4) if desc_ss is not None else None
+
+    # Vision assessment
+    vis_data = _load_json(vis_dir / "vision_assessment_metrics.json")
+    if vis_data:
+        for model_id, m in vis_data.get("models", {}).items():
+            row = by_model.setdefault(model_id, _empty_row(model_id))
+            cls_f1  = m.get("classification_overall", {}).get("f1_macro")
+            desc_ss = m.get("description_overall", {}).get("rouge_ss")
+            row["vis_cls_f1"]    = round(cls_f1,  4) if cls_f1  is not None else None
+            row["vis_desc_rss"]  = round(desc_ss, 4) if desc_ss is not None else None
+
+    # Assign stage group and sort
+    def _stage(row: dict) -> str:
+        has_lp   = row["lp_f1"]         is not None
+        has_lang = row["lang_cls_f1"]    is not None or row["lang_desc_rss"] is not None
+        has_vis  = row["vis_cls_f1"]     is not None or row["vis_desc_rss"]  is not None
+        if has_lp and has_lang and has_vis: return "Linear Probe + Language + Vision"
+        if has_lp and has_lang:             return "Linear Probe + Language"
+        if has_lp and has_vis:             return "Linear Probe + Vision"
+        if has_lang and has_vis:           return "Language + Vision"
+        if has_lp:                         return "Linear Probe"
+        if has_lang:                       return "Language Assessment"
+        if has_vis:                        return "Vision Assessment"
+        return "Unknown"
+
+    _STAGE_ORDER = {
+        "Linear Probe": 0,
+        "Language Assessment": 1,
+        "Vision Assessment": 2,
+        "Language + Vision": 3,
+        "Linear Probe + Language": 4,
+        "Linear Probe + Vision": 5,
+        "Linear Probe + Language + Vision": 6,
+    }
+
+    for row in by_model.values():
+        row["stage"] = _stage(row)
+
+    return sorted(
+        by_model.values(),
+        key=lambda r: (_STAGE_ORDER.get(r["stage"], 99), -(r["lp_f1"] or 0)),
+    )
 
 
 # ── CSV ────────────────────────────────────────────────────────────────────────
 
-FIELDS = ["stage", "model", "lp_f1", "lang_cls_f1", "lang_desc_rss", "vis_cls_f1", "vis_desc_rss"]
+FIELDS  = ["stage", "model", "lp_f1", "lang_cls_f1", "lang_desc_rss", "vis_cls_f1", "vis_desc_rss"]
 HEADERS = {
     "stage":         "Stage",
     "model":         "Model",
@@ -122,13 +148,10 @@ def write_csv(rows: list[dict], path: Path) -> None:
 # ── LaTeX ──────────────────────────────────────────────────────────────────────
 
 def _fmt(val) -> str:
-    if val is None:
-        return "--"
-    return f"{val:.4f}"
+    return "--" if val is None else f"{val:.4f}"
 
 
 def _short(model_id: str) -> str:
-    """Strip org prefix for display: org/model-name → model-name."""
     return model_id.split("/")[-1].replace("_", r"\_")
 
 
@@ -158,14 +181,14 @@ def write_latex(rows: list[dict], path: Path) -> None:
         r"\midrule",
     ]
 
-    groups = groupby(rows, key=lambda r: r["stage"])
-    stage_list = [(stage, list(grp)) for stage, grp in groups]
+    stage_groups = [(s, list(g)) for s, g in groupby(rows, key=lambda r: r["stage"])]
 
-    for gi, (stage, grp) in enumerate(stage_list):
+    for gi, (stage, grp) in enumerate(stage_groups):
         n = len(grp)
+        escaped_stage = stage.replace("+", r"\texttt{+}")
         for ri, row in enumerate(grp):
             stage_cell = (
-                rf"\multirow{{{n}}}{{*}}{{\textit{{{stage}}}}}" if ri == 0 else ""
+                rf"\multirow{{{n}}}{{*}}{{\textit{{{escaped_stage}}}}}" if ri == 0 else ""
             )
             lines.append(
                 f"{stage_cell} & {_short(row['model'])}"
@@ -173,7 +196,7 @@ def write_latex(rows: list[dict], path: Path) -> None:
                 f" & {_fmt(row['lang_cls_f1'])} & {_fmt(row['lang_desc_rss'])}"
                 f" & {_fmt(row['vis_cls_f1'])} & {_fmt(row['vis_desc_rss'])} \\\\"
             )
-        if gi < len(stage_list) - 1:
+        if gi < len(stage_groups) - 1:
             lines.append(r"\midrule")
 
     lines += [
@@ -219,32 +242,28 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = (
-        load_linear_probe(Path(args.linear_probe_dir))
-        + load_language(Path(args.language_dir))
-        + load_vision(Path(args.vision_dir))
+    rows = collate(
+        Path(args.linear_probe_dir),
+        Path(args.language_dir),
+        Path(args.vision_dir),
     )
 
     if not rows:
         print("ERROR: no data found in any of the provided directories.")
         sys.exit(1)
 
-    print(f"Collating {len(rows)} rows across "
-          f"{len(set(r['stage'] for r in rows))} stage(s)...")
+    print(f"Collating {len(rows)} model(s) across "
+          f"{len(set(r['stage'] for r in rows))} stage group(s)...")
 
     write_csv(rows, output_dir / "results_table.csv")
     write_latex(rows, output_dir / "results_table.tex")
 
-    # Print a quick summary to stdout
     print()
-    print(f"  {'Stage':<22} {'Model':<45} {'LP':>6} {'LCls':>6} {'LDesc':>6} {'VCls':>6} {'VDesc':>6}")
-    print(f"  {'-'*95}")
-    prev_stage = None
+    print(f"  {'Stage':<35} {'Model':<40} {'LP':>6} {'LCls':>6} {'LDesc':>6} {'VCls':>6} {'VDesc':>6}")
+    print(f"  {'-'*105}")
     for row in rows:
-        if row["stage"] != prev_stage:
-            prev_stage = row["stage"]
         print(
-            f"  {row['stage']:<22} {row['model']:<45}"
+            f"  {row['stage']:<35} {row['model']:<40}"
             f" {_fmt(row['lp_f1']):>6}"
             f" {_fmt(row['lang_cls_f1']):>6}"
             f" {_fmt(row['lang_desc_rss']):>6}"
