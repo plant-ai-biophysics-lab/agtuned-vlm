@@ -14,6 +14,8 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | 3 — Language Assessment | `src/language_assessment/assess.py` | Text-only agricultural VQA (ROUGE-SS + F1) — also supports VLMs |
 | language-plot | `src/language_assessment/plot.py` | Regenerate language assessment charts from saved metrics JSON (no inference) |
 | 4 — Vision Assessment | `src/vision_assessment/assess.py` | Multimodal VQA with image input (ROUGE-SS + F1) |
+| vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts from saved metrics JSON (no inference) |
+| 5 — Collate | `src/collate_results.py` | Merge all stage metrics into a single CSV + LaTeX results table |
 
 ## Prerequisites
 
@@ -175,6 +177,29 @@ python main.py vision \
 
 ---
 
+### Stage 5 — Collate results
+
+Merges outputs from all stages into `results_table.csv` and `results_table.tex`. Uses judged F1 where available, falls back to standard F1. Naive baseline is included as the first row.
+
+```bash
+python main.py collate \
+  --linear_probe_dir outputs/linear_probe/ \
+  --language_dir     outputs/language_assessment/ \
+  --vision_dir       outputs/vision_assessment/ \
+  --output_dir       outputs/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--linear_probe_dir` | `outputs/linear_probe/` | Directory containing `linear_probe_results.json` |
+| `--language_dir` | `outputs/language_assessment/` | Directory containing `language_assessment_metrics.json` |
+| `--vision_dir` | `outputs/vision_assessment/` | Directory containing `vision_assessment_metrics.json` |
+| `--output_dir` | `outputs/` | Where to write `results_table.csv` and `results_table.tex` |
+
+The LaTeX table uses `\resizebox{\textwidth}{!}{...}` and requires `booktabs` and `multirow` packages.
+
+---
+
 ## Outputs
 
 ```
@@ -200,7 +225,8 @@ outputs/
 │   ├── vision_assessment_metrics.json
 │   ├── summary.txt
 │   └── *.png
-└── pipeline_results.csv              incremental summary table — updated after each stage
+├── results_table.csv                 collated metrics across all stages
+└── results_table.tex                 LaTeX booktabs table (ready to \input into a paper)
 ```
 
 All prompt templates live in `src/config/prompts.yaml`. Edit there — no code changes needed.
