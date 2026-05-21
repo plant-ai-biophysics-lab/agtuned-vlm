@@ -12,6 +12,7 @@ STAGES = {
     "language":      "src.language_assessment.assess",
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
+    "vision-plot":   "src.vision_assessment.plot",
 }
 
 _HELP = """

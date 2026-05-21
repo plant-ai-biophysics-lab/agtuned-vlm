@@ -412,7 +412,7 @@ def plot_cls_summary_per_dataset(
     width = 0.8 / len(models)
 
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(max(12, len(all_datasets) * len(models) * 0.5), 5), sharey=True)
+                             figsize=(max(12, len(all_datasets) * len(models) * 0.5), 5), sharey=False)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, (model_key, color) in enumerate(zip(models, colors)):
@@ -430,9 +430,8 @@ def plot_cls_summary_per_dataset(
         )
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
-        ax.set_ylabel("Score" if mi == 0 else "")
-        if mi == 0:
-            ax.legend(fontsize=7)
+        ax.set_ylabel("Score")
+        ax.legend(fontsize=7)
 
     fig.suptitle("Vision Assessment — Classification Per Dataset", fontsize=11)
     plt.tight_layout()
@@ -474,7 +473,7 @@ def plot_cls_summary_per_task(
 
     subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+                             figsize=(subplot_w * len(metrics), 6), sharey=False)
     judge_label_drawn = False
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
@@ -502,9 +501,8 @@ def plot_cls_summary_per_task(
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
-        ax.set_ylabel("Score" if mi == 0 else "")
-        if mi == 0:
-            ax.legend(fontsize=7)
+        ax.set_ylabel("Score")
+        ax.legend(fontsize=7)
 
     fig.suptitle("Vision Assessment — Classification Per Task Type", fontsize=11)
     plt.tight_layout()
@@ -545,7 +543,7 @@ def plot_desc_summary_per_task(
     metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
     subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+                             figsize=(subplot_w * len(metrics), 6), sharey=False)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, (model_key, color) in enumerate(zip(models, colors)):
@@ -567,9 +565,8 @@ def plot_desc_summary_per_task(
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
         ax.set_title(metric_labels.get(metric, metric))
-        ax.set_ylabel("Score" if mi == 0 else "")
-        if mi == 0:
-            ax.legend(fontsize=7)
+        ax.set_ylabel("Score")
+        ax.legend(fontsize=7)
 
     fig.suptitle("Vision Assessment — Description ROUGE Per Task Type", fontsize=11)
     plt.tight_layout()
@@ -598,7 +595,7 @@ def plot_overall_desc_summary(
     subplot_w = max(3.5, len(models) * 1.5)
 
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+                             figsize=(subplot_w * len(metrics), 6), sharey=False)
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         vals = [
@@ -619,9 +616,8 @@ def plot_overall_desc_summary(
         )
         ax.set_ylim(0, 1.15)
         ax.set_title(metric_labels.get(metric, metric))
-        ax.set_ylabel("Score" if mi == 0 else "")
-        if mi == 0:
-            ax.legend(fontsize=7)
+        ax.set_ylabel("Score")
+        ax.legend(fontsize=7)
 
     fig.suptitle("Vision Assessment — Overall Description ROUGE", fontsize=11)
     plt.tight_layout()
@@ -651,7 +647,7 @@ def plot_overall_cls_summary(
     subplot_w = max(3.5, len(models) * 1.5)
 
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(subplot_w * len(metrics), 6), sharey=True)
+                             figsize=(subplot_w * len(metrics), 6), sharey=False)
     judge_label_drawn = False
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
@@ -679,9 +675,8 @@ def plot_overall_cls_summary(
         )
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
-        ax.set_ylabel("Score" if mi == 0 else "")
-        if mi == 0:
-            ax.legend(fontsize=7)
+        ax.set_ylabel("Score")
+        ax.legend(fontsize=7)
 
     fig.suptitle("Vision Assessment — Overall Classification", fontsize=11)
     plt.tight_layout()
