@@ -14,6 +14,7 @@ STAGES = {
     "vision":        "src.vision_assessment.assess",
     "vision-plot":   "src.vision_assessment.plot",
     "collate":       "src.collate_results",
+    "error-overlap": "src.error_overlap.analyze",
 }
 
 _HELP = """

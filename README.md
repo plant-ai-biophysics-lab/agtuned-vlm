@@ -16,6 +16,7 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | 4 — Vision Assessment | `src/vision_assessment/assess.py` | Multimodal VQA with image input (ROUGE-SS + F1) |
 | vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts from saved metrics JSON (no inference) |
 | 5 — Collate | `src/collate_results.py` | Merge all stage metrics into a single CSV + LaTeX results table |
+| 6 — Error Overlap | `src/error_overlap/analyze.py` | Per-class error overlap between language and vision assessments (quadrant analysis) |
 
 ## Prerequisites
 
@@ -131,7 +132,7 @@ python main.py language \
   --config               src/config/datasets.yaml \
   --prompts              src/config/prompts.yaml \
   --models               openai/gpt-oss-20b google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
-  --multimodal_models    google/gemma-4-26B-A4B-it \
+  --multimodal_models    google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
   --output_dir           outputs/language_assessment/
 ```
 
@@ -152,7 +153,7 @@ Charts produced: classification per dataset, classification per task type, descr
 python main.py language-plot \
   --output_dir        outputs/language_assessment/ \
   --config            src/config/datasets.yaml \
-  --multimodal_models google/gemma-4-26B-A4B-it
+  --multimodal_models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B
 ```
 
 ---
@@ -200,6 +201,37 @@ The LaTeX table uses `\resizebox{\textwidth}{!}{...}` and requires `booktabs` an
 
 ---
 
+### Stage 6 — Error overlap analysis
+
+Classifies every (dataset, class) pair into one of four quadrants based on per-class accuracy in language vs. vision assessment:
+
+| Quadrant | Interpretation |
+|----------|---------------|
+| **Both pass** | Model is aligned — sees and knows |
+| **Lang only** | Language correct, vision wrong — alignment broken |
+| **Vision only** | Vision correct, language wrong — visual knowledge compensates |
+| **Both fail** | Both wrong — knowledge bottleneck |
+
+Requires models evaluated in **both** language and vision assessment (only VLMs appear here).
+
+```bash
+python main.py error-overlap \
+  --language_dir outputs/language_assessment/ \
+  --vision_dir   outputs/vision_assessment/ \
+  --output_dir   outputs/error_overlap/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--language_dir` | `outputs/language_assessment/` | Directory with `cls_*.csv` from language assessment |
+| `--vision_dir` | `outputs/vision_assessment/` | Directory with `cls_*.csv` from vision assessment |
+| `--output_dir` | `outputs/error_overlap/` | Where to write per-model CSVs, scatter plots, and summary |
+| `--threshold` | `0.5` | Per-class accuracy threshold for pass/fail |
+
+Outputs per model: a scatter plot (language accuracy vs. vision accuracy, colour-coded by quadrant) and a per-class CSV. A stacked bar `error_overlap_heatmap.png` compares quadrant fractions across all models.
+
+---
+
 ## Outputs
 
 ```
@@ -226,7 +258,12 @@ outputs/
 │   ├── summary.txt
 │   └── *.png
 ├── results_table.csv                 collated metrics across all stages
-└── results_table.tex                 LaTeX booktabs table (ready to \input into a paper)
+├── results_table.tex                 LaTeX booktabs table (ready to \input into a paper)
+└── error_overlap/
+    ├── error_overlap_<model>.csv     per-class quadrant table
+    ├── error_overlap_<model>.png     scatter plot (lang acc vs vision acc)
+    ├── error_overlap_heatmap.png     quadrant fraction comparison across models
+    └── error_overlap_summary.json    aggregate quadrant counts per model
 ```
 
 All prompt templates live in `src/config/prompts.yaml`. Edit there — no code changes needed.
