@@ -138,6 +138,7 @@ def write_latex(rows: list[dict], path: Path) -> None:
     lines = [
         r"\begin{table}[ht]",
         r"\centering",
+        r"\resizebox{\textwidth}{!}{%",
         r"\setlength{\tabcolsep}{6pt}",
         r"\begin{tabular}{llccccc}",
         r"\toprule",
@@ -177,7 +178,8 @@ def write_latex(rows: list[dict], path: Path) -> None:
 
     lines += [
         r"\bottomrule",
-        r"\end{tabular}",
+        r"\end{tabular}%",
+        r"}",
         r"\caption{Comparison of model performance across pipeline stages. "
         r"Linear Probe reports macro F1 on frozen embeddings. "
         r"Language and Vision Assessment report macro F1 (classification) "
