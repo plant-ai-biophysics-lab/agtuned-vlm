@@ -429,7 +429,7 @@ def plot_cls_summary_per_task(
         return
 
     models = list(all_cls_results.keys())
-    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+    metrics = ["accuracy", "f1_macro"]
     colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(task_types))
     width = 0.8 / len(models)
@@ -618,7 +618,7 @@ def plot_overall_cls_summary(
     if not models:
         return
 
-    metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+    metrics = ["accuracy", "f1_macro"]
     colors = plt.cm.tab10(np.linspace(0, 0.8, len(models)))
     x = np.arange(len(models))
     bar_w = 0.7
