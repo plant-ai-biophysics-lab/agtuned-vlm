@@ -47,6 +47,11 @@ def _load_json(path: Path) -> dict | None:
     return json.loads(path.read_text())
 
 
+def _basename(model_id: str) -> str:
+    """Normalize model ID to just the name part for cross-source matching."""
+    return model_id.split("/")[-1]
+
+
 def _empty_row(model: str) -> dict:
     return {
         "model":         model,
@@ -59,31 +64,43 @@ def _empty_row(model: str) -> dict:
 
 
 def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
-    """Merge all three sources into one dict per model, then assign stage groups."""
+    """Merge all three sources into one dict per model, then assign stage groups.
+
+    Matching is done on the basename (part after '/') so that short names used
+    by linear probe (e.g. 'Qwen3.6-27B') merge with full IDs used by language/
+    vision assessment (e.g. 'Qwen/Qwen3.6-27B'). The full ID is preferred for
+    display when available.
+    """
+    # key: basename → row dict
     by_model: dict[str, dict] = {}
 
-    # Linear probe
+    # Linear probe — keyed by basename
     lp_data = _load_json(lp_dir / "linear_probe_results.json")
     if lp_data:
         for backbone, m in lp_data.get("overall", {}).items():
-            row = by_model.setdefault(backbone, _empty_row(backbone))
+            key = _basename(backbone)
+            row = by_model.setdefault(key, _empty_row(backbone))
             row["lp_f1"] = round(m.get("f1_macro", float("nan")), 4)
 
-    # Language assessment
+    # Language assessment — prefer full model ID for display
     lang_data = _load_json(lang_dir / "language_assessment_metrics.json")
     if lang_data:
         for model_id, m in lang_data.get("models", {}).items():
-            row = by_model.setdefault(model_id, _empty_row(model_id))
+            key = _basename(model_id)
+            row = by_model.setdefault(key, _empty_row(model_id))
+            row["model"] = model_id          # upgrade to full ID
             cls_f1  = m.get("classification_overall", {}).get("f1_macro")
             desc_ss = m.get("description_overall", {}).get("rouge_ss")
             row["lang_cls_f1"]   = round(cls_f1,  4) if cls_f1  is not None else None
             row["lang_desc_rss"] = round(desc_ss, 4) if desc_ss is not None else None
 
-    # Vision assessment
+    # Vision assessment — prefer full model ID for display
     vis_data = _load_json(vis_dir / "vision_assessment_metrics.json")
     if vis_data:
         for model_id, m in vis_data.get("models", {}).items():
-            row = by_model.setdefault(model_id, _empty_row(model_id))
+            key = _basename(model_id)
+            row = by_model.setdefault(key, _empty_row(model_id))
+            row["model"] = model_id          # upgrade to full ID
             cls_f1  = m.get("classification_overall", {}).get("f1_macro")
             desc_ss = m.get("description_overall", {}).get("rouge_ss")
             row["vis_cls_f1"]    = round(cls_f1,  4) if cls_f1  is not None else None
