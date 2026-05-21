@@ -88,7 +88,7 @@ QUADRANT_COLORS = {
 }
 
 
-def assign_quadrant(lang_acc: float, vis_acc: float, threshold: float = _THRESHOLD) -> str:
+def assign_quadrant(lang_acc: float, vis_acc: float, threshold: float) -> str:
     lang_pass = lang_acc >= threshold
     vis_pass  = vis_acc  >= threshold
     if lang_pass and vis_pass:
@@ -107,6 +107,7 @@ def analyze_model(
     vis_rows: list[dict],
     model_id: str,
     output_dir: Path,
+    threshold: float = _THRESHOLD,
 ) -> dict:
     lang_acc = per_class_accuracy(lang_rows)
     vis_acc  = per_class_accuracy(vis_rows)
@@ -122,7 +123,7 @@ def analyze_model(
         dataset, cls = key
         la = lang_acc[key]["accuracy"]
         va = vis_acc[key]["accuracy"]
-        q  = assign_quadrant(la, va)
+        q  = assign_quadrant(la, va, threshold)
         quadrant_counts[q] += 1
         records.append({
             "agml_dataset": dataset,
@@ -150,7 +151,7 @@ def analyze_model(
     }
 
     _write_csv(records, output_dir / f"error_overlap_{_safe_name(model_id)}.csv")
-    _plot_scatter(records, model_id, output_dir / f"error_overlap_{_safe_name(model_id)}.png")
+    _plot_scatter(records, model_id, output_dir / f"error_overlap_{_safe_name(model_id)}.png", threshold)
 
     print(f"  [{model_id}]  n={total}  "
           + "  ".join(f"{q}={n}" for q, n in quadrant_counts.items()))
@@ -174,7 +175,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
     print(f"  Saved: {path}")
 
 
-def _plot_scatter(records: list[dict], model_id: str, path: Path) -> None:
+def _plot_scatter(records: list[dict], model_id: str, path: Path, threshold: float = _THRESHOLD) -> None:
     fig, ax = plt.subplots(figsize=(7, 6))
 
     for r in records:
@@ -183,14 +184,14 @@ def _plot_scatter(records: list[dict], model_id: str, path: Path) -> None:
                    color=color, alpha=0.75, s=60, zorder=3)
 
     # Quadrant dividers
-    ax.axvline(_THRESHOLD, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
-    ax.axhline(_THRESHOLD, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+    ax.axvline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+    ax.axhline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
 
     # Quadrant shading
-    ax.axhspan(0, _THRESHOLD, xmin=0, xmax=_THRESHOLD, color=QUADRANT_COLORS["both_fail"],   alpha=0.06)
-    ax.axhspan(0, _THRESHOLD, xmin=_THRESHOLD, xmax=1,  color=QUADRANT_COLORS["lang_only"],   alpha=0.06)
-    ax.axhspan(_THRESHOLD, 1, xmin=0, xmax=_THRESHOLD,  color=QUADRANT_COLORS["vision_only"], alpha=0.06)
-    ax.axhspan(_THRESHOLD, 1, xmin=_THRESHOLD, xmax=1,  color=QUADRANT_COLORS["both_pass"],   alpha=0.06)
+    ax.axhspan(0, threshold, xmin=0, xmax=threshold, color=QUADRANT_COLORS["both_fail"],   alpha=0.06)
+    ax.axhspan(0, threshold, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["lang_only"],   alpha=0.06)
+    ax.axhspan(threshold, 1, xmin=0, xmax=threshold,  color=QUADRANT_COLORS["vision_only"], alpha=0.06)
+    ax.axhspan(threshold, 1, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["both_pass"],   alpha=0.06)
 
     # Diagonal reference
     ax.plot([0, 1], [0, 1], color="grey", linewidth=0.8, linestyle=":", alpha=0.6)
@@ -295,15 +296,14 @@ def main() -> None:
     for safe, lp, vp in pairs:
         print(f"  {safe}")
 
-    global _THRESHOLD
-    _THRESHOLD = args.threshold
+    threshold = args.threshold
 
     summaries = []
     for safe_name, lang_csv, vis_csv in pairs:
         print(f"\n=== {safe_name} ===")
         lang_rows = _load_cls_csv(lang_csv)
         vis_rows  = _load_cls_csv(vis_csv)
-        summary = analyze_model(lang_rows, vis_rows, safe_name, output_dir)
+        summary = analyze_model(lang_rows, vis_rows, safe_name, output_dir, threshold)
         if summary:
             summaries.append(summary)
 
