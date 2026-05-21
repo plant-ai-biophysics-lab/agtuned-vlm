@@ -54,9 +54,23 @@ def _basename(model_id: str) -> str:
     return model_id.split("/")[-1]
 
 
+# Known parameter counts keyed by basename.
+# MoE models: "total/active", dense models: "NB" or "NM".
+_PARAMS: dict[str, str] = {
+    "dinov3-vitb16-pretrain-lvd1689m": "86M",
+    "yolo11x-cls":                     "57M",
+    "gpt-oss-20b":                     "21B/3.6B",
+    "Llama-4-Scout-17B-16E-Instruct":  "109B/17B",
+    "Meta-Llama-3-70B-Instruct":       "70B",
+    "gemma-4-26B-A4B-it":              "26B/4B",
+    "Qwen3.6-27B":                     "27B",
+}
+
+
 def _empty_row(model: str) -> dict:
     return {
         "model":         model,
+        "params":        _PARAMS.get(_basename(model), "--"),
         "lp_f1":         None,
         "lang_cls_f1":   None,
         "lang_desc_rss": None,
@@ -85,7 +99,9 @@ def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
             key = _basename(model_id)
             row = by_model.setdefault(key, _empty_row(model_id))
             row["model"] = model_id
-            row["lang_cls_f1"]   = _r(m.get("classification_overall", {}).get("f1_macro"))
+            judge_f1 = m.get("judge", {}).get("judge_f1_macro")
+            row["lang_cls_f1"]   = _r(judge_f1 if judge_f1 is not None
+                                       else m.get("classification_overall", {}).get("f1_macro"))
             row["lang_desc_rss"] = _r(m.get("description_overall", {}).get("rouge_ss"))
 
     # Vision assessment
@@ -95,7 +111,9 @@ def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
             key = _basename(model_id)
             row = by_model.setdefault(key, _empty_row(model_id))
             row["model"] = model_id
-            row["vis_cls_f1"]  = _r(m.get("classification_overall", {}).get("f1_macro"))
+            judge_f1 = m.get("judge", {}).get("judge_f1_macro")
+            row["vis_cls_f1"]   = _r(judge_f1 if judge_f1 is not None
+                                      else m.get("classification_overall", {}).get("f1_macro"))
             row["vis_desc_rss"] = _r(m.get("description_overall", {}).get("rouge_ss"))
 
     # Assign model type
@@ -119,7 +137,7 @@ def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
         key=lambda r: (_TYPE_ORDER.get(r["type"], 99), -(r["lp_f1"] or 0)),
     )
 
-    # Naive baseline row
+    # Naive baseline row — placed at top
     naive_row = _empty_row("Naive Baseline")
     naive_row["type"] = "Baseline"
     if lang_data:
@@ -130,17 +148,18 @@ def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
         naive = vis_data.get("naive", {})
         naive_row["vis_cls_f1"]  = _macro(naive.get("classification", {}), "f1_macro")
         naive_row["vis_desc_rss"] = _macro(naive.get("description", {}), "rouge_ss")
-    rows.append(naive_row)
+    rows.insert(0, naive_row)
 
     return rows
 
 
 # ── CSV ────────────────────────────────────────────────────────────────────────
 
-FIELDS  = ["type", "model", "lp_f1", "lang_cls_f1", "lang_desc_rss", "vis_cls_f1", "vis_desc_rss"]
+FIELDS  = ["type", "model", "params", "lp_f1", "lang_cls_f1", "lang_desc_rss", "vis_cls_f1", "vis_desc_rss"]
 HEADERS = {
     "type":          "Type",
     "model":         "Model",
+    "params":        "Params",
     "lp_f1":         "Linear Probe F1",
     "lang_cls_f1":   "Lang F1",
     "lang_desc_rss": "Lang ROUGE-SS",
@@ -176,16 +195,17 @@ def write_latex(rows: list[dict], path: Path) -> None:
         r"\centering",
         r"\resizebox{\textwidth}{!}{%",
         r"\setlength{\tabcolsep}{6pt}",
-        r"\begin{tabular}{llccccc}",
+        r"\begin{tabular}{llrccccc}",
         r"\toprule",
         (
+            r" & "
             r" & "
             r" & \multicolumn{1}{c}{Linear Probe}"
             r" & \multicolumn{2}{c}{Language Assessment}"
             r" & \multicolumn{2}{c}{Vision Assessment} \\"
         ),
-        r"\cmidrule(lr){3-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}",
-        r"Type & Model & F1 & F1 & ROUGE-SS & F1 & ROUGE-SS \\",
+        r"\cmidrule(lr){4-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8}",
+        r"Type & Model & Params & F1 & F1 & ROUGE-SS & F1 & ROUGE-SS \\",
         r"\midrule",
     ]
 
@@ -199,6 +219,7 @@ def write_latex(rows: list[dict], path: Path) -> None:
             )
             lines.append(
                 f"{type_cell} & {_short(row['model'])}"
+                f" & {row['params']}"
                 f" & {_fmt(row['lp_f1'])}"
                 f" & {_fmt(row['lang_cls_f1'])} & {_fmt(row['lang_desc_rss'])}"
                 f" & {_fmt(row['vis_cls_f1'])} & {_fmt(row['vis_desc_rss'])} \\\\"
@@ -211,8 +232,9 @@ def write_latex(rows: list[dict], path: Path) -> None:
         r"\end{tabular}%",
         r"}",
         r"\caption{Comparison of model performance across pipeline stages. "
+        r"Params shows total parameters; MoE models show total/active. "
         r"Linear Probe reports macro F1 on frozen embeddings. "
-        r"Language and Vision Assessment report macro F1 (classification) "
+        r"Language and Vision Assessment report macro F1 (classification, LLM-judged where available) "
         r"and ROUGE-SS (description). -- indicates the model was not evaluated at that stage.}",
         r"\label{tab:results}",
         r"\end{table}",
@@ -267,11 +289,12 @@ def main() -> None:
     write_latex(rows, output_dir / "results_table.tex")
 
     print()
-    print(f"  {'Type':<14} {'Model':<40} {'LP F1':>6} {'L F1':>6} {'L RSS':>6} {'V F1':>6} {'V RSS':>6}")
-    print(f"  {'-'*90}")
+    print(f"  {'Type':<14} {'Model':<40} {'Params':>9} {'LP F1':>6} {'L F1':>6} {'L RSS':>6} {'V F1':>6} {'V RSS':>6}")
+    print(f"  {'-'*100}")
     for row in rows:
         print(
             f"  {row['type']:<14} {row['model']:<40}"
+            f" {row['params']:>9}"
             f" {_fmt(row['lp_f1']):>6}"
             f" {_fmt(row['lang_cls_f1']):>6}"
             f" {_fmt(row['lang_desc_rss']):>6}"
