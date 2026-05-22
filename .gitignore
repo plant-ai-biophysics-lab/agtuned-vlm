@@ -17,3 +17,4 @@ experiments/vision_feats/outputs/*
 unsloth_compiled_cache
 /experiments/.DS_Store
 /yolo11x-cls.pt
+/annotations.csv

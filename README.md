@@ -235,6 +235,14 @@ Outputs per model: a scatter plot (language accuracy vs. vision accuracy, colour
 
 ### Stage 7 — Fine-tune
 
+> **Separate environment required.** unsloth and vLLM conflict on torch/triton versions and cannot share the root environment. The fine-tuning script has its own `pyproject.toml` in `src/finetune/`.
+>
+> ```bash
+> cd src/finetune && uv sync   # one-time setup
+> ```
+>
+> Run all fine-tuning commands from `src/finetune/` using `uv run`. All other pipeline stages use the root environment as normal.
+
 LoRA fine-tuning on the Digital Green dataset using unsloth. `--train_layers` and `--tasks` are independent flags so you can mix any combination.
 
 Images are downloaded from S3 on first run and cached locally. Each row produces one sample per task per epoch.
@@ -242,29 +250,32 @@ Images are downloaded from S3 on first run and cached locally. Each row produces
 #### Running the three experiments
 
 ```bash
+# From src/finetune/ with its own uv environment:
+cd src/finetune && uv sync   # first time only
+
 # Experiment 1 — vision layers only, image classification only
-python main.py finetune \
+uv run python ../../main.py finetune \
   --model        unsloth/gemma-4-E2B-it \
   --annotations  /path/to/annotations.csv \
   --train_layers vision \
   --tasks        vis_cls \
-  --output_dir   outputs/finetune/
+  --output_dir   ../../outputs/finetune/
 
 # Experiment 2 — language layers only, text tasks only
-python main.py finetune \
+uv run python ../../main.py finetune \
   --model        unsloth/gemma-4-E2B-it \
   --annotations  /path/to/annotations.csv \
   --train_layers language \
   --tasks        lang_cls lang_desc \
-  --output_dir   outputs/finetune/
+  --output_dir   ../../outputs/finetune/
 
 # Experiment 3 — both layers, all 4 tasks
-python main.py finetune \
+uv run python ../../main.py finetune \
   --model        unsloth/gemma-4-E2B-it \
   --annotations  /path/to/annotations.csv \
   --train_layers vision_language \
   --tasks        vis_cls vis_desc lang_cls lang_desc \
-  --output_dir   outputs/finetune/
+  --output_dir   ../../outputs/finetune/
 
 # Output structure (auto-generated from --train_layers and --model):
 #   outputs/finetune/vision/gemma-4-E2B-it/

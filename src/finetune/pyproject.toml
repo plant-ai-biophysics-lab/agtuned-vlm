@@ -1,0 +1,15 @@
+[project]
+name = "agtuned-finetune"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "unsloth[cu124-torch260] @ git+https://github.com/unslothai/unsloth.git",
+    "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
+    "trl>=0.15.0",
+    "peft>=0.14.0",
+    "transformers>=4.51.0",
+    "torch>=2.6.0",
+    "pillow>=10.0.0",
+    "pyyaml>=6.0",
+    "trackio",
+]
