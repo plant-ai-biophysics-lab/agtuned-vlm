@@ -257,7 +257,8 @@ def main() -> None:
     args = parser.parse_args()
 
     random.seed(args.seed)
-    output_dir = Path(args.output_dir)
+    model_name = args.model.split("/")[-1]
+    output_dir = Path(args.output_dir) / args.train_layers / model_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load model ──────────────────────────────────────────────────────────────

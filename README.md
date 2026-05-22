@@ -242,13 +242,13 @@ Images are downloaded from S3 on first run and cached locally. Each row produces
 #### Running the three experiments
 
 ```bash
-# Experiment 1 — vision layers only, image tasks only
+# Experiment 1 — vision layers only, image classification only
 python main.py finetune \
   --model        unsloth/gemma-4-E2B-it \
   --annotations  /path/to/annotations.csv \
   --train_layers vision \
-  --tasks        vis_cls vis_desc \
-  --output_dir   outputs/finetune/vision/
+  --tasks        vis_cls \
+  --output_dir   outputs/finetune/
 
 # Experiment 2 — language layers only, text tasks only
 python main.py finetune \
@@ -256,7 +256,7 @@ python main.py finetune \
   --annotations  /path/to/annotations.csv \
   --train_layers language \
   --tasks        lang_cls lang_desc \
-  --output_dir   outputs/finetune/language/
+  --output_dir   outputs/finetune/
 
 # Experiment 3 — both layers, all 4 tasks
 python main.py finetune \
@@ -264,7 +264,12 @@ python main.py finetune \
   --annotations  /path/to/annotations.csv \
   --train_layers vision_language \
   --tasks        vis_cls vis_desc lang_cls lang_desc \
-  --output_dir   outputs/finetune/vision_language/
+  --output_dir   outputs/finetune/
+
+# Output structure (auto-generated from --train_layers and --model):
+#   outputs/finetune/vision/gemma-4-E2B-it/
+#   outputs/finetune/language/gemma-4-E2B-it/
+#   outputs/finetune/vision_language/gemma-4-E2B-it/
 ```
 
 | Flag | Default | Description |
