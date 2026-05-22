@@ -183,6 +183,29 @@ def build_samples(
 
     if skipped:
         print(f"  Skipped {skipped} rows with missing crop/diagnosis/details.")
+
+    # Print one sample per task for debugging
+    shown: set[str] = set()
+    print("\n=== Sample prompts ===")
+    for task in tasks:
+        for s in samples:
+            content = s["messages"][0]["content"]
+            has_image = any(c.get("type") == "image" for c in content)
+            task_match = (
+                (task in ("vis_cls", "vis_desc") and has_image) or
+                (task in ("lang_cls", "lang_desc") and not has_image)
+            )
+            if task_match and task not in shown:
+                user_text = next(c["text"] for c in content if c["type"] == "text")
+                answer    = s["messages"][1]["content"][0]["text"]
+                print(f"\n[{task}]")
+                print(f"  input : {user_text[:200]}{'...' if len(user_text) > 200 else ''}")
+                print(f"  output: {answer[:120]}{'...' if len(answer) > 120 else ''}")
+                shown.add(task)
+        if task not in shown:
+            print(f"\n[{task}] — no samples (images missing?)")
+    print()
+
     return samples
 
 
@@ -191,13 +214,11 @@ _ALL_TASKS = ["vis_cls", "vis_desc", "lang_cls", "lang_desc"]
 
 # ── Dataset split ──────────────────────────────────────────────────────────────
 
-def split_dataset(data: list, train: float = 0.8, val: float = 0.1):
+def split_dataset(data: list, train: float = 0.9):
     shuffled = data.copy()
     random.shuffle(shuffled)
-    n = len(shuffled)
-    t = int(n * train)
-    v = t + int(n * val)
-    return shuffled[:t], shuffled[t:v], shuffled[v:]
+    t = int(len(shuffled) * train)
+    return shuffled[:t], shuffled[t:]
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -303,7 +324,7 @@ def main() -> None:
         print("ERROR: no samples were built — check annotations and image downloads.")
         sys.exit(1)
 
-    train_ds, val_ds, _ = split_dataset(samples)
+    train_ds, val_ds = split_dataset(samples)
     print(f"Split: train={len(train_ds)}  val={len(val_ds)}")
 
     # ── Train ───────────────────────────────────────────────────────────────────
@@ -311,7 +332,7 @@ def main() -> None:
     start_mem = round(torch.cuda.max_memory_reserved() / 1024 ** 3, 3)
     max_mem   = round(gpu_stats.total_memory / 1024 ** 3, 3)
 
-    eval_steps = max(1, int(0.2 * len(train_ds) / (args.batch_size * args.grad_accum)))
+    eval_steps = max(1, int(0.25 * len(train_ds) / (args.batch_size * args.grad_accum)))
 
     trainer = SFTTrainer(
         model=model,
