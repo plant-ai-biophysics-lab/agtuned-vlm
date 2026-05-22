@@ -17,6 +17,7 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts from saved metrics JSON (no inference) |
 | 5 — Collate | `src/collate_results.py` | Merge all stage metrics into a single CSV + LaTeX results table |
 | 6 — Error Overlap | `src/error_overlap/analyze.py` | Per-class error overlap between language and vision assessments (quadrant analysis) |
+| 7 — Fine-tune | `src/finetune/train.py` | LoRA fine-tuning on Digital Green dataset with configurable component targeting |
 
 ## Prerequisites
 
@@ -229,6 +230,86 @@ python main.py error-overlap \
 | `--threshold` | `0.5` | Per-class accuracy threshold for pass/fail |
 
 Outputs per model: a scatter plot (language accuracy vs. vision accuracy, colour-coded by quadrant) and a per-class CSV. A stacked bar `error_overlap_heatmap.png` compares quadrant fractions across all models.
+
+---
+
+### Stage 7 — Fine-tune
+
+LoRA fine-tuning on the Digital Green dataset using unsloth. `--train_layers` and `--tasks` are independent flags so you can mix any combination.
+
+Images are downloaded from S3 on first run and cached locally. Each row produces one sample per task per epoch.
+
+#### Running the three experiments
+
+```bash
+# Experiment 1 — vision layers only, image tasks only
+python main.py finetune \
+  --model        unsloth/gemma-4-E2B-it \
+  --annotations  /path/to/annotations.csv \
+  --train_layers vision \
+  --tasks        vis_cls vis_desc \
+  --output_dir   outputs/finetune/vision/
+
+# Experiment 2 — language layers only, text tasks only
+python main.py finetune \
+  --model        unsloth/gemma-4-E2B-it \
+  --annotations  /path/to/annotations.csv \
+  --train_layers language \
+  --tasks        lang_cls lang_desc \
+  --output_dir   outputs/finetune/language/
+
+# Experiment 3 — both layers, all 4 tasks
+python main.py finetune \
+  --model        unsloth/gemma-4-E2B-it \
+  --annotations  /path/to/annotations.csv \
+  --train_layers vision_language \
+  --tasks        vis_cls vis_desc lang_cls lang_desc \
+  --output_dir   outputs/finetune/vision_language/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `unsloth/gemma-4-E2B-it` | Any unsloth-compatible model ID |
+| `--annotations` | `data/digital_green/annotations.csv` | Path to Digital Green annotations CSV |
+| `--images_dir` | `data/digital_green/images/` | Local cache for downloaded images |
+| `--train_layers` | `vision_language` | Which weights get gradient updates: `vision`, `language`, or `vision_language` |
+| `--tasks` | all four | Prompt configs to use: any subset of `vis_cls vis_desc lang_cls lang_desc` |
+| `--epochs` | `1` | Number of training epochs |
+| `--batch_size` | `4` | Per-device batch size |
+| `--grad_accum` | `4` | Gradient accumulation steps |
+| `--lr` | `2e-4` | Learning rate |
+| `--lora_r` | `16` | LoRA rank (lora_alpha = lora_r) |
+| `--load_in_4bit` | off | Load model in 4-bit BnB quantization |
+
+Outputs per run: `lora_adapters/` (raw LoRA weights), `vllm_model/` (merged 16-bit), `train_stats.json`. Training is logged to trackio.
+
+#### Evaluating fine-tuned models
+
+Point `--models` at the local `vllm_model/` directory — vLLM accepts local paths the same as HuggingFace IDs:
+
+```bash
+python main.py language \
+  --models outputs/finetune/vision_language/vllm_model/ \
+  --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \
+  --classification_jsonl outputs/data_generation/agml_classification.jsonl \
+  --config src/config/datasets.yaml \
+  --prompts src/config/prompts.yaml \
+  --output_dir outputs/language_assessment_finetuned/
+
+python main.py vision \
+  --models outputs/finetune/vision_language/vllm_model/ \
+  --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \
+  --config src/config/datasets.yaml \
+  --prompts src/config/prompts.yaml \
+  --output_dir outputs/vision_assessment_finetuned/
+
+python main.py error-overlap \
+  --language_dir outputs/language_assessment_finetuned/ \
+  --vision_dir   outputs/vision_assessment_finetuned/ \
+  --output_dir   outputs/error_overlap_finetuned/
+```
+
+Compare the quadrant distributions in `error_overlap_finetuned/` against the baseline `error_overlap/` to quantify alignment improvement.
 
 ---
 

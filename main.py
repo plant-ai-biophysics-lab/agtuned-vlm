@@ -15,6 +15,7 @@ STAGES = {
     "vision-plot":   "src.vision_assessment.plot",
     "collate":       "src.collate_results",
     "error-overlap": "src.error_overlap.analyze",
+    "finetune":      "src.finetune.train",
 }
 
 _HELP = """
