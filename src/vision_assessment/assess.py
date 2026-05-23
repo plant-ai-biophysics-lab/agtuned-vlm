@@ -172,6 +172,7 @@ def load_llm(
     quantization: str | None = None,
     max_num_seqs: int = 64,
     gpu_memory_utilization: float = 0.7,
+    enforce_eager: bool = False,
 ) -> tuple[LLM, object]:
     if _is_mamba(model_id):
         effective_seqs = min(max_num_seqs, _MAMBA_MAX_NUM_SEQS)
@@ -187,6 +188,7 @@ def load_llm(
         max_num_seqs=max_num_seqs,
         limit_mm_per_prompt={"image": 1},
         quantization=quantization,
+        enforce_eager=enforce_eager,
     )
     return llm, llm.get_tokenizer()
 
@@ -250,9 +252,10 @@ def run_model(
     output_dir: Path,
     quantization: str | None = None,
     max_num_seqs: int = 64,
+    enforce_eager: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
-    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs)
+    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
 
     desc_rows: list[dict] = []
     cls_rows: list[dict] = []
@@ -706,6 +709,7 @@ def _worker_vision(kwargs: dict) -> None:
         output_dir=Path(kwargs["output_dir"]),
         quantization=kwargs["quantization"],
         max_num_seqs=kwargs.get("max_num_seqs", 64),
+        enforce_eager=kwargs.get("enforce_eager", False),
     )
     with open(kwargs["out_path"], "w") as f:
         json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
@@ -759,6 +763,7 @@ def main(args: argparse.Namespace) -> None:
             output_dir=str(output_dir),
             quantization=quant,
             max_num_seqs=args.max_num_seqs,
+            enforce_eager=args.enforce_eager,
             out_path=str(worker_out),
         ))
         worker_result = json.loads(worker_out.read_text())
@@ -995,6 +1000,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_num_seqs", type=int, default=64,
         help="Max concurrent sequences for vLLM (lower to ≤35 for Mamba-architecture models)",
+    )
+    parser.add_argument(
+        "--enforce_eager", action="store_true",
+        help="Disable CUDA graph capture (workaround for Triton kernel crashes with AWQ models)",
     )
     args = parser.parse_args()
     main(args)

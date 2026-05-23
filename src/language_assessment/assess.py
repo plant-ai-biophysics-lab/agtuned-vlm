@@ -164,6 +164,7 @@ def load_llm(
     quantization: str | None = None,
     max_num_seqs: int = 128,
     gpu_memory_utilization: float = 0.7,
+    enforce_eager: bool = False,
 ) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
 
@@ -180,6 +181,7 @@ def load_llm(
         gpu_memory_utilization=gpu_memory_utilization,
         max_num_seqs=max_num_seqs,
         quantization=quantization,
+        enforce_eager=enforce_eager,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     return llm, tokenizer
@@ -677,12 +679,13 @@ def _worker_language(kwargs: dict) -> None:
     model_id      = kwargs["model_id"]
     quantization  = kwargs["quantization"]
     max_num_seqs  = kwargs.get("max_num_seqs", 128)
+    enforce_eager = kwargs.get("enforce_eager", False)
     out_path      = kwargs["out_path"]
 
     # Reconstruct DatasetConfig objects from plain dicts
     datasets_cfg = {k: DatasetConfig(**v) for k, v in kwargs["datasets_cfg"].items()}
 
-    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs)
+    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
     desc_rows = run_descriptions(llm, tokenizer, kwargs["desc_records"], kwargs["prompt_template"])
     cls_rows  = run_classifications(
         llm, tokenizer, kwargs["cls_records"],
@@ -763,6 +766,7 @@ def main(args: argparse.Namespace) -> None:
             model_id=model_id,
             quantization=quant,
             max_num_seqs=args.max_num_seqs,
+            enforce_eager=args.enforce_eager,
             desc_records=desc_records,
             cls_records=cls_records,
             prompt_template=prompt_template,
@@ -984,6 +988,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_num_seqs", type=int, default=128,
         help="Max concurrent sequences for vLLM (auto-lowered for Mamba models)",
+    )
+    parser.add_argument(
+        "--enforce_eager", action="store_true",
+        help="Disable CUDA graph capture (workaround for Triton kernel crashes with AWQ models)",
     )
     args = parser.parse_args()
     main(args)

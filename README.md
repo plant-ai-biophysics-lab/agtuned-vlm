@@ -145,6 +145,7 @@ python main.py language \
 | `--max_num_seqs` | 128 | Max concurrent sequences; auto-lowered for Mamba models |
 | `--n_samples` | all | Limit records per JSONL |
 | `--judge_model` | none | LLM-as-a-judge model for classification (runs after all eval models) |
+| `--enforce_eager` | off | Disable CUDA graph capture — use if Triton kernel crashes with AWQ models |
 
 Charts produced: classification per dataset, classification per task type, description ROUGE per task type, overall description ROUGE, overall classification.
 
@@ -176,6 +177,7 @@ python main.py vision \
 | `--quantization` | none | `awq`, `gptq`, `fp8`, or `bitsandbytes` |
 | `--max_num_seqs` | 64 | Max concurrent sequences |
 | `--n_samples` | all | Limit images per class |
+| `--enforce_eager` | off | Disable CUDA graph capture — use if Triton kernel crashes with AWQ models |
 
 ---
 
