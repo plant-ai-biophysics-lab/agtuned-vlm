@@ -58,6 +58,12 @@ CLS_PARAMS = SamplingParams(
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
+_REASONING_RE = re.compile(
+    r"\b(we need to|the user wants|the instruction|let me|i need to|i should|i will|"
+    r"to answer this|the question (is|asks)|so (just|the answer)|"
+    r"the answer (is|would be|should)|first[,\s]+(let|i)|step \d)\b",
+    re.IGNORECASE,
+)
 _GREETING_RE = re.compile(
     r"^(what (a )?(great|good|excellent|interesting|wonderful|nice)|"
     r"sure[!,.]?|great[!,.]?|of course[!,.]?|absolutely[!,.]?|"
@@ -123,10 +129,16 @@ def _clean_response(text: str) -> str:
         lines.pop(0)
     text = "\n".join(lines)
 
-    # Take first non-empty paragraph (stop at blank line)
+    # Take first non-reasoning paragraph; fall back to last paragraph
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if paragraphs:
-        text = paragraphs[0]
+    text = ""
+    for para in paragraphs:
+        collapsed = " ".join(para.split())
+        if not _REASONING_RE.search(collapsed):
+            text = collapsed
+            break
+    if not text and paragraphs:
+        text = paragraphs[-1]
 
     # Collapse internal whitespace / newlines within the paragraph
     text = " ".join(text.split())
