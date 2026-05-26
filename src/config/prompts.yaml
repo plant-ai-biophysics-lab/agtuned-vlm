@@ -56,6 +56,7 @@ verify_sanitize: |
 
 # Assessment prompts
 assessment_descriptive: "Answer the following question in exactly one concise sentence describing only the visual appearance. Do not include greetings, headers, bullet points, or explanations.\n\nQuestion: {question}\n\nAnswer:"
+assessment_classification: "Answer the following question with only the class name. Do not explain, reason, or include any other text.\n\nQuestion: {question}\n\nAnswer:"
 classification_suffix: " Respond with only the class name, nothing else."
 
 # LLM judge prompts

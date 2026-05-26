@@ -49,7 +49,7 @@ from src.common.metrics import (
     rouge_scores_per_sample,
 )
 
-DESC_PARAMS = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
+DESC_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.1)
 CLS_PARAMS = SamplingParams(
     temperature=0.0, max_tokens=32, repetition_penalty=1.1,
     stop=["\n", ".", ",", ";"],
@@ -248,6 +248,8 @@ def run_model(
     records: list[dict],
     datasets_cfg: dict,
     classification_suffix: str,
+    desc_prompt_template: str,
+    cls_prompt_template: str,
     n_samples: int | None,
     output_dir: Path,
     quantization: str | None = None,
@@ -295,7 +297,8 @@ def run_model(
         print(f"  {agml_name} / {class_label}  ({len(images)} images)")
 
         # Description task
-        desc_preds = run_batch(llm, tokenizer, images, visual_desc_q, DESC_PARAMS)
+        wrapped_desc_q = desc_prompt_template.format(question=visual_desc_q)
+        desc_preds = run_batch(llm, tokenizer, images, wrapped_desc_q, DESC_PARAMS)
         for pred, img_name in zip(desc_preds, valid_names):
             scores = rouge_scores_per_sample(pred, synth_desc)
             desc_rows.append({
@@ -313,9 +316,9 @@ def run_model(
         if visual_cls_q:
             ds_cfg = datasets_cfg.get(agml_name)
             clean_classes = ds_cfg.clean_classes if ds_cfg else []
-            cls_question = visual_cls_q + classification_suffix
+            wrapped_cls_q = cls_prompt_template.format(question=visual_cls_q)
 
-            cls_preds = run_batch(llm, tokenizer, images, cls_question, CLS_PARAMS)
+            cls_preds = run_batch(llm, tokenizer, images, wrapped_cls_q, CLS_PARAMS)
             resolved_list = [resolve_class(p, clean_classes) for p in cls_preds]
             for pred, img_name, resolved in zip(cls_preds, valid_names, resolved_list):
                 correct = resolved is not None and resolved.lower() == class_label.lower()
@@ -705,6 +708,8 @@ def _worker_vision(kwargs: dict) -> None:
         records=kwargs["records"],
         datasets_cfg=datasets_cfg,
         classification_suffix=kwargs["classification_suffix"],
+        desc_prompt_template=kwargs["desc_prompt_template"],
+        cls_prompt_template=kwargs["cls_prompt_template"],
         n_samples=kwargs["n_samples"],
         output_dir=Path(kwargs["output_dir"]),
         quantization=kwargs["quantization"],
@@ -730,6 +735,8 @@ def main(args: argparse.Namespace) -> None:
 
     prompts = load_prompts(Path(args.prompts))
     classification_suffix = prompts["classification_suffix"]
+    desc_prompt_template = prompts["assessment_descriptive"]
+    cls_prompt_template = prompts["assessment_classification"]
 
     datasets_cfg = datasets_by_name(Path(args.config))
     ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
@@ -759,6 +766,8 @@ def main(args: argparse.Namespace) -> None:
             records=records,
             datasets_cfg={k: vars(v) for k, v in datasets_cfg.items()},
             classification_suffix=classification_suffix,
+            desc_prompt_template=desc_prompt_template,
+            cls_prompt_template=cls_prompt_template,
             n_samples=args.n_samples,
             output_dir=str(output_dir),
             quantization=quant,
