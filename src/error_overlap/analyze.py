@@ -314,19 +314,15 @@ def _plot_combined_scatter(
     print(f"  Saved: {path}")
 
 
-def _plot_heatmap(summaries: list[dict], path: Path, title: str) -> None:
-    if not summaries:
-        return
-
+def _draw_heatmap_ax(ax: plt.Axes, summaries: list[dict], title: str) -> None:
+    """Draw a stacked bar heatmap into *ax* (no legend — caller adds it)."""
     quadrant_order = ["both_pass", "lang_only", "vision_only", "both_fail"]
     models = [s["model"].split("/")[-1] for s in summaries]
     x = np.arange(len(models))
-
-    fig, ax = plt.subplots(figsize=(max(5, len(models) * 1.8), 5))
     bottoms = np.zeros(len(models))
 
     for q in quadrant_order:
-        vals   = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
+        vals = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
         bars = ax.bar(x, vals, 0.5, bottom=bottoms, color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
         for bar, v in zip(bars, vals):
             if v >= 0.05:
@@ -344,9 +340,32 @@ def _plot_heatmap(summaries: list[dict], path: Path, title: str) -> None:
     ax.set_ylabel("Fraction of classes")
     ax.set_ylim(0, 1.05)
     ax.set_title(title)
-    ax.legend(fontsize=8, bbox_to_anchor=(1.01, 1), loc="upper left")
 
-    fig.tight_layout()
+
+def _plot_combined_heatmap(
+    cls_summaries: list[dict],
+    desc_summaries: list[dict],
+    path: Path,
+) -> None:
+    """Side-by-side classification + description heatmaps with a single shared legend below."""
+    n_models = max(len(cls_summaries), len(desc_summaries), 1)
+    fig, (ax_cls, ax_desc) = plt.subplots(1, 2, figsize=(max(8, n_models * 2.2) * 2, 5.5))
+    fig.suptitle("Per-class error overlap across models", fontsize=12, fontweight="bold")
+
+    _draw_heatmap_ax(ax_cls,  cls_summaries,  "Classification")
+    _draw_heatmap_ax(ax_desc, desc_summaries, "Description (ROUGE-SS)")
+
+    legend_patches = [
+        mpatches.Patch(color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
+        for q in ["both_pass", "lang_only", "vision_only", "both_fail"]
+    ]
+    fig.legend(
+        handles=legend_patches, fontsize=9,
+        loc="lower center", bbox_to_anchor=(0.5, 0.0),
+        ncol=4, frameon=False,
+    )
+
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -471,15 +490,17 @@ def main() -> None:
         p = output_dir / "error_overlap_cls_summary.json"
         p.write_text(json.dumps(cls_summaries, indent=2), encoding="utf-8")
         print(f"\n  Saved: {p}")
-        _plot_heatmap(cls_summaries, output_dir / "error_overlap_cls_heatmap.png",
-                      "Per-class error overlap — Classification")
 
     if desc_summaries:
         p = output_dir / "error_overlap_desc_summary.json"
         p.write_text(json.dumps(desc_summaries, indent=2), encoding="utf-8")
-        print(f"\n  Saved: {p}")
-        _plot_heatmap(desc_summaries, output_dir / "error_overlap_desc_heatmap.png",
-                      "Per-class error overlap — Description (ROUGE-SS)")
+        print(f"  Saved: {p}")
+
+    if cls_summaries or desc_summaries:
+        _plot_combined_heatmap(
+            cls_summaries, desc_summaries,
+            output_dir / "error_overlap_heatmap.png",
+        )
 
     # ── Print tables ───────────────────────────────────────────────────────────
     for label, summaries in [("Classification", cls_summaries), ("Description (ROUGE-SS)", desc_summaries)]:
