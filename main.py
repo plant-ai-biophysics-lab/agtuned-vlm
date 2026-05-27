@@ -14,6 +14,7 @@ STAGES = {
     "vision":        "src.vision_assessment.assess",
     "vision-plot":   "src.vision_assessment.plot",
     "collate":       "src.collate_results",
+    "hypothesis":    "src.hypothesis_plot",
     "error-overlap": "src.error_overlap.analyze",
     "finetune":      "src.finetune.train",
 }
@@ -33,6 +34,10 @@ Stages:
     language    Stage 3  — language assessment (text-only models)
     language-plot       — regenerate language assessment charts from saved metrics JSON
     vision      Stage 4  — vision assessment (multimodal models)
+    vision-plot         — regenerate vision assessment charts from saved metrics JSON
+    collate     Stage 5  — collate all metrics into a results table
+    hypothesis          — hypothesis matrix charts from results_table.csv
+    error-overlap       — analyse error overlap between language and vision
 
 Examples:
     python main.py generate \\
@@ -68,6 +73,13 @@ Examples:
         --prompts src/config/prompts.yaml \\
         --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \\
         --output_dir outputs/vision_assessment/
+
+    python main.py hypothesis \\
+        --input_dir  outputs/ \\
+        --output_dir outputs/ \\
+        --lp_threshold   0.60 \\
+        --lang_threshold 0.35 \\
+        --vis_threshold  0.35
 
 Pass --help after the stage name for all available options:
     python main.py probe --help
