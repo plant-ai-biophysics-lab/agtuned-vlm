@@ -76,10 +76,9 @@ Examples:
 
     python main.py hypothesis \\
         --input_dir  outputs/ \\
-        --output_dir outputs/ \\
-        --lp_threshold   0.60 \\
-        --lang_threshold 0.35 \\
-        --vis_threshold  0.35
+        --output_dir outputs/
+    # Thresholds default to the naive baseline row in results_table.csv.
+    # Override individually with --lp_threshold, --lang_cls_threshold, etc.
 
 Pass --help after the stage name for all available options:
     python main.py probe --help

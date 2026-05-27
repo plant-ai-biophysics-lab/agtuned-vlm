@@ -6,6 +6,9 @@ Reads  <input_dir>/results_table.csv  and produces two PNGs:
   hypothesis_desc.png  — Description view     (Lang ROUGE-SS | Vision ROUGE-SS)
 
 Each cell is coloured green (≥ threshold) or red (< threshold).
+Thresholds default to the naive baseline values read from the CSV (one per column).
+CLI args override individual columns when provided.
+
 Classification chart annotates a case label per model row:
   Case 1 — LP ✓, Vision ✓          → No bottleneck
   Case 2 — LP ✓, Lang ✓, Vision ✗  → H3 Alignment bottleneck
@@ -31,11 +34,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# ── Defaults ───────────────────────────────────────────────────────────────────
+# ── Defaults (only used when no naive baseline row exists in CSV) ──────────────
 
-_LP_THRESHOLD   = 0.60   # linear probe F1 ≥ this → "high"
-_LANG_THRESHOLD = 0.35   # language cls F1 or ROUGE-SS ≥ this → "high"
-_VIS_THRESHOLD  = 0.35   # vision cls F1 or ROUGE-SS ≥ this → "high"
+_LP_THRESHOLD        = 0.60
+_LANG_CLS_THRESHOLD  = 0.10
+_LANG_DESC_THRESHOLD = 0.10
+_VIS_CLS_THRESHOLD   = 0.10
+_VIS_DESC_THRESHOLD  = 0.10
 
 _HIGH_COLOR = "#4caf50"   # green
 _LOW_COLOR  = "#f44336"   # red
@@ -84,6 +89,33 @@ def load_table(csv_path: Path) -> list[dict]:
     return rows
 
 
+# ── Threshold auto-detection ──────────────────────────────────────────────────
+
+def naive_thresholds(rows: list[dict], overrides: dict[str, float | None]) -> dict[str, float]:
+    """
+    Build per-column thresholds from the Baseline row in *rows*.
+    Each key in *overrides* takes precedence when not None.
+    Falls back to module-level defaults if the baseline has no value for a column.
+    """
+    baseline = next((r for r in rows if r["type"] == "Baseline"), None)
+
+    def _pick(col: str, default: float) -> float:
+        ov = overrides.get(col)
+        if ov is not None:
+            return ov
+        if baseline and baseline.get(col) is not None:
+            return baseline[col]
+        return default
+
+    return {
+        "lp_f1":         _pick("lp_f1",         _LP_THRESHOLD),
+        "lang_cls_f1":   _pick("lang_cls_f1",   _LANG_CLS_THRESHOLD),
+        "lang_desc_rss": _pick("lang_desc_rss", _LANG_DESC_THRESHOLD),
+        "vis_cls_f1":    _pick("vis_cls_f1",    _VIS_CLS_THRESHOLD),
+        "vis_desc_rss":  _pick("vis_desc_rss",  _VIS_DESC_THRESHOLD),
+    }
+
+
 # ── Case classification ────────────────────────────────────────────────────────
 
 def _hi(val: float | None, threshold: float) -> bool | None:
@@ -95,17 +127,15 @@ def _hi(val: float | None, threshold: float) -> bool | None:
 
 def classify_case(
     row: dict,
-    lp_thr: float,
-    lang_thr: float,
-    vis_thr: float,
+    thr: dict[str, float],
 ) -> str:
     """
     Classify the model into a hypothesis case.
     Returns a short label and a brief description.
     """
-    lp_hi   = _hi(row["lp_f1"],       lp_thr)
-    lang_hi = _hi(row["lang_cls_f1"],  lang_thr)
-    vis_hi  = _hi(row["vis_cls_f1"],   vis_thr)
+    lp_hi   = _hi(row["lp_f1"],      thr["lp_f1"])
+    lang_hi = _hi(row["lang_cls_f1"], thr["lang_cls_f1"])
+    vis_hi  = _hi(row["vis_cls_f1"],  thr["vis_cls_f1"])
 
     # Baseline row
     if row["type"] == "Baseline":
@@ -169,12 +199,9 @@ def _draw_table(
     rows: list[dict],
     col_keys: list[str],
     col_labels: list[str],
-    thresholds: list[float],
+    thr: dict[str, float],
     extra_cols: list[tuple[str, str]] | None = None,  # [(label, text_per_row)]
     title: str = "",
-    lp_thr: float = _LP_THRESHOLD,
-    lang_thr: float = _LANG_THRESHOLD,
-    vis_thr: float = _VIS_THRESHOLD,
     show_case: bool = False,
 ) -> None:
     """Draw a colour-coded table into *ax*."""
@@ -243,9 +270,9 @@ def _draw_table(
         )
 
         # Metric cells
-        for ci, (key, thr) in enumerate(zip(col_keys, thresholds), start=1):
+        for ci, key in enumerate(col_keys, start=1):
             val = row[key]
-            fc, tc = _cell(val, thr)
+            fc, tc = _cell(val, thr[key])
             ax.add_patch(mpatches.FancyBboxPatch(
                 (ci + 0.05, y + 0.1), 0.9, 0.8,
                 boxstyle="round,pad=0.02", facecolor=fc, edgecolor="white",
@@ -270,7 +297,7 @@ def _draw_table(
 
         # Case column
         if show_case:
-            case_text = classify_case(row, lp_thr, lang_thr, vis_thr)
+            case_text = classify_case(row, thr)
             case_col = extra_start + (n_extra)
             # colour the case cell
             if "H1" in case_text:
@@ -315,29 +342,23 @@ def _draw_table(
 def plot_classification(
     rows: list[dict],
     output_dir: Path,
-    lp_thr: float,
-    lang_thr: float,
-    vis_thr: float,
+    thr: dict[str, float],
 ) -> None:
     fig, ax = plt.subplots(figsize=(11, max(4, 0.55 * len(rows) + 1.5)))
     fig.patch.set_facecolor("white")
 
     _draw_table(
         ax, rows,
-        col_keys    = ["lp_f1",     "lang_cls_f1",  "vis_cls_f1"],
-        col_labels  = ["LP F1",     "Lang Cls F1",  "Vision Cls F1"],
-        thresholds  = [lp_thr,      lang_thr,        vis_thr],
-        title       = "Hypothesis Matrix — Classification",
-        lp_thr      = lp_thr,
-        lang_thr    = lang_thr,
-        vis_thr     = vis_thr,
-        show_case   = True,
+        col_keys  = ["lp_f1", "lang_cls_f1", "vis_cls_f1"],
+        col_labels = ["LP F1", "Lang Cls F1", "Vision Cls F1"],
+        thr       = thr,
+        title     = "Hypothesis Matrix — Classification",
+        show_case = True,
     )
 
-    # Threshold annotation
     fig.text(
         0.5, 0.01,
-        f"Thresholds — LP: {lp_thr:.2f}  |  Lang Cls: {lang_thr:.2f}  |  Vision Cls: {vis_thr:.2f}",
+        f"Thresholds (naive baseline) — LP: {thr['lp_f1']:.3f}  |  Lang Cls: {thr['lang_cls_f1']:.3f}  |  Vision Cls: {thr['vis_cls_f1']:.3f}",
         ha="center", fontsize=7, color="#616161",
     )
 
@@ -353,27 +374,23 @@ def plot_classification(
 def plot_description(
     rows: list[dict],
     output_dir: Path,
-    lang_thr: float,
-    vis_thr: float,
+    thr: dict[str, float],
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, max(4, 0.55 * len(rows) + 1.5)))
     fig.patch.set_facecolor("white")
 
     _draw_table(
         ax, rows,
-        col_keys    = ["lang_desc_rss", "vis_desc_rss"],
-        col_labels  = ["Lang ROUGE-SS", "Vision ROUGE-SS"],
-        thresholds  = [lang_thr,        vis_thr],
-        title       = "Hypothesis Matrix — Description (ROUGE-SS)",
-        lp_thr      = 0.0,   # not used for desc
-        lang_thr    = lang_thr,
-        vis_thr     = vis_thr,
-        show_case   = False,
+        col_keys   = ["lang_desc_rss", "vis_desc_rss"],
+        col_labels = ["Lang ROUGE-SS", "Vision ROUGE-SS"],
+        thr        = thr,
+        title      = "Hypothesis Matrix — Description (ROUGE-SS)",
+        show_case  = False,
     )
 
     fig.text(
         0.5, 0.01,
-        f"Thresholds — Lang ROUGE-SS: {lang_thr:.2f}  |  Vision ROUGE-SS: {vis_thr:.2f}",
+        f"Thresholds (naive baseline) — Lang ROUGE-SS: {thr['lang_desc_rss']:.3f}  |  Vision ROUGE-SS: {thr['vis_desc_rss']:.3f}",
         ha="center", fontsize=7, color="#616161",
     )
 
@@ -399,16 +416,24 @@ def main() -> None:
         help="Directory to write hypothesis_cls.png and hypothesis_desc.png",
     )
     parser.add_argument(
-        "--lp_threshold", type=float, default=_LP_THRESHOLD,
-        help="Linear probe F1 threshold for high/low (default: %(default)s)",
+        "--lp_threshold", type=float, default=None,
+        help="Override linear probe F1 threshold (default: naive baseline value)",
     )
     parser.add_argument(
-        "--lang_threshold", type=float, default=_LANG_THRESHOLD,
-        help="Language assessment threshold (cls F1 and ROUGE-SS) (default: %(default)s)",
+        "--lang_cls_threshold", type=float, default=None,
+        help="Override language classification F1 threshold (default: naive baseline value)",
     )
     parser.add_argument(
-        "--vis_threshold", type=float, default=_VIS_THRESHOLD,
-        help="Vision assessment threshold (cls F1 and ROUGE-SS) (default: %(default)s)",
+        "--lang_desc_threshold", type=float, default=None,
+        help="Override language ROUGE-SS threshold (default: naive baseline value)",
+    )
+    parser.add_argument(
+        "--vis_cls_threshold", type=float, default=None,
+        help="Override vision classification F1 threshold (default: naive baseline value)",
+    )
+    parser.add_argument(
+        "--vis_desc_threshold", type=float, default=None,
+        help="Override vision ROUGE-SS threshold (default: naive baseline value)",
     )
     args = parser.parse_args()
 
@@ -426,15 +451,29 @@ def main() -> None:
         print("ERROR: results_table.csv is empty or could not be parsed.")
         sys.exit(1)
 
+    overrides = {
+        "lp_f1":         args.lp_threshold,
+        "lang_cls_f1":   args.lang_cls_threshold,
+        "lang_desc_rss": args.lang_desc_threshold,
+        "vis_cls_f1":    args.vis_cls_threshold,
+        "vis_desc_rss":  args.vis_desc_threshold,
+    }
+    thr = naive_thresholds(rows, overrides)
+
     print(f"Loaded {len(rows)} row(s) from {csv_path}")
-    print(f"Thresholds — LP: {args.lp_threshold}  Lang: {args.lang_threshold}  Vis: {args.vis_threshold}")
+    print(f"Thresholds (from naive baseline):")
+    print(f"  LP F1:          {thr['lp_f1']:.3f}")
+    print(f"  Lang Cls F1:    {thr['lang_cls_f1']:.3f}")
+    print(f"  Lang ROUGE-SS:  {thr['lang_desc_rss']:.3f}")
+    print(f"  Vision Cls F1:  {thr['vis_cls_f1']:.3f}")
+    print(f"  Vision ROUGE-SS:{thr['vis_desc_rss']:.3f}")
     print()
 
     print("=== Classification chart ===")
-    plot_classification(rows, output_dir, args.lp_threshold, args.lang_threshold, args.vis_threshold)
+    plot_classification(rows, output_dir, thr)
 
     print("=== Description chart ===")
-    plot_description(rows, output_dir, args.lang_threshold, args.vis_threshold)
+    plot_description(rows, output_dir, thr)
 
     print(f"\nDone. Charts saved to {output_dir}/")
 
