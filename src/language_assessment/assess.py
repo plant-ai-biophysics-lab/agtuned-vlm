@@ -127,7 +127,9 @@ def _clean_response(text: str) -> str:
             text = collapsed
             break
     if not text and paragraphs:
-        text = paragraphs[-1]
+        last = " ".join(paragraphs[-1].split())
+        if not _REASONING_RE.search(last):
+            text = last
 
     # Collapse internal whitespace / newlines within the paragraph
     text = " ".join(text.split())

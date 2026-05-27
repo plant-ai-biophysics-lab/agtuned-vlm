@@ -50,10 +50,7 @@ from src.common.metrics import (
 )
 
 DESC_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.1)
-CLS_PARAMS = SamplingParams(
-    temperature=0.0, max_tokens=32, repetition_penalty=1.1,
-    stop=["\n", ".", ",", ";"],
-)
+CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
 
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -138,7 +135,10 @@ def _clean_response(text: str) -> str:
             text = collapsed
             break
     if not text and paragraphs:
-        text = paragraphs[-1]
+        # Only fall back if the last paragraph doesn't look like pure reasoning either
+        last = " ".join(paragraphs[-1].split())
+        if not _REASONING_RE.search(last):
+            text = last
 
     # Collapse internal whitespace / newlines within the paragraph
     text = " ".join(text.split())
@@ -229,9 +229,14 @@ def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> 
             "content": [{"type": "image"}, {"type": "text", "text": question}],
         }
     ]
-    text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    try:
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+    except TypeError:
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
     return {"prompt": text, "multi_modal_data": {"image": image}}
 
 
