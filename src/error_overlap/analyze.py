@@ -1,24 +1,32 @@
 """
 Per-class error overlap analysis between language and vision assessments.
 
-For each model that was evaluated in both assessments, computes per-class
-accuracy in each modality and places every class into one of four quadrants:
+Runs two parallel analyses:
 
-  Both pass   — language correct  + vision correct    → model is aligned
-  Lang only   — language correct  + vision wrong      → alignment broken
-  Vision only — language wrong    + vision correct    → visual knowledge compensates
-  Both fail   — language wrong    + vision wrong      → knowledge bottleneck
+  Classification overlap  (cls_*.csv)
+    Pass/fail = per-class accuracy >= threshold (default 0.5).
 
-Outputs (per model):
-  error_overlap_<model>.csv        — per-class quadrant table
-  error_overlap_<model>.png        — scatter + quadrant chart
-  error_overlap_summary.json       — aggregate quadrant counts across models
-  error_overlap_heatmap.png        — heatmap of quadrant fractions per model
+  Description overlap  (desc_*.csv)
+    Per-class mean ROUGE-SS score >= naive baseline ROUGE-SS → pass.
+    Threshold is read from the assessment metrics JSON files; falls back
+    to --rouge_threshold if the JSON is unavailable.
+
+Four quadrants per analysis:
+  Both pass   — language ✓  vision ✓
+  Lang only   — language ✓  vision ✗
+  Vision only — language ✗  vision ✓
+  Both fail   — language ✗  vision ✗
+
+Outputs (per model, per analysis type):
+  error_overlap_{cls|desc}_<model>.csv
+  error_overlap_{cls|desc}_<model>.png
+  error_overlap_{cls|desc}_summary.json
+  error_overlap_{cls|desc}_heatmap.png
 
 Usage:
-    python main.py error-overlap \
-        --language_dir  outputs/language_assessment/ \
-        --vision_dir    outputs/vision_assessment/ \
+    python main.py error-overlap \\
+        --language_dir  outputs/language_assessment/ \\
+        --vision_dir    outputs/vision_assessment/ \\
         --output_dir    outputs/error_overlap/
 """
 
@@ -37,47 +45,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-# ── CSV loading ────────────────────────────────────────────────────────────────
 
-def _load_cls_csv(path: Path) -> list[dict]:
-    with open(path, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
-
-
-def _correct(row: dict) -> bool:
-    """Use judged_correct when available, fall back to correct."""
-    if "judged_correct" in row and row["judged_correct"] != "":
-        return str(row["judged_correct"]) == "1"
-    return str(row.get("correct", "0")) == "1"
-
-
-def _safe_name(model_id: str) -> str:
-    return model_id.replace("/", "_").replace("-", "_")
-
-
-# ── Per-class accuracy ─────────────────────────────────────────────────────────
-
-def per_class_accuracy(rows: list[dict]) -> dict[tuple[str, str], dict]:
-    """Returns {(agml_dataset, class_label): {accuracy, n}} for each class."""
-    by_class: dict[tuple, list[bool]] = defaultdict(list)
-    for row in rows:
-        key = (row["agml_dataset"], row["class_label"])
-        by_class[key].append(_correct(row))
-    return {
-        key: {"accuracy": round(sum(hits) / len(hits), 4), "n": len(hits)}
-        for key, hits in by_class.items()
-    }
-
-
-# ── Quadrant assignment ────────────────────────────────────────────────────────
-
-_THRESHOLD = 0.5  # accuracy above this = "pass"
+# ── Shared constants ───────────────────────────────────────────────────────────
 
 QUADRANT_LABELS = {
     "both_pass":   "Both pass",
     "lang_only":   "Lang only (textual knowledge compensates)",
     "vision_only": "Vision only (visual knowledge compensates)",
-    "both_fail":   "Both fail (alignment broken)",
+    "both_fail":   "Both fail",
 }
 
 QUADRANT_COLORS = {
@@ -87,10 +62,95 @@ QUADRANT_COLORS = {
     "both_fail":   "#95a5a6",
 }
 
+_CLS_THRESHOLD   = 0.5
+_ROUGE_THRESHOLD = 0.15   # fallback if metrics JSON unavailable
 
-def assign_quadrant(lang_acc: float, vis_acc: float, threshold: float) -> str:
-    lang_pass = lang_acc >= threshold
-    vis_pass  = vis_acc  >= threshold
+
+# ── CSV helpers ────────────────────────────────────────────────────────────────
+
+def _load_csv(path: Path) -> list[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _safe_name(model_id: str) -> str:
+    return model_id.replace("/", "_").replace("-", "_")
+
+
+# ── Classification helpers ─────────────────────────────────────────────────────
+
+def _correct(row: dict) -> bool:
+    if "judged_correct" in row and row["judged_correct"] != "":
+        return str(row["judged_correct"]) == "1"
+    return str(row.get("correct", "0")) == "1"
+
+
+def per_class_accuracy(rows: list[dict]) -> dict[tuple[str, str], dict]:
+    by_class: dict[tuple, list[bool]] = defaultdict(list)
+    for row in rows:
+        key = (row["agml_dataset"], row["class_label"])
+        by_class[key].append(_correct(row))
+    return {
+        key: {"score": round(sum(hits) / len(hits), 4), "n": len(hits)}
+        for key, hits in by_class.items()
+    }
+
+
+# ── Description helpers ────────────────────────────────────────────────────────
+
+def _rouge_score(row: dict) -> float | None:
+    """Return best available ROUGE score for a description row."""
+    for key in ("rouge_ss", "rouge1", "rougeL", "rouge2"):
+        v = row.get(key, "")
+        if v not in ("", None):
+            try:
+                return float(v)
+            except ValueError:
+                pass
+    return None
+
+
+def per_class_rouge(rows: list[dict]) -> dict[tuple[str, str], dict]:
+    """Mean ROUGE-SS (or best available) per (dataset, class_label)."""
+    by_class: dict[tuple, list[float]] = defaultdict(list)
+    for row in rows:
+        key = (row["agml_dataset"], row["class_label"])
+        s = _rouge_score(row)
+        if s is not None:
+            by_class[key].append(s)
+    return {
+        key: {"score": round(sum(vals) / len(vals), 4), "n": len(vals)}
+        for key, vals in by_class.items()
+        if vals
+    }
+
+
+def _naive_rouge_from_json(metrics_path: Path) -> float | None:
+    """Extract naive baseline ROUGE-SS overall from an assessment metrics JSON."""
+    if not metrics_path.exists():
+        return None
+    try:
+        data = json.loads(metrics_path.read_text())
+        naive = data.get("naive", {})
+        # Prefer pre-computed overall
+        ov = naive.get("description_overall", {})
+        if ov.get("rouge_ss") is not None:
+            return float(ov["rouge_ss"])
+        # Fall back to macro-averaging per-dataset naive values
+        per_ds = naive.get("description", {})
+        vals = [v["rouge_ss"] for v in per_ds.values() if "rouge_ss" in v]
+        if vals:
+            return round(float(np.mean(vals)), 4)
+    except Exception:
+        pass
+    return None
+
+
+# ── Quadrant logic (shared) ────────────────────────────────────────────────────
+
+def assign_quadrant(lang_score: float, vis_score: float, threshold: float) -> str:
+    lang_pass = lang_score >= threshold
+    vis_pass  = vis_score  >= threshold
     if lang_pass and vis_pass:
         return "both_pass"
     if lang_pass and not vis_pass:
@@ -103,57 +163,53 @@ def assign_quadrant(lang_acc: float, vis_acc: float, threshold: float) -> str:
 # ── Per-model analysis ─────────────────────────────────────────────────────────
 
 def analyze_model(
-    lang_rows: list[dict],
-    vis_rows: list[dict],
+    lang_scores: dict[tuple, dict],
+    vis_scores:  dict[tuple, dict],
     model_id: str,
     output_dir: Path,
-    threshold: float = _THRESHOLD,
+    threshold: float,
+    prefix: str,          # "cls" or "desc"
+    x_label: str,
+    y_label: str,
+    score_label: str,
 ) -> dict:
-    lang_acc = per_class_accuracy(lang_rows)
-    vis_acc  = per_class_accuracy(vis_rows)
-
-    shared_keys = set(lang_acc) & set(vis_acc)
+    shared_keys = set(lang_scores) & set(vis_scores)
     if not shared_keys:
         print(f"  [{model_id}] No overlapping (dataset, class) pairs — skipping.")
         return {}
 
     records = []
-    quadrant_counts = defaultdict(int)
+    quadrant_counts: dict[str, int] = defaultdict(int)
     for key in sorted(shared_keys):
         dataset, cls = key
-        la = lang_acc[key]["accuracy"]
-        va = vis_acc[key]["accuracy"]
-        q  = assign_quadrant(la, va, threshold)
+        ls = lang_scores[key]["score"]
+        vs = vis_scores[key]["score"]
+        q  = assign_quadrant(ls, vs, threshold)
         quadrant_counts[q] += 1
         records.append({
-            "agml_dataset": dataset,
-            "class_label":  cls,
-            "task_type":    lang_rows[0].get("task_type", "") if lang_rows else "",
-            "lang_accuracy": la,
-            "vis_accuracy":  va,
+            "agml_dataset":  dataset,
+            "class_label":   cls,
+            "lang_score":    ls,
+            "vis_score":     vs,
             "quadrant":      q,
-            "lang_n":        lang_acc[key]["n"],
-            "vis_n":         vis_acc[key]["n"],
+            "lang_n":        lang_scores[key]["n"],
+            "vis_n":         vis_scores[key]["n"],
         })
-
-    # Attach task_type per class from rows
-    task_map: dict[tuple, str] = {}
-    for row in lang_rows:
-        task_map[(row["agml_dataset"], row["class_label"])] = row.get("task_type", "")
-    for r in records:
-        r["task_type"] = task_map.get((r["agml_dataset"], r["class_label"]), "")
 
     total = len(records)
     summary = {
-        "model":  model_id,
+        "model":    model_id,
         "n_classes": total,
+        "threshold": threshold,
         "quadrants": {q: {"n": n, "pct": round(n / total, 3)} for q, n in quadrant_counts.items()},
     }
 
-    _write_csv(records, output_dir / f"error_overlap_{_safe_name(model_id)}.csv")
-    _plot_scatter(records, model_id, output_dir / f"error_overlap_{_safe_name(model_id)}.png", threshold)
+    csv_path = output_dir / f"error_overlap_{prefix}_{_safe_name(model_id)}.csv"
+    png_path = output_dir / f"error_overlap_{prefix}_{_safe_name(model_id)}.png"
+    _write_csv(records, csv_path, prefix)
+    _plot_scatter(records, model_id, png_path, threshold, x_label, y_label, score_label)
 
-    print(f"  [{model_id}]  n={total}  "
+    print(f"  [{model_id}] ({prefix})  n={total}  threshold={threshold:.3f}  "
           + "  ".join(f"{q}={n}" for q, n in quadrant_counts.items()))
 
     return summary
@@ -161,89 +217,98 @@ def analyze_model(
 
 # ── Output helpers ─────────────────────────────────────────────────────────────
 
-_CSV_FIELDS = [
-    "agml_dataset", "class_label", "task_type",
-    "lang_accuracy", "vis_accuracy", "quadrant", "lang_n", "vis_n",
-]
-
-
-def _write_csv(records: list[dict], path: Path) -> None:
+def _write_csv(records: list[dict], path: Path, prefix: str) -> None:
+    fields = ["agml_dataset", "class_label", "lang_score", "vis_score", "quadrant", "lang_n", "vis_n"]
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=_CSV_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(records)
     print(f"  Saved: {path}")
 
 
-def _plot_scatter(records: list[dict], model_id: str, path: Path, threshold: float = _THRESHOLD) -> None:
+def _plot_scatter(
+    records: list[dict],
+    model_id: str,
+    path: Path,
+    threshold: float,
+    x_label: str,
+    y_label: str,
+    score_label: str,
+) -> None:
     fig, ax = plt.subplots(figsize=(7, 6))
 
     quadrant_counts: dict[str, int] = defaultdict(int)
     for r in records:
-        color = QUADRANT_COLORS[r["quadrant"]]
-        ax.scatter(r["lang_accuracy"], r["vis_accuracy"],
-                   color=color, alpha=0.75, s=60, zorder=3)
+        ax.scatter(r["lang_score"], r["vis_score"],
+                   color=QUADRANT_COLORS[r["quadrant"]], alpha=0.75, s=60, zorder=3)
         quadrant_counts[r["quadrant"]] += 1
 
-    # Quadrant dividers
     ax.axvline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
     ax.axhline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
 
     # Quadrant shading
-    ax.axhspan(0, threshold, xmin=0, xmax=threshold, color=QUADRANT_COLORS["both_fail"],   alpha=0.06)
-    ax.axhspan(0, threshold, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["lang_only"],   alpha=0.06)
-    ax.axhspan(threshold, 1, xmin=0, xmax=threshold,  color=QUADRANT_COLORS["vision_only"], alpha=0.06)
-    ax.axhspan(threshold, 1, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["both_pass"],   alpha=0.06)
+    t = threshold
+    ax.axhspan(0, t, xmin=0, xmax=t, color=QUADRANT_COLORS["both_fail"],   alpha=0.06)
+    ax.axhspan(0, t, xmin=t, xmax=1, color=QUADRANT_COLORS["lang_only"],   alpha=0.06)
+    ax.axhspan(t, 1, xmin=0, xmax=t, color=QUADRANT_COLORS["vision_only"], alpha=0.06)
+    ax.axhspan(t, 1, xmin=t, xmax=1, color=QUADRANT_COLORS["both_pass"],   alpha=0.06)
 
-    # Quadrant count annotations
     pad = 0.04
-    count_style = dict(fontsize=8, fontweight="bold", alpha=0.8, zorder=4)
-    ax.text(pad, pad,         f"n={quadrant_counts['both_fail']}",   color=QUADRANT_COLORS["both_fail"],   ha="left",  va="bottom", transform=ax.transAxes, **count_style)
-    ax.text(1 - pad, pad,     f"n={quadrant_counts['lang_only']}",   color=QUADRANT_COLORS["lang_only"],   ha="right", va="bottom", transform=ax.transAxes, **count_style)
-    ax.text(pad, 1 - pad,     f"n={quadrant_counts['vision_only']}", color=QUADRANT_COLORS["vision_only"], ha="left",  va="top",    transform=ax.transAxes, **count_style)
-    ax.text(1 - pad, 1 - pad, f"n={quadrant_counts['both_pass']}",   color=QUADRANT_COLORS["both_pass"],   ha="right", va="top",    transform=ax.transAxes, **count_style)
+    style = dict(fontsize=8, fontweight="bold", alpha=0.8, zorder=4)
+    ax.text(pad,     pad,     f"n={quadrant_counts['both_fail']}",   color=QUADRANT_COLORS["both_fail"],   ha="left",  va="bottom", transform=ax.transAxes, **style)
+    ax.text(1 - pad, pad,     f"n={quadrant_counts['lang_only']}",   color=QUADRANT_COLORS["lang_only"],   ha="right", va="bottom", transform=ax.transAxes, **style)
+    ax.text(pad,     1 - pad, f"n={quadrant_counts['vision_only']}", color=QUADRANT_COLORS["vision_only"], ha="left",  va="top",    transform=ax.transAxes, **style)
+    ax.text(1 - pad, 1 - pad, f"n={quadrant_counts['both_pass']}",   color=QUADRANT_COLORS["both_pass"],   ha="right", va="top",    transform=ax.transAxes, **style)
 
-    # Diagonal reference
     ax.plot([0, 1], [0, 1], color="grey", linewidth=0.8, linestyle=":", alpha=0.6)
 
-    ax.set_xlabel("Language accuracy (per class)", fontsize=11)
-    ax.set_ylabel("Vision accuracy (per class)", fontsize=11)
-    ax.set_xlim(-0.02, 1.02)
-    ax.set_ylim(-0.02, 1.02)
-    ax.set_title(f"Error overlap — {model_id.split('/')[-1]}", fontsize=11)
+    max_val = max((r["lang_score"] for r in records), default=1.0)
+    max_val = max(max_val, max((r["vis_score"] for r in records), default=1.0))
+    lim = min(max_val * 1.05 + 0.02, 1.02)
+
+    ax.set_xlabel(x_label, fontsize=11)
+    ax.set_ylabel(y_label, fontsize=11)
+    ax.set_xlim(-0.02, lim)
+    ax.set_ylim(-0.02, lim)
+    ax.set_title(f"Error overlap ({score_label}) — {model_id.split('/')[-1]}", fontsize=11)
+    ax.annotate(f"threshold = {threshold:.3f} (naive baseline)",
+                xy=(threshold, 0), xycoords="data",
+                xytext=(8, 6), textcoords="offset points",
+                fontsize=7, color="grey")
 
     legend_patches = [
         mpatches.Patch(color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
         for q in ["both_pass", "lang_only", "vision_only", "both_fail"]
     ]
-    ax.legend(handles=legend_patches, fontsize=8, loc="lower right")
+    ax.legend(
+        handles=legend_patches, fontsize=8,
+        loc="upper center", bbox_to_anchor=(0.5, -0.14),
+        ncol=2, frameon=False,
+    )
 
     fig.tight_layout()
+    fig.subplots_adjust(bottom=0.22)
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
 
-def _plot_heatmap(summaries: list[dict], path: Path) -> None:
-    """Stacked bar chart of quadrant fractions per model."""
+def _plot_heatmap(summaries: list[dict], path: Path, title: str) -> None:
     if not summaries:
         return
 
     quadrant_order = ["both_pass", "lang_only", "vision_only", "both_fail"]
     models = [s["model"].split("/")[-1] for s in summaries]
     x = np.arange(len(models))
-    width = 0.5
 
     fig, ax = plt.subplots(figsize=(max(5, len(models) * 1.8), 5))
     bottoms = np.zeros(len(models))
 
     for q in quadrant_order:
-        vals  = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
-        counts = np.array([s["quadrants"].get(q, {}).get("n",   0)   for s in summaries])
-        bars = ax.bar(x, vals, width, bottom=bottoms,
-                      color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
-        for bar, v, n in zip(bars, vals, counts):
-            if v >= 0.05:  # only label if segment is tall enough to read
+        vals   = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
+        bars = ax.bar(x, vals, 0.5, bottom=bottoms, color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
+        for bar, v in zip(bars, vals):
+            if v >= 0.05:
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
                     bar.get_y() + v / 2,
@@ -257,7 +322,7 @@ def _plot_heatmap(summaries: list[dict], path: Path) -> None:
     ax.set_xticklabels(models, rotation=20, ha="right", fontsize=9)
     ax.set_ylabel("Fraction of classes")
     ax.set_ylim(0, 1.05)
-    ax.set_title("Per-class error overlap across models")
+    ax.set_title(title)
     ax.legend(fontsize=8, bbox_to_anchor=(1.01, 1), loc="upper left")
 
     fig.tight_layout()
@@ -266,40 +331,34 @@ def _plot_heatmap(summaries: list[dict], path: Path) -> None:
     print(f"  Saved: {path}")
 
 
-# ── Model discovery ────────────────────────────────────────────────────────────
+# ── File discovery ─────────────────────────────────────────────────────────────
 
-def _discover_model_pairs(lang_dir: Path, vis_dir: Path) -> list[tuple[str, Path, Path]]:
-    """
-    Find cls_*.csv files present in both dirs with matching suffixes.
-    Returns [(model_safe_name, lang_csv, vis_csv), ...].
-    """
-    lang_files = {p.name: p for p in lang_dir.glob("cls_*.csv")}
-    vis_files  = {p.name: p for p in vis_dir.glob("cls_*.csv")}
+def _discover_pairs(lang_dir: Path, vis_dir: Path, prefix: str) -> list[tuple[str, Path, Path]]:
+    lang_files = {p.name: p for p in lang_dir.glob(f"{prefix}_*.csv")}
+    vis_files  = {p.name: p for p in vis_dir.glob(f"{prefix}_*.csv")}
     shared = sorted(set(lang_files) & set(vis_files))
-    if not shared:
-        return []
-    # Recover a display model_id from the safe filename
-    pairs = []
-    for name in shared:
-        safe = name[len("cls_"):-len(".csv")]
-        pairs.append((safe, lang_files[name], vis_files[name]))
-    return pairs
+    return [
+        (name[len(prefix) + 1:-len(".csv")], lang_files[name], vis_files[name])
+        for name in shared
+    ]
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Per-class error overlap analysis between language and vision assessments."
+        description="Error overlap analysis (classification + description) between assessments."
     )
-    parser.add_argument("--language_dir", default="outputs/language_assessment/",
-                        help="Directory containing cls_*.csv files from language assessment")
-    parser.add_argument("--vision_dir",   default="outputs/vision_assessment/",
-                        help="Directory containing cls_*.csv files from vision assessment")
-    parser.add_argument("--output_dir",   default="outputs/error_overlap/",
-                        help="Where to write per-model CSVs, scatter plots, and summary JSON")
-    parser.add_argument("--threshold",    type=float, default=_THRESHOLD,
-                        help=f"Per-class accuracy threshold for pass/fail (default: {_THRESHOLD})")
+    parser.add_argument("--language_dir",  default="outputs/language_assessment/",
+                        help="Directory with cls_*.csv and desc_*.csv from language assessment")
+    parser.add_argument("--vision_dir",    default="outputs/vision_assessment/",
+                        help="Directory with cls_*.csv and desc_*.csv from vision assessment")
+    parser.add_argument("--output_dir",    default="outputs/error_overlap/",
+                        help="Where to write outputs")
+    parser.add_argument("--threshold",     type=float, default=_CLS_THRESHOLD,
+                        help=f"Per-class accuracy threshold for classification pass/fail (default: {_CLS_THRESHOLD})")
+    parser.add_argument("--rouge_threshold", type=float, default=None,
+                        help="Override ROUGE-SS threshold (default: naive baseline from metrics JSON)")
     args = parser.parse_args()
 
     lang_dir   = Path(args.language_dir)
@@ -307,48 +366,96 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    pairs = _discover_model_pairs(lang_dir, vis_dir)
-    if not pairs:
-        print("ERROR: no matching cls_*.csv files found in both directories.")
-        sys.exit(1)
+    # ── Determine ROUGE threshold ──────────────────────────────────────────────
+    if args.rouge_threshold is not None:
+        rouge_thr = args.rouge_threshold
+        print(f"ROUGE-SS threshold (override): {rouge_thr:.3f}")
+    else:
+        # Average naive baseline across both assessments
+        lang_rouge = _naive_rouge_from_json(lang_dir / "language_assessment_metrics.json")
+        vis_rouge  = _naive_rouge_from_json(vis_dir  / "vision_assessment_metrics.json")
+        candidates = [v for v in (lang_rouge, vis_rouge) if v is not None]
+        if candidates:
+            rouge_thr = round(float(np.mean(candidates)), 4)
+            print(f"ROUGE-SS threshold (naive baseline): {rouge_thr:.3f}"
+                  + (f"  (lang={lang_rouge:.3f}, vis={vis_rouge:.3f})" if len(candidates) == 2 else ""))
+        else:
+            rouge_thr = _ROUGE_THRESHOLD
+            print(f"ROUGE-SS threshold (fallback default): {rouge_thr:.3f}")
 
-    print(f"Found {len(pairs)} model(s) evaluated in both assessments:")
-    for safe, lp, vp in pairs:
-        print(f"  {safe}")
+    # ── Classification overlap ─────────────────────────────────────────────────
+    cls_pairs = _discover_pairs(lang_dir, vis_dir, "cls")
+    cls_summaries = []
+    if cls_pairs:
+        print(f"\n=== Classification overlap ({len(cls_pairs)} model(s)) ===")
+        for safe_name, lang_csv, vis_csv in cls_pairs:
+            lang_scores = per_class_accuracy(_load_csv(lang_csv))
+            vis_scores  = per_class_accuracy(_load_csv(vis_csv))
+            s = analyze_model(
+                lang_scores, vis_scores, safe_name, output_dir,
+                threshold=args.threshold,
+                prefix="cls",
+                x_label="Language accuracy (per class)",
+                y_label="Vision accuracy (per class)",
+                score_label="accuracy",
+            )
+            if s:
+                cls_summaries.append(s)
+    else:
+        print("No matching cls_*.csv files found — skipping classification overlap.")
 
-    threshold = args.threshold
+    # ── Description overlap ────────────────────────────────────────────────────
+    desc_pairs = _discover_pairs(lang_dir, vis_dir, "desc")
+    desc_summaries = []
+    if desc_pairs:
+        print(f"\n=== Description overlap ({len(desc_pairs)} model(s)) ===")
+        for safe_name, lang_csv, vis_csv in desc_pairs:
+            lang_scores = per_class_rouge(_load_csv(lang_csv))
+            vis_scores  = per_class_rouge(_load_csv(vis_csv))
+            s = analyze_model(
+                lang_scores, vis_scores, safe_name, output_dir,
+                threshold=rouge_thr,
+                prefix="desc",
+                x_label="Language mean ROUGE-SS (per class)",
+                y_label="Vision mean ROUGE-SS (per class)",
+                score_label="ROUGE-SS",
+            )
+            if s:
+                desc_summaries.append(s)
+    else:
+        print("No matching desc_*.csv files found — skipping description overlap.")
 
-    summaries = []
-    for safe_name, lang_csv, vis_csv in pairs:
-        print(f"\n=== {safe_name} ===")
-        lang_rows = _load_cls_csv(lang_csv)
-        vis_rows  = _load_cls_csv(vis_csv)
-        summary = analyze_model(lang_rows, vis_rows, safe_name, output_dir, threshold)
-        if summary:
-            summaries.append(summary)
+    # ── Summaries + heatmaps ───────────────────────────────────────────────────
+    if cls_summaries:
+        p = output_dir / "error_overlap_cls_summary.json"
+        p.write_text(json.dumps(cls_summaries, indent=2), encoding="utf-8")
+        print(f"\n  Saved: {p}")
+        _plot_heatmap(cls_summaries, output_dir / "error_overlap_cls_heatmap.png",
+                      "Per-class error overlap — Classification")
 
-    if not summaries:
-        print("ERROR: no overlapping classes found for any model.")
-        sys.exit(1)
+    if desc_summaries:
+        p = output_dir / "error_overlap_desc_summary.json"
+        p.write_text(json.dumps(desc_summaries, indent=2), encoding="utf-8")
+        print(f"\n  Saved: {p}")
+        _plot_heatmap(desc_summaries, output_dir / "error_overlap_desc_heatmap.png",
+                      "Per-class error overlap — Description (ROUGE-SS)")
 
-    summary_path = output_dir / "error_overlap_summary.json"
-    summary_path.write_text(json.dumps(summaries, indent=2), encoding="utf-8")
-    print(f"\n  Saved: {summary_path}")
-
-    _plot_heatmap(summaries, output_dir / "error_overlap_heatmap.png")
-
-    # Print aggregate table
-    print(f"\n{'Model':<40} {'Both pass':>10} {'Lang only':>10} {'Vision only':>12} {'Both fail (align)':>18}")
-    print(f"  {'-'*86}")
-    for s in summaries:
-        q = s["quadrants"]
-        print(
-            f"  {s['model']:<38}"
-            f" {q.get('both_pass',  {}).get('pct', 0):>10.1%}"
-            f" {q.get('lang_only',  {}).get('pct', 0):>10.1%}"
-            f" {q.get('vision_only',{}).get('pct', 0):>12.1%}"
-            f" {q.get('both_fail',  {}).get('pct', 0):>18.1%}"
-        )
+    # ── Print tables ───────────────────────────────────────────────────────────
+    for label, summaries in [("Classification", cls_summaries), ("Description (ROUGE-SS)", desc_summaries)]:
+        if not summaries:
+            continue
+        print(f"\n── {label} ──")
+        print(f"  {'Model':<38} {'Both pass':>10} {'Lang only':>10} {'Vision only':>12} {'Both fail':>10}")
+        print(f"  {'-'*82}")
+        for s in summaries:
+            q = s["quadrants"]
+            print(
+                f"  {s['model']:<38}"
+                f" {q.get('both_pass',  {}).get('pct', 0):>10.1%}"
+                f" {q.get('lang_only',  {}).get('pct', 0):>10.1%}"
+                f" {q.get('vision_only',{}).get('pct', 0):>12.1%}"
+                f" {q.get('both_fail',  {}).get('pct', 0):>10.1%}"
+            )
 
 
 if __name__ == "__main__":
