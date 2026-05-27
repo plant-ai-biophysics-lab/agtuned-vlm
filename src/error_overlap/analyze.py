@@ -178,10 +178,12 @@ def _write_csv(records: list[dict], path: Path) -> None:
 def _plot_scatter(records: list[dict], model_id: str, path: Path, threshold: float = _THRESHOLD) -> None:
     fig, ax = plt.subplots(figsize=(7, 6))
 
+    quadrant_counts: dict[str, int] = defaultdict(int)
     for r in records:
         color = QUADRANT_COLORS[r["quadrant"]]
         ax.scatter(r["lang_accuracy"], r["vis_accuracy"],
                    color=color, alpha=0.75, s=60, zorder=3)
+        quadrant_counts[r["quadrant"]] += 1
 
     # Quadrant dividers
     ax.axvline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
@@ -192,6 +194,14 @@ def _plot_scatter(records: list[dict], model_id: str, path: Path, threshold: flo
     ax.axhspan(0, threshold, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["lang_only"],   alpha=0.06)
     ax.axhspan(threshold, 1, xmin=0, xmax=threshold,  color=QUADRANT_COLORS["vision_only"], alpha=0.06)
     ax.axhspan(threshold, 1, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["both_pass"],   alpha=0.06)
+
+    # Quadrant count annotations
+    pad = 0.04
+    count_style = dict(fontsize=9, fontweight="bold", alpha=0.8, zorder=4)
+    ax.text(pad, pad,               f"n={quadrant_counts['both_fail']}",   color=QUADRANT_COLORS["both_fail"],   ha="left",  va="bottom", transform=ax.transAxes, **count_style)
+    ax.text(1 - pad, pad,           f"n={quadrant_counts['lang_only']}",   color=QUADRANT_COLORS["lang_only"],   ha="right", va="bottom", transform=ax.transAxes, **count_style)
+    ax.text(pad, 1 - pad,           f"n={quadrant_counts['vision_only']}", color=QUADRANT_COLORS["vision_only"], ha="left",  va="top",    transform=ax.transAxes, **count_style)
+    ax.text(1 - pad, 1 - pad,       f"n={quadrant_counts['both_pass']}",   color=QUADRANT_COLORS["both_pass"],   ha="right", va="top",    transform=ax.transAxes, **count_style)
 
     # Diagonal reference
     ax.plot([0, 1], [0, 1], color="grey", linewidth=0.8, linestyle=":", alpha=0.6)
@@ -228,9 +238,19 @@ def _plot_heatmap(summaries: list[dict], path: Path) -> None:
     bottoms = np.zeros(len(models))
 
     for q in quadrant_order:
-        vals = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
-        ax.bar(x, vals, width, bottom=bottoms,
-               color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
+        vals  = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
+        counts = np.array([s["quadrants"].get(q, {}).get("n",   0)   for s in summaries])
+        bars = ax.bar(x, vals, width, bottom=bottoms,
+                      color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
+        for bar, v, n in zip(bars, vals, counts):
+            if v >= 0.05:  # only label if segment is tall enough to read
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_y() + v / 2,
+                    f"{n}\n({v:.0%})",
+                    ha="center", va="center",
+                    fontsize=7, color="white", fontweight="bold",
+                )
         bottoms += vals
 
     ax.set_xticks(x)
