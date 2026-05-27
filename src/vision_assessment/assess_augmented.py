@@ -298,7 +298,7 @@ def _worker(kwargs: dict) -> None:
         desc_prompt_template=kwargs["desc_prompt_template"],
         cls_prompt_template=kwargs["cls_prompt_template"],
         augment=kwargs["augment"],
-        desc_lookup={tuple(k): v for k, v in kwargs["desc_lookup"].items()},
+        desc_lookup={tuple(k): v for k, v in kwargs["desc_lookup"]},
         use_groundtruth_desc=kwargs["use_groundtruth_desc"],
         n_samples=kwargs["n_samples"],
         output_dir=Path(kwargs["output_dir"]),
