@@ -4,6 +4,7 @@ import json
 import re
 from collections import defaultdict
 from functools import lru_cache
+import hashlib
 
 import nltk
 import numpy as np
@@ -121,6 +122,30 @@ def naive_classification_baseline(refs: list[str]) -> dict:
     shuffled = refs.copy()
     np.random.default_rng(42).shuffle(shuffled)
     return compute_classification_metrics(refs, shuffled)
+
+
+def model_color_map(models: list[str]) -> dict[str, tuple]:
+    """
+    Assign a consistent tab10 color to each model based on its name hash,
+    so colors stay the same regardless of evaluation order or which assessment
+    is producing the chart.
+    """
+    import matplotlib.pyplot as plt
+    palette = plt.cm.tab10.colors  # 10 distinct colors
+    return {m: palette[int(hashlib.md5(m.encode()).hexdigest(), 16) % len(palette)] for m in models}
+
+
+def naive_uniform_baseline_per_dataset(rows: list[dict]) -> dict:
+    """
+    Per-dataset uniform random baseline: expected F1 = 1/k where k = number of
+    unique classes in that dataset. Returns metrics macro-averaged across datasets.
+    """
+    by_ds: dict[str, set] = defaultdict(set)
+    for row in rows:
+        by_ds[row["agml_dataset"]].add(row.get("class_label", row.get("ground_truth", "")))
+    per_ds_f1 = [1.0 / max(len(classes), 1) for classes in by_ds.values()]
+    mean_f1 = float(np.mean(per_ds_f1)) if per_ds_f1 else 0.0
+    return {"f1_macro": round(mean_f1, 4), "accuracy": round(mean_f1, 4)}
 
 
 def aggregate_by_task(
