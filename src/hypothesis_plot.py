@@ -139,40 +139,43 @@ def classify_case(row: dict, thr: dict[str, float]) -> str:
     lang_hi = _assessment_hi(row, "lang_cls_f1", "lang_desc_rss", thr)
     vis_hi  = _assessment_hi(row, "vis_cls_f1",  "vis_desc_rss",  thr)
 
-    # Vision-encoder only
+    # Vision-encoder only (no language metrics)
     if lp_hi is not None and lang_hi is None and vis_hi is None:
         return "LP only"
 
     # Language-only (no LP, no vision)
     if lp_hi is None and vis_hi is None:
-        if lang_hi is True:
-            return "Lang ✓"
-        elif lang_hi is False:
-            return "Lang ✗"
-        return "—"
+        return "Lang ✓" if lang_hi else "Lang ✗"
 
-    # Multimodal without LP
+    # Multimodal without LP data
     if lp_hi is None:
-        if vis_hi is True:
-            return "Vision ✓"
-        elif vis_hi is False:
-            return "Vision ✗"
-        return "—"
+        return "Vision ✓" if vis_hi else "Vision ✗"
 
-    # Full multimodal (LP present)
-    if lp_hi is False:
-        return "Case 4\nH1 bottleneck"
-    if vis_hi is True:
-        return "Case 1\nNo bottleneck"
-    if lang_hi is True:
-        return "Case 2\nH3 Alignment"
-    return "Case 3\nH2+H3"
+    # Full 5-case matrix (LP present)
+    #   LP  Lang  Vision
+    # 1  ✗    ✓     ✗   → knows class, can't see features
+    # 2  ✓    ✗     ✗   → sees features, no vocabulary
+    # 3  ✓    ✓     ✗   → sees & knows, alignment broken
+    # 4  ✓    ✗     ✓   → vision-reliant
+    # 5  ✓    ✓     ✓   → fully functional
+    if not lp_hi and lang_hi and not vis_hi:
+        return "Case 1\nKnows, can't see"
+    if lp_hi and not lang_hi and not vis_hi:
+        return "Case 2\nSees, no vocab"
+    if lp_hi and lang_hi and not vis_hi:
+        return "Case 3\nAlignment broken"
+    if lp_hi and not lang_hi and vis_hi:
+        return "Case 4\nVision-reliant"
+    if lp_hi and lang_hi and vis_hi:
+        return "Case 5\nFully functional"
+    # LP low, and not Case 1 pattern
+    return "LP ✗"
 
 
 # ── Drawing helpers ────────────────────────────────────────────────────────────
 
-def _cell(val: float | None, threshold: float) -> tuple[str, str]:
-    if val is None:
+def _cell(val: float | None, threshold: float, baseline: bool = False) -> tuple[str, str]:
+    if val is None or baseline:
         return _NA_COLOR, _TEXT_NA
     return (_HIGH_COLOR, _TEXT_HIGH) if val >= threshold else (_LOW_COLOR, _TEXT_LOW)
 
@@ -268,9 +271,10 @@ def plot_matrix(rows: list[dict], output_dir: Path, thr: dict[str, float]) -> No
         ax.text(0.1, y + 0.5, label, ha="left", va="center", fontsize=6.5, color="#212121", zorder=5)
 
         # Metric cells
+        is_baseline = row["type"] == "Baseline"
         for i, key in enumerate(_COL_KEYS):
             val = row[key]
-            fc, tc = _cell(val, thr[key])
+            fc, tc = _cell(val, thr[key], baseline=is_baseline)
             cx = metric_cx[i]
             ax.add_patch(mpatches.FancyBboxPatch(
                 (cx - _METRIC_W * 0.42, y + 0.12), _METRIC_W * 0.84, 0.76,
@@ -281,12 +285,16 @@ def plot_matrix(rows: list[dict], output_dir: Path, thr: dict[str, float]) -> No
 
         # Case cell
         case_text = classify_case(row, thr)
-        if "H1" in case_text:
-            case_bg = "#fff3e0"
-        elif "H2" in case_text or "H3" in case_text:
-            case_bg = "#fce4ec"
-        elif "Case 1" in case_text or "No bottle" in case_text:
-            case_bg = "#e8f5e9"
+        if "Case 5" in case_text:
+            case_bg = "#e8f5e9"   # green tint — fully functional
+        elif "Case 3" in case_text:
+            case_bg = "#fce4ec"   # pink — alignment broken
+        elif "Case 2" in case_text:
+            case_bg = "#fff3e0"   # amber — no vocab
+        elif "Case 1" in case_text:
+            case_bg = "#e3f2fd"   # blue tint — can't see
+        elif "Case 4" in case_text:
+            case_bg = "#f3e5f5"   # purple tint — vision-reliant
         else:
             case_bg = row_bg
         ax.add_patch(mpatches.FancyBboxPatch(
