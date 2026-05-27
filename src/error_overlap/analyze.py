@@ -205,14 +205,12 @@ def analyze_model(
     }
 
     csv_path = output_dir / f"error_overlap_{prefix}_{_safe_name(model_id)}.csv"
-    png_path = output_dir / f"error_overlap_{prefix}_{_safe_name(model_id)}.png"
     _write_csv(records, csv_path, prefix)
-    _plot_scatter(records, model_id, png_path, threshold, x_label, y_label, score_label)
 
     print(f"  [{model_id}] ({prefix})  n={total}  threshold={threshold:.3f}  "
           + "  ".join(f"{q}={n}" for q, n in quadrant_counts.items()))
 
-    return summary
+    return summary, records
 
 
 # ── Output helpers ─────────────────────────────────────────────────────────────
@@ -226,28 +224,25 @@ def _write_csv(records: list[dict], path: Path, prefix: str) -> None:
     print(f"  Saved: {path}")
 
 
-def _plot_scatter(
+def _draw_scatter_ax(
+    ax: plt.Axes,
     records: list[dict],
-    model_id: str,
-    path: Path,
     threshold: float,
     x_label: str,
     y_label: str,
-    score_label: str,
+    title: str,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(7, 6))
-
+    """Draw a single quadrant scatter into *ax* (no legend — caller adds it)."""
     quadrant_counts: dict[str, int] = defaultdict(int)
     for r in records:
         ax.scatter(r["lang_score"], r["vis_score"],
                    color=QUADRANT_COLORS[r["quadrant"]], alpha=0.75, s=60, zorder=3)
         quadrant_counts[r["quadrant"]] += 1
 
-    ax.axvline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
-    ax.axhline(threshold, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
-
-    # Quadrant shading
     t = threshold
+    ax.axvline(t, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+    ax.axhline(t, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+
     ax.axhspan(0, t, xmin=0, xmax=t, color=QUADRANT_COLORS["both_fail"],   alpha=0.06)
     ax.axhspan(0, t, xmin=t, xmax=1, color=QUADRANT_COLORS["lang_only"],   alpha=0.06)
     ax.axhspan(t, 1, xmin=0, xmax=t, color=QUADRANT_COLORS["vision_only"], alpha=0.06)
@@ -262,32 +257,58 @@ def _plot_scatter(
 
     ax.plot([0, 1], [0, 1], color="grey", linewidth=0.8, linestyle=":", alpha=0.6)
 
-    max_val = max((r["lang_score"] for r in records), default=1.0)
-    max_val = max(max_val, max((r["vis_score"] for r in records), default=1.0))
+    max_val = max(
+        max((r["lang_score"] for r in records), default=1.0),
+        max((r["vis_score"]  for r in records), default=1.0),
+    )
     lim = min(max_val * 1.05 + 0.02, 1.02)
-
-    ax.set_xlabel(x_label, fontsize=11)
-    ax.set_ylabel(y_label, fontsize=11)
     ax.set_xlim(-0.02, lim)
     ax.set_ylim(-0.02, lim)
-    ax.set_title(f"Error overlap ({score_label}) — {model_id.split('/')[-1]}", fontsize=11)
-    ax.annotate(f"threshold = {threshold:.3f} (naive baseline)",
-                xy=(threshold, 0), xycoords="data",
-                xytext=(8, 6), textcoords="offset points",
+    ax.set_xlabel(x_label, fontsize=10)
+    ax.set_ylabel(y_label, fontsize=10)
+    ax.set_title(title, fontsize=11)
+    ax.annotate(f"threshold = {t:.3f} (naive baseline)",
+                xy=(t, -0.02), xycoords="data",
+                xytext=(6, 6), textcoords="offset points",
                 fontsize=7, color="grey")
+
+
+def _plot_combined_scatter(
+    cls_records: list[dict],
+    desc_records: list[dict],
+    model_id: str,
+    path: Path,
+    cls_thr: float,
+    rouge_thr: float,
+) -> None:
+    """Side-by-side classification + description scatter with a single shared legend below."""
+    fig, (ax_cls, ax_desc) = plt.subplots(1, 2, figsize=(13, 6))
+    fig.suptitle(f"Error overlap — {model_id.split('/')[-1]}", fontsize=13, fontweight="bold")
+
+    _draw_scatter_ax(
+        ax_cls, cls_records, cls_thr,
+        x_label="Language accuracy (per class)",
+        y_label="Vision accuracy (per class)",
+        title="Classification",
+    )
+    _draw_scatter_ax(
+        ax_desc, desc_records, rouge_thr,
+        x_label="Language mean ROUGE-SS (per class)",
+        y_label="Vision mean ROUGE-SS (per class)",
+        title="Description (ROUGE-SS)",
+    )
 
     legend_patches = [
         mpatches.Patch(color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
         for q in ["both_pass", "lang_only", "vision_only", "both_fail"]
     ]
-    ax.legend(
-        handles=legend_patches, fontsize=8,
-        loc="upper center", bbox_to_anchor=(0.5, -0.14),
-        ncol=2, frameon=False,
+    fig.legend(
+        handles=legend_patches, fontsize=9,
+        loc="lower center", bbox_to_anchor=(0.5, 0.0),
+        ncol=4, frameon=False,
     )
 
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.22)
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -386,12 +407,13 @@ def main() -> None:
     # ── Classification overlap ─────────────────────────────────────────────────
     cls_pairs = _discover_pairs(lang_dir, vis_dir, "cls")
     cls_summaries = []
+    cls_records_by_model: dict[str, list[dict]] = {}
     if cls_pairs:
         print(f"\n=== Classification overlap ({len(cls_pairs)} model(s)) ===")
         for safe_name, lang_csv, vis_csv in cls_pairs:
             lang_scores = per_class_accuracy(_load_csv(lang_csv))
             vis_scores  = per_class_accuracy(_load_csv(vis_csv))
-            s = analyze_model(
+            result = analyze_model(
                 lang_scores, vis_scores, safe_name, output_dir,
                 threshold=args.threshold,
                 prefix="cls",
@@ -399,20 +421,23 @@ def main() -> None:
                 y_label="Vision accuracy (per class)",
                 score_label="accuracy",
             )
-            if s:
+            if result:
+                s, records = result
                 cls_summaries.append(s)
+                cls_records_by_model[safe_name] = records
     else:
         print("No matching cls_*.csv files found — skipping classification overlap.")
 
     # ── Description overlap ────────────────────────────────────────────────────
     desc_pairs = _discover_pairs(lang_dir, vis_dir, "desc")
     desc_summaries = []
+    desc_records_by_model: dict[str, list[dict]] = {}
     if desc_pairs:
         print(f"\n=== Description overlap ({len(desc_pairs)} model(s)) ===")
         for safe_name, lang_csv, vis_csv in desc_pairs:
             lang_scores = per_class_rouge(_load_csv(lang_csv))
             vis_scores  = per_class_rouge(_load_csv(vis_csv))
-            s = analyze_model(
+            result = analyze_model(
                 lang_scores, vis_scores, safe_name, output_dir,
                 threshold=rouge_thr,
                 prefix="desc",
@@ -420,10 +445,26 @@ def main() -> None:
                 y_label="Vision mean ROUGE-SS (per class)",
                 score_label="ROUGE-SS",
             )
-            if s:
+            if result:
+                s, records = result
                 desc_summaries.append(s)
+                desc_records_by_model[safe_name] = records
     else:
         print("No matching desc_*.csv files found — skipping description overlap.")
+
+    # ── Combined scatter plots (one per model that has both) ───────────────────
+    shared_models = set(cls_records_by_model) & set(desc_records_by_model)
+    if shared_models:
+        print(f"\n=== Combined scatter plots ({len(shared_models)} model(s)) ===")
+        for safe_name in sorted(shared_models):
+            path = output_dir / f"error_overlap_{safe_name}.png"
+            _plot_combined_scatter(
+                cls_records_by_model[safe_name],
+                desc_records_by_model[safe_name],
+                safe_name, path,
+                cls_thr=args.threshold,
+                rouge_thr=rouge_thr,
+            )
 
     # ── Summaries + heatmaps ───────────────────────────────────────────────────
     if cls_summaries:
