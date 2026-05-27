@@ -421,7 +421,7 @@ def plot_cls_summary_per_dataset(
             offset = (i - (len(models) - 1) / 2) * width
             ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
                    hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
-        _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
+        _draw_naive_line(ax, naive_cls_metrics, metric, label=True, uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
         ax.set_xticklabels(
             [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
@@ -497,7 +497,7 @@ def plot_cls_summary_per_task(
                 if jval is not None:
                     _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
                     judge_label_drawn = True
-        _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
+        _draw_naive_line(ax, naive_cls_metrics, metric, label=True, uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
@@ -671,7 +671,7 @@ def plot_overall_cls_summary(
                 if jval is not None:
                     _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
                     judge_label_drawn = True
-        _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
+        _draw_naive_line(ax, naive_cls_metrics, metric, label=True, uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
         ax.set_xticklabels(
             [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
