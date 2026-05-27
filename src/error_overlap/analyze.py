@@ -195,14 +195,13 @@ def _plot_scatter(records: list[dict], model_id: str, path: Path, threshold: flo
     ax.axhspan(threshold, 1, xmin=0, xmax=threshold,  color=QUADRANT_COLORS["vision_only"], alpha=0.06)
     ax.axhspan(threshold, 1, xmin=threshold, xmax=1,  color=QUADRANT_COLORS["both_pass"],   alpha=0.06)
 
-    # Quadrant percentage annotations
-    total = sum(quadrant_counts.values()) or 1
+    # Quadrant count annotations
     pad = 0.04
-    count_style = dict(fontsize=7, fontweight="bold", alpha=0.8, zorder=4)
-    ax.text(pad, pad,         f"{quadrant_counts['both_fail']  / total:.0%}", color=QUADRANT_COLORS["both_fail"],   ha="left",  va="bottom", transform=ax.transAxes, **count_style)
-    ax.text(1 - pad, pad,     f"{quadrant_counts['lang_only']  / total:.0%}", color=QUADRANT_COLORS["lang_only"],   ha="right", va="bottom", transform=ax.transAxes, **count_style)
-    ax.text(pad, 1 - pad,     f"{quadrant_counts['vision_only']/ total:.0%}", color=QUADRANT_COLORS["vision_only"], ha="left",  va="top",    transform=ax.transAxes, **count_style)
-    ax.text(1 - pad, 1 - pad, f"{quadrant_counts['both_pass']  / total:.0%}", color=QUADRANT_COLORS["both_pass"],   ha="right", va="top",    transform=ax.transAxes, **count_style)
+    count_style = dict(fontsize=8, fontweight="bold", alpha=0.8, zorder=4)
+    ax.text(pad, pad,         f"n={quadrant_counts['both_fail']}",   color=QUADRANT_COLORS["both_fail"],   ha="left",  va="bottom", transform=ax.transAxes, **count_style)
+    ax.text(1 - pad, pad,     f"n={quadrant_counts['lang_only']}",   color=QUADRANT_COLORS["lang_only"],   ha="right", va="bottom", transform=ax.transAxes, **count_style)
+    ax.text(pad, 1 - pad,     f"n={quadrant_counts['vision_only']}", color=QUADRANT_COLORS["vision_only"], ha="left",  va="top",    transform=ax.transAxes, **count_style)
+    ax.text(1 - pad, 1 - pad, f"n={quadrant_counts['both_pass']}",   color=QUADRANT_COLORS["both_pass"],   ha="right", va="top",    transform=ax.transAxes, **count_style)
 
     # Diagonal reference
     ax.plot([0, 1], [0, 1], color="grey", linewidth=0.8, linestyle=":", alpha=0.6)
