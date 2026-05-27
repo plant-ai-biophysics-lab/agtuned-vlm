@@ -149,19 +149,24 @@ def main() -> None:
         or _macro_average(naive.get("classification", {}), ["accuracy", "contains_accuracy", "f1_macro"])
     )
 
+    active_datasets = {name: ds for name, ds in datasets_cfg.items() if not ds.skip}
+    per_ds_f1 = [1.0 / max(len(ds.clean_classes), 1) for ds in active_datasets.values()]
+    uniform_cls_overall = {"f1_macro": round(float(np.mean(per_ds_f1)), 4), "accuracy": round(float(np.mean(per_ds_f1)), 4)} if per_ds_f1 else None
+
     print(f"Loaded metrics for {len(all_model_desc_metrics)} model(s): "
           f"{', '.join(all_model_desc_metrics)}")
     print(f"Naive desc baseline:  { {k: round(v,3) for k,v in (naive_ov_desc or {}).items()} }")
     print(f"Naive cls  baseline:  { {k: round(v,3) for k,v in (naive_cls_overall or {}).items()} }")
+    print(f"Uniform cls baseline: { {k: round(v,3) for k,v in (uniform_cls_overall or {}).items()} }")
     if multimodal_set:
         print(f"Multimodal (hatched): {', '.join(multimodal_set)}")
 
     print("\n=== Generating plots ===")
-    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics)
+    plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
-    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics)
+    plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall)
 
     print(f"\nDone. Charts saved to {output_dir}/")
 
