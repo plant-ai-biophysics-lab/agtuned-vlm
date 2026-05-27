@@ -17,7 +17,8 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts from saved metrics JSON (no inference) |
 | 5 — Collate | `src/collate_results.py` | Merge all stage metrics into a single CSV + LaTeX results table |
 | 6 — Error Overlap | `src/error_overlap/analyze.py` | Per-class error overlap between language and vision assessments (quadrant analysis) |
-| 7 — Fine-tune | `src/finetune/train.py` | LoRA fine-tuning on Digital Green dataset with configurable component targeting |
+| 7 — Augmented Vision | `src/vision_assessment/assess_augmented.py` | Re-run vision assessment with hint injection: description hint for classification, class-name hint for description |
+| 8 — Fine-tune | `src/finetune/train.py` | LoRA fine-tuning on Digital Green dataset with configurable component targeting |
 
 ## Prerequisites
 
@@ -235,7 +236,42 @@ Outputs per model: a scatter plot (language accuracy vs. vision accuracy, colour
 
 ---
 
-### Stage 7 — Fine-tune
+### Stage 7 — Augmented Vision Assessment
+
+Re-runs the vision assessment with hint injection to test the alignment bottleneck (H3). Two augmentation modes are available:
+
+| Mode | What changes |
+|------|-------------|
+| `cls_with_desc` | The model's own predicted visual description is prepended to the classification prompt |
+| `desc_with_class` | The ground-truth class label is prepended to the description prompt |
+
+By default `cls_with_desc` uses the model's own descriptions from the prior Stage 4 run. Pass `--use_groundtruth_desc` to use the ground-truth descriptions from `agml_descriptions.jsonl` instead.
+
+```bash
+python main.py vision-augmented \
+  --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \
+  --config             src/config/datasets.yaml \
+  --prompts            src/config/prompts.yaml \
+  --models             google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --augment            both \
+  --baseline_dir       outputs/vision_assessment/ \
+  --output_dir         outputs/vision_assessment_augmented/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--models` | required | Space-separated list of multimodal model IDs |
+| `--augment` | `both` | `cls_with_desc`, `desc_with_class`, or `both` |
+| `--baseline_dir` | `../vision_assessment/` | Directory containing Stage 4 `desc_<model>.csv` files (used as hint source) |
+| `--use_groundtruth_desc` | off | Use ground-truth descriptions instead of model-predicted ones for `cls_with_desc` |
+| `--quantization` | none | `awq`, `gptq`, `fp8`, or `bitsandbytes` |
+| `--max_num_seqs` | 64 | Max concurrent sequences |
+| `--n_samples` | all | Limit images per class |
+| `--enforce_eager` | off | Disable CUDA graph capture |
+
+---
+
+### Stage 8 — Fine-tune
 
 > **Separate environment required.** unsloth and vLLM conflict on torch/triton versions and cannot share the root environment. The fine-tuning script has its own `pyproject.toml` in `src/finetune/`.
 >
@@ -355,6 +391,10 @@ outputs/
 │   ├── desc_<model>.csv / cls_<model>.csv
 │   ├── vision_assessment_metrics.json
 │   ├── summary.txt
+│   └── *.png
+├── vision_assessment_augmented/
+│   ├── desc_<model>_desc_with_class.csv / cls_<model>_cls_with_desc.csv
+│   ├── vision_assessment_augmented_metrics.json
 │   └── *.png
 ├── results_table.csv                 collated metrics across all stages
 ├── results_table.tex                 LaTeX booktabs table (ready to \input into a paper)
