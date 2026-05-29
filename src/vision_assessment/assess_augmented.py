@@ -399,12 +399,27 @@ def plot_before_after(
         ax.spines["right"].set_visible(False)
 
     if show_cls:
-        before_f1 = [baseline.get(mid, {}).get("classification_overall", {}).get("f1_macro") for mid in models]
-        after_f1  = [summary_metrics[mid]["classification_overall"].get("f1_macro") for mid in models]
+        # Prefer judge_f1_macro when both before and after have it; else raw f1_macro
+        def _cls_f1(m_dict):
+            j = m_dict.get("judge", {})
+            if j and j.get("judge_f1_macro") is not None:
+                return j["judge_f1_macro"], True
+            return m_dict.get("classification_overall", {}).get("f1_macro"), False
+
+        before_f1_vals, before_judged = zip(*[_cls_f1(baseline.get(mid, {})) for mid in models])
+        after_f1_vals,  after_judged  = zip(*[_cls_f1(summary_metrics[mid]) for mid in models])
+
+        use_judge = all(before_judged) and all(after_judged)
+        if not use_judge:
+            # Fall back to raw for both so the comparison is consistent
+            before_f1_vals = [baseline.get(mid, {}).get("classification_overall", {}).get("f1_macro") for mid in models]
+            after_f1_vals  = [summary_metrics[mid]["classification_overall"].get("f1_macro") for mid in models]
+
+        f1_label = "F1 Macro (judged)" if use_judge else "F1 Macro (raw)"
         _add_bars(
-            axes[ax_idx], before_f1, after_f1,
-            ylabel="F1 Macro",
-            title="Classification F1 Macro — Before vs After",
+            axes[ax_idx], list(before_f1_vals), list(after_f1_vals),
+            ylabel=f1_label,
+            title=f"Classification {f1_label} — Before vs After",
             hint_label="description hint",
         )
         ax_idx += 1

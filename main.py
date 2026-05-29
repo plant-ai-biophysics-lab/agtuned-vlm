@@ -16,7 +16,8 @@ STAGES = {
     "collate":       "src.collate_results",
     "hypothesis":         "src.hypothesis_plot",
     "error-overlap":      "src.error_overlap.analyze",
-    "vision-augmented":   "src.vision_assessment.assess_augmented",
+    "vision-augmented":      "src.vision_assessment.assess_augmented",
+    "vision-augmented-plot": "src.vision_assessment.plot_augmented",
     "finetune":           "src.finetune.train",
 }
 
@@ -39,7 +40,8 @@ Stages:
     collate     Stage 5  — collate all metrics into a results table
     hypothesis          — hypothesis matrix charts from results_table.csv
     error-overlap       — analyse error overlap between language and vision
-    vision-augmented    Stage 7  — augmented vision assessment (hint injection)
+    vision-augmented        Stage 7  — augmented vision assessment (hint injection)
+    vision-augmented-plot           — regenerate augmented vision assessment charts from saved metrics JSON
 
 Examples:
     python main.py generate \\

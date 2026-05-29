@@ -18,6 +18,7 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | 5 — Collate | `src/collate_results.py` | Merge all stage metrics into a single CSV + LaTeX results table |
 | 6 — Error Overlap | `src/error_overlap/analyze.py` | Per-class error overlap between language and vision assessments (quadrant analysis) |
 | 7 — Augmented Vision | `src/vision_assessment/assess_augmented.py` | Re-run vision assessment with hint injection: description hint for classification, class-name hint for description |
+| vision-augmented-plot | `src/vision_assessment/plot_augmented.py` | Regenerate augmented vision assessment charts (including before/after) from saved metrics JSON (no inference) |
 | 8 — Fine-tune | `src/finetune/train.py` | LoRA fine-tuning on Digital Green dataset with configurable component targeting |
 
 ## Prerequisites
@@ -268,6 +269,16 @@ python main.py vision-augmented \
 | `--max_num_seqs` | 64 | Max concurrent sequences |
 | `--n_samples` | all | Limit images per class |
 | `--enforce_eager` | off | Disable CUDA graph capture |
+
+#### Regenerate charts without re-running inference
+
+```bash
+python main.py vision-augmented-plot \
+  --output_dir   outputs/vision_assessment_augmented/ \
+  --baseline_dir outputs/vision_assessment/ \
+  --config       src/config/datasets.yaml \
+  --multimodal_models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B
+```
 
 ---
 
