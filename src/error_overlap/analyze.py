@@ -315,13 +315,25 @@ def _plot_combined_scatter(
 
 
 def _average_summary(summaries: list[dict]) -> dict:
-    """Mean quadrant fractions across all summaries."""
+    """
+    Aggregate summary by summing raw class counts across models, then re-computing
+    fractions from the total. This weights every class observation equally regardless
+    of how many classes each model was evaluated on — consistent with the interaction
+    matrix which also sums counts before normalising.
+    """
     quadrant_order = ["both_pass", "lang_only", "vision_only", "both_fail"]
+    total_counts = {q: sum(s["quadrants"].get(q, {}).get("n", 0) for s in summaries)
+                    for q in quadrant_order}
+    total_n = sum(total_counts.values())
     avg_pcts = {
-        q: round(float(np.mean([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])), 4)
+        q: round(total_counts[q] / total_n, 4) if total_n > 0 else 0.0
         for q in quadrant_order
     }
-    return {"model": "Average", "n_classes": None, "quadrants": {q: {"pct": v} for q, v in avg_pcts.items()}}
+    return {
+        "model": "Average",
+        "n_classes": total_n,
+        "quadrants": {q: {"pct": v, "n": total_counts[q]} for q, v in avg_pcts.items()},
+    }
 
 
 def _draw_heatmap_ax(ax: plt.Axes, summaries: list[dict], title: str) -> None:
