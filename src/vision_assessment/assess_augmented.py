@@ -53,15 +53,14 @@ from src.common.metrics import (
     naive_classification_baseline, naive_rouge_baseline,
     resolve_class, rouge_scores_per_sample,
 )
+from src.common.metrics import model_color_map
 from src.vision_assessment.assess import (
     DESC_PARAMS, CLS_PARAMS,
     _apply_healthy_override, _safe_name, _parse_model_quantization,
+    _draw_judge_marker, _draw_naive_line, _hatch,
     build_multimodal_prompt, build_name_map, destroy_llm, load_llm,
     run_batch, _clean_response,
     compute_desc_metrics_per_dataset, compute_cls_metrics_per_dataset,
-    plot_cls_summary_per_dataset, plot_cls_summary_per_task,
-    plot_desc_summary_per_task, plot_overall_desc_summary,
-    plot_overall_cls_summary,
 )
 
 
@@ -327,95 +326,132 @@ def plot_before_after(
     augment: str,
     output_dir: Path,
     multimodal_set: set | None = None,
+    naive_cls_overall: dict | None = None,
+    naive_ov_desc: dict | None = None,
 ) -> None:
     """
-    Generates before/after charts using the exact same format as the baseline
-    vision assessment overall classification chart — same baselines, same judged
-    score markers, same colour scheme.
-
-    Saves:
-      overall_cls_summary_before.png  — baseline run
-      overall_cls_summary_after.png   — augmented run
-      before_after_comparison.png     — both stitched side by side
+    Single figure, two panels (classification F1 + description ROUGE-SS).
+    For each model: one bar group with before (baseline) and after (augmented).
+    Judge score markers shown when available for either condition.
+    Same naive baseline lines as the standard vision assessment charts.
     """
     if not baseline_metrics_path.exists():
         print(f"  [warn] Baseline metrics not found at {baseline_metrics_path} — skipping before/after chart")
         return
 
-    baseline_data = json.loads(baseline_metrics_path.read_text())
-    multimodal_set = multimodal_set or set()
+    baseline_data  = json.loads(baseline_metrics_path.read_text())
+    baseline_models = baseline_data.get("models", {})
+    multimodal_set  = multimodal_set or set()
+    models          = list(summary_metrics.keys())
+    if not models:
+        return
 
-    def _extract(data: dict) -> tuple[dict, dict, dict, dict]:
-        """Pull cls_per_ds, judge_metrics, naive_cls, uniform_cls from a metrics dict."""
-        models_data = data.get("models", {})
-        cls_per_ds  = {mid: m.get("classification_per_dataset", {}) for mid, m in models_data.items()}
-        judge       = {mid: m["judge"] for mid, m in models_data.items() if m.get("judge")}
-        naive       = data.get("naive", {})
-        naive_cls   = naive.get("classification_overall") or _macro_avg(naive.get("classification", {}))
-        return cls_per_ds, judge, naive_cls
+    show_cls  = augment in ("cls_with_desc",  "both")
+    show_desc = augment in ("desc_with_class", "both")
+    n_panels  = int(show_cls) + int(show_desc)
+    if n_panels == 0:
+        return
 
-    def _macro_avg(per_ds: dict) -> dict | None:
-        if not per_ds:
-            return None
-        metrics = ["accuracy", "contains_accuracy", "f1_macro"]
-        return {
-            m: float(np.mean([v[m] for v in per_ds.values() if m in v]))
-            for m in metrics if any(m in v for v in per_ds.values())
-        }
+    color_map = model_color_map(models)
+    n_models  = len(models)
+    group_w   = 0.35          # width of each bar
+    gap       = 0.08          # gap between before/after within a group
+    x         = np.arange(n_models)
 
-    # Build augmented summary_metrics into the same structure plot fn expects
-    aug_data = {
-        "models": {
-            mid: {
-                "classification_per_dataset": m.get("classification_per_dataset", {}),
-                "judge": m.get("judge", {}),
-            }
-            for mid, m in summary_metrics.items()
-        },
-        "naive": baseline_data.get("naive", {}),  # reuse baseline naive thresholds
-    }
+    subplot_w = max(4, n_models * 2.2)
+    fig, axes = plt.subplots(1, n_panels, figsize=(subplot_w * n_panels, 6))
+    if n_panels == 1:
+        axes = [axes]
 
-    b_cls_per_ds, b_judge, b_naive_cls = _extract(baseline_data)
-    a_cls_per_ds, a_judge, _           = _extract(aug_data)
+    ax_idx = 0
 
-    # Uniform baseline — same across both (based on dataset config, not metrics)
-    # Reuse whatever uniform value is embedded in baseline if available
-    uniform_cls = baseline_data.get("naive", {}).get("classification_overall")
+    def _panel(ax, get_before, get_after, get_judge_before, get_judge_after,
+               naive_metrics, naive_key, ylabel, title):
+        judge_label_drawn = False
+        for xi, mid in enumerate(models):
+            bval = get_before(mid)
+            aval = get_after(mid)
+            color = color_map[mid]
+            hatch = _hatch(mid, multimodal_set)
 
-    before_path = output_dir / "overall_cls_summary_before.png"
-    after_path  = output_dir / "overall_cls_summary_after.png"
+            # Before bar — lighter alpha to distinguish
+            b_bar = ax.bar(xi - (group_w / 2 + gap / 2), bval or 0, group_w,
+                           color=color, alpha=0.45, hatch=hatch,
+                           edgecolor="black", linewidth=0.5, label=f"{mid} before")[0]
+            # After bar — solid
+            a_bar = ax.bar(xi + (group_w / 2 + gap / 2), aval or 0, group_w,
+                           color=color, alpha=0.87, hatch=hatch,
+                           edgecolor="black", linewidth=0.5, label=f"{mid} after")[0]
 
-    plot_overall_cls_summary(
-        b_cls_per_ds, output_dir, multimodal_set,
-        naive_cls_metrics=b_naive_cls,
-        all_judge_metrics=b_judge,
-        uniform_cls_metrics=uniform_cls,
-        filename="overall_cls_summary_before.png",
-    )
+            if bval is not None:
+                ax.text(b_bar.get_x() + b_bar.get_width() / 2, bval + 0.008,
+                        f"{bval:.3f}", ha="center", va="bottom", fontsize=7.5)
+            if aval is not None:
+                ax.text(a_bar.get_x() + a_bar.get_width() / 2, aval + 0.008,
+                        f"{aval:.3f}", ha="center", va="bottom", fontsize=7.5)
 
-    plot_overall_cls_summary(
-        a_cls_per_ds, output_dir, multimodal_set,
-        naive_cls_metrics=b_naive_cls,   # same baselines for fair comparison
-        all_judge_metrics=a_judge,
-        uniform_cls_metrics=uniform_cls,
-        filename="overall_cls_summary_after.png",
-    )
+            # Judge markers
+            jb = get_judge_before(mid)
+            if jb is not None:
+                _draw_judge_marker(ax, b_bar, jb, label=(not judge_label_drawn))
+                judge_label_drawn = True
+            ja = get_judge_after(mid)
+            if ja is not None:
+                _draw_judge_marker(ax, a_bar, ja, label=(not judge_label_drawn))
+                judge_label_drawn = True
 
-    # Stitch into one side-by-side comparison image
-    try:
-        from PIL import Image as _PIL
-        img_b = _PIL.open(before_path)
-        img_a = _PIL.open(after_path)
-        w = img_b.width + img_a.width
-        h = max(img_b.height, img_a.height)
-        combined = _PIL.new("RGB", (w, h), (255, 255, 255))
-        combined.paste(img_b, (0, 0))
-        combined.paste(img_a, (img_b.width, 0))
-        out_path = output_dir / "before_after_comparison.png"
-        combined.save(out_path)
-        print(f"  Saved before/after comparison → {out_path.name}")
-    except Exception as e:
-        print(f"  [warn] Could not stitch comparison image: {e}")
+        _draw_naive_line(ax, naive_metrics, naive_key, label=True)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [f"{mid.split('/')[-1]}\n◀ before  after ▶" for mid in models],
+            fontsize=8,
+        )
+        ax.set_ylim(0, 1.15)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title, fontsize=10)
+        ax.legend(fontsize=7)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    if show_cls:
+        def _avg_cls(per_ds):
+            if not per_ds:
+                return None
+            vals = [v.get("f1_macro", 0.0) for v in per_ds.values()]
+            return float(np.mean(vals)) if vals else None
+
+        _panel(
+            axes[ax_idx],
+            get_before=lambda mid: _avg_cls(baseline_models.get(mid, {}).get("classification_per_dataset", {})),
+            get_after=lambda mid: _avg_cls(summary_metrics[mid].get("classification_per_dataset", {})),
+            get_judge_before=lambda mid: baseline_models.get(mid, {}).get("judge", {}).get("judge_f1_macro"),
+            get_judge_after=lambda mid: summary_metrics[mid].get("judge", {}).get("judge_f1_macro"),
+            naive_metrics=naive_cls_overall,
+            naive_key="f1_macro",
+            ylabel="F1 Macro",
+            title="Classification F1 Macro — Before vs After (description hint)",
+        )
+        ax_idx += 1
+
+    if show_desc:
+        _panel(
+            axes[ax_idx],
+            get_before=lambda mid: baseline_models.get(mid, {}).get("description_overall", {}).get("rouge_ss"),
+            get_after=lambda mid: summary_metrics[mid].get("description_overall", {}).get("rouge_ss"),
+            get_judge_before=lambda _: None,
+            get_judge_after=lambda _: None,
+            naive_metrics=naive_ov_desc,
+            naive_key="rouge_ss",
+            ylabel="ROUGE-SS",
+            title="Description ROUGE-SS — Before vs After (class-name hint)",
+        )
+
+    fig.suptitle("Hint Injection: Before vs After", fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    out_path = output_dir / "before_after_comparison.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved → {out_path.name}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -580,34 +616,23 @@ def main(args: argparse.Namespace) -> None:
                   f"{ov.get('n_resolvable',0):>4}/{ov.get('n_total',0):<4}")
     tee.close()
 
-    # Plots (reuse vision assessment plot functions)
-    multimodal_set   = set(args.multimodal_models or [])
-    all_cls_per_ds   = {mid: m["classification_per_dataset"] for mid, m in summary_metrics.items()}
-    naive_ov_desc    = {
+    multimodal_set = set(args.multimodal_models or [])
+    naive_ov_desc  = {
         metric: float(np.mean([v[metric] for v in naive_desc_metrics.values() if metric in v]))
         for metric in ["rouge1", "rouge2", "rougeL", "rouge_ss"]
         if any(metric in v for v in naive_desc_metrics.values())
     } if naive_desc_metrics else {}
     naive_cls_all_refs = [r.get("metadata", {}).get("class_label", "") for r in records]
     naive_cls_overall  = naive_classification_baseline(naive_cls_all_refs)
-    judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
-
-    from src.common.metrics import naive_uniform_baseline_per_dataset
-    uniform_cls_overall = naive_uniform_baseline_per_dataset([
-        {"agml_dataset": r.get("metadata", {}).get("agml_dataset", ""),
-         "class_label":  r.get("metadata", {}).get("class_label", "")}
-        for r in records
-    ])
 
     print("\n=== Generating plots ===")
-    plot_cls_summary_per_dataset(all_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
-    plot_cls_summary_per_task(all_cls_per_ds, ds_to_task, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
-    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
-    plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
-    plot_overall_cls_summary(all_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
-
     baseline_metrics_path = Path(args.baseline_dir) / "vision_assessment_metrics.json"
-    plot_before_after(baseline_metrics_path, summary_metrics, args.augment, output_dir, multimodal_set)
+    plot_before_after(
+        baseline_metrics_path, summary_metrics, args.augment, output_dir,
+        multimodal_set=multimodal_set,
+        naive_cls_overall=naive_cls_overall,
+        naive_ov_desc=naive_ov_desc,
+    )
 
     print(f"\nAll outputs saved to {output_dir}/")
 
