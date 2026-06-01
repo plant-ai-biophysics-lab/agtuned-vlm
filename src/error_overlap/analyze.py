@@ -340,7 +340,7 @@ def _draw_heatmap_ax(ax: plt.Axes, summaries: list[dict], title: str) -> None:
     for q in quadrant_order:
         vals = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in all_summaries])
         # Slightly narrower bar for the average to visually separate it
-        widths = np.array([0.5] * (n - 1) + [0.4])
+        widths = np.array([0.3] * (n - 1) + [0.25])
         bars = ax.bar(x, vals, widths, bottom=bottoms, color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
         for bar, v in zip(bars, vals):
             if v >= 0.05:
@@ -374,7 +374,8 @@ def _plot_combined_heatmap(
 ) -> None:
     """Side-by-side classification + description heatmaps with a single shared legend below."""
     n_models = max(len(cls_summaries), len(desc_summaries), 1)
-    fig, (ax_cls, ax_desc) = plt.subplots(1, 2, figsize=(max(8, n_models * 2.2) * 2, 5.5))
+    panel_w = max(4, n_models * 1.1)
+    fig, (ax_cls, ax_desc) = plt.subplots(1, 2, figsize=(panel_w * 2, 5.5))
     fig.suptitle("Per-class error overlap across models", fontsize=12, fontweight="bold")
 
     _draw_heatmap_ax(ax_cls,  cls_summaries,  "Classification")
