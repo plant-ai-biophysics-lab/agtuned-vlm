@@ -371,6 +371,147 @@ def _plot_combined_heatmap(
     print(f"  Saved: {path}")
 
 
+# ── Classification × Description interaction matrix ───────────────────────────
+
+_QUADRANT_ORDER = ["both_pass", "lang_only", "vision_only", "both_fail"]
+_QUADRANT_SHORT = {
+    "both_pass":   "Both\npass",
+    "lang_only":   "Lang\nonly",
+    "vision_only": "Vision\nonly",
+    "both_fail":   "Both\nfail",
+}
+
+
+def interaction_matrix(
+    cls_records: list[dict],
+    desc_records: list[dict],
+) -> np.ndarray:
+    """
+    4×4 count matrix  [cls_quadrant, desc_quadrant].
+    Rows = classification quadrant, columns = description quadrant.
+    Only classes present in both lists are counted.
+    """
+    cls_map  = {(r["agml_dataset"], r["class_label"]): r["quadrant"] for r in cls_records}
+    desc_map = {(r["agml_dataset"], r["class_label"]): r["quadrant"] for r in desc_records}
+    shared   = set(cls_map) & set(desc_map)
+
+    mat = np.zeros((4, 4), dtype=int)
+    for key in shared:
+        row = _QUADRANT_ORDER.index(cls_map[key])
+        col = _QUADRANT_ORDER.index(desc_map[key])
+        mat[row, col] += 1
+    return mat
+
+
+def _plot_interaction_heatmap(
+    cls_records: list[dict],
+    desc_records: list[dict],
+    model_id: str,
+    path: Path,
+) -> None:
+    """
+    4×4 heatmap: classification quadrant (rows) × description quadrant (cols).
+    Cells are row-normalised (% of classes in that cls quadrant that land in
+    each desc quadrant) with raw counts shown below.
+    """
+    mat = interaction_matrix(cls_records, desc_records)
+    row_totals = mat.sum(axis=1, keepdims=True).clip(min=1)
+    norm = mat / row_totals          # row-normalised fractions
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    im = ax.imshow(norm, vmin=0, vmax=1, cmap="Blues", aspect="auto")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Fraction (row-normalised)")
+
+    labels = [_QUADRANT_SHORT[q] for q in _QUADRANT_ORDER]
+    ax.set_xticks(range(4))
+    ax.set_yticks(range(4))
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_yticklabels(labels, fontsize=9)
+    ax.set_xlabel("Description quadrant", fontsize=10, labelpad=8)
+    ax.set_ylabel("Classification quadrant", fontsize=10, labelpad=8)
+    ax.set_title(
+        f"Cls × Desc interaction — {model_id.split('/')[-1]}\n"
+        f"(row = cls quadrant  →  col = desc quadrant  |  n={mat.sum()} classes)",
+        fontsize=10, pad=10,
+    )
+
+    # Cell annotations: percentage + raw count
+    for r in range(4):
+        for c in range(4):
+            frac  = norm[r, c]
+            count = mat[r, c]
+            text_color = "white" if frac > 0.55 else "black"
+            ax.text(c, r, f"{frac:.0%}\n({count})",
+                    ha="center", va="center",
+                    fontsize=8, color=text_color, fontweight="bold")
+
+    # Colour the tick labels to match quadrant colours
+    for tick, q in zip(ax.get_xticklabels(), _QUADRANT_ORDER):
+        tick.set_color(QUADRANT_COLORS[q])
+    for tick, q in zip(ax.get_yticklabels(), _QUADRANT_ORDER):
+        tick.set_color(QUADRANT_COLORS[q])
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def _plot_interaction_heatmaps_combined(
+    cls_records_by_model: dict[str, list[dict]],
+    desc_records_by_model: dict[str, list[dict]],
+    path: Path,
+) -> None:
+    """One row of 4×4 interaction heatmaps, one panel per model."""
+    shared = sorted(set(cls_records_by_model) & set(desc_records_by_model))
+    if not shared:
+        return
+
+    n = len(shared)
+    fig, axes = plt.subplots(1, n, figsize=(6.5 * n, 5.5))
+    if n == 1:
+        axes = [axes]
+
+    fig.suptitle("Classification × Description quadrant interaction",
+                 fontsize=12, fontweight="bold")
+
+    for ax, model_id in zip(axes, shared):
+        mat       = interaction_matrix(cls_records_by_model[model_id], desc_records_by_model[model_id])
+        row_totals = mat.sum(axis=1, keepdims=True).clip(min=1)
+        norm      = mat / row_totals
+
+        im = ax.imshow(norm, vmin=0, vmax=1, cmap="Blues", aspect="auto")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        labels = [_QUADRANT_SHORT[q] for q in _QUADRANT_ORDER]
+        ax.set_xticks(range(4))
+        ax.set_yticks(range(4))
+        ax.set_xticklabels(labels, fontsize=8)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.set_xlabel("Description quadrant", fontsize=9)
+        ax.set_ylabel("Classification quadrant", fontsize=9)
+        ax.set_title(f"{model_id.split('/')[-1]}\n(n={mat.sum()} classes)", fontsize=9)
+
+        for r in range(4):
+            for c in range(4):
+                frac  = norm[r, c]
+                count = mat[r, c]
+                text_color = "white" if frac > 0.55 else "black"
+                ax.text(c, r, f"{frac:.0%}\n({count})",
+                        ha="center", va="center",
+                        fontsize=7.5, color=text_color, fontweight="bold")
+
+        for tick, q in zip(ax.get_xticklabels(), _QUADRANT_ORDER):
+            tick.set_color(QUADRANT_COLORS[q])
+        for tick, q in zip(ax.get_yticklabels(), _QUADRANT_ORDER):
+            tick.set_color(QUADRANT_COLORS[q])
+
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 # ── File discovery ─────────────────────────────────────────────────────────────
 
 def _discover_pairs(lang_dir: Path, vis_dir: Path, prefix: str) -> list[tuple[str, Path, Path]]:
@@ -483,6 +624,22 @@ def main() -> None:
                 safe_name, path,
                 cls_thr=args.threshold,
                 rouge_thr=rouge_thr,
+            )
+
+    # ── Classification × Description interaction ──────────────────────────────
+    if shared_models:
+        print(f"\n=== Cls × Desc interaction ({len(shared_models)} model(s)) ===")
+        for safe_name in sorted(shared_models):
+            path = output_dir / f"error_overlap_interaction_{safe_name}.png"
+            _plot_interaction_heatmap(
+                cls_records_by_model[safe_name],
+                desc_records_by_model[safe_name],
+                safe_name, path,
+            )
+        if len(shared_models) > 1:
+            _plot_interaction_heatmaps_combined(
+                cls_records_by_model, desc_records_by_model,
+                output_dir / "error_overlap_interaction_combined.png",
             )
 
     # ── Summaries + heatmaps ───────────────────────────────────────────────────
