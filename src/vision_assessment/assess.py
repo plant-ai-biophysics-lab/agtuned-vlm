@@ -666,6 +666,7 @@ def plot_overall_cls_summary(
     naive_cls_metrics: dict | None = None,
     all_judge_metrics: dict[str, dict] | None = None,
     uniform_cls_metrics: dict | None = None,
+    filename: str = "overall_cls_summary.png",
 ) -> None:
     multimodal_models = multimodal_models or set()
     all_judge_metrics = all_judge_metrics or {}
@@ -712,7 +713,7 @@ def plot_overall_cls_summary(
 
     fig.suptitle("Vision Assessment — Overall Classification", fontsize=11)
     plt.tight_layout()
-    path = output_dir / "overall_cls_summary.png"
+    path = output_dir / filename
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")

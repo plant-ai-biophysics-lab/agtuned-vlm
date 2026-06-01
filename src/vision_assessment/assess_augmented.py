@@ -321,125 +321,101 @@ def _run_in_subprocess(fn, kwargs: dict) -> None:
 
 # ── Before / after comparison chart ───────────────────────────────────────────
 
-_BEFORE_COLOR = "#5B8DB8"
-_AFTER_COLOR  = "#E8A838"
-
-
 def plot_before_after(
     baseline_metrics_path: Path,
     summary_metrics: dict,
     augment: str,
     output_dir: Path,
+    multimodal_set: set | None = None,
 ) -> None:
     """
-    Grouped bar chart comparing baseline vs augmented metrics per model.
+    Generates before/after charts using the exact same format as the baseline
+    vision assessment overall classification chart — same baselines, same judged
+    score markers, same colour scheme.
 
-    Panels shown:
-      cls_with_desc   → Classification F1 Macro only
-      desc_with_class → Description ROUGE-SS only
-      both            → both panels side-by-side
+    Saves:
+      overall_cls_summary_before.png  — baseline run
+      overall_cls_summary_after.png   — augmented run
+      before_after_comparison.png     — both stitched side by side
     """
     if not baseline_metrics_path.exists():
         print(f"  [warn] Baseline metrics not found at {baseline_metrics_path} — skipping before/after chart")
         return
 
-    baseline = json.loads(baseline_metrics_path.read_text()).get("models", {})
-    models = list(summary_metrics.keys())
-    if not models:
-        return
+    baseline_data = json.loads(baseline_metrics_path.read_text())
+    multimodal_set = multimodal_set or set()
 
-    show_cls  = augment in ("cls_with_desc",  "both")
-    show_desc = augment in ("desc_with_class", "both")
-    n_panels  = int(show_cls) + int(show_desc)
-    if n_panels == 0:
-        return
+    def _extract(data: dict) -> tuple[dict, dict, dict, dict]:
+        """Pull cls_per_ds, judge_metrics, naive_cls, uniform_cls from a metrics dict."""
+        models_data = data.get("models", {})
+        cls_per_ds  = {mid: m.get("classification_per_dataset", {}) for mid, m in models_data.items()}
+        judge       = {mid: m["judge"] for mid, m in models_data.items() if m.get("judge")}
+        naive       = data.get("naive", {})
+        naive_cls   = naive.get("classification_overall") or _macro_avg(naive.get("classification", {}))
+        return cls_per_ds, judge, naive_cls
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(max(6, len(models) * 2.8) * n_panels, 5.5))
-    if n_panels == 1:
-        axes = [axes]
+    def _macro_avg(per_ds: dict) -> dict | None:
+        if not per_ds:
+            return None
+        metrics = ["accuracy", "contains_accuracy", "f1_macro"]
+        return {
+            m: float(np.mean([v[m] for v in per_ds.values() if m in v]))
+            for m in metrics if any(m in v for v in per_ds.values())
+        }
 
-    short_labels = [_safe_name(mid).replace("_", "\n") for mid in models]
-    x = np.arange(len(models))
-    w = 0.35
-    ax_idx = 0
+    # Build augmented summary_metrics into the same structure plot fn expects
+    aug_data = {
+        "models": {
+            mid: {
+                "classification_per_dataset": m.get("classification_per_dataset", {}),
+                "judge": m.get("judge", {}),
+            }
+            for mid, m in summary_metrics.items()
+        },
+        "naive": baseline_data.get("naive", {}),  # reuse baseline naive thresholds
+    }
 
-    def _add_bars(ax, before_vals, after_vals, ylabel, title, hint_label):
-        bv = [v if v is not None else 0.0 for v in before_vals]
-        av = [v if v is not None else 0.0 for v in after_vals]
+    b_cls_per_ds, b_judge, b_naive_cls = _extract(baseline_data)
+    a_cls_per_ds, a_judge, _           = _extract(aug_data)
 
-        b_bars = ax.bar(x - w / 2, bv, w, label="Before (baseline)", color=_BEFORE_COLOR, alpha=0.87)
-        a_bars = ax.bar(x + w / 2, av, w, label=f"After ({hint_label})", color=_AFTER_COLOR, alpha=0.87)
+    # Uniform baseline — same across both (based on dataset config, not metrics)
+    # Reuse whatever uniform value is embedded in baseline if available
+    uniform_cls = baseline_data.get("naive", {}).get("classification_overall")
 
-        # Value labels + delta annotations
-        for b_bar, a_bar, bval, aval in zip(b_bars, a_bars, bv, av):
-            bh = b_bar.get_height()
-            ah = a_bar.get_height()
-            ax.text(b_bar.get_x() + b_bar.get_width() / 2, bh + 0.003,
-                    f"{bh:.3f}", ha="center", va="bottom", fontsize=7.5, color="#333")
-            ax.text(a_bar.get_x() + a_bar.get_width() / 2, ah + 0.003,
-                    f"{ah:.3f}", ha="center", va="bottom", fontsize=7.5, color="#333")
+    before_path = output_dir / "overall_cls_summary_before.png"
+    after_path  = output_dir / "overall_cls_summary_after.png"
 
-            # Delta label centred between the two bars
-            delta = aval - bval
-            delta_color = "#2a7a2a" if delta >= 0 else "#b02020"
-            delta_str = f"Δ{delta:+.3f}"
-            top = max(bh, ah) + 0.022
-            mid_x = (b_bar.get_x() + b_bar.get_width() / 2 + a_bar.get_x() + a_bar.get_width() / 2) / 2
-            ax.text(mid_x, top, delta_str, ha="center", va="bottom",
-                    fontsize=7, color=delta_color, fontweight="bold")
+    plot_overall_cls_summary(
+        b_cls_per_ds, output_dir, multimodal_set,
+        naive_cls_metrics=b_naive_cls,
+        all_judge_metrics=b_judge,
+        uniform_cls_metrics=uniform_cls,
+        filename="overall_cls_summary_before.png",
+    )
 
-        y_top = max(bv + av) if bv or av else 0.1
-        ax.set_ylim(0, min(1.0, y_top * 1.35))
-        ax.set_xticks(x)
-        ax.set_xticklabels(short_labels, fontsize=9)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title, fontsize=10, pad=8)
-        ax.legend(fontsize=8, loc="upper left")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
+    plot_overall_cls_summary(
+        a_cls_per_ds, output_dir, multimodal_set,
+        naive_cls_metrics=b_naive_cls,   # same baselines for fair comparison
+        all_judge_metrics=a_judge,
+        uniform_cls_metrics=uniform_cls,
+        filename="overall_cls_summary_after.png",
+    )
 
-    if show_cls:
-        # Prefer judge_f1_macro when both before and after have it; else raw f1_macro
-        def _cls_f1(m_dict):
-            j = m_dict.get("judge", {})
-            if j and j.get("judge_f1_macro") is not None:
-                return j["judge_f1_macro"], True
-            return m_dict.get("classification_overall", {}).get("f1_macro"), False
-
-        before_f1_vals, before_judged = zip(*[_cls_f1(baseline.get(mid, {})) for mid in models])
-        after_f1_vals,  after_judged  = zip(*[_cls_f1(summary_metrics[mid]) for mid in models])
-
-        use_judge = all(before_judged) and all(after_judged)
-        if not use_judge:
-            # Fall back to raw for both so the comparison is consistent
-            before_f1_vals = [baseline.get(mid, {}).get("classification_overall", {}).get("f1_macro") for mid in models]
-            after_f1_vals  = [summary_metrics[mid]["classification_overall"].get("f1_macro") for mid in models]
-
-        f1_label = "F1 Macro (judged)" if use_judge else "F1 Macro (raw)"
-        _add_bars(
-            axes[ax_idx], list(before_f1_vals), list(after_f1_vals),
-            ylabel=f1_label,
-            title=f"Classification {f1_label} — Before vs After",
-            hint_label="description hint",
-        )
-        ax_idx += 1
-
-    if show_desc:
-        before_rs = [baseline.get(mid, {}).get("description_overall", {}).get("rouge_ss") for mid in models]
-        after_rs  = [summary_metrics[mid]["description_overall"].get("rouge_ss") for mid in models]
-        _add_bars(
-            axes[ax_idx], before_rs, after_rs,
-            ylabel="ROUGE-SS",
-            title="Description ROUGE-SS — Before vs After",
-            hint_label="class-name hint",
-        )
-
-    fig.suptitle("Hint Injection: Before vs After", fontsize=13, fontweight="bold")
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out_path = output_dir / "before_after_comparison.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved before/after chart → {out_path.name}")
+    # Stitch into one side-by-side comparison image
+    try:
+        from PIL import Image as _PIL
+        img_b = _PIL.open(before_path)
+        img_a = _PIL.open(after_path)
+        w = img_b.width + img_a.width
+        h = max(img_b.height, img_a.height)
+        combined = _PIL.new("RGB", (w, h), (255, 255, 255))
+        combined.paste(img_b, (0, 0))
+        combined.paste(img_a, (img_b.width, 0))
+        out_path = output_dir / "before_after_comparison.png"
+        combined.save(out_path)
+        print(f"  Saved before/after comparison → {out_path.name}")
+    except Exception as e:
+        print(f"  [warn] Could not stitch comparison image: {e}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -631,7 +607,7 @@ def main(args: argparse.Namespace) -> None:
     plot_overall_cls_summary(all_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
 
     baseline_metrics_path = Path(args.baseline_dir) / "vision_assessment_metrics.json"
-    plot_before_after(baseline_metrics_path, summary_metrics, args.augment, output_dir)
+    plot_before_after(baseline_metrics_path, summary_metrics, args.augment, output_dir, multimodal_set)
 
     print(f"\nAll outputs saved to {output_dir}/")
 

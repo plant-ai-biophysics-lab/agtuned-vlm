@@ -131,7 +131,7 @@ def main() -> None:
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall)
 
     baseline_metrics_path = Path(args.baseline_dir) / "vision_assessment_metrics.json"
-    plot_before_after(baseline_metrics_path, summary_metrics, augment, output_dir)
+    plot_before_after(baseline_metrics_path, summary_metrics, augment, output_dir, multimodal_set)
 
     print(f"\nDone. Charts saved to {output_dir}/")
 
