@@ -314,16 +314,34 @@ def _plot_combined_scatter(
     print(f"  Saved: {path}")
 
 
-def _draw_heatmap_ax(ax: plt.Axes, summaries: list[dict], title: str) -> None:
-    """Draw a stacked bar heatmap into *ax* (no legend — caller adds it)."""
+def _average_summary(summaries: list[dict]) -> dict:
+    """Mean quadrant fractions across all summaries."""
     quadrant_order = ["both_pass", "lang_only", "vision_only", "both_fail"]
-    models = [s["model"].split("/")[-1] for s in summaries]
-    x = np.arange(len(models))
-    bottoms = np.zeros(len(models))
+    avg_pcts = {
+        q: round(float(np.mean([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])), 4)
+        for q in quadrant_order
+    }
+    return {"model": "Average", "n_classes": None, "quadrants": {q: {"pct": v} for q, v in avg_pcts.items()}}
+
+
+def _draw_heatmap_ax(ax: plt.Axes, summaries: list[dict], title: str) -> None:
+    """Draw a stacked bar heatmap into *ax* (no legend — caller adds it).
+    Appends an average bar at the right, separated by a small gap."""
+    quadrant_order = ["both_pass", "lang_only", "vision_only", "both_fail"]
+
+    avg = _average_summary(summaries)
+    all_summaries = summaries + [avg]
+
+    models = [s["model"].split("/")[-1] for s in all_summaries]
+    n = len(all_summaries)
+    x = np.arange(n)
+    bottoms = np.zeros(n)
 
     for q in quadrant_order:
-        vals = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in summaries])
-        bars = ax.bar(x, vals, 0.5, bottom=bottoms, color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
+        vals = np.array([s["quadrants"].get(q, {}).get("pct", 0.0) for s in all_summaries])
+        # Slightly narrower bar for the average to visually separate it
+        widths = np.array([0.5] * (n - 1) + [0.4])
+        bars = ax.bar(x, vals, widths, bottom=bottoms, color=QUADRANT_COLORS[q], label=QUADRANT_LABELS[q])
         for bar, v in zip(bars, vals):
             if v >= 0.05:
                 ax.text(
@@ -335,8 +353,15 @@ def _draw_heatmap_ax(ax: plt.Axes, summaries: list[dict], title: str) -> None:
                 )
         bottoms += vals
 
+    # Vertical separator before the average bar
+    ax.axvline(n - 1.6, color="grey", linewidth=0.8, linestyle="--", alpha=0.5)
+
     ax.set_xticks(x)
     ax.set_xticklabels(models, rotation=20, ha="right", fontsize=9)
+    # Bold the "Average" tick label
+    for tick, label in zip(ax.get_xticklabels(), models):
+        if label == "Average":
+            tick.set_fontweight("bold")
     ax.set_ylabel("Fraction of classes")
     ax.set_ylim(0, 1.05)
     ax.set_title(title)
@@ -409,52 +434,58 @@ def _plot_interaction_heatmap(
     model_id: str,
     path: Path,
 ) -> None:
-    """
-    4×4 heatmap: classification quadrant (rows) × description quadrant (cols).
-    Cells are row-normalised (% of classes in that cls quadrant that land in
-    each desc quadrant) with raw counts shown below.
-    """
+    """4×4 row-normalised interaction heatmap for a single model."""
     mat = interaction_matrix(cls_records, desc_records)
-    row_totals = mat.sum(axis=1, keepdims=True).clip(min=1)
-    norm = mat / row_totals          # row-normalised fractions
-
     fig, ax = plt.subplots(figsize=(6.5, 5.5))
-    im = ax.imshow(norm, vmin=0, vmax=1, cmap="Blues", aspect="auto")
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Fraction (row-normalised)")
-
-    labels = [_QUADRANT_SHORT[q] for q in _QUADRANT_ORDER]
-    ax.set_xticks(range(4))
-    ax.set_yticks(range(4))
-    ax.set_xticklabels(labels, fontsize=9)
-    ax.set_yticklabels(labels, fontsize=9)
-    ax.set_xlabel("Description quadrant", fontsize=10, labelpad=8)
-    ax.set_ylabel("Classification quadrant", fontsize=10, labelpad=8)
-    ax.set_title(
-        f"Cls × Desc interaction — {model_id.split('/')[-1]}\n"
-        f"(row = cls quadrant  →  col = desc quadrant  |  n={mat.sum()} classes)",
-        fontsize=10, pad=10,
+    _draw_interaction_ax(
+        ax, mat,
+        title=(
+            f"Cls × Desc interaction — {model_id.split('/')[-1]}\n"
+            f"(row = cls quadrant  →  col = desc quadrant  |  n={mat.sum()} classes)"
+        ),
+        show_counts=True,
     )
-
-    # Cell annotations: percentage + raw count
-    for r in range(4):
-        for c in range(4):
-            frac  = norm[r, c]
-            count = mat[r, c]
-            text_color = "white" if frac > 0.55 else "black"
-            ax.text(c, r, f"{frac:.0%}\n({count})",
-                    ha="center", va="center",
-                    fontsize=8, color=text_color, fontweight="bold")
-
-    # Colour the tick labels to match quadrant colours
-    for tick, q in zip(ax.get_xticklabels(), _QUADRANT_ORDER):
-        tick.set_color(QUADRANT_COLORS[q])
-    for tick, q in zip(ax.get_yticklabels(), _QUADRANT_ORDER):
-        tick.set_color(QUADRANT_COLORS[q])
-
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def _draw_interaction_ax(
+    ax: plt.Axes,
+    mat: np.ndarray,
+    title: str,
+    show_counts: bool = True,
+) -> None:
+    """Draw a single row-normalised 4×4 interaction matrix into *ax*."""
+    row_totals = mat.sum(axis=1, keepdims=True).clip(min=1)
+    norm = mat / row_totals
+
+    im = ax.imshow(norm, vmin=0, vmax=1, cmap="Blues", aspect="auto")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    labels = [_QUADRANT_SHORT[q] for q in _QUADRANT_ORDER]
+    ax.set_xticks(range(4))
+    ax.set_yticks(range(4))
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlabel("Description quadrant", fontsize=9)
+    ax.set_ylabel("Classification quadrant", fontsize=9)
+    ax.set_title(title, fontsize=9)
+
+    for r in range(4):
+        for c in range(4):
+            frac = norm[r, c]
+            text_color = "white" if frac > 0.55 else "black"
+            cell_text = f"{frac:.0%}\n({mat[r,c]:.0f})" if show_counts else f"{frac:.0%}"
+            ax.text(c, r, cell_text,
+                    ha="center", va="center",
+                    fontsize=7.5, color=text_color, fontweight="bold")
+
+    for tick, q in zip(ax.get_xticklabels(), _QUADRANT_ORDER):
+        tick.set_color(QUADRANT_COLORS[q])
+    for tick, q in zip(ax.get_yticklabels(), _QUADRANT_ORDER):
+        tick.set_color(QUADRANT_COLORS[q])
 
 
 def _plot_interaction_heatmaps_combined(
@@ -462,49 +493,40 @@ def _plot_interaction_heatmaps_combined(
     desc_records_by_model: dict[str, list[dict]],
     path: Path,
 ) -> None:
-    """One row of 4×4 interaction heatmaps, one panel per model."""
+    """
+    One panel per model + one averaged panel at the end.
+
+    The average matrix sums raw counts across all models before row-normalising,
+    so every class observation is weighted equally (not every model equally).
+    """
     shared = sorted(set(cls_records_by_model) & set(desc_records_by_model))
     if not shared:
         return
 
-    n = len(shared)
-    fig, axes = plt.subplots(1, n, figsize=(6.5 * n, 5.5))
-    if n == 1:
+    n_panels = len(shared) + 1   # +1 for the average
+    fig, axes = plt.subplots(1, n_panels, figsize=(6.5 * n_panels, 5.5))
+    if n_panels == 1:
         axes = [axes]
 
     fig.suptitle("Classification × Description quadrant interaction",
                  fontsize=12, fontweight="bold")
 
+    avg_mat = np.zeros((4, 4), dtype=float)
     for ax, model_id in zip(axes, shared):
-        mat       = interaction_matrix(cls_records_by_model[model_id], desc_records_by_model[model_id])
-        row_totals = mat.sum(axis=1, keepdims=True).clip(min=1)
-        norm      = mat / row_totals
+        mat = interaction_matrix(cls_records_by_model[model_id], desc_records_by_model[model_id])
+        avg_mat += mat
+        _draw_interaction_ax(
+            ax, mat,
+            title=f"{model_id.split('/')[-1]}\n(n={mat.sum()} classes)",
+            show_counts=True,
+        )
 
-        im = ax.imshow(norm, vmin=0, vmax=1, cmap="Blues", aspect="auto")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-        labels = [_QUADRANT_SHORT[q] for q in _QUADRANT_ORDER]
-        ax.set_xticks(range(4))
-        ax.set_yticks(range(4))
-        ax.set_xticklabels(labels, fontsize=8)
-        ax.set_yticklabels(labels, fontsize=8)
-        ax.set_xlabel("Description quadrant", fontsize=9)
-        ax.set_ylabel("Classification quadrant", fontsize=9)
-        ax.set_title(f"{model_id.split('/')[-1]}\n(n={mat.sum()} classes)", fontsize=9)
-
-        for r in range(4):
-            for c in range(4):
-                frac  = norm[r, c]
-                count = mat[r, c]
-                text_color = "white" if frac > 0.55 else "black"
-                ax.text(c, r, f"{frac:.0%}\n({count})",
-                        ha="center", va="center",
-                        fontsize=7.5, color=text_color, fontweight="bold")
-
-        for tick, q in zip(ax.get_xticklabels(), _QUADRANT_ORDER):
-            tick.set_color(QUADRANT_COLORS[q])
-        for tick, q in zip(ax.get_yticklabels(), _QUADRANT_ORDER):
-            tick.set_color(QUADRANT_COLORS[q])
+    # Average panel — counts are summed across models, show fractions only
+    _draw_interaction_ax(
+        axes[-1], avg_mat,
+        title=f"Average across {len(shared)} models\n(n={avg_mat.sum():.0f} total observations)",
+        show_counts=False,
+    )
 
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(path, dpi=150, bbox_inches="tight")
