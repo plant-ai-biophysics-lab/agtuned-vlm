@@ -18,6 +18,7 @@ STAGES = {
     "error-overlap":      "src.error_overlap.analyze",
     "vision-augmented":      "src.vision_assessment.assess_augmented",
     "vision-augmented-plot": "src.vision_assessment.plot_augmented",
+    "build-dg-jsonl":        "src.data_generation.build_digital_green_jsonl",
     "finetune":           "src.finetune.train",
 }
 
@@ -42,6 +43,7 @@ Stages:
     error-overlap       — analyse error overlap between language and vision
     vision-augmented        Stage 7  — augmented vision assessment (hint injection)
     vision-augmented-plot           — regenerate augmented vision assessment charts from saved metrics JSON
+    build-dg-jsonl                  — build Digital Green JSONL files from annotations CSV
 
 Examples:
     python main.py generate \\

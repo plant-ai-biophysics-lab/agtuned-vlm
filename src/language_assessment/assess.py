@@ -739,11 +739,21 @@ def main(args: argparse.Namespace) -> None:
     prompt_template = prompts["assessment_descriptive"]
     classification_suffix = prompts["classification_suffix"]
 
-    datasets_cfg = datasets_by_name(Path(args.config))
-    ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
+    use_dg = getattr(args, "dataset_source", "agml") == "digital_green"
 
-    desc_records = _apply_healthy_override(load_jsonl(Path(args.descriptions_jsonl), args.n_samples))
-    cls_records  = load_jsonl(Path(args.classification_jsonl), args.n_samples)
+    if use_dg:
+        dg_config  = getattr(args, "dg_config", None) or "outputs/data_generation/digital_green_datasets.yaml"
+        dg_desc    = getattr(args, "dg_descriptions_jsonl", None) or "outputs/data_generation/dg_descriptions.jsonl"
+        dg_cls     = getattr(args, "dg_classification_jsonl", None) or "outputs/data_generation/dg_classification.jsonl"
+        datasets_cfg = datasets_by_name(Path(dg_config))
+        desc_records = _apply_healthy_override(list(load_jsonl(Path(dg_desc), args.n_samples)))
+        cls_records  = list(load_jsonl(Path(dg_cls), args.n_samples))
+    else:
+        datasets_cfg = datasets_by_name(Path(args.config))
+        desc_records = _apply_healthy_override(load_jsonl(Path(args.descriptions_jsonl), args.n_samples))
+        cls_records  = load_jsonl(Path(args.classification_jsonl), args.n_samples)
+
+    ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
     print(f"Description records: {len(desc_records)}")
     print(f"Classification records: {len(cls_records)}")
 
@@ -957,6 +967,23 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Language assessment: text-only VQA evaluation on AgML datasets."
+    )
+    parser.add_argument(
+        "--dataset_source", default="agml", choices=["agml", "digital_green"],
+        help="Source dataset: 'agml' uses --descriptions_jsonl + --classification_jsonl + --config; "
+             "'digital_green' uses --dg_* variants",
+    )
+    parser.add_argument(
+        "--dg_descriptions_jsonl", default="outputs/data_generation/dg_descriptions.jsonl",
+        help="Digital Green descriptions JSONL (used when --dataset_source digital_green)",
+    )
+    parser.add_argument(
+        "--dg_classification_jsonl", default="outputs/data_generation/dg_classification.jsonl",
+        help="Digital Green classification JSONL (used when --dataset_source digital_green)",
+    )
+    parser.add_argument(
+        "--dg_config", default="outputs/data_generation/digital_green_datasets.yaml",
+        help="Digital Green datasets YAML written by build-dg-jsonl (used when --dataset_source digital_green)",
     )
     parser.add_argument(
         "--descriptions_jsonl", default="outputs/data_generation/agml_descriptions.jsonl",

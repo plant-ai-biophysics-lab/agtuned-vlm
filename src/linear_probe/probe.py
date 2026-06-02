@@ -62,6 +62,33 @@ def load_agml_samples(dataset_name: str) -> list[dict]:
     return samples
 
 
+def load_dg_samples(images_dir: Path, dg_descriptions_jsonl: Path) -> list[dict]:
+    """Load Digital Green samples from local image directory + JSONL metadata.
+
+    Each JSONL description record maps image_names → class_label (diagnosis).
+    Returns same format as load_agml_samples: [{"path": str, "label": str}, ...]
+    """
+    import json
+    filename_to_label: dict[str, str] = {}
+    with open(dg_descriptions_jsonl, encoding="utf-8") as f:
+        for line in f:
+            rec = json.loads(line)
+            meta = rec.get("metadata", {})
+            label = meta.get("class_label", "")
+            for fname in meta.get("image_names", []):
+                if fname:
+                    filename_to_label[fname] = label
+
+    samples = []
+    for img_path in sorted(images_dir.iterdir()):
+        if img_path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+            continue
+        label = filename_to_label.get(img_path.name)
+        if label:
+            samples.append({"path": str(img_path), "label": label})
+    return samples
+
+
 def subsample_stratified(samples: list[dict], n_samples: int) -> list[dict]:
     """Stratified subsample to preserve class distribution."""
     labels = [s["label"] for s in samples]
@@ -451,7 +478,16 @@ def main(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    datasets = active_datasets(Path(args.config))
+    use_dg = getattr(args, "dataset_source", "agml") == "digital_green"
+
+    if use_dg:
+        dg_config = getattr(args, "dg_config", None) or "outputs/data_generation/digital_green_datasets.yaml"
+        dg_jsonl  = getattr(args, "dg_descriptions_jsonl", None) or "outputs/data_generation/dg_descriptions.jsonl"
+        images_dir = Path(args.images_dir)
+        datasets = active_datasets(Path(dg_config))
+    else:
+        datasets = active_datasets(Path(args.config))
+
     print(f"\nActive datasets: {len(datasets)}")
 
     # Phase 1: load each backbone once, extract embeddings for all datasets, unload
@@ -462,7 +498,10 @@ def main(args):
         agml_name = ds_cfg.agml_name
         print(f"\nLoading samples: {agml_name}")
         try:
-            samples = load_agml_samples(agml_name)
+            if use_dg:
+                samples = load_dg_samples(images_dir, Path(dg_jsonl))
+            else:
+                samples = load_agml_samples(agml_name)
         except Exception as e:
             print(f"  [error] {e}")
             continue
@@ -645,6 +684,22 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Linear probe across all active AgML datasets."
+    )
+    parser.add_argument(
+        "--dataset_source", default="agml", choices=["agml", "digital_green"],
+        help="'agml' uses --config; 'digital_green' uses --dg_config + --dg_descriptions_jsonl + --images_dir",
+    )
+    parser.add_argument(
+        "--dg_config", default="outputs/data_generation/digital_green_datasets.yaml",
+        help="Digital Green datasets YAML (used when --dataset_source digital_green)",
+    )
+    parser.add_argument(
+        "--dg_descriptions_jsonl", default="outputs/data_generation/dg_descriptions.jsonl",
+        help="Digital Green descriptions JSONL for filename→label mapping (used when --dataset_source digital_green)",
+    )
+    parser.add_argument(
+        "--images_dir", default=None,
+        help="Local directory of Digital Green images (required when --dataset_source digital_green)",
     )
     parser.add_argument(
         "--config", default="src/config/datasets.yaml",

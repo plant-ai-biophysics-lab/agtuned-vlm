@@ -94,6 +94,32 @@ python main.py patch-healthy \
 
 ---
 
+### Stage 1d — Build Digital Green JSONL
+
+Direct adapter — no inference required. Converts existing `diagnosis` + `details` columns from the Digital Green annotations CSV into the same JSONL format produced by Stages 1a–1c, so all downstream stages work unchanged.
+
+```bash
+python main.py build-dg-jsonl \
+  --annotations  data/digital_green/annotations.csv \
+  --images_dir   data/digital_green/images/ \
+  --output_dir   outputs/data_generation/ \
+  --prompts      src/config/prompts.yaml
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--annotations` | `data/digital_green/annotations.csv` | Path to Digital Green annotations CSV |
+| `--images_dir` | `data/digital_green/images/` | Local cache for downloaded images |
+| `--output_dir` | `outputs/data_generation/` | Writes `dg_descriptions.jsonl`, `dg_classification.jsonl`, `digital_green_datasets.yaml` |
+| `--prompts` | `src/config/prompts.yaml` | Prompts config (same file used by all stages) |
+
+Outputs:
+- `dg_descriptions.jsonl` — one record per (crop, diagnosis) group, canonical description = most common `details` text
+- `dg_classification.jsonl` — matching classification records
+- `digital_green_datasets.yaml` — dataset config with discovered classes (passed to `--dg_config` in assess stages)
+
+---
+
 ### Streamlit UI (browse generated samples and corrections)
 
 ```bash
@@ -148,6 +174,10 @@ python main.py language \
 | `--n_samples` | all | Limit records per JSONL |
 | `--judge_model` | none | LLM-as-a-judge model for classification (runs after all eval models) |
 | `--enforce_eager` | off | Disable CUDA graph capture — use if Triton kernel crashes with AWQ models |
+| `--dataset_source` | `agml` | `agml` or `digital_green` — selects input JSONL and dataset config |
+| `--dg_descriptions_jsonl` | `outputs/data_generation/dg_descriptions.jsonl` | Used when `--dataset_source digital_green` |
+| `--dg_classification_jsonl` | `outputs/data_generation/dg_classification.jsonl` | Used when `--dataset_source digital_green` |
+| `--dg_config` | `outputs/data_generation/digital_green_datasets.yaml` | Used when `--dataset_source digital_green` |
 
 Charts produced: classification per dataset, classification per task type, description ROUGE per task type, overall description ROUGE, overall classification.
 
@@ -180,6 +210,10 @@ python main.py vision \
 | `--max_num_seqs` | 64 | Max concurrent sequences |
 | `--n_samples` | all | Limit images per class |
 | `--enforce_eager` | off | Disable CUDA graph capture — use if Triton kernel crashes with AWQ models |
+| `--dataset_source` | `agml` | `agml` or `digital_green` — selects input JSONL, dataset config, and image directory |
+| `--dg_descriptions_jsonl` | `outputs/data_generation/dg_descriptions.jsonl` | Used when `--dataset_source digital_green` |
+| `--dg_config` | `outputs/data_generation/digital_green_datasets.yaml` | Used when `--dataset_source digital_green` |
+| `--images_dir` | none | Local directory of Digital Green images (used when `--dataset_source digital_green`) |
 
 ---
 

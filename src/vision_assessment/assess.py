@@ -254,8 +254,13 @@ def run_batch(
     return [_clean_response(o.outputs[0].text) for o in outputs]
 
 
-def build_name_map(agml_name: str) -> dict[str, str]:
-    """Returns {filename: full_path} for all images in an AgML dataset."""
+def build_name_map(agml_name: str, images_dir: Path | None = None) -> dict[str, str]:
+    """Returns {filename: full_path} for all images in a dataset.
+    For digital_green (or any dataset with images_dir set), scans the local directory
+    instead of using the AgML data loader.
+    """
+    if images_dir is not None:
+        return {p.name: str(p) for p in Path(images_dir).iterdir() if p.is_file()}
     import agml
     loader = agml.data.AgMLDataLoader(agml_name)
     contents = loader.export_contents()
@@ -274,6 +279,7 @@ def run_model(
     quantization: str | None = None,
     max_num_seqs: int = 64,
     enforce_eager: bool = False,
+    images_dir: Path | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
     llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
@@ -300,7 +306,8 @@ def run_model(
 
         if agml_name not in agml_cache:
             print(f"\n  Building image map: {agml_name}...")
-            agml_cache[agml_name] = build_name_map(agml_name)
+            dg_dir = images_dir if agml_name == "digital_green" else None
+            agml_cache[agml_name] = build_name_map(agml_name, images_dir=dg_dir)
         name_map = agml_cache[agml_name]
 
         images, valid_names = [], []
@@ -742,6 +749,7 @@ def _worker_vision(kwargs: dict) -> None:
         quantization=kwargs["quantization"],
         max_num_seqs=kwargs.get("max_num_seqs", 64),
         enforce_eager=kwargs.get("enforce_eager", False),
+        images_dir=Path(kwargs["images_dir"]) if kwargs.get("images_dir") else None,
     )
     with open(kwargs["out_path"], "w") as f:
         json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
@@ -765,14 +773,25 @@ def main(args: argparse.Namespace) -> None:
     desc_prompt_template = prompts["assessment_descriptive"]
     cls_prompt_template = prompts["assessment_classification"]
 
-    datasets_cfg = datasets_by_name(Path(args.config))
-    ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
+    use_dg = getattr(args, "dataset_source", "agml") == "digital_green"
 
-    active_set = {name for name, ds in datasets_cfg.items() if not ds.skip}
-    records = _apply_healthy_override([
-        r for r in load_jsonl(Path(args.descriptions_jsonl), args.n_samples)
-        if r.get("metadata", {}).get("agml_dataset") in active_set
-    ])
+    if use_dg:
+        dg_config = getattr(args, "dg_config", None) or "outputs/data_generation/digital_green_datasets.yaml"
+        dg_jsonl  = getattr(args, "dg_descriptions_jsonl", None) or "outputs/data_generation/dg_descriptions.jsonl"
+        images_dir_val = getattr(args, "images_dir", None)
+        datasets_cfg = datasets_by_name(Path(dg_config))
+        active_set = {name for name, ds in datasets_cfg.items() if not ds.skip}
+        records = _apply_healthy_override(list(load_jsonl(Path(dg_jsonl), args.n_samples)))
+    else:
+        images_dir_val = None
+        datasets_cfg = datasets_by_name(Path(args.config))
+        active_set = {name for name, ds in datasets_cfg.items() if not ds.skip}
+        records = _apply_healthy_override([
+            r for r in load_jsonl(Path(args.descriptions_jsonl), args.n_samples)
+            if r.get("metadata", {}).get("agml_dataset") in active_set
+        ])
+
+    ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
     print(f"Records: {len(records)}  |  Active datasets: {len(active_set)}")
 
     all_model_desc_metrics: dict[str, dict[str, dict]] = {}
@@ -800,6 +819,7 @@ def main(args: argparse.Namespace) -> None:
             quantization=quant,
             max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
+            images_dir=str(images_dir_val) if images_dir_val else None,
             out_path=str(worker_out),
         ))
         worker_result = json.loads(worker_out.read_text())
@@ -986,6 +1006,23 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Vision assessment: multimodal VQA evaluation on AgML datasets."
+    )
+    parser.add_argument(
+        "--dataset_source", default="agml", choices=["agml", "digital_green"],
+        help="Source dataset: 'agml' uses --descriptions_jsonl + --config; "
+             "'digital_green' uses --dg_descriptions_jsonl + --dg_config + --images_dir",
+    )
+    parser.add_argument(
+        "--dg_descriptions_jsonl", default="outputs/data_generation/dg_descriptions.jsonl",
+        help="Digital Green descriptions JSONL (used when --dataset_source digital_green)",
+    )
+    parser.add_argument(
+        "--dg_config", default="outputs/data_generation/digital_green_datasets.yaml",
+        help="Digital Green datasets YAML written by build-dg-jsonl (used when --dataset_source digital_green)",
+    )
+    parser.add_argument(
+        "--images_dir", default=None,
+        help="Local directory of Digital Green images (used when --dataset_source digital_green)",
     )
     parser.add_argument(
         "--descriptions_jsonl", default="outputs/data_generation/agml_descriptions.jsonl",
