@@ -144,23 +144,27 @@ def _clean_response(text: str) -> str:
     return text.strip()
 
 
-def _apply_chat_template(tokenizer, question: str, prompt_template: str) -> str:
+def _apply_chat_template(tokenizer, question: str, prompt_template: str, system_prompt: str = "") -> str:
     messages = [{"role": "user", "content": prompt_template.format(question=question)}]
+    sys_msg = system_prompt or ""
     try:
+        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            full, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
     except TypeError:
         pass
     try:
+        sys_content = " ".join(filter(None, [sys_msg, "/no_think"]))
         return tokenizer.apply_chat_template(
-            [{"role": "system", "content": "/no_think"}, *messages],
+            [{"role": "system", "content": sys_content}, *messages],
             tokenize=False,
             add_generation_prompt=True,
         )
     except Exception:
+        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            full, tokenize=False, add_generation_prompt=True
         )
 
 
@@ -226,8 +230,9 @@ def run_inference(
     label: str,
     tokenizer,
     prompt_template: str,
+    system_prompt: str = "",
 ) -> tuple[list[str], float, int]:
-    formatted = [_apply_chat_template(tokenizer, p, prompt_template) for p in prompts]
+    formatted = [_apply_chat_template(tokenizer, p, prompt_template, system_prompt=system_prompt) for p in prompts]
     print(f"\nRunning inference [{label}]...")
     t_start = time.perf_counter()
     outputs = llm.generate(formatted, sampling_params=_SAMPLING)
@@ -264,12 +269,13 @@ def run_descriptions(
     tokenizer,
     records: list[dict],
     prompt_template: str,
+    system_prompt: str = "",
 ) -> list[dict]:
     """Run description inference and compute per-record ROUGE scores."""
     questions = [r["messages"][0]["content"] for r in records]
     ground_truths = [r["messages"][1]["content"] for r in records]
 
-    responses, elapsed, _ = run_inference(llm, questions, "descriptions", tokenizer, prompt_template)
+    responses, elapsed, _ = run_inference(llm, questions, "descriptions", tokenizer, prompt_template, system_prompt=system_prompt)
 
     rows = []
     for record, resp, gt in zip(records, responses, ground_truths):
@@ -294,12 +300,13 @@ def run_classifications(
     prompt_template: str,
     classification_suffix: str,
     datasets_cfg: dict,
+    system_prompt: str = "",
 ) -> list[dict]:
     """Run classification inference and compute per-record resolve/match scores."""
     questions = [r["messages"][0]["content"] + classification_suffix for r in records]
     ground_truths = [r["messages"][1]["content"] for r in records]
 
-    responses, elapsed, _ = run_inference(llm, questions, "classification", tokenizer, prompt_template)
+    responses, elapsed, _ = run_inference(llm, questions, "classification", tokenizer, prompt_template, system_prompt=system_prompt)
 
     rows = []
     for record, resp, gt in zip(records, responses, ground_truths):
@@ -708,12 +715,13 @@ def _worker_language(kwargs: dict) -> None:
     # Reconstruct DatasetConfig objects from plain dicts
     datasets_cfg = {k: DatasetConfig(**v) for k, v in kwargs["datasets_cfg"].items()}
 
+    system_prompt = kwargs.get("system_prompt", "")
     llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
-    desc_rows = run_descriptions(llm, tokenizer, kwargs["desc_records"], kwargs["prompt_template"])
+    desc_rows = run_descriptions(llm, tokenizer, kwargs["desc_records"], kwargs["prompt_template"], system_prompt=system_prompt)
     cls_rows  = run_classifications(
         llm, tokenizer, kwargs["cls_records"],
         kwargs["prompt_template"], kwargs["classification_suffix"],
-        datasets_cfg,
+        datasets_cfg, system_prompt=system_prompt,
     )
     del tokenizer, llm
 
@@ -738,6 +746,7 @@ def main(args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     prompt_template = prompts["assessment_descriptive"]
     classification_suffix = prompts["classification_suffix"]
+    assessment_system = prompts.get("assessment_system", "")
 
     use_dg = getattr(args, "dataset_source", "agml") == "digital_green"
 
@@ -805,6 +814,7 @@ def main(args: argparse.Namespace) -> None:
             prompt_template=prompt_template,
             classification_suffix=classification_suffix,
             datasets_cfg={k: vars(v) for k, v in datasets_cfg.items()},
+            system_prompt=assessment_system,
             out_path=str(worker_out),
         ))
         worker_result = json.loads(worker_out.read_text())

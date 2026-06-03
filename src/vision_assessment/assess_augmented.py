@@ -139,6 +139,7 @@ def run_model_augmented(
     quantization: str | None = None,
     max_num_seqs: int = 64,
     enforce_eager: bool = False,
+    system_prompt: str = "",
 ) -> tuple[list[dict], list[dict]]:
     llm, tokenizer = load_llm(
         model_id, quantization=quantization,
@@ -196,7 +197,7 @@ def run_model_augmented(
             hinted_desc_q = visual_desc_q
 
         wrapped_desc_q = desc_prompt_template.format(question=hinted_desc_q)
-        desc_preds = run_batch(llm, tokenizer, images, wrapped_desc_q, DESC_PARAMS)
+        desc_preds = run_batch(llm, tokenizer, images, wrapped_desc_q, DESC_PARAMS, system_prompt=system_prompt)
 
         for pred, img_name in zip(desc_preds, valid_names):
             scores = rouge_scores_per_sample(pred, synth_desc)
@@ -235,12 +236,12 @@ def run_model_augmented(
                 )
                 wrapped_cls_q = cls_prompt_template.format(question=hinted_cls_q)
                 from vllm import SamplingParams
-                prompt = build_multimodal_prompt(tokenizer, img, wrapped_cls_q)
+                prompt = build_multimodal_prompt(tokenizer, img, wrapped_cls_q, system_prompt=system_prompt)
                 out = llm.generate([prompt], sampling_params=CLS_PARAMS)
                 cls_preds.append(_clean_response(out[0].outputs[0].text))
         else:
             wrapped_cls_q = cls_prompt_template.format(question=visual_cls_q)
-            cls_preds = run_batch(llm, tokenizer, images, wrapped_cls_q, CLS_PARAMS)
+            cls_preds = run_batch(llm, tokenizer, images, wrapped_cls_q, CLS_PARAMS, system_prompt=system_prompt)
 
         resolved_list = [resolve_class(p, clean_classes) for p in cls_preds]
         for pred, img_name, resolved in zip(cls_preds, valid_names, resolved_list):
@@ -304,6 +305,7 @@ def _worker(kwargs: dict) -> None:
         quantization=kwargs["quantization"],
         max_num_seqs=kwargs.get("max_num_seqs", 64),
         enforce_eager=kwargs.get("enforce_eager", False),
+        system_prompt=kwargs.get("system_prompt", ""),
     )
     with open(kwargs["out_path"], "w") as f:
         json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
@@ -464,6 +466,7 @@ def main(args: argparse.Namespace) -> None:
     classification_suffix  = prompts["classification_suffix"]
     desc_prompt_template   = prompts["assessment_descriptive"]
     cls_prompt_template    = prompts["assessment_classification"]
+    assessment_system      = prompts.get("assessment_system", "")
 
     datasets_cfg = datasets_by_name(Path(args.config))
     ds_to_task   = {name: ds.task_type for name, ds in datasets_cfg.items()}
@@ -516,6 +519,7 @@ def main(args: argparse.Namespace) -> None:
             quantization=quant,
             max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
+            system_prompt=assessment_system,
             out_path=str(worker_out),
         ))
         worker_result = json.loads(worker_out.read_text())

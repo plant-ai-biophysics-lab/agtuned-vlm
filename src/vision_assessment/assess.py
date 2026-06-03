@@ -153,22 +153,27 @@ def _clean_response(text: str) -> str:
     return text.strip()
 
 
-def _apply_chat_template(tokenizer, prompt: str) -> str:
+def _apply_chat_template(tokenizer, prompt: str, system_prompt: str = "") -> str:
     messages = [{"role": "user", "content": prompt}]
+    sys_msg = system_prompt or ""
     try:
+        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            full, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
     except TypeError:
         pass
     try:
+        # Qwen fallback: merge system prompt with /no_think
+        sys_content = " ".join(filter(None, [sys_msg, "/no_think"]))
         return tokenizer.apply_chat_template(
-            [{"role": "system", "content": "/no_think"}, *messages],
+            [{"role": "system", "content": sys_content}, *messages],
             tokenize=False, add_generation_prompt=True,
         )
     except Exception:
+        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            full, tokenize=False, add_generation_prompt=True
         )
 
 
@@ -224,13 +229,10 @@ def destroy_llm(llm) -> None:
     torch.cuda.empty_cache()
 
 
-def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> dict:
-    messages = [
-        {
-            "role": "user",
-            "content": [{"type": "image"}, {"type": "text", "text": question}],
-        }
-    ]
+def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str, system_prompt: str = "") -> dict:
+    sys_msg = system_prompt or ""
+    user_msg = {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
+    messages = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + [user_msg]
     try:
         text = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
@@ -248,8 +250,9 @@ def run_batch(
     images: list[PILImage.Image],
     question: str,
     params: SamplingParams,
+    system_prompt: str = "",
 ) -> list[str]:
-    prompts = [build_multimodal_prompt(tokenizer, img, question) for img in images]
+    prompts = [build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt) for img in images]
     outputs = llm.generate(prompts, sampling_params=params)
     return [_clean_response(o.outputs[0].text) for o in outputs]
 
@@ -280,6 +283,7 @@ def run_model(
     max_num_seqs: int = 64,
     enforce_eager: bool = False,
     images_dir: Path | None = None,
+    system_prompt: str = "",
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
     llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
@@ -324,7 +328,7 @@ def run_model(
 
         # Description task
         wrapped_desc_q = desc_prompt_template.format(question=visual_desc_q)
-        desc_preds = run_batch(llm, tokenizer, images, wrapped_desc_q, DESC_PARAMS)
+        desc_preds = run_batch(llm, tokenizer, images, wrapped_desc_q, DESC_PARAMS, system_prompt=system_prompt)
         for pred, img_name in zip(desc_preds, valid_names):
             scores = rouge_scores_per_sample(pred, synth_desc)
             desc_rows.append({
@@ -344,7 +348,7 @@ def run_model(
             clean_classes = ds_cfg.clean_classes if ds_cfg else []
             wrapped_cls_q = cls_prompt_template.format(question=visual_cls_q)
 
-            cls_preds = run_batch(llm, tokenizer, images, wrapped_cls_q, CLS_PARAMS)
+            cls_preds = run_batch(llm, tokenizer, images, wrapped_cls_q, CLS_PARAMS, system_prompt=system_prompt)
             resolved_list = [resolve_class(p, clean_classes) for p in cls_preds]
             for pred, img_name, resolved in zip(cls_preds, valid_names, resolved_list):
                 correct = resolved is not None and resolved.lower() == class_label.lower()
@@ -750,6 +754,7 @@ def _worker_vision(kwargs: dict) -> None:
         max_num_seqs=kwargs.get("max_num_seqs", 64),
         enforce_eager=kwargs.get("enforce_eager", False),
         images_dir=Path(kwargs["images_dir"]) if kwargs.get("images_dir") else None,
+        system_prompt=kwargs.get("system_prompt", ""),
     )
     with open(kwargs["out_path"], "w") as f:
         json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
@@ -772,6 +777,7 @@ def main(args: argparse.Namespace) -> None:
     classification_suffix = prompts["classification_suffix"]
     desc_prompt_template = prompts["assessment_descriptive"]
     cls_prompt_template = prompts["assessment_classification"]
+    assessment_system = prompts.get("assessment_system", "")
 
     use_dg = getattr(args, "dataset_source", "agml") == "digital_green"
 
@@ -820,6 +826,7 @@ def main(args: argparse.Namespace) -> None:
             max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
             images_dir=str(images_dir_val) if images_dir_val else None,
+            system_prompt=assessment_system,
             out_path=str(worker_out),
         ))
         worker_result = json.loads(worker_out.read_text())

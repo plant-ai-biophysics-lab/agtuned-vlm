@@ -59,6 +59,9 @@ assessment_descriptive: "Answer the following question in exactly one concise se
 assessment_classification: "Answer the following question with only the class name. Do not reason step by step. Do not include explanations, analysis, or any other text. Output only the class name.\n\nQuestion: {question}\n\nAnswer:"
 classification_suffix: " Respond with only the class name, nothing else."
 
+# System prompt applied to all evaluated models during assessment
+assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."
+
 # LLM judge prompts
 judge_system_language: "You are an expert agricultural scientist evaluating model answers on agricultural knowledge questions."
 judge_system_vision: "You are an expert agricultural scientist evaluating model predictions on plant disease and pest identification tasks."
