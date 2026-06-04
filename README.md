@@ -134,6 +134,15 @@ Click any row in the **Reference Database** or **Corrected Descriptions** tab to
 
 Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially to stay within GPU memory.
 
+Always runs all four probe experiments in a single call:
+
+| Experiment | Probe | Scope |
+|------------|-------|-------|
+| LR per-dataset | Logistic regression | One probe per dataset |
+| LR combined | Logistic regression | All datasets merged into one label space |
+| FC per-dataset | Single `nn.Linear` + Adam | One probe per dataset |
+| FC combined | Single `nn.Linear` + Adam | All datasets merged into one label space |
+
 ```bash
 python main.py probe \
   --config     src/config/datasets.yaml \
@@ -144,9 +153,37 @@ python main.py probe \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--models` | required | One or more HuggingFace model IDs |
-| `--n_samples` | all | Images per class to embed |
-| `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large models |
+| `--models` | none | One or more HuggingFace model IDs (VLMs) |
+| `--dino_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 backbone. Pass `none` to skip |
+| `--yolo_model` | `yolo11x-cls.pt` | YOLO classification backbone. Pass `none` to skip |
+| `--n_samples` | all | Images per class to embed (stratified) |
+| `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large VLMs |
+| `--fc_epochs` | `100` | Training epochs for FC probe |
+| `--fc_lr` | `1e-3` | Adam learning rate for FC probe |
+| `--fc_batch_size` | `256` | Batch size for FC probe training |
+| `--dataset_source` | `agml` | `agml` or `digital_green` |
+| `--images_dir` | none | Local image directory (required for `digital_green`) |
+
+**Output structure:**
+
+```
+outputs/linear_probe/
+├── linear_probe_results.json       all four probe results (collate reads from "overall")
+├── probe_comparison_all.png        master chart — all 4 experiments × all backbones
+├── summary_overall.png             LR per-dataset F1 + accuracy across backbones
+├── summary_by_task.png             LR per-dataset F1 by task type
+├── tsne/
+│   └── tsne_{dataset}_{backbone}.png
+├── confusion_matrices/
+│   └── confusion_matrix_{dataset}_{backbone}.png
+├── per_class_f1/
+│   └── per_class_f1_{dataset}.png
+└── loss_curves/
+    ├── fc_loss_{dataset}_{backbone}_fc.png   FC per-dataset loss curves
+    └── fc_loss_combined_{backbone}_fc.png    FC combined loss curves
+```
+
+Loss curves show **train loss** (solid) and **val loss** (dashed) vs. epoch. If val loss diverges early, lower `--fc_lr`. If both are still dropping at the last epoch, increase `--fc_epochs`.
 
 ---
 

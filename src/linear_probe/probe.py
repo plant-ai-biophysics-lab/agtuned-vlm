@@ -302,6 +302,120 @@ def run_probe(
     return metrics, y_test_labels, y_pred_labels
 
 
+# ── FC probe ───────────────────────────────────────────────────────────────────
+
+def run_fc_probe(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    le: LabelEncoder,
+    label: str,
+    epochs: int = 100,
+    lr: float = 1e-3,
+    batch_size: int = 256,
+) -> tuple[dict, list[str], list[str]]:
+    """Single fully-connected linear layer trained with Adam + CrossEntropyLoss."""
+    from torch import nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    print(f"Training FC probe [{label}]  epochs={epochs} lr={lr} batch={batch_size}...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    n_classes = len(le.classes_)
+    input_dim = X_train.shape[1]
+
+    fc = nn.Linear(input_dim, n_classes).to(device)
+    opt = torch.optim.Adam(fc.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+
+    X_tr = torch.tensor(X_train, dtype=torch.float32)
+    y_tr = torch.tensor(y_train, dtype=torch.long)
+    X_te = torch.tensor(X_test, dtype=torch.float32).to(device)
+    y_te_t = torch.tensor(y_test, dtype=torch.long).to(device)
+
+    loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True)
+
+    train_losses, val_losses = [], []
+    for epoch in range(epochs):
+        fc.train()
+        epoch_loss = 0.0
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            opt.zero_grad()
+            loss = criterion(fc(xb), yb)
+            loss.backward()
+            opt.step()
+            epoch_loss += loss.item() * len(xb)
+        train_losses.append(epoch_loss / len(X_tr))
+
+        fc.eval()
+        with torch.no_grad():
+            val_loss = criterion(fc(X_te), y_te_t).item()
+        val_losses.append(val_loss)
+
+        if (epoch + 1) % max(1, epochs // 10) == 0:
+            print(f"  epoch {epoch+1:>4}/{epochs}  train_loss={train_losses[-1]:.4f}  val_loss={val_loss:.4f}")
+
+    fc.eval()
+    with torch.no_grad():
+        y_pred = fc(X_te).argmax(dim=1).cpu().numpy()
+
+    y_test_labels = le.inverse_transform(y_test).tolist()
+    y_pred_labels = le.inverse_transform(y_pred).tolist()
+
+    accuracy = accuracy_score(y_test, y_pred)
+    f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+    report_dict = classification_report(y_test_labels, y_pred_labels, zero_division=0, output_dict=True)
+
+    print(f"  Accuracy    : {accuracy:.4f}")
+    print(f"  F1 Macro    : {f1_macro:.4f}")
+    print(f"  F1 Weighted : {f1_weighted:.4f}")
+
+    metrics = {
+        "backbone": label,
+        "accuracy": round(accuracy, 4),
+        "f1_macro": round(f1_macro, 4),
+        "f1_weighted": round(f1_weighted, 4),
+        "per_class_report_dict": report_dict,
+        "train_losses": train_losses,
+        "val_losses": val_losses,
+    }
+    return metrics, y_test_labels, y_pred_labels
+
+
+# ── Combined embeddings builder ────────────────────────────────────────────────
+
+def build_combined_split(
+    all_embeddings: dict, backbone: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder, list[str]] | None:
+    """Concatenate embeddings from all datasets for one backbone into a single split."""
+    X_parts, label_parts = [], []
+    for agml_name, (X, labels_all, *_) in all_embeddings.get(backbone, {}).items():
+        X_parts.append(X)
+        label_parts.extend(labels_all)
+
+    if not X_parts:
+        return None
+
+    X_all = np.concatenate(X_parts, axis=0)
+    le = LabelEncoder()
+    y_all = le.fit_transform(label_parts)
+
+    # Drop classes with fewer than 2 samples
+    counts = Counter(label_parts)
+    keep = np.array([counts[label_parts[i]] >= 2 for i in range(len(label_parts))])
+    X_all, y_all = X_all[keep], y_all[keep]
+    label_parts = [label_parts[i] for i in range(len(label_parts)) if keep[i]]
+    # Re-encode after filtering
+    le = LabelEncoder()
+    y_all = le.fit_transform(label_parts)
+
+    splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, test_idx = next(splitter.split(np.zeros(len(y_all)), y_all))
+    return X_all[train_idx], X_all[test_idx], y_all[train_idx], y_all[test_idx], le, label_parts
+
+
 def unload(model):
     del model
     gc.collect()
@@ -426,6 +540,78 @@ def plot_overall_summary(results: dict, output_dir: Path):
     plt.tight_layout()
 
     path = output_dir / "summary_overall.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_loss_curve(train_losses: list[float], val_losses: list[float], label: str, output_dir: Path):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    epochs = range(1, len(train_losses) + 1)
+    ax.plot(epochs, train_losses, label="Train loss")
+    ax.plot(epochs, val_losses, label="Val loss", linestyle="--")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Cross-entropy loss")
+    ax.set_title(f"FC Probe Loss — {label}")
+    ax.legend()
+    plt.tight_layout()
+    path = output_dir / f"fc_loss_{_safe_name(label)}.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_master_comparison(results: dict, output_dir: Path):
+    """One chart showing F1 macro for all 4 probe types side by side per backbone."""
+    probe_keys = [
+        ("LR per-dataset", "overall"),
+        ("LR combined",    "lr_combined"),
+        ("FC per-dataset", "fc_per_dataset_overall"),
+        ("FC combined",    "fc_combined"),
+    ]
+
+    # Compute FC per-dataset mean F1 per backbone
+    fc_pd_overall: dict[str, float] = {}
+    for agml_data in results.get("fc_per_dataset", {}).values():
+        for backbone, m in agml_data.items():
+            fc_pd_overall.setdefault(backbone, []).append(m.get("f1_macro", 0.0))
+    fc_pd_mean = {b: float(np.mean(vals)) for b, vals in fc_pd_overall.items()}
+    results["fc_per_dataset_overall"] = {b: {"f1_macro": v} for b, v in fc_pd_mean.items()}
+
+    backbones = sorted({
+        b
+        for key in ("overall", "lr_combined", "fc_combined")
+        for b in results.get(key, {})
+    } | set(fc_pd_mean))
+
+    if not backbones:
+        return
+
+    n_probes = len(probe_keys)
+    x = np.arange(len(backbones))
+    width = 0.8 / n_probes
+    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+
+    fig, ax = plt.subplots(figsize=(max(8, len(backbones) * 3), 5))
+    for i, (probe_label, key) in enumerate(probe_keys):
+        vals = [results.get(key, {}).get(b, {}).get("f1_macro", 0.0) for b in backbones]
+        offset = (i - (n_probes - 1) / 2) * width
+        bars = ax.bar(x + offset, vals, width, label=probe_label, color=colors[i])
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
+                        f"{h:.3f}", ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([b.split("/")[-1] for b in backbones], rotation=15, ha="right")
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("F1 Macro")
+    ax.set_title("Linear Probe — All 4 Experiments (F1 Macro)")
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+
+    path = output_dir / "probe_comparison_all.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -571,7 +757,17 @@ def main(args):
         print("No backbones to evaluate.")
         return
 
-    # Phase 2: train probes and collect results
+    fc_epochs     = getattr(args, "fc_epochs", 100)
+    fc_lr         = getattr(args, "fc_lr", 1e-3)
+    fc_batch_size = getattr(args, "fc_batch_size", 256)
+
+    # Create subfolders up front so FC phases can write directly into them
+    tsne_dir = output_dir / "tsne";             tsne_dir.mkdir(exist_ok=True)
+    cm_dir   = output_dir / "confusion_matrices"; cm_dir.mkdir(exist_ok=True)
+    f1_dir   = output_dir / "per_class_f1";    f1_dir.mkdir(exist_ok=True)
+    loss_dir = output_dir / "loss_curves";      loss_dir.mkdir(exist_ok=True)
+
+    # Phase 2a: LR per-dataset (existing behaviour)
     results_per_dataset: dict[str, dict] = {}
     embeddings_store: dict[str, dict[str, tuple]] = defaultdict(dict)
     report_store: dict[str, dict[str, dict]] = defaultdict(dict)
@@ -587,7 +783,7 @@ def main(args):
             X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
             y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-            print(f"\n=== Probe: {agml_name} / {backbone} ===")
+            print(f"\n=== LR probe (per-dataset): {agml_name} / {backbone} ===")
             metrics, y_test_lbl, y_pred_lbl = run_probe(
                 X[train_idx], X[test_idx], y_train, y_test, le, backbone
             )
@@ -595,6 +791,58 @@ def main(args):
             embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
             report_store[agml_name][backbone] = metrics["per_class_report_dict"]
             pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
+
+    # Phase 2b: FC per-dataset
+    fc_per_dataset: dict[str, dict] = {}
+    for agml_name in all_embeddings["_samples"]:
+        fc_per_dataset[agml_name] = {"backbones": {}}
+        for backbone in available_backbones:
+            if agml_name not in all_embeddings.get(backbone, {}):
+                continue
+            X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
+            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+
+            print(f"\n=== FC probe (per-dataset): {agml_name} / {backbone} ===")
+            metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
+                X[train_idx], X[test_idx], y_train, y_test, le, backbone,
+                epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
+            )
+            fc_per_dataset[agml_name]["backbones"][backbone] = {
+                k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")
+            }
+            plot_loss_curve(
+                metrics["train_losses"], metrics["val_losses"],
+                f"{agml_name}_{backbone}_fc", loss_dir,
+            )
+
+    # Phase 2c: LR combined (all datasets as one)
+    lr_combined: dict[str, dict] = {}
+    for backbone in available_backbones:
+        split = build_combined_split(all_embeddings, backbone)
+        if split is None:
+            continue
+        X_tr, X_te, y_tr, y_te, le_comb, _ = split
+        print(f"\n=== LR probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
+        metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, backbone)
+        lr_combined[backbone] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
+
+    # Phase 2d: FC combined (all datasets as one)
+    fc_combined: dict[str, dict] = {}
+    for backbone in available_backbones:
+        split = build_combined_split(all_embeddings, backbone)
+        if split is None:
+            continue
+        X_tr, X_te, y_tr, y_te, le_comb, _ = split
+        print(f"\n=== FC probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
+        metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
+            X_tr, X_te, y_tr, y_te, le_comb, backbone,
+            epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
+        )
+        fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
+        plot_loss_curve(
+            metrics["train_losses"], metrics["val_losses"],
+            f"combined_{backbone}_fc", loss_dir,
+        )
 
     # Phase 3: aggregate by task type and overall
     ds_to_task = {ds.agml_name: ds.task_type for ds in datasets}
@@ -612,6 +860,7 @@ def main(args):
                 by_task_by_backbone[tt][backbone].append(f1)
 
     results = {
+        # LR per-dataset (original behaviour — collate_results reads from here)
         "per_dataset": {
             agml_name: {
                 backbone: {k: v for k, v in m.items() if k != "per_class_report_dict"}
@@ -641,31 +890,56 @@ def main(args):
             }
             for backbone, vals in overall_by_backbone.items()
         },
+        # FC per-dataset
+        "fc_per_dataset": {
+            agml_name: {
+                backbone: m
+                for backbone, m in ds_data["backbones"].items()
+            }
+            for agml_name, ds_data in fc_per_dataset.items()
+        },
+        # LR combined (all classes at once)
+        "lr_combined": lr_combined,
+        # FC combined (all classes at once)
+        "fc_combined": fc_combined,
     }
 
     # Save results
     save_json(output_dir / "linear_probe_results.json", results)
     print(f"\nResults saved to {output_dir / 'linear_probe_results.json'}")
 
-    # Summary table
-    print("\n=== Overall Summary ===")
+    # Summary tables
+    print("\n=== LR Per-Dataset — Overall Summary ===")
     print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10} {'N Datasets':>12}")
     print(f"  {'-'*64}")
     for backbone, m in results["overall"].items():
         print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f} {m['n_datasets']:>12}")
 
+    print("\n=== LR Combined (all classes) ===")
+    print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10}")
+    print(f"  {'-'*52}")
+    for backbone, m in results["lr_combined"].items():
+        print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f}")
+
+    print("\n=== FC Combined (all classes) ===")
+    print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10}")
+    print(f"  {'-'*52}")
+    for backbone, m in results["fc_combined"].items():
+        print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f}")
+
     # Plots
     print("\n=== Generating plots ===")
-    plot_overall_summary(results, output_dir)
-    plot_task_summary(results, output_dir)
+    plot_master_comparison(results, output_dir)   # master chart → root
+    plot_overall_summary(results, output_dir)     # LR summary → root
+    plot_task_summary(results, output_dir)        # task summary → root
 
     for agml_name in results_per_dataset:
         if len(report_store[agml_name]) > 1:
-            plot_per_class_f1(report_store[agml_name], agml_name, output_dir)
+            plot_per_class_f1(report_store[agml_name], agml_name, f1_dir)
         for backbone, (y_true, y_pred) in pred_store[agml_name].items():
-            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}", output_dir)
+            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}", cm_dir)
         for backbone, (X_test, y_test) in embeddings_store[agml_name].items():
-            plot_tsne(X_test, y_test, f"{agml_name}_{backbone}", output_dir)
+            plot_tsne(X_test, y_test, f"{agml_name}_{backbone}", tsne_dir)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
@@ -727,6 +1001,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
         help="Load VLMs in 4-bit or 8-bit quantization (requires bitsandbytes). Use 4bit for 48GB GPUs.",
+    )
+    parser.add_argument(
+        "--fc_epochs", type=int, default=100,
+        help="Training epochs for FC probe (default: 100)",
+    )
+    parser.add_argument(
+        "--fc_lr", type=float, default=1e-3,
+        help="Learning rate for FC probe Adam optimizer (default: 1e-3)",
+    )
+    parser.add_argument(
+        "--fc_batch_size", type=int, default=256,
+        help="Batch size for FC probe training (default: 256)",
     )
     args = parser.parse_args()
 
