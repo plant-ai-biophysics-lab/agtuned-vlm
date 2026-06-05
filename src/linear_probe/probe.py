@@ -794,6 +794,8 @@ def main(args):
 
     # Phase 2b: FC per-dataset
     fc_per_dataset: dict[str, dict] = {}
+    fc_pred_store:  dict[str, dict[str, tuple]] = defaultdict(dict)
+    fc_report_store: dict[str, dict[str, dict]] = defaultdict(dict)
     for agml_name in all_embeddings["_samples"]:
         fc_per_dataset[agml_name] = {"backbones": {}}
         for backbone in available_backbones:
@@ -810,6 +812,8 @@ def main(args):
             fc_per_dataset[agml_name]["backbones"][backbone] = {
                 k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")
             }
+            fc_pred_store[agml_name][backbone]   = (y_test_lbl, y_pred_lbl)
+            fc_report_store[agml_name][backbone] = metrics["per_class_report_dict"]
             plot_loss_curve(
                 metrics["train_losses"], metrics["val_losses"],
                 f"{agml_name}_{backbone}_fc", loss_dir,
@@ -817,6 +821,9 @@ def main(args):
 
     # Phase 2c: LR combined (all datasets as one)
     lr_combined: dict[str, dict] = {}
+    lr_comb_pred_store:   dict[str, tuple] = {}   # backbone → (y_true, y_pred)
+    lr_comb_embed_store:  dict[str, tuple] = {}   # backbone → (X_te, y_true)
+    lr_comb_report_store: dict[str, dict]  = {}
     for backbone in available_backbones:
         split = build_combined_split(all_embeddings, backbone)
         if split is None:
@@ -825,9 +832,14 @@ def main(args):
         print(f"\n=== LR probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
         metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, backbone)
         lr_combined[backbone] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
+        lr_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
+        lr_comb_embed_store[backbone]  = (X_te, y_test_lbl)
+        lr_comb_report_store[backbone] = metrics["per_class_report_dict"]
 
     # Phase 2d: FC combined (all datasets as one)
     fc_combined: dict[str, dict] = {}
+    fc_comb_pred_store:   dict[str, tuple] = {}
+    fc_comb_report_store: dict[str, dict]  = {}
     for backbone in available_backbones:
         split = build_combined_split(all_embeddings, backbone)
         if split is None:
@@ -839,6 +851,8 @@ def main(args):
             epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
         )
         fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
+        fc_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
+        fc_comb_report_store[backbone] = metrics["per_class_report_dict"]
         plot_loss_curve(
             metrics["train_losses"], metrics["val_losses"],
             f"combined_{backbone}_fc", loss_dir,
@@ -933,13 +947,36 @@ def main(args):
     plot_overall_summary(results, output_dir)     # LR summary → root
     plot_task_summary(results, output_dir)        # task summary → root
 
+    # LR per-dataset plots
     for agml_name in results_per_dataset:
         if len(report_store[agml_name]) > 1:
             plot_per_class_f1(report_store[agml_name], agml_name, f1_dir)
         for backbone, (y_true, y_pred) in pred_store[agml_name].items():
-            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}", cm_dir)
+            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_lr", cm_dir)
+        # t-SNE depends only on embeddings, not probe type — generate once per (dataset, backbone)
         for backbone, (X_test, y_test) in embeddings_store[agml_name].items():
             plot_tsne(X_test, y_test, f"{agml_name}_{backbone}", tsne_dir)
+
+    # FC per-dataset plots (separate confusion matrix + per-class F1; t-SNE same embeddings so skip)
+    for agml_name in fc_pred_store:
+        if len(fc_report_store[agml_name]) > 1:
+            plot_per_class_f1(fc_report_store[agml_name], f"{agml_name}_fc", f1_dir)
+        for backbone, (y_true, y_pred) in fc_pred_store[agml_name].items():
+            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_fc", cm_dir)
+
+    # LR combined plots
+    for backbone, (X_te, y_te) in lr_comb_embed_store.items():
+        plot_tsne(X_te, y_te, f"combined_{backbone}_lr", tsne_dir)
+    if lr_comb_report_store:
+        plot_per_class_f1(lr_comb_report_store, "combined_lr", f1_dir)
+    for backbone, (y_true, y_pred) in lr_comb_pred_store.items():
+        plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_lr", cm_dir)
+
+    # FC combined plots (t-SNE same embeddings as LR combined — skip; confusion matrix + per-class F1)
+    if fc_comb_report_store:
+        plot_per_class_f1(fc_comb_report_store, "combined_fc", f1_dir)
+    for backbone, (y_true, y_pred) in fc_comb_pred_store.items():
+        plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_fc", cm_dir)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
