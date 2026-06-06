@@ -484,6 +484,14 @@ def run_fc_probe(
 
 # ── Combined embeddings builder ────────────────────────────────────────────────
 
+def get_combined_class_counts(all_embeddings: dict, backbone: str) -> Counter:
+    """Raw class counts across all datasets for one backbone (before any filtering)."""
+    counts: Counter = Counter()
+    for _, (_, labels_all, *_) in all_embeddings.get(backbone, {}).items():
+        counts.update(labels_all)
+    return counts
+
+
 def build_combined_split(
     all_embeddings: dict, backbone: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder, list[str]] | None:
@@ -660,33 +668,18 @@ def plot_loss_curve(train_losses: list[float], val_losses: list[float], label: s
 
 
 def plot_projector_before_after(
-    pre_per_ds: dict[str, dict],   # {agml_name: {backbone: {f1_macro, ...}}}
-    post_per_ds: dict[str, dict],  # {agml_name: {backbone_postproj: {f1_macro, ...}}}
+    pre_combined: dict[str, dict],   # {backbone: {f1_macro, ...}}  (lr_combined)
+    post_combined: dict[str, dict],  # {backbone_postproj: {f1_macro, ...}}  (postproj_lr_combined)
     output_dir: Path,
 ):
-    """Grouped bar chart: pre-projector vs post-projector LR F1 per backbone (mean across datasets)."""
-    # Collect backbones that have both pre and post results
-    backbones = []
-    for agml_data in pre_per_ds.values():
-        for b in agml_data:
-            if b not in backbones:
-                backbones.append(b)
-
+    """Grouped bar chart: pre-projector vs post-projector LR F1 per backbone (LR combined)."""
     pre_means, post_means, ratios = {}, {}, {}
-    for b in backbones:
-        pre_vals = [
-            pre_per_ds[ds][b]["f1_macro"]
-            for ds in pre_per_ds if b in pre_per_ds[ds]
-        ]
+    for b, m in pre_combined.items():
         post_key = f"{b}_postproj"
-        post_vals = [
-            post_per_ds[ds][post_key]["f1_macro"]
-            for ds in post_per_ds if post_key in post_per_ds.get(ds, {})
-        ]
-        if not pre_vals or not post_vals:
+        if post_key not in post_combined:
             continue
-        pre_means[b]  = float(np.mean(pre_vals))
-        post_means[b] = float(np.mean(post_vals))
+        pre_means[b]  = m["f1_macro"]
+        post_means[b] = post_combined[post_key]["f1_macro"]
         ratios[b]     = round(post_means[b] / pre_means[b], 3) if pre_means[b] > 0 else 0.0
 
     if not pre_means:
@@ -724,6 +717,65 @@ def plot_projector_before_after(
     plt.tight_layout()
 
     path = output_dir / "projector_before_after.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_long_tail(class_counts: Counter, output_dir: Path):
+    """Bar chart of class sample counts sorted high → low."""
+    classes = sorted(class_counts, key=lambda c: -class_counts[c])
+    counts  = [class_counts[c] for c in classes]
+    n = len(classes)
+    fig, ax = plt.subplots(figsize=(max(14, n * 0.35), 5))
+    ax.bar(range(n), counts, color="#4C72B0")
+    ax.set_xticks(range(n))
+    fontsize = max(4, 8 - n // 20)
+    ax.set_xticklabels(classes, rotation=90, ha="right", fontsize=fontsize)
+    ax.set_ylabel("Sample count")
+    ax.set_xlabel("Class")
+    ax.set_title("Class distribution — combined datasets (long-tail)")
+    plt.tight_layout()
+    path = output_dir / "class_distribution_long_tail.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_class_accuracy_vs_frequency(
+    class_counts: Counter,
+    pre_reports:  dict,   # {backbone: per_class_report_dict}
+    post_reports: dict,   # {backbone_postproj: per_class_report_dict}
+    output_dir: Path,
+):
+    """Line chart: per-class F1 vs. class rank by sample count (LR combined, pre vs post projector)."""
+    classes = sorted(class_counts, key=lambda c: -class_counts[c])
+    n = len(classes)
+    x = list(range(n))
+
+    fig, ax = plt.subplots(figsize=(max(14, n * 0.4), 6))
+
+    for backbone, report in pre_reports.items():
+        f1s = [report.get(c, {}).get("f1-score", 0.0) for c in classes]
+        ax.plot(x, f1s, marker="o", markersize=3, linewidth=1,
+                label=f"{backbone.split('/')[-1]} (pre-proj)")
+
+    for backbone, report in post_reports.items():
+        f1s = [report.get(c, {}).get("f1-score", 0.0) for c in classes]
+        short = backbone.replace("_postproj", "").split("/")[-1]
+        ax.plot(x, f1s, marker="s", markersize=3, linewidth=1, linestyle="--",
+                label=f"{short} (post-proj)")
+
+    fontsize = max(4, 8 - n // 20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(classes, rotation=90, ha="right", fontsize=fontsize)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("F1 Score (per class)")
+    ax.set_xlabel("Class (ordered by sample count, high → low)")
+    ax.set_title("Per-class F1 vs. class frequency — LR combined")
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+    path = output_dir / "class_accuracy_vs_frequency.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -973,72 +1025,64 @@ def main(args):
     f1_dir   = output_dir / "per_class_f1";    f1_dir.mkdir(exist_ok=True)
     loss_dir = output_dir / "loss_curves";      loss_dir.mkdir(exist_ok=True)
 
-    # Phase 2a: LR per-dataset (existing behaviour)
+    all_experiments = getattr(args, "all_experiments", False)
+
+    # Phase 2a: LR per-dataset  (only with --all_experiments)
     results_per_dataset: dict[str, dict] = {}
     embeddings_store: dict[str, dict[str, tuple]] = defaultdict(dict)
     report_store: dict[str, dict[str, dict]] = defaultdict(dict)
     pred_store: dict[str, dict[str, tuple]] = defaultdict(dict)
 
-    for agml_name in all_embeddings["_samples"]:
-        _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
-        results_per_dataset[agml_name] = {"backbones": {}}
+    if all_experiments:
+        for agml_name in all_embeddings["_samples"]:
+            _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
+            results_per_dataset[agml_name] = {"backbones": {}}
 
-        for backbone in available_backbones:
-            if agml_name not in all_embeddings.get(backbone, {}):
-                continue
-            X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
-            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+            for backbone in available_backbones:
+                if agml_name not in all_embeddings.get(backbone, {}):
+                    continue
+                X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
+                y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-            print(f"\n=== LR probe (per-dataset): {agml_name} / {backbone} ===")
-            metrics, y_test_lbl, y_pred_lbl = run_probe(
-                X[train_idx], X[test_idx], y_train, y_test, le, backbone
-            )
-            results_per_dataset[agml_name]["backbones"][backbone] = metrics
-            embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
-            report_store[agml_name][backbone] = metrics["per_class_report_dict"]
-            pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
+                print(f"\n=== LR probe (per-dataset): {agml_name} / {backbone} ===")
+                metrics, y_test_lbl, y_pred_lbl = run_probe(
+                    X[train_idx], X[test_idx], y_train, y_test, le, backbone
+                )
+                results_per_dataset[agml_name]["backbones"][backbone] = metrics
+                embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
+                report_store[agml_name][backbone] = metrics["per_class_report_dict"]
+                pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
 
-    # Phase 2e: LR on post-projector embeddings (VLMs only)
-    postproj_lr_per_dataset: dict[str, dict] = {}   # {agml_name: {backbone_postproj: metrics}}
-    for postproj_key, ds_map in postproj_embeddings.items():
-        for agml_name, (X, labels_all, y_enc, train_idx, test_idx, le) in ds_map.items():
-            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
-            print(f"\n=== LR probe (post-proj): {agml_name} / {postproj_key} ===")
-            metrics, y_test_lbl, y_pred_lbl = run_probe(
-                X[train_idx], X[test_idx], y_train, y_test, le, postproj_key
-            )
-            postproj_lr_per_dataset.setdefault(agml_name, {})[postproj_key] = {
-                k: v for k, v in metrics.items() if k != "per_class_report_dict"
-            }
-
-    # Phase 2b: FC per-dataset
+    # Phase 2b: FC per-dataset  (only with --all_experiments)
     fc_per_dataset: dict[str, dict] = {}
     fc_pred_store:  dict[str, dict[str, tuple]] = defaultdict(dict)
     fc_report_store: dict[str, dict[str, dict]] = defaultdict(dict)
-    for agml_name in all_embeddings["_samples"]:
-        fc_per_dataset[agml_name] = {"backbones": {}}
-        for backbone in available_backbones:
-            if agml_name not in all_embeddings.get(backbone, {}):
-                continue
-            X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
-            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-            print(f"\n=== FC probe (per-dataset): {agml_name} / {backbone} ===")
-            metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
-                X[train_idx], X[test_idx], y_train, y_test, le, backbone,
-                epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
-            )
-            fc_per_dataset[agml_name]["backbones"][backbone] = {
-                k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")
-            }
-            fc_pred_store[agml_name][backbone]   = (y_test_lbl, y_pred_lbl)
-            fc_report_store[agml_name][backbone] = metrics["per_class_report_dict"]
-            plot_loss_curve(
-                metrics["train_losses"], metrics["val_losses"],
-                f"{agml_name}_{backbone}_fc", loss_dir,
-            )
+    if all_experiments:
+        for agml_name in all_embeddings["_samples"]:
+            fc_per_dataset[agml_name] = {"backbones": {}}
+            for backbone in available_backbones:
+                if agml_name not in all_embeddings.get(backbone, {}):
+                    continue
+                X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
+                y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-    # Phase 2c: LR combined (all datasets as one)
+                print(f"\n=== FC probe (per-dataset): {agml_name} / {backbone} ===")
+                metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
+                    X[train_idx], X[test_idx], y_train, y_test, le, backbone,
+                    epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
+                )
+                fc_per_dataset[agml_name]["backbones"][backbone] = {
+                    k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")
+                }
+                fc_pred_store[agml_name][backbone]   = (y_test_lbl, y_pred_lbl)
+                fc_report_store[agml_name][backbone] = metrics["per_class_report_dict"]
+                plot_loss_curve(
+                    metrics["train_losses"], metrics["val_losses"],
+                    f"{agml_name}_{backbone}_fc", loss_dir,
+                )
+
+    # Phase 2c: LR combined (always runs — default mode)
     lr_combined: dict[str, dict] = {}
     lr_comb_pred_store:   dict[str, tuple] = {}   # backbone → (y_true, y_pred)
     lr_comb_embed_store:  dict[str, tuple] = {}   # backbone → (X_te, y_true)
@@ -1055,27 +1099,42 @@ def main(args):
         lr_comb_embed_store[backbone]  = (X_te, y_test_lbl)
         lr_comb_report_store[backbone] = metrics["per_class_report_dict"]
 
-    # Phase 2d: FC combined (all datasets as one)
+    # Phase 2d: FC combined  (only with --all_experiments)
     fc_combined: dict[str, dict] = {}
     fc_comb_pred_store:   dict[str, tuple] = {}
     fc_comb_report_store: dict[str, dict]  = {}
-    for backbone in available_backbones:
-        split = build_combined_split(all_embeddings, backbone)
+
+    if all_experiments:
+        for backbone in available_backbones:
+            split = build_combined_split(all_embeddings, backbone)
+            if split is None:
+                continue
+            X_tr, X_te, y_tr, y_te, le_comb, _ = split
+            print(f"\n=== FC probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
+            metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
+                X_tr, X_te, y_tr, y_te, le_comb, backbone,
+                epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
+            )
+            fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
+            fc_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
+            fc_comb_report_store[backbone] = metrics["per_class_report_dict"]
+            plot_loss_curve(
+                metrics["train_losses"], metrics["val_losses"],
+                f"combined_{backbone}_fc", loss_dir,
+            )
+
+    # Phase 2e: LR combined on post-projector embeddings (VLMs only — always runs)
+    postproj_lr_combined: dict[str, dict] = {}          # {backbone_postproj: metrics}
+    postproj_lr_comb_report_store: dict[str, dict] = {} # {backbone_postproj: per_class_report}
+    for postproj_key in postproj_embeddings:
+        split = build_combined_split(postproj_embeddings, postproj_key)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
-        print(f"\n=== FC probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
-        metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
-            X_tr, X_te, y_tr, y_te, le_comb, backbone,
-            epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
-        )
-        fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
-        fc_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
-        fc_comb_report_store[backbone] = metrics["per_class_report_dict"]
-        plot_loss_curve(
-            metrics["train_losses"], metrics["val_losses"],
-            f"combined_{backbone}_fc", loss_dir,
-        )
+        print(f"\n=== LR probe (post-proj combined): {postproj_key}  classes={len(le_comb.classes_)} ===")
+        metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, postproj_key)
+        postproj_lr_combined[postproj_key] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
+        postproj_lr_comb_report_store[postproj_key] = metrics["per_class_report_dict"]
 
     # Phase 3: aggregate by task type and overall
     ds_to_task = {ds.agml_name: ds.task_type for ds in datasets}
@@ -1093,7 +1152,7 @@ def main(args):
                 by_task_by_backbone[tt][backbone].append(f1)
 
     results = {
-        # LR per-dataset (original behaviour — collate_results reads from here)
+        # LR per-dataset  (populated only with --all_experiments)
         "per_dataset": {
             agml_name: {
                 backbone: {k: v for k, v in m.items() if k != "per_class_report_dict"}
@@ -1123,20 +1182,19 @@ def main(args):
             }
             for backbone, vals in overall_by_backbone.items()
         },
-        # FC per-dataset
+        # FC per-dataset  (populated only with --all_experiments)
         "fc_per_dataset": {
-            agml_name: {
-                backbone: m
-                for backbone, m in ds_data["backbones"].items()
-            }
+            agml_name: {backbone: m for backbone, m in ds_data["backbones"].items()}
             for agml_name, ds_data in fc_per_dataset.items()
         },
-        # LR combined (all classes at once)
+        # LR combined (default — always runs)
         "lr_combined": lr_combined,
-        # FC combined (all classes at once)
+        "lr_combined_reports": lr_comb_report_store,
+        # FC combined  (populated only with --all_experiments)
         "fc_combined": fc_combined,
-        # Post-projector LR (VLMs only) — used for projector separability ratio
-        "postproj_lr_per_dataset": postproj_lr_per_dataset,
+        # Post-projector LR combined (VLMs only — always runs)
+        "postproj_lr_combined": postproj_lr_combined,
+        "postproj_lr_combined_reports": postproj_lr_comb_report_store,
     }
 
     # Save results
@@ -1144,52 +1202,50 @@ def main(args):
     print(f"\nResults saved to {output_dir / 'linear_probe_results.json'}")
 
     # Summary tables
-    print("\n=== LR Per-Dataset — Overall Summary ===")
-    print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10} {'N Datasets':>12}")
-    print(f"  {'-'*64}")
-    for backbone, m in results["overall"].items():
-        print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f} {m['n_datasets']:>12}")
-
     print("\n=== LR Combined (all classes) ===")
     print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10}")
     print(f"  {'-'*52}")
     for backbone, m in results["lr_combined"].items():
         print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f}")
 
-    print("\n=== FC Combined (all classes) ===")
-    print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10}")
-    print(f"  {'-'*52}")
-    for backbone, m in results["fc_combined"].items():
-        print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f}")
+    if results["postproj_lr_combined"]:
+        print("\n=== LR Combined — Post-projector (VLMs) ===")
+        print(f"  {'Backbone':<40} {'F1 Macro':>10} {'Accuracy':>10}")
+        print(f"  {'-'*62}")
+        for backbone, m in results["postproj_lr_combined"].items():
+            print(f"  {backbone:<40} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f}")
+
+    if all_experiments:
+        print("\n=== LR Per-Dataset — Overall Summary ===")
+        print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10} {'N Datasets':>12}")
+        print(f"  {'-'*64}")
+        for backbone, m in results["overall"].items():
+            print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f} {m['n_datasets']:>12}")
+
+        print("\n=== FC Combined (all classes) ===")
+        print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10}")
+        print(f"  {'-'*52}")
+        for backbone, m in results["fc_combined"].items():
+            print(f"  {backbone:<30} {m['f1_macro']:>10.4f} {m['accuracy']:>10.4f}")
+
+    # Collect class counts from the first available backbone (same across all)
+    _count_backbone = next(iter(available_backbones), None) if available_backbones else None
+    combined_class_counts: Counter = (
+        get_combined_class_counts(all_embeddings, _count_backbone)
+        if _count_backbone else Counter()
+    )
 
     # Plots
     print("\n=== Generating plots ===")
-    plot_master_comparison(results, output_dir)   # master chart → root
-    plot_overall_summary(results, output_dir)     # LR summary → root
-    plot_task_summary(results, output_dir)        # task summary → root
-    if postproj_lr_per_dataset:
-        plot_projector_before_after(
-            results["per_dataset"], results["postproj_lr_per_dataset"], output_dir
-        )
+    if results["overall"]:
+        plot_master_comparison(results, output_dir)
+        plot_overall_summary(results, output_dir)
+        plot_task_summary(results, output_dir)
 
-    # LR per-dataset plots
-    for agml_name in results_per_dataset:
-        if len(report_store[agml_name]) > 1:
-            plot_per_class_f1(report_store[agml_name], agml_name, f1_dir)
-        for backbone, (y_true, y_pred) in pred_store[agml_name].items():
-            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_lr", cm_dir)
-        # t-SNE depends only on embeddings, not probe type — generate once per (dataset, backbone)
-        for backbone, (X_test, y_test) in embeddings_store[agml_name].items():
-            plot_tsne(X_test, y_test, f"{agml_name}_{backbone}", tsne_dir)
+    if postproj_lr_combined:
+        plot_projector_before_after(results["lr_combined"], postproj_lr_combined, output_dir)
 
-    # FC per-dataset plots (separate confusion matrix + per-class F1; t-SNE same embeddings so skip)
-    for agml_name in fc_pred_store:
-        if len(fc_report_store[agml_name]) > 1:
-            plot_per_class_f1(fc_report_store[agml_name], f"{agml_name}_fc", f1_dir)
-        for backbone, (y_true, y_pred) in fc_pred_store[agml_name].items():
-            plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_fc", cm_dir)
-
-    # LR combined plots
+    # LR combined plots (always)
     for backbone, (X_te, y_te) in lr_comb_embed_store.items():
         plot_tsne(X_te, y_te, f"combined_{backbone}_lr", tsne_dir)
     if lr_comb_report_store:
@@ -1197,15 +1253,41 @@ def main(args):
     for backbone, (y_true, y_pred) in lr_comb_pred_store.items():
         plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_lr", cm_dir)
 
-    # FC combined plots (t-SNE same embeddings as LR combined — skip; confusion matrix + per-class F1)
-    if fc_comb_report_store:
-        plot_per_class_f1(fc_comb_report_store, "combined_fc", f1_dir)
-    for backbone, (y_true, y_pred) in fc_comb_pred_store.items():
-        plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_fc", cm_dir)
+    # Long-tail distribution
+    if combined_class_counts:
+        plot_long_tail(combined_class_counts, output_dir)
+
+    # Per-class accuracy vs frequency (pre + post projector, LR combined)
+    if lr_comb_report_store and combined_class_counts:
+        plot_class_accuracy_vs_frequency(
+            combined_class_counts,
+            lr_comb_report_store,
+            postproj_lr_comb_report_store,
+            output_dir,
+        )
+
+    # --all_experiments plots
+    if all_experiments:
+        for agml_name in results_per_dataset:
+            if len(report_store[agml_name]) > 1:
+                plot_per_class_f1(report_store[agml_name], agml_name, f1_dir)
+            for backbone, (y_true, y_pred) in pred_store[agml_name].items():
+                plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_lr", cm_dir)
+            for backbone, (X_test, y_test) in embeddings_store[agml_name].items():
+                plot_tsne(X_test, y_test, f"{agml_name}_{backbone}", tsne_dir)
+        for agml_name in fc_pred_store:
+            if len(fc_report_store[agml_name]) > 1:
+                plot_per_class_f1(fc_report_store[agml_name], f"{agml_name}_fc", f1_dir)
+            for backbone, (y_true, y_pred) in fc_pred_store[agml_name].items():
+                plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_fc", cm_dir)
+        if fc_comb_report_store:
+            plot_per_class_f1(fc_comb_report_store, "combined_fc", f1_dir)
+        for backbone, (y_true, y_pred) in fc_comb_pred_store.items():
+            plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_fc", cm_dir)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
-    for backbone, m in results["overall"].items():
+    for backbone, m in results["lr_combined"].items():
         update_pipeline_results(
             csv_path=pipeline_csv,
             model=backbone,
@@ -1303,8 +1385,13 @@ if __name__ == "__main__":
              "Runs LR on post-projector only; skips LR/FC per-dataset and combined phases for VLMs.",
     )
     parser.add_argument(
+        "--all_experiments", action="store_true",
+        help="Run all 4 probe variants (LR per-dataset, LR combined, FC per-dataset, FC combined). "
+             "Default runs LR combined only.",
+    )
+    parser.add_argument(
         "--replot", action="store_true",
-        help="Skip inference — load linear_probe_results.json from --output_dir and regenerate projector_before_after.png",
+        help="Skip inference — load linear_probe_results.json from --output_dir and regenerate plots.",
     )
     args = parser.parse_args()
 
@@ -1319,12 +1406,28 @@ if __name__ == "__main__":
         if not results_path.exists():
             raise FileNotFoundError(f"No results file found at {results_path}")
         results = json.loads(results_path.read_text())
-        pre = results.get("per_dataset", {})
-        post = results.get("postproj_lr_per_dataset", {})
-        if not post:
-            print("No post-projector results in saved file — nothing to plot.")
-        else:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        pre  = results.get("lr_combined", {})
+        post = results.get("postproj_lr_combined", {})
+        pre_reports  = results.get("lr_combined_reports", {})
+        post_reports = results.get("postproj_lr_combined_reports", {})
+
+        if post:
             plot_projector_before_after(pre, post, output_dir)
-            print(f"Saved projector_before_after.png to {output_dir}/")
+
+        # Rebuild class counts from lr_combined_reports (union of all class keys)
+        skip = {"accuracy", "macro avg", "weighted avg"}
+        counts: Counter = Counter()
+        for report in pre_reports.values():
+            for cls, m in report.items():
+                if cls not in skip:
+                    counts[cls] += round(m.get("support", 0))
+        if counts:
+            plot_long_tail(counts, output_dir)
+            if pre_reports:
+                plot_class_accuracy_vs_frequency(counts, pre_reports, post_reports, output_dir)
+
+        print(f"Plots saved to {output_dir}/")
     else:
         main(args)
