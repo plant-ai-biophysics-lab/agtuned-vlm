@@ -176,6 +176,82 @@ def extract_vlm_embeddings(samples, processor, model, mm_root, desc: str = "VLM 
     return np.stack(embeddings), labels
 
 
+_PROJECTOR_NAMES = (
+    "embed_vision",           # Gemma 4
+    "multi_modal_projector",  # Gemma 3 / LLaVA-style
+    "mm_projector",
+    "vision_projector",
+    "image_projector",
+    "projector",
+    "visual_merger",          # Qwen2-VL patch merger
+    "visual_projection",
+    "img_projection",
+)
+
+
+def resolve_projector(mm_root):
+    """Return (projector_module, name) for the VLM's vision→LM projector, or (None, None)."""
+    for name in _PROJECTOR_NAMES:
+        if hasattr(mm_root, name):
+            return getattr(mm_root, name), name
+    return None, None
+
+
+def extract_vlm_embeddings_postproj(
+    samples, processor, model, mm_root, desc: str = "post-proj embeddings"
+) -> tuple[np.ndarray, list[str]]:
+    """Hook the projector output (post-projector, pre-LM) and mean-pool to get one vector per image."""
+    from tqdm import tqdm
+
+    proj, proj_name = resolve_projector(mm_root)
+    if proj is None:
+        avail = [n for n, _ in mm_root.named_children()]
+        raise AttributeError(
+            f"Could not find projector on mm_root. Tried: {_PROJECTOR_NAMES}. Available: {avail}"
+        )
+    print(f"  Hooking projector: {proj_name}")
+
+    model_device = next(model.parameters()).device
+    embeddings, labels = [], []
+
+    for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
+        image = PILImage.open(sample["path"]).convert("RGB")
+
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
+        try:
+            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+            inputs = processor(text=[text], images=[image], return_tensors="pt")
+        except Exception:
+            inputs = processor(text="<image>", images=image, return_tensors="pt")
+        inputs = {k: v.to(model_device) for k, v in inputs.items()}
+
+        captured: list[torch.Tensor] = []
+
+        def _hook(module, input, output):
+            t = output if isinstance(output, torch.Tensor) else output[0]
+            if isinstance(t, torch.Tensor):
+                captured.append(t.detach().float().cpu())
+
+        handle = proj.register_forward_hook(_hook)
+        try:
+            with torch.no_grad():
+                model(**inputs)
+        finally:
+            handle.remove()
+
+        if not captured:
+            raise RuntimeError(f"Projector hook captured nothing for {sample['path']}")
+
+        feat = captured[0]
+        if feat.dim() == 3:
+            feat = feat[0]          # (batch, seq, dim) → (seq, dim)
+        emb = feat.mean(dim=0).numpy()
+        embeddings.append(emb)
+        labels.append(sample["label"])
+
+    return np.stack(embeddings), labels
+
+
 def load_gemma4(model_id: str, device: str, quantize: str | None = None):
     local = os.path.abspath(model_id)
     if os.path.exists(local):
@@ -561,6 +637,76 @@ def plot_loss_curve(train_losses: list[float], val_losses: list[float], label: s
     print(f"  Saved: {path}")
 
 
+def plot_projector_before_after(
+    pre_per_ds: dict[str, dict],   # {agml_name: {backbone: {f1_macro, ...}}}
+    post_per_ds: dict[str, dict],  # {agml_name: {backbone_postproj: {f1_macro, ...}}}
+    output_dir: Path,
+):
+    """Grouped bar chart: pre-projector vs post-projector LR F1 per backbone (mean across datasets)."""
+    # Collect backbones that have both pre and post results
+    backbones = []
+    for agml_data in pre_per_ds.values():
+        for b in agml_data:
+            if b not in backbones:
+                backbones.append(b)
+
+    pre_means, post_means, ratios = {}, {}, {}
+    for b in backbones:
+        pre_vals = [
+            pre_per_ds[ds][b]["f1_macro"]
+            for ds in pre_per_ds if b in pre_per_ds[ds]
+        ]
+        post_key = f"{b}_postproj"
+        post_vals = [
+            post_per_ds[ds][post_key]["f1_macro"]
+            for ds in post_per_ds if post_key in post_per_ds.get(ds, {})
+        ]
+        if not pre_vals or not post_vals:
+            continue
+        pre_means[b]  = float(np.mean(pre_vals))
+        post_means[b] = float(np.mean(post_vals))
+        ratios[b]     = round(post_means[b] / pre_means[b], 3) if pre_means[b] > 0 else 0.0
+
+    if not pre_means:
+        print("  [skip] No paired pre/post-projector results to plot.")
+        return
+
+    labels = list(pre_means)
+    x = np.arange(len(labels))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 2.5), 5))
+    b1 = ax.bar(x - width / 2, [pre_means[b] for b in labels],  width,
+                label="Pre-projector (vision encoder)", color="#4C72B0")
+    b2 = ax.bar(x + width / 2, [post_means[b] for b in labels], width,
+                label="Post-projector (after LM projection)", color="#DD8452")
+
+    for bar, val in zip(b1, [pre_means[b] for b in labels]):
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.005,
+                f"{val:.3f}", ha="center", va="bottom", fontsize=8)
+    for bar, b, val in zip(b2, labels, [post_means[b] for b in labels]):
+        ratio = ratios[b]
+        color = "#2ca02c" if ratio >= 1.0 else "#d62728"
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.005,
+                f"{val:.3f}\n(×{ratio:.2f})", ha="center", va="bottom",
+                fontsize=7, color=color)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([b.split("/")[-1] for b in labels], rotation=15, ha="right")
+    ax.set_ylim(0, 1.2)
+    ax.set_ylabel("LR F1 Macro (mean across datasets)")
+    ax.set_title("Projector Separability: Pre vs Post-Projector\n"
+                 "Ratio > 1 = projector preserves/improves class structure  "
+                 "Ratio < 1 = projector destroys class structure")
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+
+    path = output_dir / "projector_before_after.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 def plot_master_comparison(results: dict, output_dir: Path):
     """One chart showing F1 macro for all 4 probe types side by side per backbone."""
     probe_keys = [
@@ -740,19 +886,44 @@ def main(args):
             all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
     # VLM passes (one per --models entry, loaded and unloaded sequentially)
+    postproj_embeddings: dict[str, dict] = {}   # {backbone_postproj: {agml_name: (X, labels, ...)}}
+    feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
     for model_id in (args.models or []):
         from tqdm import tqdm
         backbone_key = model_id.split("/")[-1]
+        postproj_key = f"{backbone_key}_postproj"
         print(f"\n{'='*60}\nVLM: {model_id}\n{'='*60}")
         processor, vlm, mm_root = load_gemma4(model_id, device, quantize=args.quantize)
+
         all_embeddings[backbone_key] = {}
+        postproj_embeddings[postproj_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
+
+        # Check projector availability once before the dataset loop
+        proj, proj_name = resolve_projector(mm_root)
+        has_postproj = proj is not None
+        if not has_postproj:
+            avail = [n for n, _ in mm_root.named_children()]
+            print(f"  [warn] No projector found for {backbone_key} — skipping post-proj. Available: {avail}")
+
+        postproj_only = getattr(args, "postproj_only", False)
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
-            X, _ = extract_vlm_embeddings(samples, processor, vlm, mm_root, desc=backbone_key)
-            all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            if not postproj_only:
+                X, _ = extract_vlm_embeddings(samples, processor, vlm, mm_root, desc=backbone_key)
+                all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+                if backbone_key not in feature_dims:
+                    feature_dims[backbone_key] = {"pre": int(X.shape[1])}
+
+            if has_postproj:
+                X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, mm_root, desc=postproj_key)
+                postproj_embeddings[postproj_key][agml_name] = (X_post, labels_all, y_enc, train_idx, test_idx, le)
+                if "post" not in feature_dims.get(backbone_key, {}):
+                    feature_dims[backbone_key]["post"] = int(X_post.shape[1])
+
         unload(vlm)
 
-    available_backbones = [k for k in all_embeddings if k != "_samples"]
+    postproj_only = getattr(args, "postproj_only", False)
+    available_backbones = [k for k in all_embeddings if k != "_samples" and (not postproj_only or all_embeddings[k])]
     if not available_backbones:
         print("No backbones to evaluate.")
         return
@@ -791,6 +962,19 @@ def main(args):
             embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
             report_store[agml_name][backbone] = metrics["per_class_report_dict"]
             pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
+
+    # Phase 2e: LR on post-projector embeddings (VLMs only)
+    postproj_lr_per_dataset: dict[str, dict] = {}   # {agml_name: {backbone_postproj: metrics}}
+    for postproj_key, ds_map in postproj_embeddings.items():
+        for agml_name, (X, labels_all, y_enc, train_idx, test_idx, le) in ds_map.items():
+            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+            print(f"\n=== LR probe (post-proj): {agml_name} / {postproj_key} ===")
+            metrics, y_test_lbl, y_pred_lbl = run_probe(
+                X[train_idx], X[test_idx], y_train, y_test, le, postproj_key
+            )
+            postproj_lr_per_dataset.setdefault(agml_name, {})[postproj_key] = {
+                k: v for k, v in metrics.items() if k != "per_class_report_dict"
+            }
 
     # Phase 2b: FC per-dataset
     fc_per_dataset: dict[str, dict] = {}
@@ -916,6 +1100,8 @@ def main(args):
         "lr_combined": lr_combined,
         # FC combined (all classes at once)
         "fc_combined": fc_combined,
+        # Post-projector LR (VLMs only) — used for projector separability ratio
+        "postproj_lr_per_dataset": postproj_lr_per_dataset,
     }
 
     # Save results
@@ -946,6 +1132,10 @@ def main(args):
     plot_master_comparison(results, output_dir)   # master chart → root
     plot_overall_summary(results, output_dir)     # LR summary → root
     plot_task_summary(results, output_dir)        # task summary → root
+    if postproj_lr_per_dataset:
+        plot_projector_before_after(
+            results["per_dataset"], results["postproj_lr_per_dataset"], output_dir
+        )
 
     # LR per-dataset plots
     for agml_name in results_per_dataset:
@@ -988,6 +1178,23 @@ def main(args):
             stage="linear_probe",
             metrics={"f1_macro": m["f1_macro"]},
         )
+
+    # Write feature dimension summary
+    if feature_dims:
+        dim_lines = ["Feature dimensions (vision encoder output vs LM embedding space)\n", "=" * 60 + "\n"]
+        for backbone, dims in sorted(feature_dims.items()):
+            dim_lines.append(f"\n{backbone}\n")
+            pre = dims.get("pre")
+            post = dims.get("post")
+            if pre is not None:
+                dim_lines.append(f"  pre-projector  (vision encoder output): {pre}\n")
+            if post is not None:
+                dim_lines.append(f"  post-projector (LM embedding space):    {post}\n")
+                if pre is not None:
+                    dim_lines.append(f"  ratio post/pre:                         {post/pre:.3f}\n")
+        dim_path = output_dir / "feature_dimensions.txt"
+        dim_path.write_text("".join(dim_lines))
+        print(f"Feature dimensions written to {dim_path}")
 
     print(f"\nAll outputs saved to {output_dir}/")
 
@@ -1051,9 +1258,32 @@ if __name__ == "__main__":
         "--fc_batch_size", type=int, default=256,
         help="Batch size for FC probe training (default: 256)",
     )
+    parser.add_argument(
+        "--postproj_only", action="store_true",
+        help="For VLMs: extract only post-projector embeddings (skips vision-tower pre-projector pass). "
+             "Runs LR on post-projector only; skips LR/FC per-dataset and combined phases for VLMs.",
+    )
+    parser.add_argument(
+        "--replot", action="store_true",
+        help="Skip inference — load linear_probe_results.json from --output_dir and regenerate projector_before_after.png",
+    )
     args = parser.parse_args()
 
     if args.yolo_model and args.yolo_model.lower() == "none":
         args.yolo_model = None
 
-    main(args)
+    if args.replot:
+        output_dir = Path(args.output_dir)
+        results_path = output_dir / "linear_probe_results.json"
+        if not results_path.exists():
+            raise FileNotFoundError(f"No results file found at {results_path}")
+        results = json.loads(results_path.read_text())
+        pre = results.get("per_dataset", {})
+        post = results.get("postproj_lr_per_dataset", {})
+        if not post:
+            print("No post-projector results in saved file — nothing to plot.")
+        else:
+            plot_projector_before_after(pre, post, output_dir)
+            print(f"Saved projector_before_after.png to {output_dir}/")
+    else:
+        main(args)
