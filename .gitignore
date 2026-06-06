@@ -18,3 +18,5 @@ unsloth_compiled_cache
 /experiments/.DS_Store
 /yolo11x-cls.pt
 /annotations.csv
+/outputs
+/src/config/datasets_test.yaml

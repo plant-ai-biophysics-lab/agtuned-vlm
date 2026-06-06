@@ -346,6 +346,28 @@ def extract_dino_embeddings(samples, processor, model, device) -> tuple[np.ndarr
     return np.stack(embeddings), labels
 
 
+def load_bioclip(model_id: str, device: str):
+    import open_clip
+    print(f"Loading BioCLIP: {model_id}")
+    model, _, preprocess = open_clip.create_model_and_transforms(f"hf-hub:{model_id}")
+    model.to(device).eval()
+    return model, preprocess
+
+
+@torch.no_grad()
+def extract_bioclip_embeddings(samples, model, preprocess, device) -> tuple[np.ndarray, list[str]]:
+    from tqdm import tqdm
+    embeddings, labels = [], []
+    for sample in tqdm(samples, desc="  BioCLIP embeddings", unit="img", leave=False):
+        image = PILImage.open(sample["path"]).convert("RGB")
+        tensor = preprocess(image).unsqueeze(0).to(device)
+        features = model.encode_image(tensor)
+        emb = features[0].cpu().float().numpy()
+        embeddings.append(emb)
+        labels.append(sample["label"])
+    return np.stack(embeddings), labels
+
+
 # ── Logistic regression probe ──────────────────────────────────────────────────
 
 def run_probe(
@@ -885,6 +907,19 @@ def main(args):
             X = extract_yolo_embeddings(samples, args.yolo_model, device)
             all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
+    # BioCLIP pass
+    if args.bioclip_model:
+        from tqdm import tqdm
+        print(f"\n{'='*60}\nBioCLIP: {args.bioclip_model}\n{'='*60}")
+        bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
+        bioclip_key = args.bioclip_model.split("/")[-1]
+        all_embeddings[bioclip_key] = {}
+        ds_items = list(all_embeddings["_samples"].items())
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="BioCLIP datasets", unit="ds"):
+            X, _ = extract_bioclip_embeddings(samples, bioclip_model, bioclip_preprocess, device)
+            all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+        unload(bioclip_model)
+
     # VLM passes (one per --models entry, loaded and unloaded sequentially)
     postproj_embeddings: dict[str, dict] = {}   # {backbone_postproj: {agml_name: (X, labels, ...)}}
     feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
@@ -1232,6 +1267,10 @@ if __name__ == "__main__":
         help="DINOv3 model ID. Pass 'none' to skip.",
     )
     parser.add_argument(
+        "--bioclip_model", type=str, default="imageomics/bioclip",
+        help="BioCLIP model HF repo ID. Pass 'none' to skip.",
+    )
+    parser.add_argument(
         "--yolo_model", type=str, default="yolo11x-cls.pt",
         help="YOLO classification model. Pass 'none' to skip.",
     )
@@ -1271,6 +1310,8 @@ if __name__ == "__main__":
 
     if args.yolo_model and args.yolo_model.lower() == "none":
         args.yolo_model = None
+    if args.bioclip_model and args.bioclip_model.lower() == "none":
+        args.bioclip_model = None
 
     if args.replot:
         output_dir = Path(args.output_dir)
