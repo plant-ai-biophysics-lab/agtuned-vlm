@@ -1085,18 +1085,22 @@ def main(args):
     # Phase 2c: LR combined (always runs — default mode)
     lr_combined: dict[str, dict] = {}
     lr_comb_pred_store:   dict[str, tuple] = {}   # backbone → (y_true, y_pred)
-    lr_comb_embed_store:  dict[str, tuple] = {}   # backbone → (X_te, y_true)
+    lr_comb_embed_store:  dict[str, tuple] = {}   # backbone → (X_all, y_all_labels)
     lr_comb_report_store: dict[str, dict]  = {}
     for backbone in available_backbones:
         split = build_combined_split(all_embeddings, backbone)
         if split is None:
             continue
-        X_tr, X_te, y_tr, y_te, le_comb, _ = split
+        X_tr, X_te, y_tr, y_te, le_comb, label_parts = split
         print(f"\n=== LR probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
         metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, backbone)
         lr_combined[backbone] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
         lr_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
-        lr_comb_embed_store[backbone]  = (X_te, y_test_lbl)
+        X_all = np.concatenate([X_tr, X_te], axis=0)
+        y_all_lbl = le_comb.inverse_transform(
+            np.concatenate([y_tr, y_te], axis=0)
+        ).tolist()
+        lr_comb_embed_store[backbone]  = (X_all, y_all_lbl)
         lr_comb_report_store[backbone] = metrics["per_class_report_dict"]
 
     # Phase 2d: FC combined  (only with --all_experiments)
