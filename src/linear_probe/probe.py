@@ -28,6 +28,7 @@ from typing import Any, Dict, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import yaml
 from PIL import Image as PILImage
 from sklearn.linear_model import LogisticRegression
 from sklearn.manifold import TSNE
@@ -44,6 +45,16 @@ from transformers import AutoImageProcessor, AutoModel, AutoModelForImageTextToT
 
 from src.common.dataset_config import active_datasets, DatasetConfig
 from src.common.io import save_json, update_pipeline_results
+
+# Path to the layer selections config written by app/layer_explorer.py
+_LAYER_SELECTIONS_PATH = Path(__file__).parent.parent / "config" / "layer_selections.yaml"
+
+
+def _load_layer_selections() -> dict:
+    """Load saved pre/post-projector layer paths per model ID, or return empty dict."""
+    if _LAYER_SELECTIONS_PATH.exists():
+        return yaml.safe_load(_LAYER_SELECTIONS_PATH.read_text()) or {}
+    return {}
 
 
 # ── Dataset loading ────────────────────────────────────────────────────────────
@@ -120,13 +131,14 @@ def resolve_mm_root(model):
     raise AttributeError(f"Could not locate vision encoder. Top-level: {available}")
 
 
-def extract_vlm_embeddings(samples, processor, model, mm_root, desc: str = "VLM embeddings") -> tuple[np.ndarray, list[str]]:
+def extract_vlm_embeddings(
+    samples, processor, model, hook_module: torch.nn.Module, desc: str = "VLM embeddings"
+) -> tuple[np.ndarray, list[str]]:
     """
-    Architecture-agnostic vision embedding extraction via forward hook.
+    Hook hook_module, run a forward pass per image, mean-pool the captured feature map.
 
-    Registers a hook on mm_root.vision_tower, runs a full forward pass for each
-    image, and mean-pools the captured feature map. Works for Gemma4, Qwen VL,
-    and any model whose vision encoder is reachable via mm_root.vision_tower.
+    hook_module is resolved by the caller — either from layer_selections.yaml via
+    model.get_submodule(path), or from the heuristic resolve_mm_root fallback.
     """
     from tqdm import tqdm
 
@@ -136,8 +148,6 @@ def extract_vlm_embeddings(samples, processor, model, mm_root, desc: str = "VLM 
     for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
         image = PILImage.open(sample["path"]).convert("RGB")
 
-        # Build a minimal chat-formatted input so the processor handles
-        # image preprocessing correctly for each architecture
         messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
         try:
             text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
@@ -156,7 +166,7 @@ def extract_vlm_embeddings(samples, processor, model, mm_root, desc: str = "VLM 
             if isinstance(t, torch.Tensor):
                 captured.append(t.detach().float().cpu())
 
-        handle = mm_root.vision_tower.register_forward_hook(_hook)
+        handle = hook_module.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 model(**inputs)
@@ -198,18 +208,14 @@ def resolve_projector(mm_root):
 
 
 def extract_vlm_embeddings_postproj(
-    samples, processor, model, mm_root, desc: str = "post-proj embeddings"
+    samples, processor, model, hook_module: torch.nn.Module, desc: str = "post-proj embeddings"
 ) -> tuple[np.ndarray, list[str]]:
-    """Hook the projector output (post-projector, pre-LM) and mean-pool to get one vector per image."""
-    from tqdm import tqdm
+    """Hook hook_module (projector output), run a forward pass, mean-pool to one vector per image.
 
-    proj, proj_name = resolve_projector(mm_root)
-    if proj is None:
-        avail = [n for n, _ in mm_root.named_children()]
-        raise AttributeError(
-            f"Could not find projector on mm_root. Tried: {_PROJECTOR_NAMES}. Available: {avail}"
-        )
-    print(f"  Hooking projector: {proj_name}")
+    hook_module is resolved by the caller — either from layer_selections.yaml via
+    model.get_submodule(path), or from the heuristic resolve_projector fallback.
+    """
+    from tqdm import tqdm
 
     model_device = next(model.parameters()).device
     embeddings, labels = [], []
@@ -232,7 +238,7 @@ def extract_vlm_embeddings_postproj(
             if isinstance(t, torch.Tensor):
                 captured.append(t.detach().float().cpu())
 
-        handle = proj.register_forward_hook(_hook)
+        handle = hook_module.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 model(**inputs)
@@ -568,12 +574,13 @@ def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: Path, 
     color_map = {lbl: cmap(i) for i, lbl in enumerate(unique_labels)}
 
     fig, ax = plt.subplots(figsize=(10, 8))
+    handles = []
     for lbl in unique_labels:
         mask = [i for i, y in enumerate(y_labels) if y == lbl]
-        ax.scatter(X_2d[mask, 0], X_2d[mask, 1], c=[color_map[lbl]], label=lbl, s=12, alpha=0.7)
+        sc = ax.scatter(X_2d[mask, 0], X_2d[mask, 1], c=[color_map[lbl]], label=lbl, s=12, alpha=0.7)
+        handles.append(sc)
 
-    ncol = max(1, len(unique_labels) // 20)
-    ax.legend(loc="best", fontsize=6, ncol=ncol, markerscale=1.5)
+    # No legend on the scatter plot — saved separately to avoid overlap
     ax.set_title(f"t-SNE Embedding Space — {label}", fontsize=11)
     ax.set_xlabel("dim 1")
     ax.set_ylabel("dim 2")
@@ -583,6 +590,20 @@ def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: Path, 
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+    # Legend saved as a separate image
+    legends_dir = output_dir.parent / "tsne_legends"
+    legends_dir.mkdir(exist_ok=True)
+    ncol = max(1, len(unique_labels) // 20)
+    rows = (len(unique_labels) + ncol - 1) // ncol
+    fig_leg, ax_leg = plt.subplots(figsize=(max(3, ncol * 3.5), max(1.5, rows * 0.35)))
+    ax_leg.set_axis_off()
+    ax_leg.legend(handles=handles, labels=unique_labels, loc="center",
+                  fontsize=7, ncol=ncol, markerscale=1.5)
+    legend_path = legends_dir / f"legend_{_safe_name(label)}.png"
+    fig_leg.savefig(legend_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_leg)
+    print(f"  Saved: {legend_path}")
 
 
 def plot_per_class_f1(backbone_reports: dict[str, dict], dataset_name: str, output_dir: Path):
@@ -748,34 +769,79 @@ def plot_class_accuracy_vs_frequency(
     post_reports: dict,   # {backbone_postproj: per_class_report_dict}
     output_dir: Path,
 ):
-    """Line chart: per-class F1 vs. class rank by sample count (LR combined, pre vs post projector)."""
+    """Bar chart per backbone (pre vs post), plus summary averaging all backbones."""
     classes = sorted(class_counts, key=lambda c: -class_counts[c])
     n = len(classes)
-    x = list(range(n))
+    x = np.arange(n)
+    fontsize = max(4, 8 - n // 20)
+
+    cacc_dir = output_dir / "class_accuracy_vs_frequency"
+    cacc_dir.mkdir(exist_ok=True)
+
+    # --- Per-backbone figures ---
+    for backbone, pre_report in pre_reports.items():
+        post_key = f"{backbone}_postproj"
+        post_report = post_reports.get(post_key)
+        has_post = post_report is not None
+        n_series = 2 if has_post else 1
+        width = 0.8 / n_series
+        offsets = [-(n_series - 1) * width / 2 + i * width for i in range(n_series)]
+
+        pre_f1s = [pre_report.get(c, {}).get("f1-score", 0.0) for c in classes]
+
+        fig, ax = plt.subplots(figsize=(max(14, n * 0.4), 6))
+        ax.bar(x + offsets[0], pre_f1s, width, label="pre-proj", color="#4C72B0")
+        if has_post:
+            post_f1s = [post_report.get(c, {}).get("f1-score", 0.0) for c in classes]
+            ax.bar(x + offsets[1], post_f1s, width, label="post-proj", color="#DD8452")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(classes, rotation=90, ha="right", fontsize=fontsize)
+        ax.set_ylim(0, 1.1)
+        ax.set_ylabel("F1 Score (per class)")
+        ax.set_xlabel("Class (ordered by sample count, high → low)")
+        short_name = backbone.split("/")[-1]
+        ax.set_title(f"Per-class F1 vs. frequency — {short_name} (LR combined)")
+        ax.legend(fontsize=8)
+        plt.tight_layout()
+        path = cacc_dir / f"class_acc_vs_freq_{_safe_name(short_name)}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
+
+    # --- Summary: average F1 per class across all backbones ---
+    pre_avg = {
+        cls: float(np.mean([pre_reports[b].get(cls, {}).get("f1-score", 0.0) for b in pre_reports]))
+        for cls in classes
+    }
+    post_avg: dict[str, float] = {}
+    if post_reports:
+        post_avg = {
+            cls: float(np.mean([post_reports[b].get(cls, {}).get("f1-score", 0.0) for b in post_reports]))
+            for cls in classes
+        }
+
+    has_post_summary = bool(post_avg)
+    n_series = 2 if has_post_summary else 1
+    width = 0.8 / n_series
+    offsets = [-(n_series - 1) * width / 2 + i * width for i in range(n_series)]
 
     fig, ax = plt.subplots(figsize=(max(14, n * 0.4), 6))
+    ax.bar(x + offsets[0], [pre_avg[c] for c in classes], width,
+           label="pre-proj (avg)", color="#4C72B0")
+    if has_post_summary:
+        ax.bar(x + offsets[1], [post_avg[c] for c in classes], width,
+               label="post-proj (avg)", color="#DD8452")
 
-    for backbone, report in pre_reports.items():
-        f1s = [report.get(c, {}).get("f1-score", 0.0) for c in classes]
-        ax.plot(x, f1s, marker="o", markersize=3, linewidth=1,
-                label=f"{backbone.split('/')[-1]} (pre-proj)")
-
-    for backbone, report in post_reports.items():
-        f1s = [report.get(c, {}).get("f1-score", 0.0) for c in classes]
-        short = backbone.replace("_postproj", "").split("/")[-1]
-        ax.plot(x, f1s, marker="s", markersize=3, linewidth=1, linestyle="--",
-                label=f"{short} (post-proj)")
-
-    fontsize = max(4, 8 - n // 20)
     ax.set_xticks(x)
     ax.set_xticklabels(classes, rotation=90, ha="right", fontsize=fontsize)
-    ax.set_ylim(0, 1.05)
-    ax.set_ylabel("F1 Score (per class)")
+    ax.set_ylim(0, 1.1)
+    ax.set_ylabel("F1 Score (avg over backbones)")
     ax.set_xlabel("Class (ordered by sample count, high → low)")
-    ax.set_title("Per-class F1 vs. class frequency — LR combined")
+    ax.set_title("Per-class F1 vs. frequency — summary (avg all backbones, LR combined)")
     ax.legend(fontsize=8)
     plt.tight_layout()
-    path = output_dir / "class_accuracy_vs_frequency.png"
+    path = cacc_dir / "class_acc_vs_freq_summary.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -973,6 +1039,7 @@ def main(args):
         unload(bioclip_model)
 
     # VLM passes (one per --models entry, loaded and unloaded sequentially)
+    layer_selections = _load_layer_selections()
     postproj_embeddings: dict[str, dict] = {}   # {backbone_postproj: {agml_name: (X, labels, ...)}}
     feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
     for model_id in (args.models or []):
@@ -986,23 +1053,47 @@ def main(args):
         postproj_embeddings[postproj_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
 
-        # Check projector availability once before the dataset loop
-        proj, proj_name = resolve_projector(mm_root)
-        has_postproj = proj is not None
-        if not has_postproj:
-            avail = [n for n, _ in mm_root.named_children()]
-            print(f"  [warn] No projector found for {backbone_key} — skipping post-proj. Available: {avail}")
+        # Resolve pre-projector hook module
+        model_sels = layer_selections.get(model_id, {})
+        if "pre" in model_sels:
+            pre_module = vlm.get_submodule(model_sels["pre"])
+            print(f"  Pre-projector (from layer_selections.yaml): {model_sels['pre']}")
+        else:
+            pre_module = mm_root.vision_tower
+            print(f"  Pre-projector (heuristic fallback): vision_tower")
+            if not layer_selections:
+                print(f"  Tip: run 'streamlit run app/layer_explorer.py' to pick exact layers.")
+
+        # Resolve post-projector hook module
+        has_postproj = False
+        post_module: torch.nn.Module | None = None
+        if "post" in model_sels:
+            try:
+                post_module = vlm.get_submodule(model_sels["post"])
+                has_postproj = True
+                print(f"  Post-projector (from layer_selections.yaml): {model_sels['post']}")
+            except Exception as exc:
+                print(f"  [warn] Could not resolve post-projector path '{model_sels['post']}': {exc}")
+        else:
+            proj, proj_name = resolve_projector(mm_root)
+            if proj is not None:
+                post_module = proj
+                has_postproj = True
+                print(f"  Post-projector (heuristic fallback): {proj_name}")
+            else:
+                avail = [n for n, _ in mm_root.named_children()]
+                print(f"  [warn] No post-projector found for {backbone_key}. Available: {avail}")
 
         postproj_only = getattr(args, "postproj_only", False)
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
             if not postproj_only:
-                X, _ = extract_vlm_embeddings(samples, processor, vlm, mm_root, desc=backbone_key)
+                X, _ = extract_vlm_embeddings(samples, processor, vlm, pre_module, desc=backbone_key)
                 all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
                 if backbone_key not in feature_dims:
                     feature_dims[backbone_key] = {"pre": int(X.shape[1])}
 
-            if has_postproj:
-                X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, mm_root, desc=postproj_key)
+            if has_postproj and post_module is not None:
+                X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, post_module, desc=postproj_key)
                 postproj_embeddings[postproj_key][agml_name] = (X_post, labels_all, y_enc, train_idx, test_idx, le)
                 if "post" not in feature_dims.get(backbone_key, {}):
                     feature_dims[backbone_key]["post"] = int(X_post.shape[1])
@@ -1027,31 +1118,31 @@ def main(args):
 
     all_experiments = getattr(args, "all_experiments", False)
 
-    # Phase 2a: LR per-dataset  (only with --all_experiments)
+    # Phase 2a: LR per-dataset (always runs — cheap after embeddings extracted)
+    # Per-dataset plots (confusion matrix, t-SNE, per-class F1) gated behind --all_experiments
     results_per_dataset: dict[str, dict] = {}
     embeddings_store: dict[str, dict[str, tuple]] = defaultdict(dict)
     report_store: dict[str, dict[str, dict]] = defaultdict(dict)
     pred_store: dict[str, dict[str, tuple]] = defaultdict(dict)
 
-    if all_experiments:
-        for agml_name in all_embeddings["_samples"]:
-            _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
-            results_per_dataset[agml_name] = {"backbones": {}}
+    for agml_name in all_embeddings["_samples"]:
+        _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
+        results_per_dataset[agml_name] = {"backbones": {}}
 
-            for backbone in available_backbones:
-                if agml_name not in all_embeddings.get(backbone, {}):
-                    continue
-                X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
-                y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+        for backbone in available_backbones:
+            if agml_name not in all_embeddings.get(backbone, {}):
+                continue
+            X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
+            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-                print(f"\n=== LR probe (per-dataset): {agml_name} / {backbone} ===")
-                metrics, y_test_lbl, y_pred_lbl = run_probe(
-                    X[train_idx], X[test_idx], y_train, y_test, le, backbone
-                )
-                results_per_dataset[agml_name]["backbones"][backbone] = metrics
-                embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
-                report_store[agml_name][backbone] = metrics["per_class_report_dict"]
-                pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
+            print(f"\n=== LR probe (per-dataset): {agml_name} / {backbone} ===")
+            metrics, y_test_lbl, y_pred_lbl = run_probe(
+                X[train_idx], X[test_idx], y_train, y_test, le, backbone
+            )
+            results_per_dataset[agml_name]["backbones"][backbone] = metrics
+            embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
+            report_store[agml_name][backbone] = metrics["per_class_report_dict"]
+            pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
 
     # Phase 2b: FC per-dataset  (only with --all_experiments)
     fc_per_dataset: dict[str, dict] = {}
@@ -1102,6 +1193,12 @@ def main(args):
         ).tolist()
         lr_comb_embed_store[backbone]  = (X_all, y_all_lbl)
         lr_comb_report_store[backbone] = metrics["per_class_report_dict"]
+
+        # Save intermediate metrics after each backbone so partial results survive crashes
+        save_json(output_dir / "linear_probe_results_intermediate.json", {
+            "lr_combined": lr_combined,
+            "lr_combined_reports": lr_comb_report_store,
+        })
 
     # Phase 2d: FC combined  (only with --all_experiments)
     fc_combined: dict[str, dict] = {}
@@ -1156,7 +1253,7 @@ def main(args):
                 by_task_by_backbone[tt][backbone].append(f1)
 
     results = {
-        # LR per-dataset  (populated only with --all_experiments)
+        # LR per-dataset (always populated)
         "per_dataset": {
             agml_name: {
                 backbone: {k: v for k, v in m.items() if k != "per_class_report_dict"}
@@ -1241,10 +1338,13 @@ def main(args):
 
     # Plots
     print("\n=== Generating plots ===")
+
+    # Overall backbone comparison + task-type summary (always — Phase 2a always runs now)
     if results["overall"]:
-        plot_master_comparison(results, output_dir)
         plot_overall_summary(results, output_dir)
         plot_task_summary(results, output_dir)
+    if all_experiments and results["overall"]:
+        plot_master_comparison(results, output_dir)
 
     if postproj_lr_combined:
         plot_projector_before_after(results["lr_combined"], postproj_lr_combined, output_dir)
@@ -1405,11 +1505,15 @@ if __name__ == "__main__":
         args.bioclip_model = None
 
     if args.replot:
+        import json as _json
         output_dir = Path(args.output_dir)
         results_path = output_dir / "linear_probe_results.json"
         if not results_path.exists():
-            raise FileNotFoundError(f"No results file found at {results_path}")
-        results = json.loads(results_path.read_text())
+            # Fall back to intermediate file if full results not yet saved
+            results_path = output_dir / "linear_probe_results_intermediate.json"
+        if not results_path.exists():
+            raise FileNotFoundError(f"No results file found in {output_dir}")
+        results = _json.loads(results_path.read_text())
         output_dir.mkdir(parents=True, exist_ok=True)
 
         pre  = results.get("lr_combined", {})
@@ -1417,20 +1521,28 @@ if __name__ == "__main__":
         pre_reports  = results.get("lr_combined_reports", {})
         post_reports = results.get("postproj_lr_combined_reports", {})
 
+        # Pre/post projector comparison
         if post:
             plot_projector_before_after(pre, post, output_dir)
 
-        # Rebuild class counts from lr_combined_reports (union of all class keys)
-        skip = {"accuracy", "macro avg", "weighted avg"}
+        # Rebuild class counts from lr_combined_reports support field
+        skip_keys = {"accuracy", "macro avg", "weighted avg"}
         counts: Counter = Counter()
         for report in pre_reports.values():
             for cls, m in report.items():
-                if cls not in skip:
+                if cls not in skip_keys:
                     counts[cls] += round(m.get("support", 0))
+
         if counts:
             plot_long_tail(counts, output_dir)
             if pre_reports:
                 plot_class_accuracy_vs_frequency(counts, pre_reports, post_reports, output_dir)
+
+        # Overall backbone comparison (from per-dataset aggregation if present)
+        if results.get("overall"):
+            plot_overall_summary(results, output_dir)
+        if results.get("by_task"):
+            plot_task_summary(results, output_dir)
 
         print(f"Plots saved to {output_dir}/")
     else:

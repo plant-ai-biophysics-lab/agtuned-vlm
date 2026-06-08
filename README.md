@@ -10,7 +10,8 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | 1b — Reference DB | `src/data_generation/build_reference_db.py` | Export CSV + fetch reference excerpts from Wikipedia / USDA APHIS / CGIAR |
 | 1c — Verify | `src/data_generation/verify.py` | Rewrite descriptions grounded in reference sources; healthy classes are overridden automatically |
 | patch-healthy | `src/data_generation/patch_healthy.py` | Patch healthy-class descriptions in an already-generated CSV without re-running verify |
-| 2 — Linear Probe | `src/linear_probe/probe.py` | Logistic regression on frozen embeddings across all datasets and backbones |
+| Layer Explorer | `app/layer_explorer.py` | Streamlit GUI: browse any HF model's module tree, select pre/post-projector layers, save to `src/config/layer_selections.yaml` |
+| 2 — Linear Probe | `src/linear_probe/probe.py` | Frozen-embedding separability across backbones (LR + optional FC, per-dataset + combined) |
 | 3 — Language Assessment | `src/language_assessment/assess.py` | Text-only agricultural VQA (ROUGE-SS + F1) — also supports VLMs |
 | language-plot | `src/language_assessment/plot.py` | Regenerate language assessment charts from saved metrics JSON (no inference) |
 | 4 — Vision Assessment | `src/vision_assessment/assess.py` | Multimodal VQA with image input (ROUGE-SS + F1) |
@@ -130,60 +131,126 @@ Click any row in the **Reference Database** or **Corrected Descriptions** tab to
 
 ---
 
+### Layer Explorer (VLM module browser)
+
+A Streamlit app for inspecting any HuggingFace model's layer tree and saving pre/post-projector
+layer paths for use by the linear probe. Loads the model on the `"meta"` device — weights are
+shape-only tensors, so only ~200 MB RAM is needed and no GPU is required.
+
+```bash
+streamlit run app/layer_explorer.py
+```
+
+**Workflow:**
+1. Enter a HF model ID (e.g. `google/gemma-4-26B-A4B-it`) and click **Load**.
+2. Filter the module table by name or type; toggle between leaf-only and full tree view.
+3. Select a **Pre-projector** layer (vision encoder output) and **Post-projector** layer
+   (after the vision→LM projection) from the dropdowns. Each selection shows module type,
+   input shape, output shape, and parameter count derived from static weight attributes.
+4. Click **Save** — selections are written to `src/config/layer_selections.yaml` and
+   automatically used the next time `probe.py` runs for that model ID.
+
+**Shape info** is read from static weight attributes (`nn.Linear` → `in_features/out_features`,
+`nn.Conv2d` → `in/out channels`, `nn.Embedding` → vocab/dim, etc.) without any forward pass.
+For composite blocks (transformer layers, attention) that have no weights of their own, only
+parameter counts are shown.
+
+**Config format** (`src/config/layer_selections.yaml`):
+
+```yaml
+google/gemma-4-26B-A4B-it:
+  pre: model.model.vision_tower
+  post: model.model.embed_vision
+Qwen/Qwen3.6-27B:
+  pre: model.model.visual.patch_embed
+  post: model.model.visual.merger
+```
+
+If no entry exists for a given model, `probe.py` falls back to its built-in heuristics
+(`vision_tower` attribute for pre, and a list of known projector module names for post)
+and prints a tip to run the layer explorer.
+
+---
+
 ### Stage 2 — Linear probe
 
-Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially to stay within GPU memory.
+Evaluates frozen-embedding separability across one or more backbones. Models are loaded
+and unloaded sequentially to stay within GPU memory.
 
-Always runs all four probe experiments in a single call:
+**Default mode** runs LR per-dataset + LR combined for every backbone. Add `--all_experiments`
+to also run FC probes.
 
-| Experiment | Probe | Scope |
-|------------|-------|-------|
-| LR per-dataset | Logistic regression | One probe per dataset |
-| LR combined | Logistic regression | All datasets merged into one label space |
-| FC per-dataset | Single `nn.Linear` + Adam | One probe per dataset |
-| FC combined | Single `nn.Linear` + Adam | All datasets merged into one label space |
+| Experiment | Probe | Scope | When |
+|------------|-------|-------|------|
+| LR per-dataset | Logistic regression | One probe per dataset | Always |
+| LR combined | Logistic regression | All datasets merged into one label space | Always |
+| FC per-dataset | Single `nn.Linear` + Adam | One probe per dataset | `--all_experiments` |
+| FC combined | Single `nn.Linear` + Adam | All datasets merged into one label space | `--all_experiments` |
+| Post-proj LR combined | LR on post-projector embeddings | All datasets merged | VLMs only, always |
 
 ```bash
 python main.py probe \
   --config     src/config/datasets.yaml \
   --output_dir outputs/linear_probe/ \
-  --models     google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --models     google/gemma-4-26B-A4B-it \
   --n_samples  300
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--models` | none | One or more HuggingFace model IDs (VLMs) |
+| `--models` | none | One or more HuggingFace VLM model IDs |
 | `--dino_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 backbone. Pass `none` to skip |
 | `--yolo_model` | `yolo11x-cls.pt` | YOLO classification backbone. Pass `none` to skip |
-| `--n_samples` | all | Images per class to embed (stratified) |
+| `--bioclip_model` | `imageomics/bioclip` | BioCLIP backbone (ViT-B/16 trained on biological images). Pass `none` to skip |
+| `--n_samples` | all | Max images per dataset (stratified subsample) |
 | `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large VLMs |
+| `--all_experiments` | off | Also run FC per-dataset and FC combined probes |
+| `--postproj_only` | off | For VLMs: extract only post-projector embeddings, skip pre-projector pass |
+| `--replot` | off | Reload `linear_probe_results.json` and regenerate all plots without re-running inference |
 | `--fc_epochs` | `100` | Training epochs for FC probe |
 | `--fc_lr` | `1e-3` | Adam learning rate for FC probe |
 | `--fc_batch_size` | `256` | Batch size for FC probe training |
 | `--dataset_source` | `agml` | `agml` or `digital_green` |
 | `--images_dir` | none | Local image directory (required for `digital_green`) |
 
+**Layer selection for VLMs** — if `src/config/layer_selections.yaml` has an entry for the model
+ID (written by the Layer Explorer), the probe hooks exactly those modules. Otherwise it falls
+back to built-in heuristics (`vision_tower` for pre, known projector names for post).
+
+**Intermediate saves** — after each backbone completes the LR combined phase, partial metrics are
+written to `linear_probe_results_intermediate.json`. This allows `--replot` to work even if the
+full run is interrupted later.
+
 **Output structure:**
 
 ```
 outputs/linear_probe/
-├── linear_probe_results.json       all four probe results (collate reads from "overall")
-├── probe_comparison_all.png        master chart — all 4 experiments × all backbones
-├── summary_overall.png             LR per-dataset F1 + accuracy across backbones
-├── summary_by_task.png             LR per-dataset F1 by task type
+├── linear_probe_results.json             all probe results (full run)
+├── linear_probe_results_intermediate.json  partial results saved after each backbone
+├── feature_dimensions.txt               pre/post-projector dim per VLM backbone
+├── summary_overall.png                  LR per-dataset F1 + accuracy across backbones
+├── summary_by_task.png                  LR per-dataset F1 by task type across backbones
+├── projector_before_after.png           pre vs post-projector LR F1 per VLM (with ratio)
+├── class_distribution_long_tail.png     sample counts per class across all datasets
+├── class_accuracy_vs_frequency/
+│   ├── class_acc_vs_freq_{backbone}.png   per-backbone bar chart: per-class F1 vs count rank
+│   └── class_acc_vs_freq_summary.png      averaged over all backbones
 ├── tsne/
-│   └── tsne_{dataset}_{backbone}.png
+│   └── tsne_combined_{backbone}_lr.png   t-SNE of combined LR embeddings (no legend — see below)
+├── tsne_legends/
+│   └── legend_combined_{backbone}_lr.png  colour-class legend for the corresponding t-SNE
 ├── confusion_matrices/
-│   └── confusion_matrix_{dataset}_{backbone}.png
+│   └── confusion_matrix_combined_{backbone}_lr.png
 ├── per_class_f1/
-│   └── per_class_f1_{dataset}.png
-└── loss_curves/
-    ├── fc_loss_{dataset}_{backbone}_fc.png   FC per-dataset loss curves
-    └── fc_loss_combined_{backbone}_fc.png    FC combined loss curves
+│   └── per_class_f1_combined_lr.png
+└── loss_curves/                           FC probe loss curves (only with --all_experiments)
 ```
 
-Loss curves show **train loss** (solid) and **val loss** (dashed) vs. epoch. If val loss diverges early, lower `--fc_lr`. If both are still dropping at the last epoch, increase `--fc_epochs`.
+`--all_experiments` additionally produces per-dataset confusion matrices, t-SNE plots,
+per-class F1 charts, FC loss curves, and a `probe_comparison_all.png` master chart.
+
+Loss curves: **train loss** solid, **val loss** dashed vs. epoch. Val loss diverging early → lower
+`--fc_lr`. Both still dropping at the last epoch → increase `--fc_epochs`.
 
 ---
 
@@ -462,8 +529,13 @@ outputs/
 │   └── sample_images/                one image per class per dataset (for UI)
 ├── linear_probe/
 │   ├── linear_probe_results.json
-│   ├── t-SNE plots
-│   └── confusion matrices
+│   ├── linear_probe_results_intermediate.json
+│   ├── feature_dimensions.txt
+│   ├── summary_overall.png / summary_by_task.png / projector_before_after.png
+│   ├── class_distribution_long_tail.png
+│   ├── class_accuracy_vs_frequency/
+│   ├── tsne/ + tsne_legends/
+│   └── confusion_matrices/ + per_class_f1/ + loss_curves/
 ├── language_assessment/
 │   ├── desc_<model>.csv / cls_<model>.csv   per-model prediction rows
 │   ├── language_assessment_metrics.json     all metrics (input to language-plot)

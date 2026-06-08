@@ -1,0 +1,6 @@
+Qwen/Qwen3.6-27B:
+  post: model.visual.merger
+  pre: model.visual.blocks.26
+google/gemma-4-26B-A4B-it:
+  post: model.embed_vision
+  pre: model.vision_tower
