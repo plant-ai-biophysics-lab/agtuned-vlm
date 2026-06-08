@@ -1070,38 +1070,89 @@ def main(args):
     if args.dino_model:
         from tqdm import tqdm
         print(f"\n{'='*60}\nDINOv3: {args.dino_model}\n{'='*60}")
-        dino_processor, dino_model = load_dino(args.dino_model, device)
         dino_key = args.dino_model.split("/")[-1].replace(".pt", "")
-        all_embeddings[dino_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
-            X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
-            all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
-        unload(dino_model)
+        ds_names = [dsn for dsn, _ in ds_items]
+        all_embeddings[dino_key] = {}
+        all_dino_cached = use_embedding_cache and all(
+            load_cached_embeddings(cache_dir, dino_key, dsn, "emb") is not None for dsn in ds_names
+        )
+        if all_dino_cached:
+            print(f"  [cache] All DINOv3 embeddings cached — skipping model load")
+            for agml_name, (_, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
+                X, _ = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb")
+                all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+        else:
+            dino_processor, dino_model = load_dino(args.dino_model, device)
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
+                cached = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb") if use_embedding_cache else None
+                if cached is not None:
+                    X, _ = cached
+                    print(f"  [cache hit] {dino_key} / {agml_name}")
+                else:
+                    X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
+                    if use_embedding_cache:
+                        save_cached_embeddings(cache_dir, dino_key, agml_name, "emb", X, labels_all)
+                all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            unload(dino_model)
 
     # YOLO pass
     if args.yolo_model:
         from tqdm import tqdm
         print(f"\n{'='*60}\nYOLO: {args.yolo_model}\n{'='*60}")
         yolo_key = args.yolo_model.replace(".pt", "")
-        all_embeddings[yolo_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
-            X = extract_yolo_embeddings(samples, args.yolo_model, device)
-            all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+        ds_names = [dsn for dsn, _ in ds_items]
+        all_embeddings[yolo_key] = {}
+        all_yolo_cached = use_embedding_cache and all(
+            load_cached_embeddings(cache_dir, yolo_key, dsn, "emb") is not None for dsn in ds_names
+        )
+        if all_yolo_cached:
+            print(f"  [cache] All YOLO embeddings cached — skipping model load")
+            for agml_name, (_, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
+                X, _ = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb")
+                all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+        else:
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
+                cached = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb") if use_embedding_cache else None
+                if cached is not None:
+                    X, _ = cached
+                    print(f"  [cache hit] {yolo_key} / {agml_name}")
+                else:
+                    X = extract_yolo_embeddings(samples, args.yolo_model, device)
+                    if use_embedding_cache:
+                        save_cached_embeddings(cache_dir, yolo_key, agml_name, "emb", X, labels_all)
+                all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
     # BioCLIP pass
     if args.bioclip_model:
         from tqdm import tqdm
         print(f"\n{'='*60}\nBioCLIP: {args.bioclip_model}\n{'='*60}")
-        bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
         bioclip_key = args.bioclip_model.split("/")[-1]
-        all_embeddings[bioclip_key] = {}
         ds_items = list(all_embeddings["_samples"].items())
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="BioCLIP datasets", unit="ds"):
-            X, _ = extract_bioclip_embeddings(samples, bioclip_model, bioclip_preprocess, device)
-            all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
-        unload(bioclip_model)
+        ds_names = [dsn for dsn, _ in ds_items]
+        all_embeddings[bioclip_key] = {}
+        all_bioclip_cached = use_embedding_cache and all(
+            load_cached_embeddings(cache_dir, bioclip_key, dsn, "emb") is not None for dsn in ds_names
+        )
+        if all_bioclip_cached:
+            print(f"  [cache] All BioCLIP embeddings cached — skipping model load")
+            for agml_name, (_, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
+                X, _ = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb")
+                all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+        else:
+            bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="BioCLIP datasets", unit="ds"):
+                cached = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb") if use_embedding_cache else None
+                if cached is not None:
+                    X, _ = cached
+                    print(f"  [cache hit] {bioclip_key} / {agml_name}")
+                else:
+                    X, _ = extract_bioclip_embeddings(samples, bioclip_model, bioclip_preprocess, device)
+                    if use_embedding_cache:
+                        save_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb", X, labels_all)
+                all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            unload(bioclip_model)
 
     # VLM passes (one per --models entry, loaded and unloaded sequentially)
     layer_selections = _load_layer_selections()
