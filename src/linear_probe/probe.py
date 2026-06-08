@@ -50,6 +50,59 @@ from src.common.io import save_json, update_pipeline_results
 _LAYER_SELECTIONS_PATH = Path(__file__).parent.parent / "config" / "layer_selections.yaml"
 
 
+# ── Early-exit sentinel ────────────────────────────────────────────────────────
+
+class _EarlyExit(Exception):
+    """Raised by forward hooks to abort the forward pass once features are captured.
+
+    This short-circuits the LLM layers of a VLM so extraction cost scales with
+    the vision encoder (~460M params) rather than the full model (~26B params).
+    """
+
+
+# ── Embedding cache ────────────────────────────────────────────────────────────
+
+def _layer_tag(layer_path: str | None) -> str:
+    """Short stable tag derived from the layer module path, included in cache filenames.
+
+    Changing the selected layer in layer_explorer.py changes this tag, so stale
+    embeddings are never silently reused after a layer selection change.
+    """
+    if not layer_path:
+        return "default"
+    import hashlib
+    return hashlib.sha1(layer_path.encode()).hexdigest()[:8]
+
+
+def _cache_path(cache_dir: Path, backbone_key: str, dataset_name: str, split: str, layer_path: str | None = None) -> Path:
+    slug = backbone_key.replace("/", "--").replace(":", "-")
+    tag  = _layer_tag(layer_path)
+    return cache_dir / f"{slug}__{dataset_name}__{split}__{tag}.npz"
+
+
+def load_cached_embeddings(cache_dir: Path, backbone_key: str, dataset_name: str, split: str, layer_path: str | None = None):
+    """Return (embeddings, labels) from cache, or None if not cached.
+
+    layer_path is the module path used to extract embeddings (e.g. 'model.visual.blocks.26').
+    It is hashed into the filename so that changing the layer selection auto-invalidates the cache.
+    """
+    p = _cache_path(cache_dir, backbone_key, dataset_name, split, layer_path)
+    if p.exists():
+        d = np.load(p, allow_pickle=True)
+        return d["embeddings"], list(d["labels"])
+    return None
+
+
+def save_cached_embeddings(
+    cache_dir: Path, backbone_key: str, dataset_name: str, split: str,
+    embeddings: np.ndarray, labels: list[str], layer_path: str | None = None,
+):
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    p = _cache_path(cache_dir, backbone_key, dataset_name, split, layer_path)
+    np.savez(p, embeddings=embeddings, labels=np.array(labels))
+    print(f"  Cached: {p.name}")
+
+
 def _load_layer_selections() -> dict:
     """Load saved pre/post-projector layer paths per model ID, or return empty dict."""
     if _LAYER_SELECTIONS_PATH.exists():
@@ -165,11 +218,14 @@ def extract_vlm_embeddings(
                 t = t[0]
             if isinstance(t, torch.Tensor):
                 captured.append(t.detach().float().cpu())
+            raise _EarlyExit
 
         handle = hook_module.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 model(**inputs)
+        except _EarlyExit:
+            pass
         finally:
             handle.remove()
 
@@ -237,11 +293,14 @@ def extract_vlm_embeddings_postproj(
             t = output if isinstance(output, torch.Tensor) else output[0]
             if isinstance(t, torch.Tensor):
                 captured.append(t.detach().float().cpu())
+            raise _EarlyExit
 
         handle = hook_module.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 model(**inputs)
+        except _EarlyExit:
+            pass
         finally:
             handle.remove()
 
@@ -950,6 +1009,12 @@ def main(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    use_embedding_cache = getattr(args, "cache_embeddings", False)
+    cache_dir = Path(getattr(args, "cache_dir", None) or (output_dir / "embedding_cache"))
+    if use_embedding_cache:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Embedding cache: {cache_dir}")
+
     use_dg = getattr(args, "dataset_source", "agml") == "digital_green"
 
     if use_dg:
@@ -1042,11 +1107,52 @@ def main(args):
     layer_selections = _load_layer_selections()
     postproj_embeddings: dict[str, dict] = {}   # {backbone_postproj: {agml_name: (X, labels, ...)}}
     feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
+    postproj_only_outer = getattr(args, "postproj_only", False)
     for model_id in (args.models or []):
         from tqdm import tqdm
         backbone_key = model_id.split("/")[-1]
         postproj_key = f"{backbone_key}_postproj"
         print(f"\n{'='*60}\nVLM: {model_id}\n{'='*60}")
+
+        ds_items = list(all_embeddings["_samples"].items())
+        ds_names = [dsn for dsn, _ in ds_items]
+
+        # When caching is on, check if all datasets already have cached embeddings —
+        # if so, skip loading the model entirely (saves ~20 min of load + extraction time).
+        if use_embedding_cache:
+            model_sels_check   = layer_selections.get(model_id, {})
+            check_pre_path     = model_sels_check.get("pre")   # None → heuristic (can't verify w/o model)
+            check_post_path    = model_sels_check.get("post")  # None → heuristic
+            post_path_known    = check_post_path is not None
+
+            all_pre_cached = postproj_only_outer or all(
+                load_cached_embeddings(cache_dir, backbone_key, dsn, "pre", check_pre_path) is not None
+                for dsn in ds_names
+            )
+            # Only check post caches if post path is explicitly configured in layer_selections;
+            # otherwise we cannot know if post-projector exists without loading the model.
+            all_post_cached = post_path_known and all(
+                load_cached_embeddings(cache_dir, postproj_key, dsn, "post", check_post_path) is not None
+                for dsn in ds_names
+            )
+            fully_cached = all_pre_cached and (all_post_cached or not post_path_known)
+            if fully_cached:
+                print(f"  [cache] All embeddings cached — skipping model load for {backbone_key}")
+                all_embeddings[backbone_key] = {}
+                postproj_embeddings[postproj_key] = {}
+                for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
+                    if not postproj_only_outer:
+                        X, _ = load_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", check_pre_path)
+                        all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+                        if backbone_key not in feature_dims:
+                            feature_dims[backbone_key] = {"pre": int(X.shape[1])}
+                    if all_post_cached:
+                        X_post, _ = load_cached_embeddings(cache_dir, postproj_key, agml_name, "post", check_post_path)
+                        postproj_embeddings[postproj_key][agml_name] = (X_post, labels_all, y_enc, train_idx, test_idx, le)
+                        if "post" not in feature_dims.get(backbone_key, {}):
+                            feature_dims[backbone_key]["post"] = int(X_post.shape[1])
+                continue
+
         processor, vlm, mm_root = load_gemma4(model_id, device, quantize=args.quantize)
 
         all_embeddings[backbone_key] = {}
@@ -1056,9 +1162,11 @@ def main(args):
         # Resolve pre-projector hook module
         model_sels = layer_selections.get(model_id, {})
         if "pre" in model_sels:
-            pre_module = vlm.get_submodule(model_sels["pre"])
-            print(f"  Pre-projector (from layer_selections.yaml): {model_sels['pre']}")
+            pre_layer_path: str | None = model_sels["pre"]
+            pre_module = vlm.get_submodule(pre_layer_path)
+            print(f"  Pre-projector (from layer_selections.yaml): {pre_layer_path}")
         else:
+            pre_layer_path = None
             pre_module = mm_root.vision_tower
             print(f"  Pre-projector (heuristic fallback): vision_tower")
             if not layer_selections:
@@ -1067,17 +1175,20 @@ def main(args):
         # Resolve post-projector hook module
         has_postproj = False
         post_module: torch.nn.Module | None = None
+        post_layer_path: str | None = None
         if "post" in model_sels:
             try:
-                post_module = vlm.get_submodule(model_sels["post"])
+                post_layer_path = model_sels["post"]
+                post_module = vlm.get_submodule(post_layer_path)
                 has_postproj = True
-                print(f"  Post-projector (from layer_selections.yaml): {model_sels['post']}")
+                print(f"  Post-projector (from layer_selections.yaml): {post_layer_path}")
             except Exception as exc:
                 print(f"  [warn] Could not resolve post-projector path '{model_sels['post']}': {exc}")
         else:
             proj, proj_name = resolve_projector(mm_root)
             if proj is not None:
                 post_module = proj
+                post_layer_path = proj_name
                 has_postproj = True
                 print(f"  Post-projector (heuristic fallback): {proj_name}")
             else:
@@ -1087,17 +1198,32 @@ def main(args):
         postproj_only = getattr(args, "postproj_only", False)
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
             if not postproj_only:
-                X, _ = extract_vlm_embeddings(samples, processor, vlm, pre_module, desc=backbone_key)
+                cached = load_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", pre_layer_path) if use_embedding_cache else None
+                if cached is not None:
+                    X, _ = cached
+                    print(f"  [cache hit] {backbone_key} / {agml_name} pre")
+                else:
+                    X, _ = extract_vlm_embeddings(samples, processor, vlm, pre_module, desc=backbone_key)
+                    if use_embedding_cache:
+                        save_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", X, labels_all, pre_layer_path)
                 all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
                 if backbone_key not in feature_dims:
                     feature_dims[backbone_key] = {"pre": int(X.shape[1])}
 
             if has_postproj and post_module is not None:
-                X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, post_module, desc=postproj_key)
+                cached_post = load_cached_embeddings(cache_dir, postproj_key, agml_name, "post", post_layer_path) if use_embedding_cache else None
+                if cached_post is not None:
+                    X_post, _ = cached_post
+                    print(f"  [cache hit] {postproj_key} / {agml_name} post")
+                else:
+                    X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, post_module, desc=postproj_key)
+                    if use_embedding_cache:
+                        save_cached_embeddings(cache_dir, postproj_key, agml_name, "post", X_post, labels_all, post_layer_path)
                 postproj_embeddings[postproj_key][agml_name] = (X_post, labels_all, y_enc, train_idx, test_idx, le)
                 if "post" not in feature_dims.get(backbone_key, {}):
                     feature_dims[backbone_key]["post"] = int(X_post.shape[1])
 
+        # If all datasets were cache hits, skip VLM load on future runs
         unload(vlm)
 
     postproj_only = getattr(args, "postproj_only", False)
@@ -1496,6 +1622,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--replot", action="store_true",
         help="Skip inference — load linear_probe_results.json from --output_dir and regenerate plots.",
+    )
+    parser.add_argument(
+        "--cache_embeddings", action="store_true",
+        help="Cache extracted embeddings to disk (.npz). On re-runs, cached datasets are loaded "
+             "instantly and — when all datasets are cached — the VLM is not loaded at all.",
+    )
+    parser.add_argument(
+        "--cache_dir", type=str, default=None,
+        help="Directory to store embedding cache files. Defaults to <output_dir>/embedding_cache/.",
     )
     args = parser.parse_args()
 
