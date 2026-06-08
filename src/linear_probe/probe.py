@@ -1404,6 +1404,7 @@ def main(args):
     # Phase 2e: LR combined on post-projector embeddings (VLMs only — always runs)
     postproj_lr_combined: dict[str, dict] = {}          # {backbone_postproj: metrics}
     postproj_lr_comb_report_store: dict[str, dict] = {} # {backbone_postproj: per_class_report}
+    postproj_lr_comb_embed_store:  dict[str, tuple] = {} # {backbone_postproj: (X_all, y_all_labels)}
     for postproj_key in postproj_embeddings:
         split = build_combined_split(postproj_embeddings, postproj_key)
         if split is None:
@@ -1413,6 +1414,9 @@ def main(args):
         metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, postproj_key)
         postproj_lr_combined[postproj_key] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
         postproj_lr_comb_report_store[postproj_key] = metrics["per_class_report_dict"]
+        X_all = np.concatenate([X_tr, X_te], axis=0)
+        y_all_lbl = le_comb.inverse_transform(np.concatenate([y_tr, y_te], axis=0)).tolist()
+        postproj_lr_comb_embed_store[postproj_key] = (X_all, y_all_lbl)
 
     # Phase 3: aggregate by task type and overall
     ds_to_task = {ds.agml_name: ds.task_type for ds in datasets}
@@ -1529,6 +1533,8 @@ def main(args):
     # LR combined plots (always)
     for backbone, (X_te, y_te) in lr_comb_embed_store.items():
         plot_tsne(X_te, y_te, f"combined_{backbone}_lr", tsne_dir)
+    for postproj_key, (X_all, y_all) in postproj_lr_comb_embed_store.items():
+        plot_tsne(X_all, y_all, f"combined_{postproj_key}_lr", tsne_dir)
     if lr_comb_report_store:
         plot_per_class_f1(lr_comb_report_store, "combined_lr", f1_dir)
     for backbone, (y_true, y_pred) in lr_comb_pred_store.items():
