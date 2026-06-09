@@ -50,6 +50,15 @@ from src.common.metrics import resolve_class, compute_classification_metrics
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
+_PLACEHOLDER_RE = re.compile(r'\{([^{}]*)\}')
+_KNOWN_PLACEHOLDERS = {"crop", "class_list", "cls"}
+
+
+def _sanitize_template(template: str) -> str:
+    """Escape any {placeholder} that isn't one of our known variables."""
+    def _replace(m: re.Match) -> str:
+        return m.group(0) if m.group(1) in _KNOWN_PLACEHOLDERS else "{{" + m.group(1) + "}}"
+    return _PLACEHOLDER_RE.sub(_replace, template)
 
 # ── config loading ────────────────────────────────────────────────────────────
 
@@ -202,16 +211,7 @@ def evaluate_prompt(
     """
     paths = image_paths[:n_eval] if n_eval else image_paths
 
-    # Escape any stray braces that aren't our known placeholders so str.format
-    # doesn't crash on candidates like "inspect the {affected} area".
-    safe_template = (
-        prompt_template
-        .replace("{", "{{").replace("}", "}}")
-        .replace("{{crop}}", "{crop}")
-        .replace("{{class_list}}", "{class_list}")
-        .replace("{{cls}}", "{cls}")
-    )
-    question = safe_template.format(
+    question = _sanitize_template(prompt_template).format(
         crop=crop, class_list=class_list_str, cls=class_label
     )
 
@@ -288,10 +288,12 @@ def generate_candidates(
     if candidates:
         return candidates[:n_candidates], raw
 
-    # Fallback 2: numbered list  (1. text\n2. text\n...)
-    candidates = re.findall(r'^\s*\d+[\.\)]\s*(.{20,})', raw, re.MULTILINE)
+    # Fallback 2: numbered list — capture each item including continuation lines
+    # Split on "N." / "N)" markers, take everything until the next marker
+    items = re.split(r'\n\s*\d+[\.\)]\s+', "\n" + raw)
+    candidates = [c.strip() for c in items[1:] if len(c.strip()) >= 20]
     if candidates:
-        return [c.strip() for c in candidates[:n_candidates]], raw
+        return [c.replace("\n", " ") for c in candidates[:n_candidates]], raw
 
     print(f"  [warn] Could not parse candidates from optimizer output: {raw[:200]}")
     return [], raw
@@ -334,6 +336,9 @@ def generate_class_summary(
     return _clean_response(outputs[0].outputs[0].text)
 
 
+_MAX_CONSOLIDATION_CHARS = 2400  # leave room for system prompt + output within 4096 tokens
+
+
 def consolidate_summaries(
     opt_llm: LLM,
     opt_tokenizer,
@@ -343,9 +348,16 @@ def consolidate_summaries(
     previous_consolidated: str,
     summary_params: SamplingParams,
 ) -> str:
+    # Always include the most recent summaries; drop oldest if over budget
+    entries = list(per_class_summaries)
+    while len(entries) > 1:
+        text = "\n\n---\n\n".join(f"[{e['cls_key']}]\n{e['summary']}" for e in entries)
+        if len(text) <= _MAX_CONSOLIDATION_CHARS:
+            break
+        entries = entries[1:]  # drop oldest
     summaries_text = "\n\n---\n\n".join(
         f"[{e['cls_key']}]\n{e['summary']}"
-        for e in per_class_summaries
+        for e in entries
     )
     user_msg = consolidation_user_template.format(
         per_class_summaries=summaries_text or "(none yet)",
