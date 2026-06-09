@@ -653,6 +653,11 @@ def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: Path, 
     plt.close(fig)
     print(f"  Saved: {path}")
 
+    # Save 2D coordinates so other stages (e.g. prompt-optim) can overlay markers
+    # on the same layout without re-running t-SNE.
+    coords_path = output_dir / f"tsne_{_safe_name(label)}_coords.npz"
+    np.savez(coords_path, X_2d=X_2d, labels=np.array(y_labels))
+
     # Legend saved as a separate image
     legends_dir = output_dir.parent / "tsne_legends"
     legends_dir.mkdir(parents=True, exist_ok=True)

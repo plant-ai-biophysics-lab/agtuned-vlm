@@ -20,6 +20,7 @@ STAGES = {
     "vision-augmented-plot": "src.vision_assessment.plot_augmented",
     "build-dg-jsonl":        "src.data_generation.build_digital_green_jsonl",
     "finetune":           "src.finetune.train",
+    "prompt-optim":       "src.prompt_optim.optimise",
 }
 
 _HELP = """
@@ -44,6 +45,7 @@ Stages:
     vision-augmented        Stage 7  — augmented vision assessment (hint injection)
     vision-augmented-plot           — regenerate augmented vision assessment charts from saved metrics JSON
     build-dg-jsonl                  — build Digital Green JSONL files from annotations CSV
+    prompt-optim        — iteratively optimise per-class prompts via meta-prompting
 
 Examples:
     python main.py generate \\

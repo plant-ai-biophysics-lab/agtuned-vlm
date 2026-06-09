@@ -1,0 +1,50 @@
+# Dataset train / test split
+#
+# Stratified by task_type so every task is represented in both halves.
+# Train: run full optimisation loop (generate candidates → evaluate → update summary).
+# Test:  apply accumulated summary; evaluate base prompt and best summary-derived
+#        prompt only — no further optimisation loops.
+#
+# Split criteria:
+#   - Equal task_type counts across train/test within each type
+#   - Geographic diversity balanced across both splits
+#   - Mix of single-crop and multi-crop datasets in both splits
+#   - Mix of small (<500 imgs) and large (>10k imgs) datasets in both splits
+
+train:
+  # disease (11 of 22)
+  - bean_disease_uganda            # africa · 3 classes · 1 295 imgs
+  - plant_village_classification   # north_america · 39 classes · 55 448 imgs · multi-crop
+  - corn_maize_leaf_disease        # worldwide · 4 classes · 4 188 imgs
+  - paddy_disease_classification   # asia/india · 10 classes · 10 407 imgs
+  - chilli_leaf_classification     # asia/india · 5 classes · 10 974 imgs
+  - arabica_coffee_leaf_disease_classification  # africa/kenya · 5 classes · 58 549 imgs
+  - coconut_tree_disease_classification         # asia/india · 5 classes · 5 798 imgs
+  - tea_leaf_disease_classification             # asia/india · 6 classes · 5 867 imgs
+  - java_plum_leaf_disease_classification       # asia/bangladesh · 6 classes · 2 400 imgs
+  - sunflower_disease_classification            # asia/bangladesh · 4 classes · 2 358 imgs
+  - cucumber_disease_classification             # asia/bangladesh · 8 classes · 7 689 imgs
+  # pest_damage (1 of 2)
+  - soybean_insect_classification  # south_america/brazil · 3 classes · 6 410 imgs
+  # weed_identification (2 of 4)
+  - plant_seedlings_aarhus         # europe/denmark · 12 classes · 5 539 imgs
+  - soybean_weed_uav_brazil        # south_america/brazil · 4 classes · 15 336 imgs
+
+test:
+  # disease (11 of 22)
+  - guava_disease_pakistan                      # asia/pakistan · 4 classes · 306 imgs
+  - plant_doc_classification                    # worldwide · 28 classes · 2 598 imgs · multi-crop
+  - tomato_leaf_disease                         # worldwide · 10 classes · 11 000 imgs
+  - vine_virus_photo_dataset                    # worldwide · 4 classes · 3 866 imgs
+  - onion_leaf_classification                   # asia/india · 4 classes · 4 502 imgs
+  - orange_leaf_disease_classification          # asia/bangladesh · 11 classes · 5 813 imgs
+  - papaya_leaf_disease_classification          # asia/bangladesh · 5 classes · 2 159 imgs
+  - blackgram_plant_leaf_disease_classification # asia/india · 5 classes · 1 007 imgs
+  - banana_leaf_disease_classification          # africa/ethiopia · 3 classes · 1 288 imgs
+  - rice_leaf_disease_classification            # worldwide · 6 classes · 3 829 imgs
+  - betel_leaf_disease_classification           # asia/bangladesh · 4 classes · 3 589 imgs
+  # pest_damage (1 of 2)
+  - sugarcane_damage_usa           # north_america/usa · 6 classes · 153 imgs
+  # weed_identification (2 of 4)
+  - crop_weeds_greece              # europe/greece · 4 classes · 508 imgs
+  - rangeland_weeds_australia      # oceania/australia · 9 classes · 17 509 imgs

@@ -1,0 +1,138 @@
+# Prompt optimisation config
+# Used by src/prompt_optim/optimise.py
+#
+# Variable tokens used in prompt templates:
+#   {crop}         — crop name, e.g. "tomato", "corn"
+#   {cls}          — target class name, e.g. "Early Blight"
+#   {class_list}   — comma-separated list of all valid class names for this dataset
+#   {n_candidates} — number of candidate prompts the optimizer must return
+
+# ── Evaluation prompts ─────────────────────────────────────────────────────────
+
+# Starting point before any optimisation.
+base_prompt: >-
+  What disease or condition is shown in this image of a {crop}?
+
+# Used during optimisation (train classes).
+# Including the class list maximises resolvable predictions via substring
+# matching and gives the optimiser a clean F1 signal to improve against.
+closed_form_prompt: >-
+  What condition is shown in this image of a {crop}?
+  Choose from: {class_list}.
+  Reply with only the condition name.
+
+# Used on the test set — no class list, matches current pipeline behaviour
+# (resolve_predicted_class substring matching against all known class names).
+open_ended_prompt: >-
+  What disease, pest, or stress condition is shown in this image of a {crop}?
+  Describe any visible symptoms and name the specific condition.
+
+# ── Meta system prompt (candidate generation) ─────────────────────────────────
+
+meta_system_prompt: |
+  You are an agricultural computer vision expert specialising in plant disease,
+  pest, and stress identification.
+
+  Your task is to generate improved question prompts for classifying specific
+  crop conditions in farm images. The prompts will be passed as instructions
+  to vision-language models (VLMs) such as Gemma-4 and Qwen, each paired with
+  a single crop image. The model must respond by naming the condition shown.
+
+  The prompt you generate will be evaluated using substring matching: the
+  model's response is scanned for a known class name. A prompt that encourages
+  the model to state the exact condition name clearly will score higher.
+
+  Prompts should include the class list placeholder {class_list} so the model
+  knows what options are valid. Use {crop} where referring to the crop type.
+
+  You will be shown:
+    1. The crop type and target class you must improve prompts for.
+    2. Cross-run insights (if available) summarising what prompt strategies
+       have worked across other classes and crops.
+    3. The best-scoring prompt so far and the most recently tested prompt
+       for this class.
+
+  Use the cross-run insights to inform your suggestions — if a pattern has
+  improved F1 across multiple classes or crops, try applying it here. Then
+  generate fresh candidates that push beyond what has already been tried.
+
+  Return a JSON array of EXACTLY {n_candidates} prompt strings and nothing else.
+  Each prompt must contain {class_list} and may contain {crop}.
+
+  Example for class "Early Blight" on "Tomato":
+  [
+    "What condition is shown in this image of a {crop}? Choose from: {class_list}. Focus on any spots or lesions on the leaves before answering.",
+    "Examine the color, shape, and distribution of any abnormalities on this {crop} plant. Which condition from the following list is present: {class_list}?",
+    "Look closely at the leaf surface of this {crop}. Based on the visible symptoms, select the correct condition from: {class_list}. Reply with only the condition name."
+  ]
+
+# ── Summary update prompt (cross-run knowledge base) ──────────────────────────
+
+summary_update_system: |
+  You are an agricultural computer vision research assistant maintaining a
+  running knowledge base of prompt engineering insights for vision-language
+  models (VLMs) classifying crop conditions from images.
+
+  Responses are evaluated via substring matching: the model's free-text output
+  is scanned for a known class name. Prompts that improve the resolvability
+  and correctness of the model's output will show higher F1 scores.
+
+  After each completed optimisation run you will be given:
+    - A summary of that run (dataset, crop, class, best prompt found, F1 gain
+      over the base prompt, and resolvability rate).
+    - A log of all completed runs so far.
+    - The current knowledge-base summary (may be empty on the first run).
+
+  Your job is to write an updated summary that captures:
+    1. Per-model patterns — what prompt styles consistently work or fail for
+       each VLM (Gemma-4, Qwen, etc.).
+    2. Crop / condition patterns — e.g. "asking the model to describe lesion
+       shape before selecting a class improves F1 for fungal diseases", or
+       "direct single-sentence prompts outperform verbose instructions for
+       binary healthy vs. diseased cases".
+    3. Cross-model generalisable insights — trends that hold regardless of
+       which VLM is used.
+    4. Any surprising or counter-intuitive findings worth tracking, including
+       cases where the base prompt outperformed all optimised candidates.
+
+  Write 6-12 sentences of plain text. Be concrete: name models, crops, task
+  types, and specific prompt features. Do not include JSON, bullet points, or
+  headers — just flowing, informative prose.
+
+# ── Summary update user message template ──────────────────────────────────────
+
+summary_update_user: |
+  === Latest run ===
+  {latest_run_summary}
+
+  === All runs log ===
+  {all_runs_log}
+
+  === Current knowledge-base summary ===
+  {current_summary}
+
+  Please write an updated knowledge-base summary.
+
+# ── Optimisation hyperparameters ──────────────────────────────────────────────
+
+optimizer_model: meta-llama/Llama-3.2-1B-Instruct
+n_candidates: 5          # candidate prompts generated per iteration
+n_iterations: 10         # optimisation iterations per class
+optimizer_temperature: 0.8
+classifier_temperature: 0.0   # greedy decoding for evaluation — deterministic F1
+max_tokens_response: 64       # max tokens for VLM classification response
+max_tokens_optimizer: 512     # max tokens for Llama candidate generation
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+# All of the following are written to output_dir/prompt_optim/:
+#   run_log.jsonl          — one record per candidate evaluated (prompt, scores, iteration)
+#   best_prompts.json      — best prompt per class at end of run
+#   summary_history.jsonl  — knowledge-base summary after each class completes
+#   results.json           — final F1: base vs best optimised, per class and overall
+
+# ── Train / test split ────────────────────────────────────────────────────────
+# Split definition lives in a separate file so other scripts can load it
+# independently without depending on this prompt-optimisation config.
+
+split_config: src/config/dataset_split.yaml
