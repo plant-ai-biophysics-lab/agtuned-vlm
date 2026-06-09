@@ -702,10 +702,12 @@ def plot_per_class_f1(backbone_reports: dict[str, dict], dataset_name: str, outp
 
 
 def plot_overall_summary(results: dict, output_dir: Path):
-    """Bar chart comparing backbone F1 across all datasets (mean overall)."""
-    backbones = list(results["overall"].keys())
-    f1_macros = [results["overall"][b]["f1_macro"] for b in backbones]
-    accuracies = [results["overall"][b]["accuracy"] for b in backbones]
+    """Bar chart comparing backbone F1 using LR combined (one global classifier)."""
+    backbones = list(results["lr_combined"].keys())
+    if not backbones:
+        return
+    f1_macros = [results["lr_combined"][b]["f1_macro"] for b in backbones]
+    accuracies = [results["lr_combined"][b]["accuracy"] for b in backbones]
 
     x = np.arange(len(backbones))
     width = 0.35
@@ -721,10 +723,10 @@ def plot_overall_summary(results: dict, output_dir: Path):
                     f"{h:.3f}", ha="center", va="bottom", fontsize=8)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(backbones, rotation=15, ha="right")
+    ax.set_xticklabels([b.split("/")[-1] for b in backbones], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("Score")
-    ax.set_title("Linear Probe — Overall Backbone Comparison (mean across all datasets)")
+    ax.set_title("Linear Probe — Overall Backbone Comparison (LR combined, all classes)")
     ax.legend()
     plt.tight_layout()
 
@@ -966,19 +968,27 @@ def plot_master_comparison(results: dict, output_dir: Path):
 
 
 def plot_task_summary(results: dict, output_dir: Path):
-    """Bar chart comparing backbone F1 per task type."""
-    task_types = list(results.get("by_task", {}).keys())
+    """Bar chart comparing backbone F1 per task type using LR combined scores."""
+    # Prefer by_task_lr_combined (consistent with LR combined classifier);
+    # fall back to by_task (per-dataset mean) for old result files.
+    by_task = results.get("by_task_lr_combined") or results.get("by_task", {})
+    task_types = list(by_task.keys())
     if not task_types:
         return
-    backbones = list(next(iter(results["by_task"].values())).keys())
+
+    # Flatten nested {backbone: {f1_macro}} or {backbone: float} into floats
+    def _f1(entry):
+        return entry if isinstance(entry, float) else entry.get("f1_macro", 0.0)
+
+    backbones = list(next(iter(by_task.values())).keys())
     x = np.arange(len(task_types))
     width = 0.8 / len(backbones)
 
     fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
     for i, backbone in enumerate(backbones):
-        vals = [results["by_task"][tt].get(backbone, {}).get("f1_macro", 0.0) for tt in task_types]
+        vals = [_f1(by_task[tt].get(backbone, 0.0)) for tt in task_types]
         offset = (i - (len(backbones) - 1) / 2) * width
-        bars = ax.bar(x + offset, vals, width, label=backbone)
+        bars = ax.bar(x + offset, vals, width, label=backbone.split("/")[-1])
         for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
@@ -988,7 +998,7 @@ def plot_task_summary(results: dict, output_dir: Path):
     ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("F1 Macro")
-    ax.set_title("Linear Probe — F1 by Task Type")
+    ax.set_title("Linear Probe — F1 by Task Type (LR combined)")
     ax.legend()
     plt.tight_layout()
 
@@ -1436,6 +1446,34 @@ def main(args):
             if tt:
                 by_task_by_backbone[tt][backbone].append(f1)
 
+    # Build task-type breakdown from LR combined per-class F1 scores so the values
+    # are consistent with the combined classifier rather than per-dataset means.
+    # Map each class label → task type via datasets.yaml (last writer wins on overlap).
+    _class_to_task: dict[str, str] = {}
+    for agml_name, (samples, labels_all, *_) in all_embeddings["_samples"].items():
+        tt = ds_to_task.get(agml_name)
+        if tt:
+            for lbl in set(labels_all):
+                _class_to_task[lbl] = tt
+
+    _skip = {"accuracy", "macro avg", "weighted avg"}
+    by_task_combined_backbone: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for backbone, report in lr_comb_report_store.items():
+        for cls, metrics in report.items():
+            if cls in _skip:
+                continue
+            tt = _class_to_task.get(cls)
+            if tt:
+                by_task_combined_backbone[tt][backbone].append(metrics.get("f1-score", 0.0))
+
+    by_task_lr_combined = {
+        tt: {
+            backbone: round(float(np.mean(vals)), 4)
+            for backbone, vals in backbone_map.items()
+        }
+        for tt, backbone_map in by_task_combined_backbone.items()
+    }
+
     results = {
         # LR per-dataset (always populated)
         "per_dataset": {
@@ -1475,6 +1513,7 @@ def main(args):
         # LR combined (default — always runs)
         "lr_combined": lr_combined,
         "lr_combined_reports": lr_comb_report_store,
+        "by_task_lr_combined": by_task_lr_combined,
         # FC combined  (populated only with --all_experiments)
         "fc_combined": fc_combined,
         # Post-projector LR combined (VLMs only — always runs)
@@ -1524,8 +1563,9 @@ def main(args):
     print("\n=== Generating plots ===")
 
     # Overall backbone comparison + task-type summary (always — Phase 2a always runs now)
-    if results["overall"]:
+    if results["lr_combined"]:
         plot_overall_summary(results, output_dir)
+    if results.get("by_task_lr_combined") or results.get("by_task"):
         plot_task_summary(results, output_dir)
     if all_experiments and results["overall"]:
         plot_master_comparison(results, output_dir)
@@ -1733,10 +1773,10 @@ if __name__ == "__main__":
             if pre_reports:
                 plot_class_accuracy_vs_frequency(counts, pre_reports, post_reports, output_dir)
 
-        # Overall backbone comparison (from per-dataset aggregation if present)
-        if results.get("overall"):
+        # Overall backbone comparison (LR combined)
+        if results.get("lr_combined"):
             plot_overall_summary(results, output_dir)
-        if results.get("by_task"):
+        if results.get("by_task_lr_combined") or results.get("by_task"):
             plot_task_summary(results, output_dir)
 
         print(f"Plots saved to {output_dir}/")
