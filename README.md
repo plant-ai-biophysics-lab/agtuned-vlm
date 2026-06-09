@@ -21,6 +21,7 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | 7 — Augmented Vision | `src/vision_assessment/assess_augmented.py` | Re-run vision assessment with hint injection: description hint for classification, class-name hint for description |
 | vision-augmented-plot | `src/vision_assessment/plot_augmented.py` | Regenerate augmented vision assessment charts (including before/after) from saved metrics JSON (no inference) |
 | 8 — Fine-tune | `src/finetune/train.py` | LoRA fine-tuning on Digital Green dataset with configurable component targeting |
+| 9 — Prompt Optimisation | `src/prompt_optim/optimise.py` | Meta-prompting pipeline: iteratively optimise per-class VLM prompts via Llama-1B, accumulate a hierarchical knowledge base, evaluate generalisation on held-out datasets |
 
 ## Prerequisites
 
@@ -516,6 +517,72 @@ Compare the quadrant distributions in `error_overlap_finetuned/` against the bas
 
 ---
 
+### Stage 9 — Prompt Optimisation
+
+Meta-prompting pipeline that iteratively improves per-class classification prompts for a VLM.
+Uses `meta-llama/Llama-3.2-1B-Instruct` as the optimizer and any VLM (Gemma-4, Qwen, etc.)
+as the classifier. Both models are loaded simultaneously.
+
+**Train loop** (14 datasets, all classes):
+- Llama generates 5 candidate prompts per iteration (10 iterations per class) using: crop/class info + consolidated knowledge base + best prompt so far
+- VLM scores each candidate via per-class F1 (substring matching)
+- After each class: Llama writes a per-class summary, then consolidates all summaries into an updated global knowledge base
+- Closed-form prompts (with `{class_list}`) used throughout train for a clean F1 signal
+
+**Test evaluation** (14 held-out datasets, all classes — no loop):
+- Llama reads the final consolidated knowledge base + class info → generates one prompt per class
+- VLM compares that prompt against the open-ended base prompt (no class list)
+- Measures how well the accumulated knowledge generalises to unseen datasets and classes
+
+```bash
+uv run python main.py prompt-optim \
+  --model      google/gemma-4-26B-A4B-it \
+  --config     src/config/datasets.yaml \
+  --output_dir outputs/prompt_optim/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `Qwen/Qwen3.6-27B` | VLM used for classification evaluation |
+| `--config` | `src/config/datasets.yaml` | AgML datasets config |
+| `--optim_config` | `src/config/prompt_optim.yaml` | Prompt optimisation hyperparameters and prompts |
+| `--n_samples_per_class` | `30` | Images sampled per class for optimisation |
+| `--n_eval_per_candidate` | `15` | Images used to score each candidate prompt |
+| `--output_dir` | `outputs/prompt_optim/` | Output directory |
+| `--probe_dir` | `outputs/linear_probe/` | Linear probe output dir — used to find t-SNE coords for overlay plot |
+| `--split` | `both` | `train`, `test`, or `both` |
+| `--force` | off | Re-run even if checkpoint shows a class is done |
+| `--skip_plots` | off | Skip plot generation |
+| `--seed` | `42` | Random seed for image sampling |
+
+**Train/test split** is defined in `src/config/dataset_split.yaml` (14 train / 14 test datasets,
+stratified by task type: disease, pest_damage, weed_identification).
+
+**Output structure:**
+
+```
+outputs/prompt_optim/
+├── run_log.jsonl                      one record per candidate evaluated (prompt, F1, VLM responses, Llama raw output)
+├── test_log.jsonl                     one record per test class (base prompt vs summary-informed prompt)
+├── best_prompts.json                  best prompt per train class at end of run
+├── per_class_summaries.jsonl          Llama-written summary after each train class completes
+├── consolidated_summary_history.jsonl consolidated knowledge base snapshot after each class
+├── checkpoint.json                    resume state (re-run resumes from last completed class)
+├── results.json                       final F1: base vs optimised, per class / dataset / task / overall
+└── plots/
+    ├── f1_overall.png                 overall / train / test grouped bar chart
+    ├── f1_by_task.png                 F1 by task type (disease, pest_damage, weed_identification)
+    ├── f1_by_dataset.png              F1 by dataset (mean across classes)
+    ├── f1_per_class.png               F1 per class (most granular)
+    └── tsne_overlay.png               linear probe t-SNE with ■ base and ★ optimised centroids
+```
+
+The t-SNE overlay reuses coordinates saved by `probe.py` — run `probe` at least once before
+`prompt-optim` to generate the `tsne/*_coords.npz` files. The overlay is skipped with a
+clear message if the file is not found.
+
+---
+
 ## Outputs
 
 ```
@@ -550,6 +617,12 @@ outputs/
 │   ├── desc_<model>_desc_with_class.csv / cls_<model>_cls_with_desc.csv
 │   ├── vision_assessment_augmented_metrics.json
 │   └── *.png
+├── prompt_optim/
+│   ├── run_log.jsonl / test_log.jsonl
+│   ├── best_prompts.json
+│   ├── per_class_summaries.jsonl / consolidated_summary_history.jsonl
+│   ├── results.json
+│   └── plots/
 ├── results_table.csv                 collated metrics across all stages
 ├── results_table.tex                 LaTeX booktabs table (ready to \input into a paper)
 └── error_overlap/
