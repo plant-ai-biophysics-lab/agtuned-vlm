@@ -618,6 +618,8 @@ def plot_confusion_matrix(y_true: list[str], y_pred: list[str], label: str, outp
 
 
 def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: Path, max_samples: int = 2000):
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if len(X) > max_samples:
         rng = np.random.default_rng(42)
         idx = rng.choice(len(X), max_samples, replace=False)
@@ -629,7 +631,8 @@ def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: Path, 
     X_2d = TSNE(n_components=2, random_state=42, perplexity=perplexity).fit_transform(X)
 
     unique_labels = sorted(set(y_labels))
-    cmap = plt.cm.get_cmap("tab20" if len(unique_labels) <= 20 else "hsv", len(unique_labels))
+    import matplotlib
+    cmap = matplotlib.colormaps["tab20" if len(unique_labels) <= 20 else "hsv"].resampled(len(unique_labels))
     color_map = {lbl: cmap(i) for i, lbl in enumerate(unique_labels)}
 
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -652,7 +655,7 @@ def plot_tsne(X: np.ndarray, y_labels: list[str], label: str, output_dir: Path, 
 
     # Legend saved as a separate image
     legends_dir = output_dir.parent / "tsne_legends"
-    legends_dir.mkdir(exist_ok=True)
+    legends_dir.mkdir(parents=True, exist_ok=True)
     ncol = max(1, len(unique_labels) // 20)
     rows = (len(unique_labels) + ncol - 1) // ncol
     fig_leg, ax_leg = plt.subplots(figsize=(max(3, ncol * 3.5), max(1.5, rows * 0.35)))
