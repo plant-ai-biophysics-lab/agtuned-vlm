@@ -201,7 +201,17 @@ def evaluate_prompt(
     f1_macro_for_class is the F1 for the target class against all classes.
     """
     paths = image_paths[:n_eval] if n_eval else image_paths
-    question = prompt_template.format(
+
+    # Escape any stray braces that aren't our known placeholders so str.format
+    # doesn't crash on candidates like "inspect the {affected} area".
+    safe_template = (
+        prompt_template
+        .replace("{", "{{").replace("}", "}}")
+        .replace("{{crop}}", "{crop}")
+        .replace("{{class_list}}", "{class_list}")
+        .replace("{{cls}}", "{cls}")
+    )
+    question = safe_template.format(
         crop=crop, class_list=class_list_str, cls=class_label
     )
 
@@ -273,10 +283,15 @@ def generate_candidates(
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Fallback: extract quoted strings
+    # Fallback 1: extract quoted strings
     candidates = re.findall(r'"([^"]{20,})"', raw)
     if candidates:
         return candidates[:n_candidates], raw
+
+    # Fallback 2: numbered list  (1. text\n2. text\n...)
+    candidates = re.findall(r'^\s*\d+[\.\)]\s*(.{20,})', raw, re.MULTILINE)
+    if candidates:
+        return [c.strip() for c in candidates[:n_candidates]], raw
 
     print(f"  [warn] Could not parse candidates from optimizer output: {raw[:200]}")
     return [], raw
