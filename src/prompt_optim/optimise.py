@@ -119,12 +119,12 @@ def _is_mamba(model_id: str) -> bool:
     return any(name.startswith(p) for p in {"mamba", "jamba", "zamba", "qwen"})
 
 
-def load_vlm(model_id: str, gpu_memory_utilization: float = 0.7) -> tuple[LLM, object]:
+def load_vlm(model_id: str, gpu_memory_utilization: float = 0.7, max_model_len: int = 6144) -> tuple[LLM, object]:
     max_num_seqs = 32 if _is_mamba(model_id) else 64
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
-        max_model_len=16384,
+        max_model_len=max_model_len,
         gpu_memory_utilization=gpu_memory_utilization,
         max_num_seqs=max_num_seqs,
         limit_mm_per_prompt={"image": 1},
@@ -985,6 +985,8 @@ def main() -> None:
                         help="Images used to score each candidate prompt")
     parser.add_argument("--output_dir", default="outputs/prompt_optim/",
                         help="Output directory")
+    parser.add_argument("--max_model_len", type=int, default=6144,
+                        help="Max sequence length for the VLM (lower = less KV cache memory)")
     parser.add_argument("--probe_dir", default="outputs/linear_probe/",
                         help="Linear probe output directory. Used to locate the t-SNE coords "
                              "file saved by probe.py (auto-derived from --model name).")
@@ -1017,7 +1019,7 @@ def main() -> None:
 
     # Load both models once
     print("\nLoading VLM...")
-    vlm, vlm_tokenizer = load_vlm(args.model, gpu_memory_utilization=0.65)
+    vlm, vlm_tokenizer = load_vlm(args.model, gpu_memory_utilization=0.65, max_model_len=args.max_model_len)
 
     print("Loading optimizer (Llama)...")
     opt_llm, opt_tokenizer = load_optimizer(optimizer_model)
