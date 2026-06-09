@@ -269,17 +269,17 @@ def generate_candidates(
         if start != -1 and end > start:
             candidates = json.loads(raw[start:end])
             if isinstance(candidates, list):
-                return [str(c) for c in candidates[:n_candidates]]
+                return [str(c) for c in candidates[:n_candidates]], raw
     except (json.JSONDecodeError, ValueError):
         pass
 
     # Fallback: extract quoted strings
     candidates = re.findall(r'"([^"]{20,})"', raw)
     if candidates:
-        return candidates[:n_candidates]
+        return candidates[:n_candidates], raw
 
     print(f"  [warn] Could not parse candidates from optimizer output: {raw[:200]}")
-    return []
+    return [], raw
 
 
 # ── Knowledge-base summary update ────────────────────────────────────────────
@@ -638,7 +638,7 @@ def run_train_loop(
             last_prompt = closed_form_tmpl
 
             for iteration in range(n_iterations):
-                candidates = generate_candidates(
+                candidates, llama_raw = generate_candidates(
                     opt_llm, opt_tokenizer,
                     meta_system, crop, clean_cls,
                     best_prompt if best_prompt != closed_form_tmpl else None,
@@ -676,6 +676,8 @@ def run_train_loop(
                         "iteration": iteration,
                         "candidate_idx": ci,
                         "prompt": candidate,
+                        "llama_raw_output": llama_raw,
+                        "vlm_responses": responses,
                         "f1": f1,
                         "resolvable": resolvable,
                         "base_f1": base_f1,
@@ -774,6 +776,7 @@ def run_test_evaluation(
 
     n_samples = max(n_eval_per_candidate * 2, 20)
     test_results: dict = {}
+    test_log_path = output_dir / "test_log.jsonl"
 
     for agml_name in split_datasets:
         ds_cfg = datasets_cfg.get(agml_name)
@@ -797,7 +800,7 @@ def run_test_evaluation(
             cls_key = f"{agml_name}/{clean_cls}"
 
             # Base prompt (open-ended, matches current pipeline)
-            base_f1, base_resolvable, _ = evaluate_prompt(
+            base_f1, base_resolvable, base_responses = evaluate_prompt(
                 vlm, vlm_tokenizer, open_ended_tmpl, image_paths,
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
@@ -806,7 +809,7 @@ def run_test_evaluation(
             best_entry = best_prompts.get(cls_key, {})
             best_train_prompt = best_entry.get("best_prompt", closed_form_tmpl)
 
-            opt_f1, opt_resolvable, _ = evaluate_prompt(
+            opt_f1, opt_resolvable, opt_responses = evaluate_prompt(
                 vlm, vlm_tokenizer, best_train_prompt, image_paths,
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
@@ -822,6 +825,23 @@ def run_test_evaluation(
                 "gain": round(opt_f1 - base_f1, 4),
                 "best_prompt": best_train_prompt,
             }
+
+            append_jsonl(test_log_path, {
+                "dataset": agml_name,
+                "class_label": clean_cls,
+                "crop": crop,
+                "base_prompt": open_ended_tmpl,
+                "base_vlm_responses": base_responses,
+                "base_f1": base_f1,
+                "base_resolvable": base_resolvable,
+                "opt_prompt": best_train_prompt,
+                "opt_vlm_responses": opt_responses,
+                "opt_f1": opt_f1,
+                "opt_resolvable": opt_resolvable,
+                "gain": round(opt_f1 - base_f1, 4),
+                "prompt_source": "train_best" if cls_key in best_prompts else "fallback_closed_form",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
             print(
                 f"    {clean_cls}: base={base_f1:.3f}  opt={opt_f1:.3f}  "
                 f"gain={opt_f1 - base_f1:+.3f}"
