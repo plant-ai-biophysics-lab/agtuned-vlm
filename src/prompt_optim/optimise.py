@@ -282,28 +282,88 @@ def generate_candidates(
     return [], raw
 
 
-# ── Knowledge-base summary update ────────────────────────────────────────────
+# ── Per-class summary + consolidation ────────────────────────────────────────
 
-def update_summary(
+def generate_class_summary(
     opt_llm: LLM,
     opt_tokenizer,
-    summary_update_system: str,
-    summary_update_user_template: str,
-    latest_run_summary: str,
-    all_runs_log: str,
-    current_summary: str,
-    opt_params: SamplingParams,
+    class_summary_system: str,
+    class_summary_user_template: str,
+    crop: str,
+    cls: str,
+    dataset: str,
+    base_f1: float,
+    best_f1: float,
+    base_prompt: str,
+    best_prompt: str,
+    prompts_tested: list[dict],
+    summary_params: SamplingParams,
 ) -> str:
-    user_msg = summary_update_user_template.format(
-        latest_run_summary=latest_run_summary,
-        all_runs_log=all_runs_log,
-        current_summary=current_summary or "(empty)",
+    tested_lines = "\n".join(
+        f"  iter={e['iteration']} c={e['candidate_idx']} f1={e['f1']:.3f}  {e['prompt'][:120]}"
+        for e in prompts_tested
     )
-    formatted = _apply_chat_template(
-        opt_tokenizer, user_msg, system_prompt=summary_update_system
+    user_msg = class_summary_user_template.format(
+        crop=crop,
+        cls=cls,
+        dataset=dataset,
+        base_f1=round(base_f1, 3),
+        best_f1=round(best_f1, 3),
+        gain=round(best_f1 - base_f1, 3),
+        base_prompt=base_prompt,
+        best_prompt=best_prompt,
+        prompts_tested=tested_lines or "(none)",
     )
-    outputs = opt_llm.generate([formatted], sampling_params=opt_params)
+    formatted = _apply_chat_template(opt_tokenizer, user_msg, system_prompt=class_summary_system)
+    outputs = opt_llm.generate([formatted], sampling_params=summary_params)
     return _clean_response(outputs[0].outputs[0].text)
+
+
+def consolidate_summaries(
+    opt_llm: LLM,
+    opt_tokenizer,
+    consolidation_system: str,
+    consolidation_user_template: str,
+    per_class_summaries: list[dict],
+    previous_consolidated: str,
+    summary_params: SamplingParams,
+) -> str:
+    summaries_text = "\n\n---\n\n".join(
+        f"[{e['cls_key']}]\n{e['summary']}"
+        for e in per_class_summaries
+    )
+    user_msg = consolidation_user_template.format(
+        per_class_summaries=summaries_text or "(none yet)",
+        previous_consolidated=previous_consolidated or "(empty)",
+    )
+    formatted = _apply_chat_template(opt_tokenizer, user_msg, system_prompt=consolidation_system)
+    outputs = opt_llm.generate([formatted], sampling_params=summary_params)
+    return _clean_response(outputs[0].outputs[0].text)
+
+
+def generate_test_prompt(
+    opt_llm: LLM,
+    opt_tokenizer,
+    test_prompt_system: str,
+    test_prompt_user_template: str,
+    consolidated_summary: str,
+    crop: str,
+    cls: str,
+    class_list_str: str,
+    prompt_params: SamplingParams,
+) -> str:
+    user_msg = test_prompt_user_template.format(
+        consolidated_summary=consolidated_summary or "(empty)",
+        crop=crop,
+        cls=cls,
+        class_list=class_list_str,
+    )
+    formatted = _apply_chat_template(opt_tokenizer, user_msg, system_prompt=test_prompt_system)
+    outputs = opt_llm.generate([formatted], sampling_params=prompt_params)
+    prompt = _clean_response(outputs[0].outputs[0].text)
+    if "{class_list}" not in prompt:
+        prompt = prompt.rstrip() + " Choose from: {class_list}."
+    return prompt
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
@@ -323,6 +383,21 @@ def save_checkpoint(output_dir: Path, checkpoint: dict) -> None:
 def append_jsonl(path: Path, record: dict) -> None:
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    records = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return records
 
 
 # ── t-SNE overlay plot ────────────────────────────────────────────────────────
@@ -569,15 +644,17 @@ def run_train_loop(
 ) -> tuple[dict, str]:
     """
     Run optimisation loop over train split.
-    Returns (best_prompts dict, final knowledge-base summary).
+    Returns (best_prompts dict, final consolidated summary).
     """
     best_prompts: dict = checkpoint.get("best_prompts", {})
-    summary = checkpoint.get("summary", "")
-    all_runs_log_entries: list[str] = checkpoint.get("all_runs_log", [])
+    per_class_summaries: list[dict] = checkpoint.get("per_class_summaries", [])
+    consolidated_summary: str = checkpoint.get("consolidated_summary", "")
 
     meta_system = cfg["meta_system_prompt"]
-    summary_update_system = cfg["summary_update_system"]
-    summary_update_user_tmpl = cfg["summary_update_user"]
+    class_summary_system = cfg["class_summary_system"]
+    class_summary_user_tmpl = cfg["class_summary_user"]
+    consolidation_system = cfg["consolidation_system"]
+    consolidation_user_tmpl = cfg["consolidation_user"]
     base_prompt_tmpl = cfg["base_prompt"]
     closed_form_tmpl = cfg["closed_form_prompt"]
     n_candidates = int(cfg.get("n_candidates", 5))
@@ -592,9 +669,14 @@ def run_train_loop(
         temperature=float(cfg.get("optimizer_temperature", 0.8)),
         max_tokens=int(cfg.get("max_tokens_optimizer", 512)),
     )
+    summary_params = SamplingParams(
+        temperature=float(cfg.get("optimizer_temperature", 0.8)),
+        max_tokens=int(cfg.get("max_tokens_summary", 384)),
+    )
 
     run_log_path = output_dir / "run_log.jsonl"
-    summary_history_path = output_dir / "summary_history.jsonl"
+    per_class_summaries_path = output_dir / "per_class_summaries.jsonl"
+    consolidated_history_path = output_dir / "consolidated_summary_history.jsonl"
 
     for agml_name in split_datasets:
         ds_cfg = datasets_cfg.get(agml_name)
@@ -643,7 +725,7 @@ def run_train_loop(
                     meta_system, crop, clean_cls,
                     best_prompt if best_prompt != closed_form_tmpl else None,
                     last_prompt,
-                    summary,
+                    consolidated_summary,
                     n_candidates,
                     opt_params,
                 )
@@ -709,30 +791,51 @@ def run_train_loop(
                 "gain": round(best_f1 - base_f1, 4),
             }
 
-            # Update knowledge-base summary
-            latest_run_summary = (
-                f"Dataset: {agml_name} | Crop: {crop} | Class: {clean_cls}\n"
-                f"Best prompt: {best_prompt}\n"
-                f"F1 gain: {best_f1 - base_f1:+.3f} (base={base_f1:.3f} → best={best_f1:.3f})\n"
-                f"Resolvability: {base_resolvable:.2f} → (not re-measured for best)"
-            )
-            all_runs_log_entries.append(latest_run_summary)
-            all_runs_log = "\n\n---\n\n".join(all_runs_log_entries[-20:])
+            # Collect all candidates tested for this class from run_log
+            class_candidates = [
+                e for e in _read_jsonl(run_log_path)
+                if e.get("dataset") == agml_name and e.get("class_label") == clean_cls
+            ]
 
+            # 1. Per-class summary
             try:
-                new_summary = update_summary(
+                cls_summary = generate_class_summary(
                     opt_llm, opt_tokenizer,
-                    summary_update_system, summary_update_user_tmpl,
-                    latest_run_summary, all_runs_log, summary,
-                    opt_params,
+                    class_summary_system, class_summary_user_tmpl,
+                    crop, clean_cls, agml_name,
+                    base_f1, best_f1, base_prompt_tmpl, best_prompt,
+                    class_candidates, summary_params,
                 )
-                summary = new_summary
             except Exception as e:
-                print(f"  [warn] Summary update failed: {e}")
+                print(f"  [warn] Per-class summary failed: {e}")
+                cls_summary = f"Optimised {clean_cls} on {agml_name}. Base F1={base_f1:.3f} → best F1={best_f1:.3f}."
 
-            append_jsonl(summary_history_path, {
+            per_class_summaries.append({
                 "cls_key": cls_key,
-                "summary": summary,
+                "dataset": agml_name,
+                "class_label": clean_cls,
+                "crop": crop,
+                "summary": cls_summary,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+            append_jsonl(per_class_summaries_path, per_class_summaries[-1])
+            print(f"    Per-class summary written.")
+
+            # 2. Consolidate all per-class summaries into updated global summary
+            try:
+                consolidated_summary = consolidate_summaries(
+                    opt_llm, opt_tokenizer,
+                    consolidation_system, consolidation_user_tmpl,
+                    per_class_summaries, consolidated_summary,
+                    summary_params,
+                )
+            except Exception as e:
+                print(f"  [warn] Consolidation failed: {e}")
+
+            append_jsonl(consolidated_history_path, {
+                "cls_key": cls_key,
+                "n_classes_seen": len(per_class_summaries),
+                "consolidated_summary": consolidated_summary,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
 
@@ -741,37 +844,45 @@ def run_train_loop(
                 checkpoint["classes"] = {}
             checkpoint["classes"][cls_key] = {"status": "done", "best_f1": best_f1}
             checkpoint["best_prompts"] = best_prompts
-            checkpoint["summary"] = summary
-            checkpoint["all_runs_log"] = all_runs_log_entries
+            checkpoint["per_class_summaries"] = per_class_summaries
+            checkpoint["consolidated_summary"] = consolidated_summary
             save_checkpoint(output_dir, checkpoint)
 
-    return best_prompts, summary
+    return best_prompts, consolidated_summary
 
 
 def run_test_evaluation(
     vlm: LLM,
     vlm_tokenizer,
+    opt_llm: LLM,
+    opt_tokenizer,
     cfg: dict,
     datasets_cfg: dict,
     split_datasets: list[str],
-    best_prompts: dict,
+    consolidated_summary: str,
     n_eval_per_candidate: int,
     output_dir: Path,
-    checkpoint: dict,
     seed: int,
 ) -> dict:
     """
-    Evaluate test split: base prompt vs best optimised prompt (open-ended).
+    Evaluate test split:
+      - Base prompt (open-ended, no class list)
+      - Summary-informed prompt (Llama generates one prompt per class using
+        the final consolidated summary — no iteration loop)
     Returns per_class results dict.
     """
     open_ended_tmpl = cfg["open_ended_prompt"]
-    base_prompt_tmpl = cfg["base_prompt"]
-    closed_form_tmpl = cfg["closed_form_prompt"]
+    test_prompt_system = cfg["test_prompt_system"]
+    test_prompt_user_tmpl = cfg["test_prompt_user"]
 
     cls_params = SamplingParams(
         temperature=float(cfg.get("classifier_temperature", 0.0)),
         max_tokens=int(cfg.get("max_tokens_response", 64)),
         repetition_penalty=1.1,
+    )
+    prompt_params = SamplingParams(
+        temperature=float(cfg.get("optimizer_temperature", 0.8)),
+        max_tokens=int(cfg.get("max_tokens_test_prompt", 128)),
     )
 
     n_samples = max(n_eval_per_candidate * 2, 20)
@@ -799,18 +910,27 @@ def run_test_evaluation(
             crop, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
             cls_key = f"{agml_name}/{clean_cls}"
 
-            # Base prompt (open-ended, matches current pipeline)
+            # Base prompt (open-ended, no class list — matches production pipeline)
             base_f1, base_resolvable, base_responses = evaluate_prompt(
                 vlm, vlm_tokenizer, open_ended_tmpl, image_paths,
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
 
-            # Best prompt from train (closed-form), falling back to closed_form_tmpl
-            best_entry = best_prompts.get(cls_key, {})
-            best_train_prompt = best_entry.get("best_prompt", closed_form_tmpl)
+            # Summary-informed prompt: Llama generates one prompt using the
+            # final consolidated summary — no loop, no class-specific lookup
+            try:
+                opt_prompt = generate_test_prompt(
+                    opt_llm, opt_tokenizer,
+                    test_prompt_system, test_prompt_user_tmpl,
+                    consolidated_summary, crop, clean_cls, class_list_str,
+                    prompt_params,
+                )
+            except Exception as e:
+                print(f"  [warn] Test prompt generation failed for {clean_cls}: {e}")
+                opt_prompt = cfg["closed_form_prompt"]
 
             opt_f1, opt_resolvable, opt_responses = evaluate_prompt(
-                vlm, vlm_tokenizer, best_train_prompt, image_paths,
+                vlm, vlm_tokenizer, opt_prompt, image_paths,
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
 
@@ -823,7 +943,7 @@ def run_test_evaluation(
                 "best_f1": opt_f1,
                 "best_resolvable": opt_resolvable,
                 "gain": round(opt_f1 - base_f1, 4),
-                "best_prompt": best_train_prompt,
+                "best_prompt": opt_prompt,
             }
 
             append_jsonl(test_log_path, {
@@ -834,12 +954,11 @@ def run_test_evaluation(
                 "base_vlm_responses": base_responses,
                 "base_f1": base_f1,
                 "base_resolvable": base_resolvable,
-                "opt_prompt": best_train_prompt,
+                "opt_prompt": opt_prompt,
                 "opt_vlm_responses": opt_responses,
                 "opt_f1": opt_f1,
                 "opt_resolvable": opt_resolvable,
                 "gain": round(opt_f1 - base_f1, 4),
-                "prompt_source": "train_best" if cls_key in best_prompts else "fallback_closed_form",
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
             print(
@@ -904,13 +1023,13 @@ def main() -> None:
     opt_llm, opt_tokenizer = load_optimizer(optimizer_model)
 
     best_prompts: dict = checkpoint.get("best_prompts", {})
-    summary: str = checkpoint.get("summary", "")
+    consolidated_summary: str = checkpoint.get("consolidated_summary", "")
 
     # Train loop
     if args.split in ("train", "both"):
         print(f"\n{'#'*60}")
         print(f"TRAIN SPLIT ({len(train_split)} datasets)")
-        best_prompts, summary = run_train_loop(
+        best_prompts, consolidated_summary = run_train_loop(
             vlm, vlm_tokenizer, opt_llm, opt_tokenizer,
             cfg, datasets_cfg, train_split,
             n_samples_per_class=args.n_samples_per_class,
@@ -930,12 +1049,11 @@ def main() -> None:
         print(f"\n{'#'*60}")
         print(f"TEST SPLIT ({len(test_split)} datasets)")
         test_results = run_test_evaluation(
-            vlm, vlm_tokenizer,
+            vlm, vlm_tokenizer, opt_llm, opt_tokenizer,
             cfg, datasets_cfg, test_split,
-            best_prompts=best_prompts,
+            consolidated_summary=consolidated_summary,
             n_eval_per_candidate=args.n_eval_per_candidate,
             output_dir=output_dir,
-            checkpoint=checkpoint,
             seed=args.seed,
         )
 

@@ -21,8 +21,8 @@ closed_form_prompt: >-
   Choose from: {class_list}.
   Reply with only the condition name.
 
-# Used on the test set — no class list, matches current pipeline behaviour
-# (resolve_predicted_class substring matching against all known class names).
+# Used as the base comparison on the test set — no class list, matches current
+# pipeline behaviour (resolve_predicted_class substring matching).
 open_ended_prompt: >-
   What disease, pest, or stress condition is shown in this image of a {crop}?
   Describe any visible symptoms and name the specific condition.
@@ -47,12 +47,12 @@ meta_system_prompt: |
 
   You will be shown:
     1. The crop type and target class you must improve prompts for.
-    2. Cross-run insights (if available) summarising what prompt strategies
-       have worked across other classes and crops.
+    2. A consolidated summary of insights from all classes optimised so far
+       (may be empty on the first class).
     3. The best-scoring prompt so far and the most recently tested prompt
        for this class.
 
-  Use the cross-run insights to inform your suggestions — if a pattern has
+  Use the consolidated insights to inform your suggestions — if a pattern has
   improved F1 across multiple classes or crops, try applying it here. Then
   generate fresh candidates that push beyond what has already been tried.
 
@@ -66,52 +66,102 @@ meta_system_prompt: |
     "Look closely at the leaf surface of this {crop}. Based on the visible symptoms, select the correct condition from: {class_list}. Reply with only the condition name."
   ]
 
-# ── Summary update prompt (cross-run knowledge base) ──────────────────────────
+# ── Per-class summary (written after each class completes) ────────────────────
 
-summary_update_system: |
+class_summary_system: |
+  You are an agricultural computer vision research assistant. You have just
+  completed prompt optimisation for a single crop condition class.
+
+  Write a concise 2-4 sentence summary capturing:
+    1. What the best prompt looked like and why it likely worked.
+    2. What prompt styles failed or showed no improvement.
+    3. Any class-specific visual features that seemed important to reference
+       in the prompt (e.g. lesion colour, shape, distribution pattern).
+
+  Be specific — name the crop, condition, and exact prompt features. This
+  summary will later be consolidated with other class summaries to extract
+  cross-cutting patterns.
+
+class_summary_user: |
+  Crop: {crop}
+  Class: {cls}
+  Dataset: {dataset}
+  Base F1: {base_f1}
+  Best F1: {best_f1}
+  F1 gain: {gain}
+
+  Base prompt:
+  {base_prompt}
+
+  Best prompt found:
+  {best_prompt}
+
+  All prompts tested (iteration, candidate, prompt, F1):
+  {prompts_tested}
+
+  Write a concise summary of what worked and why for this class.
+
+# ── Consolidated summary (distilled from all per-class summaries so far) ──────
+
+consolidation_system: |
   You are an agricultural computer vision research assistant maintaining a
-  running knowledge base of prompt engineering insights for vision-language
+  growing knowledge base of prompt engineering insights for vision-language
   models (VLMs) classifying crop conditions from images.
 
   Responses are evaluated via substring matching: the model's free-text output
-  is scanned for a known class name. Prompts that improve the resolvability
-  and correctness of the model's output will show higher F1 scores.
+  is scanned for a known class name. Prompts that improve resolvability and
+  correctness score higher.
 
-  After each completed optimisation run you will be given:
-    - A summary of that run (dataset, crop, class, best prompt found, F1 gain
-      over the base prompt, and resolvability rate).
-    - A log of all completed runs so far.
-    - The current knowledge-base summary (may be empty on the first run).
-
-  Your job is to write an updated summary that captures:
+  You will be given all per-class summaries written so far, plus the previous
+  consolidated summary. Your job is to distil these into an updated consolidated
+  summary that captures:
     1. Per-model patterns — what prompt styles consistently work or fail for
        each VLM (Gemma-4, Qwen, etc.).
     2. Crop / condition patterns — e.g. "asking the model to describe lesion
-       shape before selecting a class improves F1 for fungal diseases", or
-       "direct single-sentence prompts outperform verbose instructions for
-       binary healthy vs. diseased cases".
-    3. Cross-model generalisable insights — trends that hold regardless of
-       which VLM is used.
-    4. Any surprising or counter-intuitive findings worth tracking, including
-       cases where the base prompt outperformed all optimised candidates.
+       shape before selecting a class improves F1 for fungal diseases".
+    3. Cross-cutting generalisable insights — trends that hold across multiple
+       crops, datasets, and task types.
+    4. Failure patterns — prompt styles that consistently underperform.
+    5. Any surprising or counter-intuitive findings.
 
-  Write 6-12 sentences of plain text. Be concrete: name models, crops, task
-  types, and specific prompt features. Do not include JSON, bullet points, or
-  headers — just flowing, informative prose.
+  Write 6-12 sentences of plain text. Be concrete: name crops, task types,
+  and specific prompt features. Do not include JSON, bullet points, or headers.
 
-# ── Summary update user message template ──────────────────────────────────────
+consolidation_user: |
+  === Per-class summaries (all classes completed so far) ===
+  {per_class_summaries}
 
-summary_update_user: |
-  === Latest run ===
-  {latest_run_summary}
+  === Previous consolidated summary ===
+  {previous_consolidated}
 
-  === All runs log ===
-  {all_runs_log}
+  Please write an updated consolidated summary.
 
-  === Current knowledge-base summary ===
-  {current_summary}
+# ── Test prompt generation (uses consolidated summary, no loop) ───────────────
 
-  Please write an updated knowledge-base summary.
+test_prompt_system: |
+  You are an agricultural computer vision expert. You have a knowledge base of
+  prompt engineering insights built from optimising prompts across multiple crop
+  disease, pest, and weed datasets.
+
+  Your task is to write a single classification prompt for a new crop condition
+  class that you have not seen before. Apply the patterns from the knowledge
+  base to write the best prompt you can.
+
+  The prompt will be evaluated using substring matching against known class
+  names. It must include {class_list} and may include {crop}.
+
+  Return only the prompt string — no JSON array, no explanation.
+
+test_prompt_user: |
+  === Consolidated knowledge base ===
+  {consolidated_summary}
+
+  === New class to generate a prompt for ===
+  Crop: {crop}
+  Class: {cls}
+  Valid classes: {class_list}
+
+  Write one prompt for this class.
 
 # ── Optimisation hyperparameters ──────────────────────────────────────────────
 
@@ -122,14 +172,19 @@ optimizer_temperature: 0.8
 classifier_temperature: 0.0   # greedy decoding for evaluation — deterministic F1
 max_tokens_response: 64       # max tokens for VLM classification response
 max_tokens_optimizer: 512     # max tokens for Llama candidate generation
+max_tokens_summary: 384       # max tokens for per-class and consolidated summaries
+max_tokens_test_prompt: 128   # max tokens for test prompt generation
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
-# All of the following are written to output_dir/prompt_optim/:
-#   run_log.jsonl          — one record per candidate evaluated (prompt, scores, iteration)
-#   best_prompts.json      — best prompt per class at end of run
-#   summary_history.jsonl  — knowledge-base summary after each class completes
-#   results.json           — final F1: base vs best optimised, per class and overall
+# All of the following are written to output_dir/:
+#   run_log.jsonl                  — one record per candidate evaluated
+#   test_log.jsonl                 — one record per test class (base vs opt)
+#   best_prompts.json              — best prompt per class at end of train
+#   per_class_summaries.jsonl      — per-class summary after each train class
+#   consolidated_summary_history.jsonl — consolidated summary after each class
+#   results.json                   — final F1 per class / dataset / task / overall
+#   plots/                         — bar charts + t-SNE overlay
 
 # ── Train / test split ────────────────────────────────────────────────────────
 # Split definition lives in a separate file so other scripts can load it
