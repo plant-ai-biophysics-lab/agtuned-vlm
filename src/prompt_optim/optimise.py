@@ -257,7 +257,7 @@ def generate_candidates(
         f"Most recent prompt tested:\n{last_prompt or '(none)'}\n\n"
         f"Generate {n_candidates} new improved candidates."
     )
-    system = meta_system_prompt.format(n_candidates=n_candidates)
+    system = meta_system_prompt.replace("{n_candidates}", str(n_candidates))
     formatted = _apply_chat_template(opt_tokenizer, user_content, system_prompt=system)
     outputs = opt_llm.generate([formatted], sampling_params=opt_params)
     raw = outputs[0].outputs[0].text.strip()
