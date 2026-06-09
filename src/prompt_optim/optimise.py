@@ -424,6 +424,99 @@ def plot_tsne_overlay(
 
 # ── F1 comparison bar chart ───────────────────────────────────────────────────
 
+def _bar_chart(
+    labels: list[str],
+    base_vals: list[float],
+    opt_vals: list[float],
+    title: str,
+    out_path: Path,
+    xlabel: str = "",
+    rotate: int = 0,
+) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    x = np.arange(len(labels))
+    width = 0.38
+    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 0.7), 5))
+    ax.bar(x - width / 2, base_vals, width, label="Base prompt", color="#5b8dd9", alpha=0.9)
+    ax.bar(x + width / 2, opt_vals,  width, label="Best optimised", color="#e07b54", alpha=0.9)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center", fontsize=9)
+    ax.set_ylabel("F1 macro")
+    ax.set_ylim(0, 1.05)
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
+def plot_f1_overall(results: dict, output_dir: Path) -> None:
+    ov = results.get("overall", {})
+    tr = results.get("train_overall", {})
+    te = results.get("test_overall", {})
+    if not ov:
+        return
+    rows = [
+        ("overall",  ov.get("base_f1_macro", 0), ov.get("best_f1_macro", 0)),
+        ("train",    tr.get("base_f1_macro", 0), tr.get("best_f1_macro", 0)),
+        ("test",     te.get("base_f1_macro", 0), te.get("best_f1_macro", 0)),
+    ]
+    labels, base_vals, opt_vals = zip(*rows)
+    _bar_chart(
+        list(labels), list(base_vals), list(opt_vals),
+        title="Prompt Optimisation — Overall F1",
+        out_path=output_dir / "f1_overall.png",
+    )
+
+
+def plot_f1_by_task(results: dict, output_dir: Path) -> None:
+    by_task: dict[str, list] = defaultdict(lambda: [[], []])
+    for data in results.get("per_class", {}).values():
+        tt = data.get("task_type")
+        if not tt:
+            continue
+        by_task[tt][0].append(data.get("base_f1", 0.0))
+        by_task[tt][1].append(data.get("best_f1", 0.0))
+    if not by_task:
+        return
+    labels = sorted(by_task)
+    base_vals = [float(np.mean(by_task[t][0])) for t in labels]
+    opt_vals  = [float(np.mean(by_task[t][1])) for t in labels]
+    _bar_chart(
+        labels, base_vals, opt_vals,
+        title="Prompt Optimisation — F1 by Task Type",
+        out_path=output_dir / "f1_by_task.png",
+    )
+
+
+def plot_f1_by_dataset(results: dict, output_dir: Path) -> None:
+    by_ds: dict[str, list] = defaultdict(lambda: [[], []])
+    for data in results.get("per_class", {}).values():
+        ds = data.get("dataset")
+        if not ds:
+            continue
+        by_ds[ds][0].append(data.get("base_f1", 0.0))
+        by_ds[ds][1].append(data.get("best_f1", 0.0))
+    if not by_ds:
+        return
+    labels = sorted(by_ds)
+    base_vals = [float(np.mean(by_ds[d][0])) for d in labels]
+    opt_vals  = [float(np.mean(by_ds[d][1])) for d in labels]
+    _bar_chart(
+        labels, base_vals, opt_vals,
+        title="Prompt Optimisation — F1 by Dataset",
+        out_path=output_dir / "f1_by_dataset.png",
+        rotate=45,
+    )
+
+
 def plot_f1_comparison(results: dict, output_dir: Path) -> None:
     try:
         import matplotlib
@@ -448,34 +541,13 @@ def plot_f1_comparison(results: dict, output_dir: Path) -> None:
     x = np.arange(len(labels))
     width = 0.38
 
-    fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.55), 6))
-    ax.bar(x - width / 2, base_f1s, width, label="Base prompt", color="#5b8dd9", alpha=0.9)
-    ax.bar(x + width / 2, opt_f1s, width, label="Best optimised", color="#e07b54", alpha=0.9)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel("F1 (per-class)")
-    ax.set_title("Prompt Optimisation — Base vs Best Optimised F1 per Class")
-    ax.legend()
-    ax.set_ylim(0, 1.05)
-
-    # Annotate overall
-    ov = results.get("overall", {})
-    if ov:
-        note = (
-            f"Overall  base={ov.get('base_f1_macro', 0):.3f}  "
-            f"opt={ov.get('best_f1_macro', 0):.3f}"
-        )
-        ax.text(0.99, 0.97, note, transform=ax.transAxes,
-                ha="right", va="top", fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7))
-
-    fig.tight_layout()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / "f1_comparison.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {out_path}")
+    _bar_chart(
+        labels, base_f1s, opt_f1s,
+        title="Prompt Optimisation — F1 per Class",
+        out_path=output_dir / "f1_per_class.png",
+        xlabel="class",
+        rotate=45,
+    )
 
 
 # ── Main optimisation loop ────────────────────────────────────────────────────
@@ -862,6 +934,12 @@ def main() -> None:
     train_entries = {k: v for k, v in best_prompts.items() if "best_f1" in v}
     test_entries = {k: v for k, v in test_results.items() if "best_f1" in v}
 
+    # Annotate each per-class entry with task_type for grouping in plots
+    for entry in all_per_class.values():
+        ds_cfg = datasets_cfg.get(entry.get("dataset", ""))
+        if ds_cfg:
+            entry["task_type"] = ds_cfg.task_type
+
     results = {
         "model": args.model,
         "optimizer_model": optimizer_model,
@@ -900,6 +978,9 @@ def main() -> None:
     if not args.skip_plots:
         plots_dir = output_dir / "plots"
         plots_dir.mkdir(parents=True, exist_ok=True)
+        plot_f1_overall(results, plots_dir)
+        plot_f1_by_task(results, plots_dir)
+        plot_f1_by_dataset(results, plots_dir)
         plot_f1_comparison(results, plots_dir)
 
         safe_model = args.model.replace("/", "_").replace(":", "_").replace(" ", "_")
