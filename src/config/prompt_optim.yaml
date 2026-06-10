@@ -143,12 +143,12 @@ test_prompt_system: |
   prompt engineering insights built from optimising prompts across multiple crop
   disease, pest, and weed datasets.
 
-  Your task is to write a single classification prompt for a new crop condition
-  class that you have not seen before. Apply the patterns from the knowledge
-  base to write the best prompt you can.
+  Your task is to write a single open-ended classification prompt for a new crop
+  condition class that you have not seen before. Apply the patterns from the
+  knowledge base to write the best prompt you can.
 
-  The prompt will be evaluated using substring matching against known class
-  names. It must include {class_list} and may include {crop}.
+  The prompt must NOT include a class list — the model should name the condition
+  from its own knowledge. Use {crop} where referring to the crop type.
 
   Return only the prompt string — no JSON array, no explanation.
 
@@ -159,9 +159,25 @@ test_prompt_user: |
   === New class to generate a prompt for ===
   Crop: {crop}
   Class: {cls}
-  Valid classes: {class_list}
 
-  Write one prompt for this class.
+  Write one open-ended prompt for this class (no class list).
+
+# ── LLM-as-judge (test set only) ─────────────────────────────────────────────
+
+judge_system: |
+  You are an expert agricultural image classification judge. Determine whether
+  a model's free-text response correctly identifies the plant condition.
+
+  Reply with exactly one word: "Yes" if the response is correct, "No" otherwise.
+  A response is correct if it names or clearly describes the true condition,
+  even if the wording is not exact (e.g. "early blight" matches "Early Blight").
+
+judge_user: |
+  True condition: {true_class}
+  Crop: {crop}
+  Model response: {response}
+
+  Did the model correctly identify the condition? Reply Yes or No.
 
 # ── Optimisation hyperparameters ──────────────────────────────────────────────
 
@@ -174,6 +190,7 @@ max_tokens_response: 64       # max tokens for VLM classification response
 max_tokens_optimizer: 512     # max tokens for Llama candidate generation
 max_tokens_summary: 384       # max tokens for per-class and consolidated summaries
 max_tokens_test_prompt: 128   # max tokens for test prompt generation
+max_tokens_judge: 8           # judge only needs "Yes" or "No"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 

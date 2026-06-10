@@ -414,14 +414,41 @@ def generate_test_prompt(
         consolidated_summary=consolidated_summary or "(empty)",
         crop=crop,
         cls=cls,
-        class_list=class_list_str,
     )
     formatted = _apply_chat_template(opt_tokenizer, user_msg, system_prompt=test_prompt_system)
     outputs = opt_llm.generate([formatted], sampling_params=prompt_params)
     prompt = _clean_response(outputs[0].outputs[0].text)
-    if "{class_list}" not in prompt:
-        prompt = prompt.rstrip() + " Choose from: {class_list}."
+    # Explicitly strip any class list the model may have hallucinated in
+    prompt = re.sub(r"\s*Choose from:[^.]*\.", "", prompt).strip()
     return prompt
+
+
+def judge_responses(
+    opt_llm: LLM,
+    opt_tokenizer,
+    responses: list[str],
+    true_class: str,
+    crop: str,
+    judge_system: str,
+    judge_user_template: str,
+    judge_params: SamplingParams,
+) -> float:
+    """Ask Llama to judge each VLM response. Returns fraction judged correct."""
+    if not responses:
+        return 0.0
+    prompts = []
+    for resp in responses:
+        user_msg = judge_user_template.format(
+            true_class=true_class, crop=crop, response=resp
+        )
+        prompts.append(_apply_chat_template(opt_tokenizer, user_msg, system_prompt=judge_system))
+    outputs = opt_llm.generate(prompts, sampling_params=judge_params)
+    correct = 0
+    for o in outputs:
+        text = _clean_response(o.outputs[0].text).lower().strip()
+        if text.startswith("yes") or "correct" in text:
+            correct += 1
+    return round(correct / len(responses), 4)
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
@@ -565,20 +592,51 @@ def _bar_chart(
     out_path: Path,
     xlabel: str = "",
     rotate: int = 0,
+    judge_vals: list[float] | None = None,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    x = np.arange(len(labels))
-    width = 0.38
-    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 0.7), 5))
-    ax.bar(x - width / 2, base_vals, width, label="Base prompt", color="#5b8dd9", alpha=0.9)
-    ax.bar(x + width / 2, opt_vals,  width, label="Best optimised", color="#e07b54", alpha=0.9)
+    n = len(labels)
+    x = np.arange(n)
+    has_judge = judge_vals is not None and len(judge_vals) == n
+
+    if has_judge:
+        width = 0.26
+        offsets = [-width, 0, width]
+    else:
+        width = 0.38
+        offsets = [-width / 2, width / 2]
+
+    fig, ax = plt.subplots(figsize=(max(8, n * 0.9), 5))
+
+    bars_base = ax.bar(x + offsets[0], base_vals, width, label="Base prompt",
+                       color="#5b8dd9", alpha=0.9)
+    bars_opt  = ax.bar(x + offsets[1], opt_vals,  width, label="Best optimised",
+                       color="#e07b54", alpha=0.9)
+
+    for bar in bars_base:
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
+                ha="center", va="bottom", fontsize=7, color="#5b8dd9")
+    for bar in bars_opt:
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
+                ha="center", va="bottom", fontsize=7, color="#c0522a")
+
+    if has_judge:
+        bars_judge = ax.bar(x + offsets[2], judge_vals, width, label="Judge (opt)",
+                            color="#333333", alpha=0.85)
+        for bar in bars_judge:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
+                    ha="center", va="bottom", fontsize=7, color="#333333")
+
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center", fontsize=9)
-    ax.set_ylabel("F1 macro")
-    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("F1 / accuracy")
+    ax.set_ylim(0, 1.12)
     if xlabel:
         ax.set_xlabel(xlabel)
     ax.set_title(title)
@@ -590,63 +648,88 @@ def _bar_chart(
     print(f"  Saved: {out_path}")
 
 
+def _judge_mean(entries: list[dict]) -> float | None:
+    """Mean judge_acc across entries that have it; None if none have it."""
+    vals = [v["judge_acc"] for v in entries if "judge_acc" in v]
+    return float(np.mean(vals)) if vals else None
+
+
 def plot_f1_overall(results: dict, output_dir: Path) -> None:
     ov = results.get("overall", {})
     tr = results.get("train_overall", {})
     te = results.get("test_overall", {})
     if not ov:
         return
+
+    judge_test = te.get("judge_acc_macro") or None
+
     rows = [
-        ("overall",  ov.get("base_f1_macro", 0), ov.get("best_f1_macro", 0)),
-        ("train",    tr.get("base_f1_macro", 0), tr.get("best_f1_macro", 0)),
-        ("test",     te.get("base_f1_macro", 0), te.get("best_f1_macro", 0)),
+        ("overall",  ov.get("base_f1_macro", 0), ov.get("best_f1_macro", 0), None),
+        ("train",    tr.get("base_f1_macro", 0), tr.get("best_f1_macro", 0), None),
+        ("test",     te.get("base_f1_macro", 0), te.get("best_f1_macro", 0), judge_test),
     ]
-    labels, base_vals, opt_vals = zip(*rows)
+    labels   = [r[0] for r in rows]
+    base_vals = [r[1] for r in rows]
+    opt_vals  = [r[2] for r in rows]
+    judge_vals = [r[3] if r[3] is not None else 0.0 for r in rows]
+    has_judge = any(r[3] is not None for r in rows)
+
     _bar_chart(
-        list(labels), list(base_vals), list(opt_vals),
+        labels, base_vals, opt_vals,
         title="Prompt Optimisation — Overall F1",
         out_path=output_dir / "f1_overall.png",
+        judge_vals=judge_vals if has_judge else None,
     )
 
 
 def plot_f1_by_task(results: dict, output_dir: Path) -> None:
-    by_task: dict[str, list] = defaultdict(lambda: [[], []])
+    by_task: dict[str, list] = defaultdict(lambda: [[], [], []])
     for data in results.get("per_class", {}).values():
         tt = data.get("task_type")
         if not tt:
             continue
         by_task[tt][0].append(data.get("base_f1", 0.0))
         by_task[tt][1].append(data.get("best_f1", 0.0))
+        if "judge_acc" in data:
+            by_task[tt][2].append(data["judge_acc"])
     if not by_task:
         return
     labels = sorted(by_task)
-    base_vals = [float(np.mean(by_task[t][0])) for t in labels]
-    opt_vals  = [float(np.mean(by_task[t][1])) for t in labels]
+    base_vals  = [float(np.mean(by_task[t][0])) for t in labels]
+    opt_vals   = [float(np.mean(by_task[t][1])) for t in labels]
+    judge_vals = [float(np.mean(by_task[t][2])) if by_task[t][2] else None for t in labels]
+    has_judge  = any(v is not None for v in judge_vals)
     _bar_chart(
         labels, base_vals, opt_vals,
         title="Prompt Optimisation — F1 by Task Type",
         out_path=output_dir / "f1_by_task.png",
+        judge_vals=[v if v is not None else 0.0 for v in judge_vals] if has_judge else None,
     )
 
 
 def plot_f1_by_dataset(results: dict, output_dir: Path) -> None:
-    by_ds: dict[str, list] = defaultdict(lambda: [[], []])
+    by_ds: dict[str, list] = defaultdict(lambda: [[], [], []])
     for data in results.get("per_class", {}).values():
         ds = data.get("dataset")
         if not ds:
             continue
         by_ds[ds][0].append(data.get("base_f1", 0.0))
         by_ds[ds][1].append(data.get("best_f1", 0.0))
+        if "judge_acc" in data:
+            by_ds[ds][2].append(data["judge_acc"])
     if not by_ds:
         return
     labels = sorted(by_ds)
-    base_vals = [float(np.mean(by_ds[d][0])) for d in labels]
-    opt_vals  = [float(np.mean(by_ds[d][1])) for d in labels]
+    base_vals  = [float(np.mean(by_ds[d][0])) for d in labels]
+    opt_vals   = [float(np.mean(by_ds[d][1])) for d in labels]
+    judge_vals = [float(np.mean(by_ds[d][2])) if by_ds[d][2] else None for d in labels]
+    has_judge  = any(v is not None for v in judge_vals)
     _bar_chart(
         labels, base_vals, opt_vals,
         title="Prompt Optimisation — F1 by Dataset",
         out_path=output_dir / "f1_by_dataset.png",
         rotate=45,
+        judge_vals=[v if v is not None else 0.0 for v in judge_vals] if has_judge else None,
     )
 
 
@@ -932,6 +1015,8 @@ def run_test_evaluation(
     open_ended_tmpl = cfg["open_ended_prompt"]
     test_prompt_system = cfg["test_prompt_system"]
     test_prompt_user_tmpl = cfg["test_prompt_user"]
+    judge_system = cfg.get("judge_system", "")
+    judge_user_tmpl = cfg.get("judge_user", "")
 
     cls_params = SamplingParams(
         temperature=float(cfg.get("classifier_temperature", 0.0)),
@@ -941,6 +1026,10 @@ def run_test_evaluation(
     prompt_params = SamplingParams(
         temperature=float(cfg.get("optimizer_temperature", 0.8)),
         max_tokens=int(cfg.get("max_tokens_test_prompt", 128)),
+    )
+    judge_params = SamplingParams(
+        temperature=0.0,
+        max_tokens=int(cfg.get("max_tokens_judge", 8)),
     )
 
     n_samples = max(n_eval_per_candidate * 2, 20)
@@ -992,6 +1081,18 @@ def run_test_evaluation(
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
 
+            # LLM-as-judge on the optimised prompt's responses
+            judge_acc = 0.0
+            if judge_system and judge_user_tmpl and opt_responses:
+                try:
+                    judge_acc = judge_responses(
+                        opt_llm, opt_tokenizer,
+                        opt_responses, clean_cls, crop,
+                        judge_system, judge_user_tmpl, judge_params,
+                    )
+                except Exception as e:
+                    print(f"  [warn] Judge failed for {clean_cls}: {e}")
+
             test_results[cls_key] = {
                 "dataset": agml_name,
                 "class_label": clean_cls,
@@ -1000,6 +1101,7 @@ def run_test_evaluation(
                 "base_resolvable": base_resolvable,
                 "best_f1": opt_f1,
                 "best_resolvable": opt_resolvable,
+                "judge_acc": judge_acc,
                 "gain": round(opt_f1 - base_f1, 4),
                 "best_prompt": opt_prompt,
             }
@@ -1016,12 +1118,13 @@ def run_test_evaluation(
                 "opt_vlm_responses": opt_responses,
                 "opt_f1": opt_f1,
                 "opt_resolvable": opt_resolvable,
+                "judge_acc": judge_acc,
                 "gain": round(opt_f1 - base_f1, 4),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
             print(
                 f"    {clean_cls}: base={base_f1:.3f}  opt={opt_f1:.3f}  "
-                f"gain={opt_f1 - base_f1:+.3f}"
+                f"judge={judge_acc:.3f}  gain={opt_f1 - base_f1:+.3f}"
             )
 
     return test_results
@@ -1155,9 +1258,13 @@ def main() -> None:
         "test_overall": {
             "base_f1_macro": _safe_mean([v["base_f1"] for v in test_entries.values()]),
             "best_f1_macro": _safe_mean([v["best_f1"] for v in test_entries.values()]),
+            "judge_acc_macro": _safe_mean(
+                [v["judge_acc"] for v in test_entries.values() if "judge_acc" in v]
+            ),
             "n_classes": len(test_entries),
         },
         "per_class": all_per_class,
+        "test_results_raw": test_results,
         "final_summary": consolidated_summary,
     }
 
