@@ -1020,6 +1020,8 @@ def run_test_evaluation(
     n_eval_per_candidate: int,
     output_dir: Path,
     seed: int,
+    checkpoint: dict | None = None,
+    force: bool = False,
 ) -> dict:
     """
     Evaluate test split:
@@ -1049,7 +1051,8 @@ def run_test_evaluation(
     )
 
     n_samples = max(n_eval_per_candidate * 2, 20)
-    test_results: dict = {}
+    # Load any previously completed test results so re-runs don't overwrite them
+    test_results: dict = checkpoint.get("test_results", {})
     test_log_path = output_dir / "test_log.jsonl"
 
     for agml_name in split_datasets:
@@ -1072,6 +1075,10 @@ def run_test_evaluation(
         for raw_cls, image_paths in sampled.items():
             crop, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
             cls_key = f"{agml_name}/{clean_cls}"
+
+            if cls_key in test_results and not force:
+                print(f"    {clean_cls}: already done — skipping")
+                continue
 
             # Base prompt (open-ended, no class list — matches production pipeline)
             base_f1, base_resolvable, base_responses = evaluate_prompt(
@@ -1150,6 +1157,8 @@ def run_test_evaluation(
                 "judge_gain": round(judge_acc - base_judge_acc, 4),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
+            checkpoint["test_results"] = test_results
+            save_checkpoint(output_dir, checkpoint)
             print(
                 f"    {clean_cls}: base={base_f1:.3f}(j={base_judge_acc:.3f})  "
                 f"opt={opt_f1:.3f}(j={judge_acc:.3f})  "
@@ -1247,6 +1256,8 @@ def main() -> None:
             n_eval_per_candidate=args.n_eval_per_candidate,
             output_dir=output_dir,
             seed=args.seed,
+            checkpoint=checkpoint,
+            force=args.force,
         )
 
     destroy_llm(vlm)
