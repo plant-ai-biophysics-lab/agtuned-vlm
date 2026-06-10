@@ -55,10 +55,41 @@ _KNOWN_PLACEHOLDERS = {"crop", "class_list", "cls"}
 
 
 def _sanitize_template(template: str) -> str:
-    """Escape any {placeholder} that isn't one of our known variables."""
+    """Escape any {placeholder} that isn't one of our known variables.
+
+    Also escapes lone { or } (unmatched braces from model output) which would
+    cause ValueError inside str.format().
+    """
     def _replace(m: re.Match) -> str:
         return m.group(0) if m.group(1) in _KNOWN_PLACEHOLDERS else "{{" + m.group(1) + "}}"
-    return _PLACEHOLDER_RE.sub(_replace, template)
+
+    # First escape all complete {placeholder} pairs
+    result = _PLACEHOLDER_RE.sub(_replace, template)
+
+    # Then escape any remaining lone braces that str.format() would choke on.
+    # We do this char-by-char so we don't disturb the {{ / }} we just wrote.
+    out: list[str] = []
+    i = 0
+    while i < len(result):
+        c = result[i]
+        if c == '{':
+            if i + 1 < len(result) and result[i + 1] == '{':
+                out.append('{{')
+                i += 2
+            else:
+                out.append('{{')   # lone '{' → escape it
+                i += 1
+        elif c == '}':
+            if i + 1 < len(result) and result[i + 1] == '}':
+                out.append('}}')
+                i += 2
+            else:
+                out.append('}}')   # lone '}' → escape it
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
 
 # ── config loading ────────────────────────────────────────────────────────────
 
