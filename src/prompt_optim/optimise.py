@@ -589,6 +589,7 @@ def _bar_chart(
     out_path: Path,
     xlabel: str = "",
     rotate: int = 0,
+    base_judge_vals: list[float] | None = None,
     judge_vals: list[float] | None = None,
 ) -> None:
     import matplotlib
@@ -598,37 +599,42 @@ def _bar_chart(
     n = len(labels)
     x = np.arange(n)
     has_judge = judge_vals is not None and len(judge_vals) == n
+    has_base_judge = base_judge_vals is not None and len(base_judge_vals) == n
 
-    if has_judge:
-        width = 0.26
-        offsets = [-width, 0, width]
-    else:
-        width = 0.38
-        offsets = [-width / 2, width / 2]
+    n_bars = 2 + int(has_base_judge) + int(has_judge)
+    width = min(0.38, 0.8 / n_bars)
+    total = width * n_bars
+    offsets = [i * width - total / 2 + width / 2 for i in range(n_bars)]
 
-    fig, ax = plt.subplots(figsize=(max(8, n * 0.9), 5))
+    fig, ax = plt.subplots(figsize=(max(8, n * 1.1), 5))
 
-    bars_base = ax.bar(x + offsets[0], base_vals, width, label="Base prompt",
-                       color="#5b8dd9", alpha=0.9)
-    bars_opt  = ax.bar(x + offsets[1], opt_vals,  width, label="Best optimised",
-                       color="#e07b54", alpha=0.9)
-
-    for bar in bars_base:
-        h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
-                ha="center", va="bottom", fontsize=7, color="#5b8dd9")
-    for bar in bars_opt:
-        h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
-                ha="center", va="bottom", fontsize=7, color="#c0522a")
-
-    if has_judge:
-        bars_judge = ax.bar(x + offsets[2], judge_vals, width, label="Judge (opt)",
-                            color="#333333", alpha=0.85)
-        for bar in bars_judge:
+    def _annotate(bars, color):
+        for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
-                    ha="center", va="bottom", fontsize=7, color="#333333")
+                    ha="center", va="bottom", fontsize=7, color=color)
+
+    idx = 0
+    bars_base = ax.bar(x + offsets[idx], base_vals, width, label="Base (F1)",
+                       color="#5b8dd9", alpha=0.9)
+    _annotate(bars_base, "#5b8dd9")
+    idx += 1
+
+    if has_base_judge:
+        bars_bj = ax.bar(x + offsets[idx], base_judge_vals, width, label="Base (judge)",
+                         color="#8bafd4", alpha=0.85, hatch="//")
+        _annotate(bars_bj, "#5b8dd9")
+        idx += 1
+
+    bars_opt = ax.bar(x + offsets[idx], opt_vals, width, label="Optimised (F1)",
+                      color="#e07b54", alpha=0.9)
+    _annotate(bars_opt, "#c0522a")
+    idx += 1
+
+    if has_judge:
+        bars_judge = ax.bar(x + offsets[idx], judge_vals, width, label="Optimised (judge)",
+                            color="#333333", alpha=0.85)
+        _annotate(bars_judge, "#333333")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center", fontsize=9)
@@ -658,75 +664,88 @@ def plot_f1_overall(results: dict, output_dir: Path) -> None:
     if not ov:
         return
 
-    judge_test = te.get("judge_acc_macro") or None
+    base_judge_test = te.get("base_judge_acc_macro") or None
+    judge_test      = te.get("judge_acc_macro") or None
+    has_judge = base_judge_test is not None or judge_test is not None
 
     rows = [
-        ("overall",  ov.get("base_f1_macro", 0), ov.get("best_f1_macro", 0), None),
-        ("train",    tr.get("base_f1_macro", 0), tr.get("best_f1_macro", 0), None),
-        ("test",     te.get("base_f1_macro", 0), te.get("best_f1_macro", 0), judge_test),
+        ("overall", ov.get("base_f1_macro", 0), ov.get("best_f1_macro", 0), None, None),
+        ("train",   tr.get("base_f1_macro", 0), tr.get("best_f1_macro", 0), None, None),
+        ("test",    te.get("base_f1_macro", 0), te.get("best_f1_macro", 0), base_judge_test, judge_test),
     ]
-    labels   = [r[0] for r in rows]
-    base_vals = [r[1] for r in rows]
-    opt_vals  = [r[2] for r in rows]
-    judge_vals = [r[3] if r[3] is not None else 0.0 for r in rows]
-    has_judge = any(r[3] is not None for r in rows)
+    labels          = [r[0] for r in rows]
+    base_vals       = [r[1] for r in rows]
+    opt_vals        = [r[2] for r in rows]
+    base_judge_vals = [r[3] or 0.0 for r in rows]
+    judge_vals      = [r[4] or 0.0 for r in rows]
 
     _bar_chart(
         labels, base_vals, opt_vals,
         title="Prompt Optimisation — Overall F1",
         out_path=output_dir / "f1_overall.png",
+        base_judge_vals=base_judge_vals if has_judge else None,
         judge_vals=judge_vals if has_judge else None,
     )
 
 
 def plot_f1_by_task(results: dict, output_dir: Path) -> None:
-    by_task: dict[str, list] = defaultdict(lambda: [[], [], []])
+    by_task: dict[str, list] = defaultdict(lambda: [[], [], [], []])
     for data in results.get("per_class", {}).values():
         tt = data.get("task_type")
         if not tt:
             continue
         by_task[tt][0].append(data.get("base_f1", 0.0))
         by_task[tt][1].append(data.get("best_f1", 0.0))
+        if "base_judge_acc" in data:
+            by_task[tt][2].append(data["base_judge_acc"])
         if "judge_acc" in data:
-            by_task[tt][2].append(data["judge_acc"])
+            by_task[tt][3].append(data["judge_acc"])
     if not by_task:
         return
     labels = sorted(by_task)
-    base_vals  = [float(np.mean(by_task[t][0])) for t in labels]
-    opt_vals   = [float(np.mean(by_task[t][1])) for t in labels]
-    judge_vals = [float(np.mean(by_task[t][2])) if by_task[t][2] else None for t in labels]
-    has_judge  = any(v is not None for v in judge_vals)
+    base_vals       = [float(np.mean(by_task[t][0])) for t in labels]
+    opt_vals        = [float(np.mean(by_task[t][1])) for t in labels]
+    base_judge_vals = [float(np.mean(by_task[t][2])) if by_task[t][2] else None for t in labels]
+    judge_vals      = [float(np.mean(by_task[t][3])) if by_task[t][3] else None for t in labels]
+    has_bj    = any(v is not None for v in base_judge_vals)
+    has_judge = any(v is not None for v in judge_vals)
     _bar_chart(
         labels, base_vals, opt_vals,
         title="Prompt Optimisation — F1 by Task Type",
         out_path=output_dir / "f1_by_task.png",
-        judge_vals=[v if v is not None else 0.0 for v in judge_vals] if has_judge else None,
+        base_judge_vals=[v or 0.0 for v in base_judge_vals] if has_bj else None,
+        judge_vals=[v or 0.0 for v in judge_vals] if has_judge else None,
     )
 
 
 def plot_f1_by_dataset(results: dict, output_dir: Path) -> None:
-    by_ds: dict[str, list] = defaultdict(lambda: [[], [], []])
+    by_ds: dict[str, list] = defaultdict(lambda: [[], [], [], []])
     for data in results.get("per_class", {}).values():
         ds = data.get("dataset")
         if not ds:
             continue
         by_ds[ds][0].append(data.get("base_f1", 0.0))
         by_ds[ds][1].append(data.get("best_f1", 0.0))
+        if "base_judge_acc" in data:
+            by_ds[ds][2].append(data["base_judge_acc"])
         if "judge_acc" in data:
-            by_ds[ds][2].append(data["judge_acc"])
+            by_ds[ds][3].append(data["judge_acc"])
     if not by_ds:
         return
     labels = sorted(by_ds)
-    base_vals  = [float(np.mean(by_ds[d][0])) for d in labels]
-    opt_vals   = [float(np.mean(by_ds[d][1])) for d in labels]
-    judge_vals = [float(np.mean(by_ds[d][2])) if by_ds[d][2] else None for d in labels]
-    has_judge  = any(v is not None for v in judge_vals)
+    base_vals       = [float(np.mean(by_ds[d][0])) for d in labels]
+    opt_vals        = [float(np.mean(by_ds[d][1])) for d in labels]
+    base_judge_vals = [float(np.mean(by_ds[d][2])) if by_ds[d][2] else None for d in labels]
+    judge_vals      = [float(np.mean(by_ds[d][3])) if by_ds[d][3] else None for d in labels]
+    has_bj    = any(v is not None for v in base_judge_vals)
+    has_judge = any(v is not None for v in judge_vals)
     _bar_chart(
         labels, base_vals, opt_vals,
         title="Prompt Optimisation — F1 by Dataset",
         out_path=output_dir / "f1_by_dataset.png",
         rotate=45,
-        judge_vals=[v if v is not None else 0.0 for v in judge_vals] if has_judge else None,
+        base_judge_vals=[v or 0.0 for v in base_judge_vals] if has_bj else None,
+        judge_vals=[v or 0.0 for v in judge_vals] if has_judge else None,
     )
 
 
@@ -1078,15 +1097,23 @@ def run_test_evaluation(
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
 
-            # LLM-as-judge on the optimised prompt's responses
+            # LLM-as-judge on both base and optimised responses
+            base_judge_acc = 0.0
             judge_acc = 0.0
-            if judge_system and judge_user_tmpl and opt_responses:
+            if judge_system and judge_user_tmpl:
                 try:
-                    judge_acc = judge_responses(
-                        opt_llm, opt_tokenizer,
-                        opt_responses, clean_cls, crop,
-                        judge_system, judge_user_tmpl, judge_params,
-                    )
+                    if base_responses:
+                        base_judge_acc = judge_responses(
+                            opt_llm, opt_tokenizer,
+                            base_responses, clean_cls, crop,
+                            judge_system, judge_user_tmpl, judge_params,
+                        )
+                    if opt_responses:
+                        judge_acc = judge_responses(
+                            opt_llm, opt_tokenizer,
+                            opt_responses, clean_cls, crop,
+                            judge_system, judge_user_tmpl, judge_params,
+                        )
                 except Exception as e:
                     print(f"  [warn] Judge failed for {clean_cls}: {e}")
 
@@ -1096,10 +1123,12 @@ def run_test_evaluation(
                 "crop": crop,
                 "base_f1": base_f1,
                 "base_resolvable": base_resolvable,
+                "base_judge_acc": base_judge_acc,
                 "best_f1": opt_f1,
                 "best_resolvable": opt_resolvable,
                 "judge_acc": judge_acc,
                 "gain": round(opt_f1 - base_f1, 4),
+                "judge_gain": round(judge_acc - base_judge_acc, 4),
                 "best_prompt": opt_prompt,
             }
 
@@ -1111,17 +1140,20 @@ def run_test_evaluation(
                 "base_vlm_responses": base_responses,
                 "base_f1": base_f1,
                 "base_resolvable": base_resolvable,
+                "base_judge_acc": base_judge_acc,
                 "opt_prompt": opt_prompt,
                 "opt_vlm_responses": opt_responses,
                 "opt_f1": opt_f1,
                 "opt_resolvable": opt_resolvable,
                 "judge_acc": judge_acc,
                 "gain": round(opt_f1 - base_f1, 4),
+                "judge_gain": round(judge_acc - base_judge_acc, 4),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
             print(
-                f"    {clean_cls}: base={base_f1:.3f}  opt={opt_f1:.3f}  "
-                f"judge={judge_acc:.3f}  gain={opt_f1 - base_f1:+.3f}"
+                f"    {clean_cls}: base={base_f1:.3f}(j={base_judge_acc:.3f})  "
+                f"opt={opt_f1:.3f}(j={judge_acc:.3f})  "
+                f"gain={opt_f1 - base_f1:+.3f}"
             )
 
     return test_results
@@ -1255,6 +1287,9 @@ def main() -> None:
         "test_overall": {
             "base_f1_macro": _safe_mean([v["base_f1"] for v in test_entries.values()]),
             "best_f1_macro": _safe_mean([v["best_f1"] for v in test_entries.values()]),
+            "base_judge_acc_macro": _safe_mean(
+                [v["base_judge_acc"] for v in test_entries.values() if "base_judge_acc" in v]
+            ),
             "judge_acc_macro": _safe_mean(
                 [v["judge_acc"] for v in test_entries.values() if "judge_acc" in v]
             ),
