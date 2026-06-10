@@ -585,6 +585,16 @@ def plot_tsne_overlay(
 
 # ── F1 comparison bar chart ───────────────────────────────────────────────────
 
+def _draw_judge_line(ax, bar, value: float, label: bool = False) -> None:
+    """Draw a thick horizontal line across a bar at the judge score (vision-assessment style)."""
+    x0, w = bar.get_x(), bar.get_width()
+    ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
+            solid_capstyle="butt", zorder=5,
+            label="judge score" if label else "_nolegend_")
+    ax.text(x0 + w / 2, value + 0.005, f"{value:.3f}",
+            ha="center", va="bottom", fontsize=6, color="black", zorder=6)
+
+
 def _bar_chart(
     labels: list[str],
     base_vals: list[float],
@@ -602,14 +612,10 @@ def _bar_chart(
 
     n = len(labels)
     x = np.arange(n)
-    has_judge = judge_vals is not None and len(judge_vals) == n
     has_base_judge = base_judge_vals is not None and len(base_judge_vals) == n
+    has_judge      = judge_vals is not None and len(judge_vals) == n
 
-    n_bars = 2 + int(has_base_judge) + int(has_judge)
-    width = min(0.38, 0.8 / n_bars)
-    total = width * n_bars
-    offsets = [i * width - total / 2 + width / 2 for i in range(n_bars)]
-
+    width = 0.38
     fig, ax = plt.subplots(figsize=(max(8, n * 1.1), 5))
 
     def _annotate(bars, color):
@@ -618,27 +624,24 @@ def _bar_chart(
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
                     ha="center", va="bottom", fontsize=7, color=color)
 
-    idx = 0
-    bars_base = ax.bar(x + offsets[idx], base_vals, width, label="Base (F1)",
+    bars_base = ax.bar(x - width / 2, base_vals, width, label="Base (F1)",
                        color="#5b8dd9", alpha=0.9)
     _annotate(bars_base, "#5b8dd9")
-    idx += 1
 
-    if has_base_judge:
-        bars_bj = ax.bar(x + offsets[idx], base_judge_vals, width, label="Base (judge)",
-                         color="#8bafd4", alpha=0.85, hatch="//")
-        _annotate(bars_bj, "#5b8dd9")
-        idx += 1
-
-    bars_opt = ax.bar(x + offsets[idx], opt_vals, width, label="Optimised (F1)",
+    bars_opt = ax.bar(x + width / 2, opt_vals, width, label="Optimised (F1)",
                       color="#e07b54", alpha=0.9)
     _annotate(bars_opt, "#c0522a")
-    idx += 1
 
+    # Judge scores as horizontal lines across their respective bars
+    judge_label_drawn = False
+    if has_base_judge:
+        for bar, jval in zip(bars_base, base_judge_vals):
+            _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
+            judge_label_drawn = True
     if has_judge:
-        bars_judge = ax.bar(x + offsets[idx], judge_vals, width, label="Optimised (judge)",
-                            color="#333333", alpha=0.85)
-        _annotate(bars_judge, "#333333")
+        for bar, jval in zip(bars_opt, judge_vals):
+            _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
+            judge_label_drawn = True
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center", fontsize=9)
@@ -693,8 +696,9 @@ def plot_f1_overall(results: dict, output_dir: Path) -> None:
 
 
 def plot_f1_by_task(results: dict, output_dir: Path) -> None:
+    # Use test entries only — train uses class_list (closed-form) so mixing distorts the comparison
     by_task: dict[str, list] = defaultdict(lambda: [[], [], [], []])
-    for data in results.get("per_class", {}).values():
+    for data in results.get("test_results_raw", {}).values():
         tt = data.get("task_type")
         if not tt:
             continue
@@ -723,8 +727,9 @@ def plot_f1_by_task(results: dict, output_dir: Path) -> None:
 
 
 def plot_f1_by_dataset(results: dict, output_dir: Path) -> None:
+    # Use test entries only — train uses class_list (closed-form) so mixing distorts the comparison
     by_ds: dict[str, list] = defaultdict(lambda: [[], [], [], []])
-    for data in results.get("per_class", {}).values():
+    for data in results.get("test_results_raw", {}).values():
         ds = data.get("dataset")
         if not ds:
             continue
@@ -1274,8 +1279,8 @@ def main() -> None:
     train_entries = {k: v for k, v in best_prompts.items() if "best_f1" in v}
     test_entries = {k: v for k, v in test_results.items() if "best_f1" in v}
 
-    # Annotate each per-class entry with task_type for grouping in plots
-    for entry in all_per_class.values():
+    # Annotate every entry with task_type for grouping in plots
+    for entry in list(all_per_class.values()) + list(test_results.values()):
         ds_cfg = datasets_cfg.get(entry.get("dataset", ""))
         if ds_cfg:
             entry["task_type"] = ds_cfg.task_type
