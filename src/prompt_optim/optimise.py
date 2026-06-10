@@ -982,32 +982,37 @@ def run_train_loop(
             append_jsonl(per_class_summaries_path, per_class_summaries[-1])
             print(f"    Per-class summary written.")
 
-            # 2. Consolidate all per-class summaries into updated global summary
-            try:
-                consolidated_summary = consolidate_summaries(
-                    opt_llm, opt_tokenizer,
-                    consolidation_system, consolidation_user_tmpl,
-                    per_class_summaries, consolidated_summary,
-                    summary_params,
-                )
-            except Exception as e:
-                print(f"  [warn] Consolidation failed: {e}")
-
-            append_jsonl(consolidated_history_path, {
-                "cls_key": cls_key,
-                "n_classes_seen": len(per_class_summaries),
-                "consolidated_summary": consolidated_summary,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            })
-
-            # Checkpoint
+            # Checkpoint per-class progress (no consolidation yet)
             if "classes" not in checkpoint:
                 checkpoint["classes"] = {}
             checkpoint["classes"][cls_key] = {"status": "done", "best_f1": best_f1}
             checkpoint["best_prompts"] = best_prompts
             checkpoint["per_class_summaries"] = per_class_summaries
-            checkpoint["consolidated_summary"] = consolidated_summary
             save_checkpoint(output_dir, checkpoint)
+
+    # Consolidate once after all classes are done
+    print(f"\nConsolidating {len(per_class_summaries)} per-class summaries...")
+    try:
+        consolidated_summary = consolidate_summaries(
+            opt_llm, opt_tokenizer,
+            consolidation_system, consolidation_user_tmpl,
+            per_class_summaries, "",
+            summary_params,
+        )
+    except Exception as e:
+        print(f"  [warn] Consolidation failed: {e}")
+        consolidated_summary = "\n\n".join(
+            f"{s['crop']} / {s['class_label']}: {s['summary']}"
+            for s in per_class_summaries
+        )
+
+    append_jsonl(consolidated_history_path, {
+        "n_classes_seen": len(per_class_summaries),
+        "consolidated_summary": consolidated_summary,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+    checkpoint["consolidated_summary"] = consolidated_summary
+    save_checkpoint(output_dir, checkpoint)
 
     return best_prompts, consolidated_summary
 
