@@ -1158,7 +1158,7 @@ def main() -> None:
             "n_classes": len(test_entries),
         },
         "per_class": all_per_class,
-        "final_summary": summary,
+        "final_summary": consolidated_summary,
     }
 
     results_path = output_dir / "results.json"
