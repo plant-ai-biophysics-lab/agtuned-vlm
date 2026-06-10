@@ -141,15 +141,18 @@ def _apply_chat_template(tokenizer, prompt: str, system_prompt: str = "") -> str
         )
 
 
-def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> dict:
+def build_multimodal_prompt(
+    tokenizer, image: PILImage.Image, question: str, system_prompt: str = ""
+) -> dict:
     user_msg = {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
+    messages = ([{"role": "system", "content": system_prompt}] if system_prompt else []) + [user_msg]
     try:
         text = tokenizer.apply_chat_template(
-            [user_msg], tokenize=False, add_generation_prompt=True, enable_thinking=False
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
     except TypeError:
         text = tokenizer.apply_chat_template(
-            [user_msg], tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
     return {"prompt": text, "multi_modal_data": {"image": image}}
 
@@ -234,6 +237,7 @@ def evaluate_prompt(
     class_list_str: str,
     cls_params: SamplingParams,
     n_eval: int | None = None,
+    system_prompt: str = "",
 ) -> tuple[float, float, list[str]]:
     """
     Evaluate a prompt template on a set of images for one class.
@@ -250,7 +254,7 @@ def evaluate_prompt(
     for p in paths:
         try:
             img = PILImage.open(p).convert("RGB")
-            prompts.append(build_multimodal_prompt(tokenizer, img, question))
+            prompts.append(build_multimodal_prompt(tokenizer, img, question, system_prompt))
         except Exception as e:
             print(f"    [warn] Could not load {p}: {e}")
 
@@ -1025,14 +1029,12 @@ def run_test_evaluation(
 ) -> dict:
     """
     Evaluate test split:
-      - Base prompt (open-ended, no class list)
-      - Summary-informed prompt (Llama generates one prompt per class using
-        the final consolidated summary — no iteration loop)
+      - Base: open_ended_prompt only (no context)
+      - Opt:  consolidated_summary as VLM system prompt + open_ended_prompt as question
+              (hardcoded — no Llama generation)
     Returns per_class results dict.
     """
     open_ended_tmpl = cfg["open_ended_prompt"]
-    test_prompt_system = cfg["test_prompt_system"]
-    test_prompt_user_tmpl = cfg["test_prompt_user"]
     judge_system = cfg.get("judge_system", "")
     judge_user_tmpl = cfg.get("judge_user", "")
 
@@ -1041,18 +1043,19 @@ def run_test_evaluation(
         max_tokens=int(cfg.get("max_tokens_response", 64)),
         repetition_penalty=1.1,
     )
-    prompt_params = SamplingParams(
-        temperature=float(cfg.get("optimizer_temperature", 0.8)),
-        max_tokens=int(cfg.get("max_tokens_test_prompt", 128)),
-    )
     judge_params = SamplingParams(
         temperature=0.0,
         max_tokens=int(cfg.get("max_tokens_judge", 8)),
     )
 
+    # Write summary to disk so it can be inspected / edited before re-runs
+    summary_path = output_dir / "final_summary.txt"
+    summary_path.write_text(consolidated_summary or "")
+    print(f"  Final summary written to: {summary_path}")
+
     n_samples = max(n_eval_per_candidate * 2, 20)
     # Load any previously completed test results so re-runs don't overwrite them
-    test_results: dict = checkpoint.get("test_results", {})
+    test_results: dict = (checkpoint or {}).get("test_results", {})
     test_log_path = output_dir / "test_log.jsonl"
 
     for agml_name in split_datasets:
@@ -1086,23 +1089,14 @@ def run_test_evaluation(
                 crop, clean_cls, all_classes, class_list_str, cls_params,
             )
 
-            # Summary-informed prompt: Llama generates one prompt using the
-            # final consolidated summary — no loop, no class-specific lookup
-            try:
-                opt_prompt = generate_test_prompt(
-                    opt_llm, opt_tokenizer,
-                    test_prompt_system, test_prompt_user_tmpl,
-                    consolidated_summary, crop,
-                    prompt_params,
-                )
-            except Exception as e:
-                print(f"  [warn] Test prompt generation failed for {clean_cls}: {e}")
-                opt_prompt = cfg["closed_form_prompt"]
-
+            # Opt: consolidated summary as VLM system prompt + same base question
+            # Structure is hardcoded: {summary} / {base_prompt} — no Llama involved
             opt_f1, opt_resolvable, opt_responses = evaluate_prompt(
-                vlm, vlm_tokenizer, opt_prompt, image_paths,
+                vlm, vlm_tokenizer, open_ended_tmpl, image_paths,
                 crop, clean_cls, all_classes, class_list_str, cls_params,
+                system_prompt=consolidated_summary,
             )
+            opt_prompt = f"[system: consolidated_summary]\n{open_ended_tmpl}"
 
             # LLM-as-judge on both base and optimised responses
             base_judge_acc = 0.0
