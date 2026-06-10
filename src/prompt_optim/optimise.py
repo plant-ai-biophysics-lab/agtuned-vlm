@@ -406,14 +406,11 @@ def generate_test_prompt(
     test_prompt_user_template: str,
     consolidated_summary: str,
     crop: str,
-    cls: str,
-    class_list_str: str,
     prompt_params: SamplingParams,
 ) -> str:
     user_msg = test_prompt_user_template.format(
         consolidated_summary=consolidated_summary or "(empty)",
         crop=crop,
-        cls=cls,
     )
     formatted = _apply_chat_template(opt_tokenizer, user_msg, system_prompt=test_prompt_system)
     outputs = opt_llm.generate([formatted], sampling_params=prompt_params)
@@ -1069,7 +1066,7 @@ def run_test_evaluation(
                 opt_prompt = generate_test_prompt(
                     opt_llm, opt_tokenizer,
                     test_prompt_system, test_prompt_user_tmpl,
-                    consolidated_summary, crop, clean_cls, class_list_str,
+                    consolidated_summary, crop,
                     prompt_params,
                 )
             except Exception as e:

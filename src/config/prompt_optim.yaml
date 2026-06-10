@@ -156,11 +156,10 @@ test_prompt_user: |
   === Consolidated knowledge base ===
   {consolidated_summary}
 
-  === New class to generate a prompt for ===
+  === Task ===
   Crop: {crop}
-  Class: {cls}
 
-  Write one open-ended prompt for this class (no class list).
+  Write one open-ended prompt for classifying conditions on this crop (no class list).
 
 # ── LLM-as-judge (test set only) ─────────────────────────────────────────────
 
