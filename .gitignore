@@ -20,3 +20,16 @@ unsloth_compiled_cache
 /annotations.csv
 /outputs
 /src/config/datasets_test.yaml
+
+# more
+data/*
+experiments/**/**/*.jpg
+experiments/**/**/*.jsonl
+experiments/**/**/*.json
+experiments/**/**/*.csv
+experiments/**/**/*.txt
+experiments/**/**/*.png
+farm_outputs/*
+experiments/**/**/*.log
+**/*.lock
+experiments/text_qa/uv.lock
