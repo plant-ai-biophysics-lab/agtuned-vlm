@@ -21,6 +21,7 @@ STAGES = {
     "build-dg-jsonl":        "src.data_generation.build_digital_green_jsonl",
     "finetune":           "src.finetune.train",
     "prompt-optim":       "src.prompt_optim.optimise",
+    "vocab-grounding":    "src.vocab_grounding.run",
 }
 
 _HELP = """
@@ -46,6 +47,7 @@ Stages:
     vision-augmented-plot           — regenerate augmented vision assessment charts from saved metrics JSON
     build-dg-jsonl                  — build Digital Green JSONL files from annotations CSV
     prompt-optim        — iteratively optimise per-class prompts via meta-prompting
+    vocab-grounding     — inject class-discriminative vocab tokens into prompts, measure F1 gain
 
 Examples:
     python main.py generate \\

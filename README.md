@@ -602,18 +602,18 @@ to a disease class's image representations should anchor attention to the right 
 
 ```bash
 # Full run (test split)
-uv run python experiments/vocab_grounding/vocab_grounding.py \
+uv run python main.py vocab-grounding \
   --model google/gemma-4-26B-A4B-it \
   --split test \
   --output_dir outputs/vocab_grounding
 
 # Re-run evaluation only (Phase 1 already done)
-uv run python experiments/vocab_grounding/vocab_grounding.py \
+uv run python main.py vocab-grounding \
   --skip_grounding \
   --output_dir outputs/vocab_grounding
 
 # Replot from existing results (no inference)
-uv run python experiments/vocab_grounding/vocab_grounding.py \
+uv run python main.py vocab-grounding \
   --skip_grounding --skip_eval \
   --output_dir outputs/vocab_grounding
 ```

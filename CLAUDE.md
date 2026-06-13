@@ -30,7 +30,7 @@ Each experiment is a self-contained CLI script. There is no top-level orchestrat
 | `vllm_inference/` | `gemma4_inference.py` | Benchmark inference speed + accuracy via vLLM |
 | `vision_feats/` | `01–04_*.py` | Analyze vision representations at different model levels |
 | `alignment_test/` | `check_alignment.py` | H3: Vision-text alignment via attention-bbox overlap |
-| `vocab_grounding/` | `vocab_grounding.py` | Test whether injecting class-discriminative vocab tokens into prompts improves F1 |
+| `vocab_grounding/` | `run.py` | Test whether injecting class-discriminative vocab tokens into prompts improves F1 |
 
 ### Common CLI arguments
 - `--model`: HuggingFace model ID or local path (Gemma-4 variants: E2B, E4B, 26B, 31B)
