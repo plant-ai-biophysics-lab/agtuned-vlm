@@ -583,6 +583,62 @@ clear message if the file is not found.
 
 ---
 
+### Stage 10 — Vocab Grounding
+
+Tests whether injecting class-discriminative tokens from the VLM's own embedding space into
+classification prompts improves F1. Hypothesis: diagnostic vocabulary (`disease`, `pest`,
+`stress`) is weakly grounded in visual space; tokens whose embeddings are geometrically close
+to a disease class's image representations should anchor attention to the right visual features.
+
+**Phase 1 — Grounding analysis** (HuggingFace transformers, `output_hidden_states=True`):
+- For each class: forward N images, compute mean image-token hidden-state centroid at final layer
+- Search full vocab embedding table for tokens with highest `sim_to_target − mean_sim_to_others`
+- Saves `discriminative_vocab.json`
+
+**Phase 2 — Evaluation** (vLLM, fast batch):
+- Base prompt: `visual_classification_disease` from `src/config/prompts.yaml` (open-ended, no class list)
+- Contrastive prompt: discriminative tokens prepended bare → `"pustule, lesion. What disease... in this image of a {crop}?"`
+- Measures F1 gain per class across all evaluated datasets
+
+```bash
+# Full run (test split)
+uv run python experiments/vocab_grounding/vocab_grounding.py \
+  --model google/gemma-4-26B-A4B-it \
+  --split test \
+  --output_dir outputs/vocab_grounding
+
+# Re-run evaluation only (Phase 1 already done)
+uv run python experiments/vocab_grounding/vocab_grounding.py \
+  --skip_grounding \
+  --output_dir outputs/vocab_grounding
+
+# Replot from existing results (no inference)
+uv run python experiments/vocab_grounding/vocab_grounding.py \
+  --skip_grounding --skip_eval \
+  --output_dir outputs/vocab_grounding
+```
+
+**Output structure:**
+
+```
+outputs/vocab_grounding/
+├── discriminative_vocab.json          top discriminative tokens per class + scores
+├── results.json                       F1 base vs contrastive, per class / dataset / task / overall
+├── class_log.jsonl                    per-class evaluation records with raw responses
+├── checkpoint.json                    resume state
+└── plots/
+    ├── f1_overall.png                 overall F1 grouped bar chart
+    ├── f1_by_task.png                 F1 by task type
+    ├── f1_by_dataset.png              F1 by dataset
+    ├── f1_per_class.png               F1 per class
+    ├── token_grounding_{dataset}.png  discriminability heatmap: tokens × classes
+    ├── discriminability_vs_gain.png   scatter: does disc score predict F1 gain?
+    ├── gain_distribution.png          histogram of F1 gains across classes
+    └── threshold_sensitivity.png      coverage vs min_gap threshold
+```
+
+---
+
 ## Outputs
 
 ```
