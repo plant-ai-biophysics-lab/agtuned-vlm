@@ -33,4 +33,8 @@ farm_outputs/*
 experiments/**/**/*.log
 **/*.lock
 experiments/text_qa/uv.lock
+<<<<<<< Updated upstream
 /.DS_Store
+=======
+experiments/**/**/*.npy
+>>>>>>> Stashed changes
