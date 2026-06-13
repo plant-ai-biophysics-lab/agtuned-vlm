@@ -33,3 +33,4 @@ farm_outputs/*
 experiments/**/**/*.log
 **/*.lock
 experiments/text_qa/uv.lock
+/.DS_Store

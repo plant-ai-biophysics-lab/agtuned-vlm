@@ -1,0 +1,47 @@
+# Vocab Grounding Experiment Config
+# Used by experiments/vocab_grounding/vocab_grounding.py
+#
+# Hypothesis: injecting class-discriminative tokens (from the VLM's own embedding
+# space) into classification prompts improves F1 by anchoring attention to
+# visually-grounded vocabulary.
+
+# ── Prompt templates ──────────────────────────────────────────────────────────
+
+# Baseline — open-ended, no class list, matches prompt_optim base_prompt
+base_prompt: >-
+  What disease or condition is shown in this image of a {crop}?
+
+# Contrastive — discriminative tokens prepended bare, then the same base question
+# {disc_tokens} is filled with top-K tokens from grounding analysis
+contrastive_prompt: >-
+  {disc_tokens}. What disease or condition is shown in this image of a {crop}?
+
+# ── Grounding hyperparameters ─────────────────────────────────────────────────
+
+# Images per class used to compute hidden-state image centroid in Phase 1
+n_grounding: 10
+
+# Candidate discriminative tokens found per class before filtering
+top_k_tokens: 15
+
+# Minimum discriminability gap to inject a token (sim_to_target - mean_sim_to_others)
+min_gap: 0.003
+
+# Number of discriminative tokens to inject into the contrastive prompt
+n_disc_tokens: 3
+
+# Minimum token length (chars) and only alphabetic tokens are considered
+min_token_len: 3
+
+# ── Evaluation hyperparameters ────────────────────────────────────────────────
+
+# Images per class used to evaluate prompts in Phase 2
+n_eval: 10
+
+classifier_temperature: 0.0
+max_tokens_response: 64
+
+# ── vLLM settings ─────────────────────────────────────────────────────────────
+
+gpu_memory_utilization: 0.55   # leave headroom for Phase 1 HF model footprint
+max_model_len: 6144

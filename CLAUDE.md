@@ -20,6 +20,24 @@ uv run python experiments/<module>/<script>.py --<args>
 
 Each experiment is a self-contained CLI script. There is no top-level orchestrator — `main.py` is a placeholder.
 
+```bash
+# Vocab grounding experiment — full run (test split)
+uv run python experiments/vocab_grounding/vocab_grounding.py \
+  --model google/gemma-4-26B-A4B-it \
+  --split test \
+  --output_dir outputs/vocab_grounding
+
+# Re-run evaluation only (Phase 1 already done)
+uv run python experiments/vocab_grounding/vocab_grounding.py \
+  --skip_grounding \
+  --output_dir outputs/vocab_grounding
+
+# Replot from existing results (no inference)
+uv run python experiments/vocab_grounding/vocab_grounding.py \
+  --skip_grounding --skip_eval \
+  --output_dir outputs/vocab_grounding
+```
+
 ## Experiment Modules
 
 | Module | Script | Purpose |
@@ -30,6 +48,7 @@ Each experiment is a self-contained CLI script. There is no top-level orchestrat
 | `vllm_inference/` | `gemma4_inference.py` | Benchmark inference speed + accuracy via vLLM |
 | `vision_feats/` | `01–04_*.py` | Analyze vision representations at different model levels |
 | `alignment_test/` | `check_alignment.py` | H3: Vision-text alignment via attention-bbox overlap |
+| `vocab_grounding/` | `vocab_grounding.py` | Test whether injecting class-discriminative vocab tokens into prompts improves F1 |
 
 ### Common CLI arguments
 - `--model`: HuggingFace model ID or local path (Gemma-4 variants: E2B, E4B, 26B, 31B)
