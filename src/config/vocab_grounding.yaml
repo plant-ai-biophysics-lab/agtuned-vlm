@@ -7,14 +7,12 @@
 
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
-# Baseline — open-ended, no class list, matches prompt_optim base_prompt
-base_prompt: >-
-  What disease or condition is shown in this image of a {crop}?
+# Baseline — matches visual_classification_disease in src/config/prompts.yaml
+base_prompt: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 
 # Contrastive — discriminative tokens prepended bare, then the same base question
 # {disc_tokens} is filled with top-K tokens from grounding analysis
-contrastive_prompt: >-
-  {disc_tokens}. What disease or condition is shown in this image of a {crop}?
+contrastive_prompt: "{disc_tokens}. What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 
 # ── Grounding hyperparameters ─────────────────────────────────────────────────
 
