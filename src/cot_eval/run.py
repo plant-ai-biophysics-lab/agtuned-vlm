@@ -190,8 +190,17 @@ def _build_cot_classify_turn(
 
 
 def _clean(text: str) -> str:
-    """Strip <think>...</think> blocks and whitespace."""
-    return _THINK_RE.sub("", text).strip()
+    """
+    Strip <think>...</think> blocks.
+    If the block is unclosed (truncated output), discard everything from <think> onward
+    so a truncated generation doesn't masquerade as a valid response.
+    """
+    text = _THINK_RE.sub("", text)
+    # Discard any remaining unclosed <think> prefix
+    idx = text.lower().find("<think>")
+    if idx != -1:
+        text = text[:idx]
+    return text.strip()
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
@@ -217,7 +226,8 @@ def evaluate_class(
     image_paths: list[str],
     thinking_prompt: str,
     base_prompt: str,
-    classification_question: str,
+    base_classification_q: str,
+    cot_classification_q: str,
     base_params,
     cot_params,
     cls_params,
@@ -226,11 +236,14 @@ def evaluate_class(
 ) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     """
     5 vLLM passes:
-      1. base              — single-turn, thinking=False
-      2. observations      — structured CoT pass, thinking=False (clean text)
-      3. cot classify      — two-turn with observations, thinking=False
-      4. native thinking   — single-turn, thinking=True
-      5. cot+thinking      — two-turn with observations, thinking=True
+      1. base            — [image] + base_prompt + base_classification_q   (thinking=False)
+      2. observations    — [image] + thinking_prompt                        (thinking=False, clean text)
+      3. cot classify    — [image+obs] + cot_classification_q               (thinking=False)
+      4. native thinking — [image] + base_prompt + base_classification_q   (thinking=True)
+      5. cot+thinking    — [image+obs] + cot_classification_q               (thinking=True)
+
+    base_classification_q  — asks for the specific name directly
+    cot_classification_q   — bridges from the structured analysis to a specific name
 
     Returns (base_responses, cot_responses, thinking_responses, cot_thinking_responses, cot_thoughts).
     """
@@ -245,37 +258,37 @@ def evaluate_class(
     if not images:
         return [], [], [], [], []
 
-    # Pass 1 — base
-    base_inputs = [_build_single_turn(tokenizer, img, base_prompt, enable_thinking=False)
+    # Pass 1 — base (direct name instruction, no thinking)
+    base_inputs = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=False)
                    for img in images]
     base_responses = [_clean(o.outputs[0].text)
                       for o in llm.generate(base_inputs, base_params)]
 
-    # Pass 2 — structured observations (thinking=False → clean structured text)
+    # Pass 2 — structured observations (thinking=False → clean text, no <think> tags)
     obs_inputs = [_build_single_turn(tokenizer, img, thinking_prompt, enable_thinking=False)
                   for img in images]
     cot_thoughts = [_clean(o.outputs[0].text)
                     for o in llm.generate(obs_inputs, cot_params)]
 
-    # Pass 3 — CoT classify (structured context, thinking=False)
+    # Pass 3 — CoT classify (structured context + bridging question, thinking=False)
     cot_inputs = [
         _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought,
-                                 classification_question, enable_thinking=False)
+                                 cot_classification_q, enable_thinking=False)
         for img, thought in zip(images, cot_thoughts)
     ]
     cot_responses = [_clean(o.outputs[0].text)
                      for o in llm.generate(cot_inputs, cls_params)]
 
     # Pass 4 — native thinking on base question (thinking=True)
-    think_inputs = [_build_single_turn(tokenizer, img, base_prompt, enable_thinking=True)
+    think_inputs = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=True)
                     for img in images]
     thinking_responses = [_clean(o.outputs[0].text)
                           for o in llm.generate(think_inputs, thinking_params)]
 
-    # Pass 5 — CoT + native thinking (structured context, thinking=True)
+    # Pass 5 — CoT + native thinking (structured context + bridging question, thinking=True)
     cot_think_inputs = [
         _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought,
-                                 classification_question, enable_thinking=True)
+                                 cot_classification_q, enable_thinking=True)
         for img, thought in zip(images, cot_thoughts)
     ]
     cot_thinking_responses = [_clean(o.outputs[0].text)
@@ -324,7 +337,12 @@ def run_evaluation(
 
     judge_system   = prompts_cfg["judge_system_vision"]
     judge_template = prompts_cfg["judge_classification_template"]
-    cls_suffix     = prompts_cfg.get("classification_suffix", " Respond with only the class name, nothing else.")
+    # Separate suffixes: base/thinking get a direct "name it" instruction;
+    # CoT passes get a bridging phrase so the model doesn't output a category
+    base_suffix = cfg.get("base_classification_suffix",
+                          " Answer with the specific disease, pest, or stress name only. Do not describe — just name it.")
+    cot_suffix  = cfg.get("cot_classification_suffix",
+                          " Based on your analysis above, what is the specific name of the condition shown? Answer with the specific name only.")
 
     base_params     = SamplingParams(temperature=temp, max_tokens=max_resp,     repetition_penalty=1.1)
     cot_params      = SamplingParams(temperature=temp, max_tokens=max_cot,      repetition_penalty=1.05)
@@ -363,14 +381,18 @@ def run_evaluation(
 
             print(f"\n  Class: {clean_cls}")
 
-            base_prompt            = get_base_prompt(ds_cfg.task_type, prompts_cfg, cfg, crop)
-            classification_question = base_prompt + cls_suffix
+            base_prompt             = get_base_prompt(ds_cfg.task_type, prompts_cfg, cfg, crop)
+            # base/thinking: direct name instruction
+            base_classification_q   = base_prompt + base_suffix
+            # cot passes: bridge from structured analysis to specific name
+            cot_classification_q    = base_prompt + cot_suffix
 
             (base_responses, cot_responses,
              thinking_responses, cot_thinking_responses,
              cot_thoughts) = evaluate_class(
                 llm, tokenizer, image_paths,
-                thinking_prompt, base_prompt, classification_question,
+                thinking_prompt, base_prompt,
+                base_classification_q, cot_classification_q,
                 base_params, cot_params, cls_params, thinking_params, n_eval,
             )
 
@@ -408,6 +430,8 @@ def run_evaluation(
                 "class_label": clean_cls,
                 "crop":       crop,
                 "task_type":  ds_cfg.task_type,
+                "base_classification_q": base_classification_q,
+                "cot_classification_q":  cot_classification_q,
                 # F1
                 "base_f1":          base_f1,
                 "cot_f1":           cot_f1,
@@ -428,10 +452,9 @@ def run_evaluation(
                 "thinking_judge_acc":     thinking_judge,
                 "cot_thinking_judge_acc": cot_thinking_judge,
                 # metadata
-                "mean_cot_length_words": mean_cot_len,
-                "base_prompt":           base_prompt,
-                "classification_question": classification_question,
-                "cot_prompt_key":        cfg["task_type_to_cot"].get(ds_cfg.task_type, "disease_pest"),
+                "mean_cot_length_words":  mean_cot_len,
+                "base_prompt":            base_prompt,
+                "cot_prompt_key":         cfg["task_type_to_cot"].get(ds_cfg.task_type, "disease_pest"),
                 "timestamp":             time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
             eval_results[cls_key] = entry

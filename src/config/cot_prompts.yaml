@@ -48,6 +48,15 @@ task_type_to_base_prompt:
   pest_damage:         visual_classification_disease
   weed_identification: visual_classification_weed
 
+# ── Classification suffixes ───────────────────────────────────────────────────
+
+# Appended to the base prompt for the base and thinking conditions
+base_classification_suffix: " Answer with the specific disease, pest, or stress name only (if any - healthy otherwise). Do not describe — just name it."
+
+# Appended to the base prompt for the CoT classify pass (Pass 3 and 5).
+# Bridges from the structured analysis to a specific name.
+cot_classification_suffix: " Based on your analysis above, what is the specific name of the condition shown (if any - healthy otherwise)? Answer with the specific name only."
+
 # ── LLM-as-judge ──────────────────────────────────────────────────────────────
 # Reuses judge_system_vision + judge_classification_template from prompts.yaml
 
@@ -59,6 +68,6 @@ n_eval: 30
 classifier_temperature: 0.0
 max_tokens_cot: 2048       # structured observation pass (thinking=False, clean text) — 5 detailed points
 max_tokens_response: 128    # classification pass (base and cot conditions) — just a class name
-max_tokens_thinking: 2048  # native thinking passes (thinking=True) — <think> block can be verbose
+max_tokens_thinking: 4096  # native thinking passes (thinking=True) — <think> block can be verbose
 gpu_memory_utilization: 0.85
-max_model_len: 8192        # must accommodate image + CoT context + thinking block + response
+max_model_len: 12288       # must accommodate image + CoT context + thinking block + response
