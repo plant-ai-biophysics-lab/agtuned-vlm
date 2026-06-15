@@ -33,29 +33,20 @@ thinking_prompts:
     4. Candidate Species: Based on these exact visual markers, list the top 2-3 most likely botanical matches (Scientific Name and Common Name). State your confidence level for each.
     5. Weed Status & Ecological Profile: If commonly classified as a weed or invasive species, specify its impact (e.g., agricultural weed, garden nuisance, noxious weed).
 
-  crop_identification: |
-    Before identifying, carefully analyze this image:
-
-    1. Identification: What crop or plant species is shown?
-    2. Growth Stage: What growth or maturity stage is the plant at? Look for seedling, vegetative, flowering, or fruiting indicators.
-    3. Visual Features: Describe the key visual features — color, size, texture, shape — that indicate the growth stage or ripeness.
-    4. Condition: Is the crop healthy, stressed, or at an optimal harvest stage?
-
 # ── Task type routing ─────────────────────────────────────────────────────────
 
 # Maps dataset task_type → thinking_prompt key above
+# Only task types actually used in datasets.yaml are listed here.
 task_type_to_cot:
-  disease:            disease_pest
-  pest_damage:        disease_pest
+  disease:             disease_pest
+  pest_damage:         disease_pest
   weed_identification: weed_identification
-  crop_identification: crop_identification
 
 # Maps dataset task_type → key in src/config/prompts.yaml for the base question
 task_type_to_base_prompt:
-  disease:            visual_classification_disease
-  pest_damage:        visual_classification_disease
+  disease:             visual_classification_disease
+  pest_damage:         visual_classification_disease
   weed_identification: visual_classification_weed
-  crop_identification: visual_classification_weed
 
 # ── LLM-as-judge ──────────────────────────────────────────────────────────────
 # Reuses judge_system_vision + judge_classification_template from prompts.yaml
