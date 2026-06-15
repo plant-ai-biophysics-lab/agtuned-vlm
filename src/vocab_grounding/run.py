@@ -62,7 +62,7 @@ import yaml
 from PIL import Image as PILImage
 
 from src.common.dataset_config import datasets_by_name, clean_class_list, parse_class_label
-from src.common.metrics import resolve_class, compute_classification_metrics
+from src.common.metrics import resolve_class, compute_classification_metrics, apply_judge
 
 # ── regex ─────────────────────────────────────────────────────────────────────
 
@@ -635,6 +635,11 @@ def run_evaluation_phase(
     gpu_util = float(cfg.get("gpu_memory_utilization", 0.55))
     max_model_len = int(cfg.get("max_model_len", 6144))
 
+    # Load shared judge prompts from prompts.yaml
+    prompts_cfg = yaml.safe_load(Path(cfg.get("prompts_config", "src/config/prompts.yaml")).read_text())
+    judge_system = prompts_cfg["judge_system_vision"]
+    judge_template = prompts_cfg["judge_classification_template"]
+
     cls_params = SamplingParams(
         temperature=float(cfg.get("classifier_temperature", 0.0)),
         max_tokens=int(cfg.get("max_tokens_response", 64)),
@@ -702,6 +707,15 @@ def run_evaluation_phase(
             )
             print(f"    contrastive F1={cont_f1:.3f}  resolvable={cont_resolvable:.2f}  gain={cont_f1-base_f1:+.3f}")
 
+            # Judge — reuse same vLLM instance, text-only
+            base_rows = [{"gt": clean_cls, "response": r} for r in base_responses]
+            cont_rows = [{"gt": clean_cls, "response": r} for r in cont_responses]
+            base_judged = apply_judge(base_rows, llm, tokenizer, judge_system, judge_template, "gt", "response")
+            cont_judged = apply_judge(cont_rows, llm, tokenizer, judge_system, judge_template, "gt", "response")
+            base_judge = round(sum(r["judged_correct"] for r in base_judged) / max(len(base_judged), 1), 4)
+            cont_judge = round(sum(r["judged_correct"] for r in cont_judged) / max(len(cont_judged), 1), 4)
+            print(f"    judge      base={base_judge:.3f}  cont={cont_judge:.3f}")
+
             entry = {
                 "dataset": agml_name,
                 "class_label": clean_cls,
@@ -712,6 +726,8 @@ def run_evaluation_phase(
                 "gain": round(cont_f1 - base_f1, 4),
                 "base_resolvable": base_resolvable,
                 "cont_resolvable": cont_resolvable,
+                "base_judge_acc": base_judge,
+                "cont_judge_acc": cont_judge,
                 "base_prompt": base_prompt,
                 "cont_prompt": cont_prompt,
                 "disc_tokens_used": [t["token"] for t in tokens_used],
@@ -746,33 +762,49 @@ def aggregate_results(eval_results: dict) -> dict:
     cont_f1s = [e["cont_f1"] for e in all_e]
     n_improved = sum(1 for e in all_e if e["cont_f1"] > e["base_f1"])
 
-    by_task: dict[str, list] = defaultdict(lambda: [[], []])
-    by_ds: dict[str, list] = defaultdict(lambda: [[], []])
+    base_judge = [e["base_judge_acc"] for e in all_e if "base_judge_acc" in e]
+    cont_judge = [e["cont_judge_acc"] for e in all_e if "cont_judge_acc" in e]
+
+    by_task: dict[str, list] = defaultdict(lambda: [[], [], [], []])
+    by_ds:   dict[str, list] = defaultdict(lambda: [[], [], [], []])
     for e in all_e:
+        bj = e.get("base_judge_acc")
+        cj = e.get("cont_judge_acc")
         if e.get("task_type"):
             by_task[e["task_type"]][0].append(e["base_f1"])
             by_task[e["task_type"]][1].append(e["cont_f1"])
+            if bj is not None: by_task[e["task_type"]][2].append(bj)
+            if cj is not None: by_task[e["task_type"]][3].append(cj)
         if e.get("dataset"):
             by_ds[e["dataset"]][0].append(e["base_f1"])
             by_ds[e["dataset"]][1].append(e["cont_f1"])
+            if bj is not None: by_ds[e["dataset"]][2].append(bj)
+            if cj is not None: by_ds[e["dataset"]][3].append(cj)
 
     def _mean_pair(v):
-        return {
+        d = {
             "base_f1_macro": round(float(np.mean(v[0])), 4),
             "cont_f1_macro": round(float(np.mean(v[1])), 4),
             "gain": round(float(np.mean(v[1])) - float(np.mean(v[0])), 4),
             "n_classes": len(v[0]),
         }
+        if v[2]: d["base_judge_acc_macro"] = round(float(np.mean(v[2])), 4)
+        if v[3]: d["cont_judge_acc_macro"] = round(float(np.mean(v[3])), 4)
+        return d
+
+    overall = {
+        "base_f1_macro": round(float(np.mean(base_f1s)), 4),
+        "cont_f1_macro": round(float(np.mean(cont_f1s)), 4),
+        "gain": round(float(np.mean(cont_f1s)) - float(np.mean(base_f1s)), 4),
+        "n_classes": len(all_e),
+        "n_improved": n_improved,
+        "pct_improved": round(n_improved / max(len(all_e), 1), 4),
+    }
+    if base_judge: overall["base_judge_acc_macro"] = round(float(np.mean(base_judge)), 4)
+    if cont_judge: overall["cont_judge_acc_macro"] = round(float(np.mean(cont_judge)), 4)
 
     return {
-        "overall": {
-            "base_f1_macro": round(float(np.mean(base_f1s)), 4),
-            "cont_f1_macro": round(float(np.mean(cont_f1s)), 4),
-            "gain": round(float(np.mean(cont_f1s)) - float(np.mean(base_f1s)), 4),
-            "n_classes": len(all_e),
-            "n_improved": n_improved,
-            "pct_improved": round(n_improved / max(len(all_e), 1), 4),
-        },
+        "overall": overall,
         "by_task": {tt: _mean_pair(v) for tt, v in by_task.items()},
         "by_dataset": {ds: _mean_pair(v) for ds, v in by_ds.items()},
         "per_class": eval_results,
@@ -780,6 +812,16 @@ def aggregate_results(eval_results: dict) -> dict:
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
+
+def _draw_judge_line(ax, bar, value: float, label: bool = False) -> None:
+    """Black horizontal line across a bar at the judge score."""
+    x0, w = bar.get_x(), bar.get_width()
+    ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
+            solid_capstyle="butt", zorder=5,
+            label="judge score" if label else "_nolegend_")
+    ax.text(x0 + w / 2, value + 0.005, f"{value:.3f}",
+            ha="center", va="bottom", fontsize=6, color="black", zorder=6)
+
 
 def _bar_chart(
     labels: list[str],
@@ -789,6 +831,8 @@ def _bar_chart(
     out_path: Path,
     xlabel: str = "",
     rotate: int = 0,
+    base_judge_vals: list[float] | None = None,
+    judge_vals: list[float] | None = None,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -797,6 +841,8 @@ def _bar_chart(
     n = len(labels)
     x = np.arange(n)
     width = 0.38
+    has_bj = base_judge_vals is not None and len(base_judge_vals) == n
+    has_j  = judge_vals      is not None and len(judge_vals)      == n
 
     fig, ax = plt.subplots(figsize=(max(8, n * 1.1), 5))
 
@@ -812,9 +858,19 @@ def _bar_chart(
     bars_cont = ax.bar(x + width / 2, cont_vals, width, label="Contrastive (F1)", color="#e07b54", alpha=0.9)
     _annotate(bars_cont, "#c0522a")
 
+    judge_label_drawn = False
+    if has_bj:
+        for bar, jval in zip(bars_base, base_judge_vals):
+            _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
+            judge_label_drawn = True
+    if has_j:
+        for bar, jval in zip(bars_cont, judge_vals):
+            _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
+            judge_label_drawn = True
+
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center", fontsize=9)
-    ax.set_ylabel("F1")
+    ax.set_ylabel("F1 / judge accuracy")
     ax.set_ylim(0, 1.12)
     if xlabel:
         ax.set_xlabel(xlabel)
@@ -831,6 +887,8 @@ def plot_f1_overall(results: dict, plots_dir: Path) -> None:
     ov = results.get("overall", {})
     if not ov:
         return
+    bj = ov.get("base_judge_acc_macro")
+    cj = ov.get("cont_judge_acc_macro")
     _bar_chart(
         ["overall"],
         [ov.get("base_f1_macro", 0)],
@@ -842,6 +900,8 @@ def plot_f1_overall(results: dict, plots_dir: Path) -> None:
             f"gain={ov.get('gain',0):+.4f}"
         ),
         out_path=plots_dir / "f1_overall.png",
+        base_judge_vals=[bj] if bj is not None else None,
+        judge_vals=[cj] if cj is not None else None,
     )
 
 
@@ -850,12 +910,18 @@ def plot_f1_by_task(results: dict, plots_dir: Path) -> None:
     if not by_task:
         return
     labels = sorted(by_task)
+    bj = [by_task[t].get("base_judge_acc_macro") for t in labels]
+    cj = [by_task[t].get("cont_judge_acc_macro") for t in labels]
+    has_bj = any(v is not None for v in bj)
+    has_cj = any(v is not None for v in cj)
     _bar_chart(
         labels,
         [by_task[t]["base_f1_macro"] for t in labels],
         [by_task[t]["cont_f1_macro"] for t in labels],
         title="Vocab Grounding — F1 by Task Type",
         out_path=plots_dir / "f1_by_task.png",
+        base_judge_vals=[v or 0.0 for v in bj] if has_bj else None,
+        judge_vals=[v or 0.0 for v in cj] if has_cj else None,
     )
 
 
@@ -864,6 +930,10 @@ def plot_f1_by_dataset(results: dict, plots_dir: Path) -> None:
     if not by_ds:
         return
     labels = sorted(by_ds)
+    bj = [by_ds[d].get("base_judge_acc_macro") for d in labels]
+    cj = [by_ds[d].get("cont_judge_acc_macro") for d in labels]
+    has_bj = any(v is not None for v in bj)
+    has_cj = any(v is not None for v in cj)
     _bar_chart(
         labels,
         [by_ds[d]["base_f1_macro"] for d in labels],
@@ -871,6 +941,8 @@ def plot_f1_by_dataset(results: dict, plots_dir: Path) -> None:
         title="Vocab Grounding — F1 by Dataset",
         out_path=plots_dir / "f1_by_dataset.png",
         rotate=45,
+        base_judge_vals=[v or 0.0 for v in bj] if has_bj else None,
+        judge_vals=[v or 0.0 for v in cj] if has_cj else None,
     )
 
 
@@ -879,6 +951,10 @@ def plot_f1_per_class(results: dict, plots_dir: Path) -> None:
     if not per_class:
         return
     items = sorted(per_class.items())
+    bj = [v.get("base_judge_acc") for _, v in items]
+    cj = [v.get("cont_judge_acc") for _, v in items]
+    has_bj = any(v is not None for v in bj)
+    has_cj = any(v is not None for v in cj)
     _bar_chart(
         [v.get("class_label", k) for k, v in items],
         [v["base_f1"] for _, v in items],
@@ -887,6 +963,8 @@ def plot_f1_per_class(results: dict, plots_dir: Path) -> None:
         out_path=plots_dir / "f1_per_class.png",
         xlabel="class",
         rotate=45,
+        base_judge_vals=[v or 0.0 for v in bj] if has_bj else None,
+        judge_vals=[v or 0.0 for v in cj] if has_cj else None,
     )
 
 

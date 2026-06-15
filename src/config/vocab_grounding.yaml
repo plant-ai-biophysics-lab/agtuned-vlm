@@ -14,6 +14,12 @@ base_prompt: "What disease, pest, damage type, or other stress, if any, is exhib
 # {disc_tokens} is filled with top-K tokens from grounding analysis
 contrastive_prompt: "{disc_tokens}. What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 
+# ── LLM-as-judge ─────────────────────────────────────────────────────────────
+# Reuses judge_system_vision + judge_classification_template from src/config/prompts.yaml
+
+prompts_config: src/config/prompts.yaml
+max_tokens_judge: 1024   # JSON response needs more tokens than a simple Yes/No
+
 # ── Grounding hyperparameters ─────────────────────────────────────────────────
 
 # Images per class used to compute hidden-state image centroid in Phase 1
