@@ -591,7 +591,8 @@ classification prompts improves F1. Hypothesis: diagnostic vocabulary (`disease`
 to a disease class's image representations should anchor attention to the right visual features.
 
 **Phase 1 — Grounding analysis** (HuggingFace transformers, `output_hidden_states=True`):
-- For each class: forward N images, compute mean image-token hidden-state centroid at final layer
+- **Supervised** (default): forward N labeled images per class → mean hidden-state centroid per class
+- **Zero-shot** (`--zero_shot`): embed all images without labels → K-means into K clusters → Hungarian-match each cluster to a class name via text embedding similarity. No labeled images used.
 - Search full vocab embedding table for tokens with highest `sim_to_target − mean_sim_to_others`
 - Saves `discriminative_vocab.json`
 
@@ -601,20 +602,23 @@ to a disease class's image representations should anchor attention to the right 
 - Measures F1 gain per class across all evaluated datasets
 
 ```bash
-# Full run (test split)
+# Phase 1 — grounding analysis (HF transformers, saves discriminative_vocab.json)
 uv run python main.py vocab-grounding \
   --model google/gemma-4-26B-A4B-it \
   --split test \
+  --phase 1 \
   --output_dir outputs/vocab_grounding
 
-# Re-run evaluation only (Phase 1 already done)
+# Phase 2 — evaluation (vLLM, reads discriminative_vocab.json, saves results.json + plots)
 uv run python main.py vocab-grounding \
-  --skip_grounding \
+  --model google/gemma-4-26B-A4B-it \
+  --split test \
+  --phase 2 \
   --output_dir outputs/vocab_grounding
 
-# Replot from existing results (no inference)
+# Regenerate plots only (no inference)
 uv run python main.py vocab-grounding \
-  --skip_grounding --skip_eval \
+  --phase plots \
   --output_dir outputs/vocab_grounding
 ```
 

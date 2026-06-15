@@ -121,12 +121,20 @@ def load_hf_model(model_id: str):
     return model, processor
 
 
-def unload_hf_model(model) -> None:
+def unload_hf_model(model, processor=None) -> None:
+    # Move to CPU first — forces immediate CUDA deallocation before del
+    try:
+        model.cpu()
+    except Exception:
+        pass
     del model
+    if processor is not None:
+        del processor
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
     print("[phase1] HF model unloaded")
 
 
@@ -261,6 +269,87 @@ def find_discriminative_tokens(
     return result
 
 
+def embed_single_image(
+    model,
+    processor,
+    path: str,
+    prompt: str,
+    img_tok_id: int,
+) -> np.ndarray | None:
+    """Forward one image → L2-normalized mean of image-token hidden states at final layer."""
+    device = next(model.parameters()).device
+    try:
+        img = PILImage.open(path).convert("RGB")
+        inputs = _build_hf_inputs(processor, img, prompt, device)
+    except Exception as e:
+        print(f"      [warn] {path}: {e}")
+        return None
+    with torch.no_grad():
+        try:
+            outputs = model(**inputs, output_hidden_states=True, return_dict=True)
+        except Exception as e:
+            print(f"      [warn] forward failed {path}: {e}")
+            return None
+    input_ids = inputs["input_ids"][0]
+    img_positions = (input_ids == img_tok_id).nonzero(as_tuple=True)[0]
+    if len(img_positions) == 0:
+        return None
+    last_h = outputs.hidden_states[-1][0].float().cpu()
+    img_h = last_h[img_positions.cpu()].mean(0)
+    img_h = img_h / (img_h.norm() + 1e-6)
+    return img_h.numpy()
+
+
+def cluster_embeddings(
+    embeddings: np.ndarray,
+    n_clusters: int,
+    seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    K-means on image embeddings.
+    Returns (cluster_labels, L2-normalized cluster_centroids).
+    """
+    from sklearn.cluster import KMeans
+    km = KMeans(n_clusters=n_clusters, random_state=seed, n_init=10, max_iter=300)
+    labels = km.fit_predict(embeddings)
+    centroids = km.cluster_centers_.astype(np.float32)
+    norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+    centroids = centroids / (norms + 1e-6)
+    return labels, centroids
+
+
+def match_clusters_to_classes(
+    cluster_centroids: np.ndarray,
+    class_names: list[str],
+    model,
+    processor,
+) -> dict[int, str]:
+    """
+    Hungarian assignment: map each cluster to the class name whose first-token
+    embedding is closest to the cluster centroid. No labeled images needed.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    embed_w = model.get_input_embeddings().weight.detach().float().cpu()
+    norms = embed_w.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+    embed_norm = embed_w / norms  # (vocab, d)
+
+    # First-token embedding per class name
+    class_embs = []
+    for cls in class_names:
+        tok_ids = processor.tokenizer(cls, add_special_tokens=False).input_ids
+        if tok_ids:
+            class_embs.append(embed_norm[tok_ids[0]].numpy())
+        else:
+            class_embs.append(np.zeros(embed_norm.shape[1], dtype=np.float32))
+    class_embs = np.array(class_embs)  # (n_classes, d)
+
+    # Similarity matrix: (n_clusters, n_classes)
+    sim = cluster_centroids @ class_embs.T
+    row_ind, col_ind = linear_sum_assignment(-sim)  # maximize similarity
+    return {int(r): class_names[c] for r, c in zip(row_ind, col_ind)}
+
+
 def run_grounding_phase(
     model_id: str,
     datasets_cfg: dict,
@@ -270,10 +359,14 @@ def run_grounding_phase(
     output_dir: Path,
     force: bool,
     seed: int,
+    zero_shot: bool = False,
 ) -> dict:
     """
     Phase 1: Compute image centroids + discriminative vocab per class.
-    Returns disc_vocab dict and updates checkpoint in place.
+
+    supervised (default): uses labeled images — N images per class → centroid per class.
+    zero_shot:            embeds all images without labels → K-means into K clusters →
+                          Hungarian-matches each cluster to a class name via text embedding.
     """
     n_grounding = int(cfg.get("n_grounding", 10))
     top_k = int(cfg.get("top_k_tokens", 15))
@@ -292,7 +385,8 @@ def run_grounding_phase(
             continue
 
         print(f"\n{'='*60}")
-        print(f"[phase1] Dataset: {agml_name}")
+        mode_tag = "[zero-shot]" if zero_shot else "[supervised]"
+        print(f"[phase1]{mode_tag} Dataset: {agml_name}")
 
         try:
             sampled = load_agml_images(agml_name, n_grounding, seed=seed)
@@ -301,42 +395,79 @@ def run_grounding_phase(
             continue
 
         all_classes = clean_class_list(ds_cfg.classes)
-
-        # Check if all classes already done
-        class_keys = []
-        for raw_cls in sampled:
-            _, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
-            class_keys.append(f"{agml_name}/{clean_cls}")
+        class_keys = [
+            f"{agml_name}/{parse_class_label(rc, ds_cfg.crop)[1]}" for rc in sampled
+        ]
         if not force and all(k in disc_vocab for k in class_keys):
             print("  [skip] all classes already grounded")
             continue
 
-        # Pass 1: compute centroids for all classes in this dataset
-        centroids: dict[str, np.ndarray] = {}
+        # ── crop map (needed for prompt and metadata) ─────────────────────────
         crop_map: dict[str, str] = {}
-
-        for raw_cls, image_paths in sampled.items():
+        for raw_cls in sampled:
             crop, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
             crop_map[clean_cls] = crop
-            prompt = base_prompt_tmpl.format(crop=crop)
-            print(f"    centroid → {clean_cls} ({len(image_paths)} imgs)")
-            centroid = compute_image_centroid(
-                model, processor, image_paths, prompt, img_tok_id, max_images=n_grounding
-            )
-            if centroid is not None:
-                centroids[clean_cls] = centroid
-            else:
-                print(f"    [warn] no centroid for {clean_cls}")
 
-        # Pass 2: find discriminative tokens using cross-class discriminability
-        for raw_cls, image_paths in sampled.items():
+        # Use the dataset-level crop for the grounding prompt (or "plant" fallback)
+        ds_crop = ds_cfg.crop if ds_cfg.crop and ds_cfg.crop != "multiple" else "plant"
+        grounding_prompt = base_prompt_tmpl.format(crop=ds_crop)
+
+        # ── compute centroids ─────────────────────────────────────────────────
+        centroids: dict[str, np.ndarray] = {}
+
+        if zero_shot:
+            # Flatten all image paths, discarding label info
+            all_paths = [p for paths in sampled.values() for p in paths]
+            random.Random(seed).shuffle(all_paths)
+
+            print(f"  embedding {len(all_paths)} images (no labels) ...")
+            embeddings, valid_paths = [], []
+            for path in all_paths:
+                emb = embed_single_image(model, processor, path, grounding_prompt, img_tok_id)
+                if emb is not None:
+                    embeddings.append(emb)
+                    valid_paths.append(path)
+
+            if len(embeddings) < len(all_classes):
+                print(f"  [warn] only {len(embeddings)} embeddings — need ≥{len(all_classes)}")
+            else:
+                n_clusters = len(all_classes)
+                print(f"  K-means: {len(embeddings)} images → {n_clusters} clusters ...")
+                cluster_labels, cluster_centroids = cluster_embeddings(
+                    np.array(embeddings), n_clusters, seed=seed
+                )
+                cluster_to_class = match_clusters_to_classes(
+                    cluster_centroids, all_classes, model, processor
+                )
+                print("  cluster → class assignment:")
+                for ci, cls in sorted(cluster_to_class.items()):
+                    n = int((cluster_labels == ci).sum())
+                    print(f"    cluster {ci} ({n} imgs) → {cls}")
+                for ci, cls in cluster_to_class.items():
+                    centroids[cls] = cluster_centroids[ci]
+
+        else:
+            # Supervised: one centroid per labeled class
+            for raw_cls, image_paths in sampled.items():
+                crop, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
+                prompt = base_prompt_tmpl.format(crop=crop)
+                print(f"    centroid → {clean_cls} ({len(image_paths)} imgs)")
+                centroid = compute_image_centroid(
+                    model, processor, image_paths, prompt, img_tok_id, max_images=n_grounding
+                )
+                if centroid is not None:
+                    centroids[clean_cls] = centroid
+                else:
+                    print(f"    [warn] no centroid for {clean_cls}")
+
+        # ── find discriminative tokens per class ──────────────────────────────
+        for raw_cls in sampled:
             _, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
             cls_key = f"{agml_name}/{clean_cls}"
 
             if not force and cls_key in disc_vocab:
                 print(f"    [skip] {clean_cls}")
                 continue
-
             if clean_cls not in centroids:
                 print(f"    [skip] {clean_cls} — no centroid")
                 continue
@@ -354,6 +485,7 @@ def run_grounding_phase(
                 "crop": crop_map[clean_cls],
                 "class_label": clean_cls,
                 "dataset": agml_name,
+                "zero_shot": zero_shot,
                 "tokens": disc_tokens,
             }
             top_str = ", ".join(t["token"] for t in disc_tokens[:5])
@@ -362,7 +494,7 @@ def run_grounding_phase(
         checkpoint["disc_vocab"] = disc_vocab
         save_checkpoint(output_dir, checkpoint)
 
-    unload_hf_model(model)
+    unload_hf_model(model, processor)
 
     vocab_path = output_dir / "discriminative_vocab.json"
     vocab_path.write_text(json.dumps(disc_vocab, indent=2))
@@ -1062,10 +1194,20 @@ def main():
                         help="Override n_disc_tokens from config")
     parser.add_argument("--gpu_memory_utilization", type=float, default=None)
 
-    parser.add_argument("--skip_grounding", action="store_true",
-                        help="Skip Phase 1 — load disc vocab from checkpoint/discriminative_vocab.json")
-    parser.add_argument("--skip_eval", action="store_true",
-                        help="Skip Phase 2 — load eval results from checkpoint, only replot")
+    parser.add_argument("--phase", choices=["1", "2", "plots"], default=None,
+                        help=(
+                            "Run a single phase then exit cleanly (GPU is freed between phases). "
+                            "1 = grounding only (HF transformers, saves discriminative_vocab.json); "
+                            "2 = evaluation only (vLLM, reads discriminative_vocab.json); "
+                            "plots = regenerate plots from existing results.json. "
+                            "Omit to run phase 1 → 2 → plots in one process (not recommended for large models)."
+                        ))
+    parser.add_argument("--zero_shot", action="store_true",
+                        help=(
+                            "Zero-shot grounding (phase 1 only): embed all images without labels, "
+                            "K-means into K clusters, Hungarian-match clusters to class "
+                            "names via text embedding."
+                        ))
     parser.add_argument("--force", action="store_true",
                         help="Re-run all classes even if already checkpointed")
     parser.add_argument("--seed", type=int, default=42)
@@ -1100,35 +1242,48 @@ def main():
         dataset_names = split_raw.get("train", []) + split_raw.get("test", [])
 
     dataset_names = [d for d in dataset_names if d in datasets_cfg and not datasets_cfg[d].skip]
-    print(f"Datasets: {len(dataset_names)}")
-    print(f"Config:   n_grounding={cfg['n_grounding']}  n_eval={cfg['n_eval']}  "
+    print(f"Datasets : {len(dataset_names)}")
+    print(f"Phase    : {args.phase or 'all'}")
+    print(f"Config   : n_grounding={cfg['n_grounding']}  n_eval={cfg['n_eval']}  "
           f"min_gap={cfg['min_gap']}  n_disc_tokens={cfg['n_disc_tokens']}")
 
     checkpoint = load_checkpoint(output_dir)
+    run_phase1 = args.phase in (None, "1")
+    run_phase2 = args.phase in (None, "2")
+    run_plots  = args.phase in (None, "plots")
 
-    # ── Phase 1: Grounding ────────────────────────────────────────────────────
-    if not args.skip_grounding:
+    # ── Phase 1: Grounding (HF transformers) ─────────────────────────────────
+    if run_phase1:
+        if args.zero_shot:
+            print("[mode] zero-shot — cluster-based grounding (no labels used)")
         disc_vocab = run_grounding_phase(
             args.model, datasets_cfg, dataset_names, cfg,
             checkpoint, output_dir, args.force, args.seed,
+            zero_shot=args.zero_shot,
         )
+        if args.phase == "1":
+            print("\n[phase 1 complete] Run phase 2 next:")
+            print(f"  uv run python main.py vocab-grounding --phase 2 "
+                  f"--model {args.model} --split {args.split} --output_dir {args.output_dir}")
+            return
     else:
         vocab_path = output_dir / "discriminative_vocab.json"
-        if vocab_path.exists():
-            disc_vocab = json.loads(vocab_path.read_text())
-        else:
-            disc_vocab = checkpoint.get("disc_vocab", {})
-        print(f"[phase1] Skipped — loaded {len(disc_vocab)} classes from cache")
+        disc_vocab = json.loads(vocab_path.read_text()) if vocab_path.exists() \
+                     else checkpoint.get("disc_vocab", {})
+        print(f"[phase1] Loaded {len(disc_vocab)} classes from {vocab_path.name}")
 
-    # ── Phase 2: Evaluation ───────────────────────────────────────────────────
-    if not args.skip_eval:
+    # ── Phase 2: Evaluation (vLLM) ───────────────────────────────────────────
+    if run_phase2:
         eval_results = run_evaluation_phase(
             args.model, disc_vocab, datasets_cfg, dataset_names, cfg,
             checkpoint, output_dir, args.force, args.seed,
         )
+        if args.phase == "2":
+            # Still generate plots so the output is complete after phase 2
+            run_plots = True
     else:
         eval_results = checkpoint.get("eval_results", {})
-        print(f"[phase2] Skipped — {len(eval_results)} classes from checkpoint")
+        print(f"[phase2] Loaded {len(eval_results)} classes from checkpoint")
 
     if not eval_results:
         print("No evaluation results — exiting without plots")
@@ -1139,20 +1294,20 @@ def main():
     (output_dir / "results.json").write_text(json.dumps(results, indent=2))
     print(f"\nSaved → {output_dir / 'results.json'}")
 
-    # ── Plots ─────────────────────────────────────────────────────────────────
-    print("\nGenerating plots...")
-    plot_f1_overall(results, plots_dir)
-    plot_f1_by_task(results, plots_dir)
-    plot_f1_by_dataset(results, plots_dir)
-    plot_f1_per_class(results, plots_dir)
-    plot_token_grounding_heatmap(disc_vocab, plots_dir)
-    plot_discriminability_vs_gain(disc_vocab, eval_results, plots_dir)
-    plot_gain_distribution(eval_results, plots_dir)
-    plot_threshold_sensitivity(disc_vocab, eval_results, plots_dir)
+    # ── Plots + summary ───────────────────────────────────────────────────────
+    if run_plots:
+        print("\nGenerating plots...")
+        plot_f1_overall(results, plots_dir)
+        plot_f1_by_task(results, plots_dir)
+        plot_f1_by_dataset(results, plots_dir)
+        plot_f1_per_class(results, plots_dir)
+        plot_token_grounding_heatmap(disc_vocab, plots_dir)
+        plot_discriminability_vs_gain(disc_vocab, eval_results, plots_dir)
+        plot_gain_distribution(eval_results, plots_dir)
+        plot_threshold_sensitivity(disc_vocab, eval_results, plots_dir)
 
-    # ── Summary report ────────────────────────────────────────────────────────
-    print("\nSummary:")
-    write_summary_report(results, disc_vocab, eval_results, output_dir)
+        print("\nSummary:")
+        write_summary_report(results, disc_vocab, eval_results, output_dir)
 
 
 if __name__ == "__main__":
