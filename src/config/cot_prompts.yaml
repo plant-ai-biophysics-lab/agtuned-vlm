@@ -57,8 +57,8 @@ prompts_config: src/config/prompts.yaml
 
 n_eval: 30
 classifier_temperature: 0.0
-max_tokens_cot: 1024       # structured observation pass (thinking=False, clean text) — 5 detailed points
-max_tokens_response: 64    # classification pass (base and cot conditions) — just a class name
+max_tokens_cot: 2048       # structured observation pass (thinking=False, clean text) — 5 detailed points
+max_tokens_response: 128    # classification pass (base and cot conditions) — just a class name
 max_tokens_thinking: 2048  # native thinking passes (thinking=True) — <think> block can be verbose
 gpu_memory_utilization: 0.85
 max_model_len: 8192        # must accommodate image + CoT context + thinking block + response
