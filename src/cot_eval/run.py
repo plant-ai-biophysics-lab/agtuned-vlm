@@ -1,37 +1,39 @@
 """
 CoT Eval Experiment
 ===================
-Tests whether a chain-of-thought visual analysis step prior to the classification
-question improves F1 on agricultural image tasks.
+4-way ablation of chain-of-thought prompting strategies for agricultural
+image classification.
 
-Hypothesis:
-  Prompting the model to reason through structured visual observations
-  (symptoms, morphology, damage patterns) before the classification question
-  anchors attention to task-relevant features and improves accuracy.
+Conditions (per image):
+  base         — plain classification question, no thinking
+  cot          — structured 5-point observation pass → classify with context
+  thinking     — Gemma-4 native enable_thinking=True on base question
+  cot_thinking — structured observation pass → classify with context + native thinking
 
-Pipeline (single phase — vLLM only):
-  For each class in each dataset:
-    Base pass:  [image] + classification_question → answer
-    CoT pass:
-      Step 1:  [image] + thinking_prompt → structured observations
-      Step 2:  [image + thinking_prompt] + [observations] + classification_question → answer
-  Compare F1 base vs CoT, with LLM-as-judge on both.
+This isolates: (1) does domain-specific prior help? (2) does native thinking help?
+(3) do they compound?
 
-Thinking prompts are task-specific (disease_pest / weed_identification / crop_identification)
-and stored in src/config/cot_prompts.yaml.
-Base classification questions come from src/config/prompts.yaml.
+Pipeline:
+  Pass 1: base            [image] + base_prompt                        (thinking=False)
+  Pass 2: observations    [image] + thinking_prompt                    (thinking=False)
+  Pass 3: cot classify    [image + thinking_prompt] + obs + cls_q      (thinking=False)
+  Pass 4: native thinking [image] + base_prompt                        (thinking=True)
+  Pass 5: cot+thinking    [image + thinking_prompt] + obs + cls_q      (thinking=True)
+
+Thinking prompts are task-specific (disease_pest / weed_identification) from
+src/config/cot_prompts.yaml. Base classification prompts from prompts.yaml.
 
 Outputs (under output_dir/):
-  results.json         — aggregate F1 base vs CoT, by task / dataset / class
-  class_log.jsonl      — per-class records: responses + CoT observations
+  results.json         — aggregate metrics for all 4 conditions
+  class_log.jsonl      — per-class records with all responses + CoT observations
   checkpoint.json      — incremental checkpoint
   plots/
     f1_overall.png
     f1_by_task.png
     f1_by_dataset.png
     f1_per_class.png
-    cot_length_vs_gain.png  — scatter: does longer analysis → larger F1 gain?
-    gain_distribution.png
+    cot_length_vs_gain.png   scatter: CoT observation length vs F1 gain (cot vs base)
+    gain_distribution.png    histogram of gains for all non-base conditions
 """
 
 from __future__ import annotations
@@ -54,9 +56,11 @@ import yaml
 from PIL import Image as PILImage
 
 from src.common.dataset_config import datasets_by_name, clean_class_list, parse_class_label
-from src.common.metrics import resolve_class, compute_classification_metrics, apply_judge
+from src.common.metrics import resolve_class, apply_judge
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+CONDITIONS = ["base", "cot", "thinking", "cot_thinking"]
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -95,7 +99,7 @@ def load_agml_images(agml_name: str, n_samples: int, seed: int = 42) -> dict[str
     return {cls: rng.sample(paths, min(n_samples, len(paths))) for cls, paths in by_class.items()}
 
 
-# ── vLLM helpers ─────────────────────────────────────────────────────────────
+# ── vLLM helpers ──────────────────────────────────────────────────────────────
 
 def load_vlm(model_id: str, gpu_util: float, max_model_len: int):
     from vllm import LLM
@@ -129,10 +133,11 @@ def destroy_vlm(llm) -> None:
     print("[eval] vLLM engine destroyed")
 
 
-def _apply_template(tokenizer, messages: list[dict]) -> str:
+def _apply_template(tokenizer, messages: list[dict], enable_thinking: bool = False) -> str:
     try:
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            messages, tokenize=False, add_generation_prompt=True,
+            enable_thinking=enable_thinking,
         )
     except TypeError:
         return tokenizer.apply_chat_template(
@@ -140,13 +145,20 @@ def _apply_template(tokenizer, messages: list[dict]) -> str:
         )
 
 
-def _build_single_turn(tokenizer, image: PILImage.Image, question: str) -> dict:
-    """Single-turn prompt: [image] + question."""
+def _build_single_turn(
+    tokenizer,
+    image: PILImage.Image,
+    question: str,
+    enable_thinking: bool = False,
+) -> dict:
     msgs = [{"role": "user", "content": [
         {"type": "image"},
         {"type": "text", "text": question},
     ]}]
-    return {"prompt": _apply_template(tokenizer, msgs), "multi_modal_data": {"image": image}}
+    return {
+        "prompt": _apply_template(tokenizer, msgs, enable_thinking=enable_thinking),
+        "multi_modal_data": {"image": image},
+    }
 
 
 def _build_cot_classify_turn(
@@ -155,13 +167,11 @@ def _build_cot_classify_turn(
     thinking_prompt: str,
     cot_response: str,
     classification_question: str,
+    enable_thinking: bool = False,
 ) -> dict:
     """
-    Two-turn prompt:
-      User:      [image] + thinking_prompt
-      Assistant: cot_response  (the structured observations)
-      User:      classification_question + suffix
-    Image only appears in the first user turn.
+    Two-turn: [image + thinking_prompt] → [observations] → [classification_question].
+    Image only in the first user turn; enable_thinking controls the final answer pass.
     """
     msgs = [
         {"role": "user", "content": [
@@ -173,10 +183,14 @@ def _build_cot_classify_turn(
             {"type": "text", "text": classification_question},
         ]},
     ]
-    return {"prompt": _apply_template(tokenizer, msgs), "multi_modal_data": {"image": image}}
+    return {
+        "prompt": _apply_template(tokenizer, msgs, enable_thinking=enable_thinking),
+        "multi_modal_data": {"image": image},
+    }
 
 
 def _clean(text: str) -> str:
+    """Strip <think>...</think> blocks and whitespace."""
     return _THINK_RE.sub("", text).strip()
 
 
@@ -195,7 +209,7 @@ def get_base_prompt(task_type: str, prompts_cfg: dict, cot_cfg: dict, crop: str 
     return template
 
 
-# ── Per-class evaluation ──────────────────────────────────────────────────────
+# ── Per-class 4-way evaluation ────────────────────────────────────────────────
 
 def evaluate_class(
     llm,
@@ -204,20 +218,21 @@ def evaluate_class(
     thinking_prompt: str,
     base_prompt: str,
     classification_question: str,
-    class_label: str,
-    all_classes: list[str],
     base_params,
     cot_params,
     cls_params,
+    thinking_params,
     n_eval: int,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     """
-    Three vLLM passes per class:
-      1. Base — single-turn classification
-      2. CoT thinking — structured visual analysis
-      3. CoT classify — classify given the thinking context
+    5 vLLM passes:
+      1. base              — single-turn, thinking=False
+      2. observations      — structured CoT pass, thinking=False (clean text)
+      3. cot classify      — two-turn with observations, thinking=False
+      4. native thinking   — single-turn, thinking=True
+      5. cot+thinking      — two-turn with observations, thinking=True
 
-    Returns (base_responses, cot_responses, cot_thoughts).
+    Returns (base_responses, cot_responses, thinking_responses, cot_thinking_responses, cot_thoughts).
     """
     paths = image_paths[:n_eval]
     images: list[PILImage.Image] = []
@@ -225,34 +240,51 @@ def evaluate_class(
         try:
             images.append(PILImage.open(p).convert("RGB"))
         except Exception as e:
-            print(f"      [warn] load failed {p}: {e}")
+            print(f"      [warn] {p}: {e}")
 
     if not images:
-        return [], [], []
+        return [], [], [], [], []
 
-    # Pass 1: base classification
-    base_inputs = [_build_single_turn(tokenizer, img, base_prompt) for img in images]
-    base_raw = llm.generate(base_inputs, base_params)
-    base_responses = [_clean(o.outputs[0].text) for o in base_raw]
+    # Pass 1 — base
+    base_inputs = [_build_single_turn(tokenizer, img, base_prompt, enable_thinking=False)
+                   for img in images]
+    base_responses = [_clean(o.outputs[0].text)
+                      for o in llm.generate(base_inputs, base_params)]
 
-    # Pass 2: CoT thinking
-    cot_inputs = [_build_single_turn(tokenizer, img, thinking_prompt) for img in images]
-    cot_raw = llm.generate(cot_inputs, cot_params)
-    cot_thoughts = [_clean(o.outputs[0].text) for o in cot_raw]
+    # Pass 2 — structured observations (thinking=False → clean structured text)
+    obs_inputs = [_build_single_turn(tokenizer, img, thinking_prompt, enable_thinking=False)
+                  for img in images]
+    cot_thoughts = [_clean(o.outputs[0].text)
+                    for o in llm.generate(obs_inputs, cot_params)]
 
-    # Pass 3: classify with CoT context
-    cls_inputs = [
-        _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought, classification_question)
+    # Pass 3 — CoT classify (structured context, thinking=False)
+    cot_inputs = [
+        _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought,
+                                 classification_question, enable_thinking=False)
         for img, thought in zip(images, cot_thoughts)
     ]
-    cls_raw = llm.generate(cls_inputs, cls_params)
-    cot_responses = [_clean(o.outputs[0].text) for o in cls_raw]
+    cot_responses = [_clean(o.outputs[0].text)
+                     for o in llm.generate(cot_inputs, cls_params)]
 
-    return base_responses, cot_responses, cot_thoughts
+    # Pass 4 — native thinking on base question (thinking=True)
+    think_inputs = [_build_single_turn(tokenizer, img, base_prompt, enable_thinking=True)
+                    for img in images]
+    thinking_responses = [_clean(o.outputs[0].text)
+                          for o in llm.generate(think_inputs, thinking_params)]
+
+    # Pass 5 — CoT + native thinking (structured context, thinking=True)
+    cot_think_inputs = [
+        _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought,
+                                 classification_question, enable_thinking=True)
+        for img, thought in zip(images, cot_thoughts)
+    ]
+    cot_thinking_responses = [_clean(o.outputs[0].text)
+                               for o in llm.generate(cot_think_inputs, thinking_params)]
+
+    return base_responses, cot_responses, thinking_responses, cot_thinking_responses, cot_thoughts
 
 
 def _class_f1(responses: list[str], class_label: str, all_classes: list[str]) -> tuple[float, float]:
-    """Returns (class_f1, resolvability_rate)."""
     from sklearn.metrics import f1_score
     preds = [resolve_class(r, all_classes) for r in responses]
     resolved = [p or "" for p in preds]
@@ -260,6 +292,11 @@ def _class_f1(responses: list[str], class_label: str, all_classes: list[str]) ->
     refs = [class_label] * len(resolved)
     f1 = f1_score(refs, resolved, labels=[class_label], average="macro", zero_division=0)
     return round(float(f1), 4), round(resolvability, 4)
+
+
+def _judge_acc(rows: list[dict], llm, tokenizer, judge_system: str, judge_template: str) -> float:
+    judged = apply_judge(rows, llm, tokenizer, judge_system, judge_template, "gt", "response")
+    return round(sum(r["judged_correct"] for r in judged) / max(len(judged), 1), 4)
 
 
 # ── Evaluation phase ──────────────────────────────────────────────────────────
@@ -277,20 +314,22 @@ def run_evaluation(
 ) -> dict:
     from vllm import SamplingParams
 
-    n_eval = int(cfg.get("n_eval", 10))
-    temp = float(cfg.get("classifier_temperature", 0.0))
-    max_cot = int(cfg.get("max_tokens_cot", 512))
-    max_resp = int(cfg.get("max_tokens_response", 64))
-    gpu_util = float(cfg.get("gpu_memory_utilization", 0.85))
+    n_eval       = int(cfg.get("n_eval", 30))
+    temp         = float(cfg.get("classifier_temperature", 0.0))
+    max_cot      = int(cfg.get("max_tokens_cot", 512))
+    max_resp     = int(cfg.get("max_tokens_response", 64))
+    max_thinking = int(cfg.get("max_tokens_thinking", 1024))
+    gpu_util     = float(cfg.get("gpu_memory_utilization", 0.85))
     max_model_len = int(cfg.get("max_model_len", 8192))
 
-    judge_system = prompts_cfg["judge_system_vision"]
+    judge_system   = prompts_cfg["judge_system_vision"]
     judge_template = prompts_cfg["judge_classification_template"]
-    cls_suffix = prompts_cfg.get("classification_suffix", " Respond with only the class name, nothing else.")
+    cls_suffix     = prompts_cfg.get("classification_suffix", " Respond with only the class name, nothing else.")
 
-    base_params = SamplingParams(temperature=temp, max_tokens=max_resp, repetition_penalty=1.1)
-    cot_params  = SamplingParams(temperature=temp, max_tokens=max_cot,  repetition_penalty=1.05)
-    cls_params  = SamplingParams(temperature=temp, max_tokens=max_resp, repetition_penalty=1.1)
+    base_params     = SamplingParams(temperature=temp, max_tokens=max_resp,     repetition_penalty=1.1)
+    cot_params      = SamplingParams(temperature=temp, max_tokens=max_cot,      repetition_penalty=1.05)
+    cls_params      = SamplingParams(temperature=temp, max_tokens=max_resp,     repetition_penalty=1.1)
+    thinking_params = SamplingParams(temperature=temp, max_tokens=max_thinking, repetition_penalty=1.05)
 
     eval_results: dict = checkpoint.get("eval_results", {})
     log_path = output_dir / "class_log.jsonl"
@@ -311,7 +350,7 @@ def run_evaluation(
             print(f"  [error] Could not load {agml_name}: {e}")
             continue
 
-        all_classes = clean_class_list(ds_cfg.classes)
+        all_classes    = clean_class_list(ds_cfg.classes)
         thinking_prompt = get_thinking_prompt(ds_cfg.task_type, cfg)
 
         for raw_cls, image_paths in sampled.items():
@@ -324,62 +363,86 @@ def run_evaluation(
 
             print(f"\n  Class: {clean_cls}")
 
-            base_prompt = get_base_prompt(ds_cfg.task_type, prompts_cfg, cfg, crop)
-            # Final classification question in CoT second turn includes suffix
+            base_prompt            = get_base_prompt(ds_cfg.task_type, prompts_cfg, cfg, crop)
             classification_question = base_prompt + cls_suffix
 
-            base_responses, cot_responses, cot_thoughts = evaluate_class(
+            (base_responses, cot_responses,
+             thinking_responses, cot_thinking_responses,
+             cot_thoughts) = evaluate_class(
                 llm, tokenizer, image_paths,
                 thinking_prompt, base_prompt, classification_question,
-                clean_cls, all_classes,
-                base_params, cot_params, cls_params, n_eval,
+                base_params, cot_params, cls_params, thinking_params, n_eval,
             )
 
             if not base_responses:
                 print(f"    [warn] no images loaded — skipping")
                 continue
 
-            base_f1, base_resolvable = _class_f1(base_responses, clean_cls, all_classes)
-            cot_f1,  cot_resolvable  = _class_f1(cot_responses,  clean_cls, all_classes)
-            print(f"    base  F1={base_f1:.3f}  resolvable={base_resolvable:.2f}")
-            print(f"    cot   F1={cot_f1:.3f}  resolvable={cot_resolvable:.2f}  gain={cot_f1-base_f1:+.3f}")
+            base_f1,         base_res  = _class_f1(base_responses,         clean_cls, all_classes)
+            cot_f1,          cot_res   = _class_f1(cot_responses,          clean_cls, all_classes)
+            thinking_f1,     think_res = _class_f1(thinking_responses,     clean_cls, all_classes)
+            cot_thinking_f1, ct_res    = _class_f1(cot_thinking_responses, clean_cls, all_classes)
 
-            # Judge
-            base_rows = [{"gt": clean_cls, "response": r} for r in base_responses]
-            cot_rows  = [{"gt": clean_cls, "response": r} for r in cot_responses]
-            base_judged = apply_judge(base_rows, llm, tokenizer, judge_system, judge_template, "gt", "response")
-            cot_judged  = apply_judge(cot_rows,  llm, tokenizer, judge_system, judge_template, "gt", "response")
-            base_judge = round(sum(r["judged_correct"] for r in base_judged) / max(len(base_judged), 1), 4)
-            cot_judge  = round(sum(r["judged_correct"] for r in cot_judged)  / max(len(cot_judged),  1), 4)
-            print(f"    judge base={base_judge:.3f}  cot={cot_judge:.3f}")
+            print(f"    base            F1={base_f1:.3f}  res={base_res:.2f}")
+            print(f"    cot             F1={cot_f1:.3f}  res={cot_res:.2f}  gain={cot_f1-base_f1:+.3f}")
+            print(f"    thinking        F1={thinking_f1:.3f}  res={think_res:.2f}  gain={thinking_f1-base_f1:+.3f}")
+            print(f"    cot+thinking    F1={cot_thinking_f1:.3f}  res={ct_res:.2f}  gain={cot_thinking_f1-base_f1:+.3f}")
 
-            mean_cot_len = round(float(np.mean([len(t.split()) for t in cot_thoughts])), 1) if cot_thoughts else 0.0
+            # Judge all 4 conditions with the same vLLM instance
+            def _rows(responses):
+                return [{"gt": clean_cls, "response": r} for r in responses]
+
+            base_judge        = _judge_acc(_rows(base_responses),         llm, tokenizer, judge_system, judge_template)
+            cot_judge         = _judge_acc(_rows(cot_responses),          llm, tokenizer, judge_system, judge_template)
+            thinking_judge    = _judge_acc(_rows(thinking_responses),     llm, tokenizer, judge_system, judge_template)
+            cot_thinking_judge = _judge_acc(_rows(cot_thinking_responses), llm, tokenizer, judge_system, judge_template)
+
+            print(f"    judge  base={base_judge:.3f}  cot={cot_judge:.3f}  "
+                  f"thinking={thinking_judge:.3f}  cot+thinking={cot_thinking_judge:.3f}")
+
+            mean_cot_len = round(float(np.mean([len(t.split()) for t in cot_thoughts])), 1) \
+                           if cot_thoughts else 0.0
 
             entry = {
-                "dataset": agml_name,
+                "dataset":    agml_name,
                 "class_label": clean_cls,
-                "crop": crop,
-                "task_type": ds_cfg.task_type,
-                "base_f1": base_f1,
-                "cot_f1": cot_f1,
-                "gain": round(cot_f1 - base_f1, 4),
-                "base_resolvable": base_resolvable,
-                "cot_resolvable": cot_resolvable,
-                "base_judge_acc": base_judge,
-                "cot_judge_acc": cot_judge,
+                "crop":       crop,
+                "task_type":  ds_cfg.task_type,
+                # F1
+                "base_f1":          base_f1,
+                "cot_f1":           cot_f1,
+                "thinking_f1":      thinking_f1,
+                "cot_thinking_f1":  cot_thinking_f1,
+                # gains vs base
+                "cot_gain":         round(cot_f1         - base_f1, 4),
+                "thinking_gain":    round(thinking_f1    - base_f1, 4),
+                "cot_thinking_gain": round(cot_thinking_f1 - base_f1, 4),
+                # resolvability
+                "base_resolvable":         base_res,
+                "cot_resolvable":          cot_res,
+                "thinking_resolvable":     think_res,
+                "cot_thinking_resolvable": ct_res,
+                # judge
+                "base_judge_acc":         base_judge,
+                "cot_judge_acc":          cot_judge,
+                "thinking_judge_acc":     thinking_judge,
+                "cot_thinking_judge_acc": cot_thinking_judge,
+                # metadata
                 "mean_cot_length_words": mean_cot_len,
-                "base_prompt": base_prompt,
+                "base_prompt":           base_prompt,
                 "classification_question": classification_question,
-                "cot_prompt_key": cfg["task_type_to_cot"].get(ds_cfg.task_type, "disease_pest"),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "cot_prompt_key":        cfg["task_type_to_cot"].get(ds_cfg.task_type, "disease_pest"),
+                "timestamp":             time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
             eval_results[cls_key] = entry
 
             append_jsonl(log_path, {
                 **entry,
-                "base_responses": base_responses,
-                "cot_responses": cot_responses,
-                "cot_thoughts": cot_thoughts,
+                "base_responses":         base_responses,
+                "cot_responses":          cot_responses,
+                "thinking_responses":     thinking_responses,
+                "cot_thinking_responses": cot_thinking_responses,
+                "cot_thoughts":           cot_thoughts,
             })
 
             checkpoint["eval_results"] = eval_results
@@ -396,80 +459,94 @@ def aggregate_results(eval_results: dict) -> dict:
     if not all_e:
         return {}
 
-    base_f1s = [e["base_f1"] for e in all_e]
-    cot_f1s  = [e["cot_f1"]  for e in all_e]
-    n_improved = sum(1 for e in all_e if e["cot_f1"] > e["base_f1"])
+    def _macro(key):
+        vals = [e[key] for e in all_e if key in e]
+        return round(float(np.mean(vals)), 4) if vals else None
 
-    base_judge = [e["base_judge_acc"] for e in all_e if "base_judge_acc" in e]
-    cot_judge  = [e["cot_judge_acc"]  for e in all_e if "cot_judge_acc"  in e]
+    def _n_improved(f1_key):
+        return sum(1 for e in all_e if e.get(f1_key, 0) > e.get("base_f1", 0))
 
-    by_task: dict[str, list] = defaultdict(lambda: [[], [], [], []])
-    by_ds:   dict[str, list] = defaultdict(lambda: [[], [], [], []])
+    by_task: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    by_ds:   dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+
+    numeric_keys = [
+        "base_f1", "cot_f1", "thinking_f1", "cot_thinking_f1",
+        "base_judge_acc", "cot_judge_acc", "thinking_judge_acc", "cot_thinking_judge_acc",
+    ]
+
     for e in all_e:
-        bj = e.get("base_judge_acc")
-        cj = e.get("cot_judge_acc")
-        if e.get("task_type"):
-            by_task[e["task_type"]][0].append(e["base_f1"])
-            by_task[e["task_type"]][1].append(e["cot_f1"])
-            if bj is not None: by_task[e["task_type"]][2].append(bj)
-            if cj is not None: by_task[e["task_type"]][3].append(cj)
-        if e.get("dataset"):
-            by_ds[e["dataset"]][0].append(e["base_f1"])
-            by_ds[e["dataset"]][1].append(e["cot_f1"])
-            if bj is not None: by_ds[e["dataset"]][2].append(bj)
-            if cj is not None: by_ds[e["dataset"]][3].append(cj)
+        tt = e.get("task_type")
+        ds = e.get("dataset")
+        for k in numeric_keys:
+            if k in e:
+                if tt: by_task[tt][k].append(e[k])
+                if ds: by_ds[ds][k].append(e[k])
 
-    def _mean_pair(v):
-        d = {
-            "base_f1_macro": round(float(np.mean(v[0])), 4),
-            "cot_f1_macro":  round(float(np.mean(v[1])), 4),
-            "gain":          round(float(np.mean(v[1])) - float(np.mean(v[0])), 4),
-            "n_classes":     len(v[0]),
-        }
-        if v[2]: d["base_judge_acc_macro"] = round(float(np.mean(v[2])), 4)
-        if v[3]: d["cot_judge_acc_macro"]  = round(float(np.mean(v[3])), 4)
-        return d
+    def _mean_group(d):
+        out = {k: round(float(np.mean(v)), 4) for k, v in d.items() if v}
+        out["n_classes"] = len(d.get("base_f1", []))
+        for f1_key in ("cot_f1", "thinking_f1", "cot_thinking_f1"):
+            gain_key = f1_key.replace("_f1", "_gain")
+            if "base_f1" in out and f1_key in out:
+                out[gain_key] = round(out[f1_key] - out["base_f1"], 4)
+        return out
 
+    n = len(all_e)
     overall = {
-        "base_f1_macro": round(float(np.mean(base_f1s)), 4),
-        "cot_f1_macro":  round(float(np.mean(cot_f1s)),  4),
-        "gain":          round(float(np.mean(cot_f1s)) - float(np.mean(base_f1s)), 4),
-        "n_classes":     len(all_e),
-        "n_improved":    n_improved,
-        "pct_improved":  round(n_improved / max(len(all_e), 1), 4),
+        "n_classes": n,
     }
-    if base_judge: overall["base_judge_acc_macro"] = round(float(np.mean(base_judge)), 4)
-    if cot_judge:  overall["cot_judge_acc_macro"]  = round(float(np.mean(cot_judge)),  4)
+    for k in numeric_keys:
+        v = _macro(k)
+        if v is not None:
+            overall[k] = v
+    for f1_key in ("cot_f1", "thinking_f1", "cot_thinking_f1"):
+        if "base_f1" in overall and f1_key in overall:
+            overall[f1_key.replace("_f1", "_gain")] = round(overall[f1_key] - overall["base_f1"], 4)
+    overall["cot_n_improved"]         = _n_improved("cot_f1")
+    overall["thinking_n_improved"]    = _n_improved("thinking_f1")
+    overall["cot_thinking_n_improved"] = _n_improved("cot_thinking_f1")
 
     return {
         "overall":    overall,
-        "by_task":    {tt: _mean_pair(v) for tt, v in by_task.items()},
-        "by_dataset": {ds: _mean_pair(v) for ds, v in by_ds.items()},
+        "by_task":    {tt: _mean_group(d) for tt, d in by_task.items()},
+        "by_dataset": {ds: _mean_group(d) for ds, d in by_ds.items()},
         "per_class":  eval_results,
     }
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
+_COLORS = {
+    "base":         "#5b8dd9",
+    "cot":          "#e07b54",
+    "thinking":     "#2ecc71",
+    "cot_thinking": "#9b59b6",
+}
+_LABELS = {
+    "base":         "Base",
+    "cot":          "Structured CoT",
+    "thinking":     "Native Thinking",
+    "cot_thinking": "CoT + Thinking",
+}
+
+
 def _draw_judge_line(ax, bar, value: float, label: bool = False) -> None:
     x0, w = bar.get_x(), bar.get_width()
-    ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.5,
+    ax.plot([x0, x0 + w], [value, value], color="black", linewidth=2.0,
             solid_capstyle="butt", zorder=5,
             label="judge score" if label else "_nolegend_")
-    ax.text(x0 + w / 2, value + 0.005, f"{value:.3f}",
-            ha="center", va="bottom", fontsize=6, color="black", zorder=6)
+    ax.text(x0 + w / 2, value + 0.005, f"{value:.2f}",
+            ha="center", va="bottom", fontsize=5.5, color="black", zorder=6)
 
 
-def _bar_chart(
+def _bar_chart_4(
     labels: list[str],
-    base_vals: list[float],
-    cot_vals: list[float],
+    vals: dict[str, list[float]],          # condition → values
+    judge_vals: dict[str, list[float]],    # condition → judge values (may be empty)
     title: str,
     out_path: Path,
     xlabel: str = "",
     rotate: int = 0,
-    base_judge_vals: list[float] | None = None,
-    judge_vals: list[float] | None = None,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -477,42 +554,35 @@ def _bar_chart(
 
     n = len(labels)
     x = np.arange(n)
-    width = 0.38
-    has_bj = base_judge_vals is not None and len(base_judge_vals) == n
-    has_j  = judge_vals      is not None and len(judge_vals)      == n
+    width = 0.2
+    offsets = {"base": -1.5, "cot": -0.5, "thinking": 0.5, "cot_thinking": 1.5}
 
-    fig, ax = plt.subplots(figsize=(max(8, n * 1.1), 5))
-
-    def _annotate(bars, color):
-        for bar in bars:
-            h = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.01, f"{h:.2f}",
-                    ha="center", va="bottom", fontsize=7, color=color)
-
-    bars_base = ax.bar(x - width / 2, base_vals, width, label="Base (F1)", color="#5b8dd9", alpha=0.9)
-    _annotate(bars_base, "#5b8dd9")
-
-    bars_cot = ax.bar(x + width / 2, cot_vals, width, label="CoT (F1)", color="#e07b54", alpha=0.9)
-    _annotate(bars_cot, "#c0522a")
+    fig, ax = plt.subplots(figsize=(max(10, n * 1.4), 5))
 
     judge_label_drawn = False
-    if has_bj:
-        for bar, jval in zip(bars_base, base_judge_vals):
-            _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
-            judge_label_drawn = True
-    if has_j:
-        for bar, jval in zip(bars_cot, judge_vals):
-            _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
-            judge_label_drawn = True
+    for cond in CONDITIONS:
+        v = vals.get(cond, [0.0] * n)
+        offset = offsets[cond] * width
+        bars = ax.bar(x + offset, v, width, label=_LABELS[cond],
+                      color=_COLORS[cond], alpha=0.88)
+        for bar, h in zip(bars, v):
+            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.008, f"{h:.2f}",
+                    ha="center", va="bottom", fontsize=6, color=_COLORS[cond])
+
+        jv = judge_vals.get(cond, [])
+        if len(jv) == n:
+            for bar, jval in zip(bars, jv):
+                _draw_judge_line(ax, bar, jval, label=not judge_label_drawn)
+                judge_label_drawn = True
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=rotate, ha="right" if rotate else "center", fontsize=9)
     ax.set_ylabel("F1 / judge accuracy")
-    ax.set_ylim(0, 1.12)
+    ax.set_ylim(0, 1.18)
     if xlabel:
         ax.set_xlabel(xlabel)
     ax.set_title(title)
-    ax.legend()
+    ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -520,25 +590,37 @@ def _bar_chart(
     print(f"  Saved: {out_path}")
 
 
+def _extract_vals(source: dict, f1_keys: dict[str, str], judge_keys: dict[str, str]) \
+        -> tuple[dict[str, list[float]], dict[str, list[float]]]:
+    """Pull ordered F1 and judge value lists from an ordered dict of group entries."""
+    group_labels = list(source.keys())
+    vals, jvals = {}, {}
+    for cond in CONDITIONS:
+        vals[cond]  = [source[g].get(f1_keys[cond],    0.0) for g in group_labels]
+        jvals[cond] = [source[g].get(judge_keys[cond], 0.0) for g in group_labels]
+    return vals, jvals
+
+
+_F1_KEYS   = {c: f"{c}_f1"        for c in CONDITIONS}
+_JUDGE_KEYS = {c: f"{c}_judge_acc" for c in CONDITIONS}
+
+
 def plot_f1_overall(results: dict, plots_dir: Path) -> None:
     ov = results.get("overall", {})
     if not ov:
         return
-    bj = ov.get("base_judge_acc_macro")
-    cj = ov.get("cot_judge_acc_macro")
-    _bar_chart(
-        ["overall"],
-        [ov.get("base_f1_macro", 0)],
-        [ov.get("cot_f1_macro",  0)],
+    vals  = {c: [ov.get(f"{c}_f1", 0.0)]        for c in CONDITIONS}
+    jvals = {c: [ov.get(f"{c}_judge_acc", 0.0)]  for c in CONDITIONS}
+    cot_gain = ov.get("cot_gain", 0.0)
+    _bar_chart_4(
+        ["overall"], vals, jvals,
         title=(
-            f"CoT Eval — Overall F1\n"
-            f"n={ov.get('n_classes',0)} classes  "
-            f"{ov.get('pct_improved',0):.0%} improved  "
-            f"gain={ov.get('gain',0):+.4f}"
+            f"CoT Eval — Overall F1  (n={ov.get('n_classes',0)} classes)\n"
+            f"cot gain={cot_gain:+.4f}  "
+            f"thinking gain={ov.get('thinking_gain',0):+.4f}  "
+            f"cot+thinking gain={ov.get('cot_thinking_gain',0):+.4f}"
         ),
         out_path=plots_dir / "f1_overall.png",
-        base_judge_vals=[bj] if bj is not None else None,
-        judge_vals=[cj] if cj is not None else None,
     )
 
 
@@ -547,19 +629,10 @@ def plot_f1_by_task(results: dict, plots_dir: Path) -> None:
     if not by_task:
         return
     labels = sorted(by_task)
-    bj = [by_task[t].get("base_judge_acc_macro") for t in labels]
-    cj = [by_task[t].get("cot_judge_acc_macro")  for t in labels]
-    has_bj = any(v is not None for v in bj)
-    has_cj = any(v is not None for v in cj)
-    _bar_chart(
-        labels,
-        [by_task[t]["base_f1_macro"] for t in labels],
-        [by_task[t]["cot_f1_macro"]  for t in labels],
-        title="CoT Eval — F1 by Task Type",
-        out_path=plots_dir / "f1_by_task.png",
-        base_judge_vals=[v or 0.0 for v in bj] if has_bj else None,
-        judge_vals=[v or 0.0 for v in cj]       if has_cj else None,
-    )
+    vals  = {c: [by_task[t].get(f"{c}_f1",        0.0) for t in labels] for c in CONDITIONS}
+    jvals = {c: [by_task[t].get(f"{c}_judge_acc",  0.0) for t in labels] for c in CONDITIONS}
+    _bar_chart_4(labels, vals, jvals, title="CoT Eval — F1 by Task Type",
+                 out_path=plots_dir / "f1_by_task.png")
 
 
 def plot_f1_by_dataset(results: dict, plots_dir: Path) -> None:
@@ -567,20 +640,10 @@ def plot_f1_by_dataset(results: dict, plots_dir: Path) -> None:
     if not by_ds:
         return
     labels = sorted(by_ds)
-    bj = [by_ds[d].get("base_judge_acc_macro") for d in labels]
-    cj = [by_ds[d].get("cot_judge_acc_macro")  for d in labels]
-    has_bj = any(v is not None for v in bj)
-    has_cj = any(v is not None for v in cj)
-    _bar_chart(
-        labels,
-        [by_ds[d]["base_f1_macro"] for d in labels],
-        [by_ds[d]["cot_f1_macro"]  for d in labels],
-        title="CoT Eval — F1 by Dataset",
-        out_path=plots_dir / "f1_by_dataset.png",
-        rotate=45,
-        base_judge_vals=[v or 0.0 for v in bj] if has_bj else None,
-        judge_vals=[v or 0.0 for v in cj]       if has_cj else None,
-    )
+    vals  = {c: [by_ds[d].get(f"{c}_f1",        0.0) for d in labels] for c in CONDITIONS}
+    jvals = {c: [by_ds[d].get(f"{c}_judge_acc",  0.0) for d in labels] for c in CONDITIONS}
+    _bar_chart_4(labels, vals, jvals, title="CoT Eval — F1 by Dataset",
+                 out_path=plots_dir / "f1_by_dataset.png", rotate=45)
 
 
 def plot_f1_per_class(results: dict, plots_dir: Path) -> None:
@@ -588,43 +651,30 @@ def plot_f1_per_class(results: dict, plots_dir: Path) -> None:
     if not per_class:
         return
     items = sorted(per_class.items())
-    bj = [v.get("base_judge_acc") for _, v in items]
-    cj = [v.get("cot_judge_acc")  for _, v in items]
-    has_bj = any(v is not None for v in bj)
-    has_cj = any(v is not None for v in cj)
-    _bar_chart(
-        [v.get("class_label", k) for k, v in items],
-        [v["base_f1"] for _, v in items],
-        [v["cot_f1"]  for _, v in items],
-        title="CoT Eval — F1 per Class",
-        out_path=plots_dir / "f1_per_class.png",
-        xlabel="class",
-        rotate=45,
-        base_judge_vals=[v or 0.0 for v in bj] if has_bj else None,
-        judge_vals=[v or 0.0 for v in cj]       if has_cj else None,
-    )
+    labels = [v.get("class_label", k) for k, v in items]
+    vals  = {c: [v.get(f"{c}_f1",        0.0) for _, v in items] for c in CONDITIONS}
+    jvals = {c: [v.get(f"{c}_judge_acc",  0.0) for _, v in items] for c in CONDITIONS}
+    _bar_chart_4(labels, vals, jvals, title="CoT Eval — F1 per Class",
+                 out_path=plots_dir / "f1_per_class.png", xlabel="class", rotate=45)
 
 
 def plot_cot_length_vs_gain(eval_results: dict, plots_dir: Path) -> None:
-    """Scatter: x = mean CoT observation length (words), y = F1 gain."""
+    """Scatter: x = mean CoT observation length (words), y = F1 gain (cot vs base)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     xs, ys, labels, task_types = [], [], [], []
     for cls_key, e in eval_results.items():
-        cot_len = e.get("mean_cot_length_words", 0.0)
-        gain = e.get("gain", 0.0)
-        xs.append(float(cot_len))
-        ys.append(float(gain))
+        xs.append(float(e.get("mean_cot_length_words", 0.0)))
+        ys.append(float(e.get("cot_gain", 0.0)))
         labels.append(e.get("class_label", cls_key))
         task_types.append(e.get("task_type", "unknown"))
 
     if not xs:
         return
 
-    task_palette = {"disease": "#e07b54", "pest_damage": "#9b59b6",
-                    "weed_identification": "#2ecc71", "crop_identification": "#3498db"}
+    task_palette = {"disease": "#e07b54", "pest_damage": "#9b59b6", "weed_identification": "#2ecc71"}
     colors = [task_palette.get(tt, "gray") for tt in task_types]
 
     fig, ax = plt.subplots(figsize=(10, 7))
@@ -639,8 +689,7 @@ def plot_cot_length_vs_gain(eval_results: dict, plots_dir: Path) -> None:
         try:
             from scipy import stats as sp_stats
             corr, p = sp_stats.pearsonr(xs, ys)
-            ax.text(0.04, 0.96,
-                    f"Pearson r = {corr:.3f}  (p={p:.3f})",
+            ax.text(0.04, 0.96, f"Pearson r = {corr:.3f}  (p={p:.3f})",
                     transform=ax.transAxes, fontsize=10, va="top",
                     color="darkgreen" if corr > 0 else "darkred",
                     bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
@@ -648,19 +697,16 @@ def plot_cot_length_vs_gain(eval_results: dict, plots_dir: Path) -> None:
             pass
 
     from matplotlib.patches import Patch
-    legend_elems = [Patch(facecolor=col, label=tt)
-                    for tt, col in task_palette.items() if tt in task_types]
-    ax.legend(handles=legend_elems, loc="lower right", fontsize=8, title="task type")
+    ax.legend(handles=[Patch(facecolor=col, label=tt)
+                        for tt, col in task_palette.items() if tt in task_types],
+              loc="lower right", fontsize=8, title="task type")
 
     ax.set_xlabel("Mean CoT analysis length (words)")
-    ax.set_ylabel("F1 gain (CoT − base)")
-    ax.set_title(
-        "Does longer chain-of-thought analysis predict larger F1 gain?\n"
-        "Each point = one class   |   Above zero line = CoT helps"
-    )
+    ax.set_ylabel("F1 gain — Structured CoT vs Base")
+    ax.set_title("Does longer structured analysis predict larger F1 gain?\n"
+                 "Each point = one class   |   Above zero = CoT helps")
     ax.grid(alpha=0.3)
     fig.tight_layout()
-
     out_path = plots_dir / "cot_length_vs_gain.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -668,31 +714,31 @@ def plot_cot_length_vs_gain(eval_results: dict, plots_dir: Path) -> None:
 
 
 def plot_gain_distribution(eval_results: dict, plots_dir: Path) -> None:
+    """Overlapping histograms of F1 gains for the 3 non-base conditions."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    gains = [e["gain"] for e in eval_results.values()]
-    if not gains:
-        return
+    non_base = {
+        "cot":          ("cot_gain",         _COLORS["cot"],          "Structured CoT"),
+        "thinking":     ("thinking_gain",     _COLORS["thinking"],     "Native Thinking"),
+        "cot_thinking": ("cot_thinking_gain", _COLORS["cot_thinking"], "CoT + Thinking"),
+    }
 
-    fig, ax = plt.subplots(figsize=(9, 5))
-    ax.hist(gains, bins=20, color="#5b8dd9", edgecolor="white", alpha=0.85)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for cond, (gain_key, color, label) in non_base.items():
+        gains = [e[gain_key] for e in eval_results.values() if gain_key in e]
+        if gains:
+            ax.hist(gains, bins=15, color=color, alpha=0.55, label=f"{label} (mean={np.mean(gains):+.3f})",
+                    edgecolor="white")
+
     ax.axvline(0, color="crimson", lw=2, ls="--", label="no gain baseline")
-    ax.axvline(float(np.mean(gains)), color="darkorange", lw=2, ls="--",
-               label=f"mean gain = {np.mean(gains):+.3f}")
-    n_pos = sum(1 for g in gains if g > 0)
-    n_neg = sum(1 for g in gains if g < 0)
-    ax.set_xlabel("F1 gain (CoT − base)")
+    ax.set_xlabel("F1 gain vs base")
     ax.set_ylabel("Number of classes")
-    ax.set_title(
-        f"Distribution of F1 gains from CoT prior prompting\n"
-        f"↑ improved: {n_pos}   ↓ degraded: {n_neg}   → no change: {len(gains)-n_pos-n_neg}"
-    )
-    ax.legend()
+    ax.set_title("Distribution of F1 gains by prompting condition")
+    ax.legend(fontsize=8)
     ax.grid(alpha=0.3, axis="y")
     fig.tight_layout()
-
     out_path = plots_dir / "gain_distribution.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -708,37 +754,36 @@ def write_summary_report(results: dict, eval_results: dict, output_dir: Path) ->
         "=" * 60,
         "",
         f"Classes evaluated : {ov.get('n_classes', 0)}",
-        f"Base F1 (macro)   : {ov.get('base_f1_macro', 0):.4f}",
-        f"CoT F1 (macro)    : {ov.get('cot_f1_macro',  0):.4f}",
-        f"Mean gain         : {ov.get('gain', 0):+.4f}",
-        f"Classes improved  : {ov.get('n_improved', 0)}  ({ov.get('pct_improved', 0):.1%})",
         "",
-        "By task type:",
+        f"{'Condition':<20} {'F1':>6}  {'Judge':>6}  {'Gain':>7}  {'Improved':>9}",
+        "-" * 55,
     ]
+    for cond, label in _LABELS.items():
+        f1    = ov.get(f"{cond}_f1", 0.0)
+        judge = ov.get(f"{cond}_judge_acc", 0.0)
+        gain  = ov.get(f"{cond}_gain", 0.0) if cond != "base" else 0.0
+        n_imp = ov.get(f"{cond}_n_improved", "-") if cond != "base" else "-"
+        lines.append(f"  {label:<18} {f1:>6.4f}  {judge:>6.4f}  {gain:>+7.4f}  {str(n_imp):>9}")
+
+    lines += ["", "By task type:"]
     for tt, v in sorted(results.get("by_task", {}).items()):
-        lines.append(
-            f"  {tt:25s}  base={v['base_f1_macro']:.4f}  cot={v['cot_f1_macro']:.4f}  "
-            f"gain={v['gain']:+.4f}  n={v['n_classes']}"
-        )
+        lines.append(f"  {tt}")
+        for cond in CONDITIONS:
+            f1   = v.get(f"{cond}_f1",  0.0)
+            gain = round(f1 - v.get("base_f1", 0.0), 4) if cond != "base" else 0.0
+            lines.append(f"    {_LABELS[cond]:<20} F1={f1:.4f}  gain={gain:+.4f}")
 
-    lines += ["", "By dataset:"]
-    for ds, v in sorted(results.get("by_dataset", {}).items()):
-        lines.append(
-            f"  {ds:40s}  base={v['base_f1_macro']:.4f}  cot={v['cot_f1_macro']:.4f}  "
-            f"gain={v['gain']:+.4f}"
-        )
-
-    lines += ["", "Top-5 improved classes:"]
-    top = sorted(eval_results.values(), key=lambda e: e.get("gain", 0), reverse=True)[:5]
+    lines += ["", "Top-5 classes by cot_gain:"]
+    top = sorted(eval_results.values(), key=lambda e: e.get("cot_gain", 0), reverse=True)[:5]
     for e in top:
-        lines.append(f"  {e['class_label']:30s}  gain={e['gain']:+.4f}  "
-                     f"cot_len={e.get('mean_cot_length_words', 0):.0f} words")
+        lines.append(f"  {e['class_label']:30s}  cot_gain={e.get('cot_gain',0):+.4f}  "
+                     f"thinking_gain={e.get('thinking_gain',0):+.4f}  "
+                     f"cot_len={e.get('mean_cot_length_words',0):.0f}w")
 
-    lines += ["", "Top-5 degraded classes:"]
-    bot = sorted(eval_results.values(), key=lambda e: e.get("gain", 0))[:5]
-    for e in bot:
-        lines.append(f"  {e['class_label']:30s}  gain={e['gain']:+.4f}  "
-                     f"cot_len={e.get('mean_cot_length_words', 0):.0f} words")
+    lines += ["", "Top-5 classes by thinking_gain:"]
+    top2 = sorted(eval_results.values(), key=lambda e: e.get("thinking_gain", 0), reverse=True)[:5]
+    for e in top2:
+        lines.append(f"  {e['class_label']:30s}  thinking_gain={e.get('thinking_gain',0):+.4f}")
 
     report = "\n".join(lines) + "\n"
     path = output_dir / "results_summary.txt"
@@ -750,15 +795,14 @@ def write_summary_report(results: dict, eval_results: dict, output_dir: Path) ->
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="CoT Eval — chain-of-thought prior prompting")
+    parser = argparse.ArgumentParser(description="CoT Eval — 4-way ablation of CoT prompting strategies")
     parser.add_argument("--model", default="google/gemma-4-26B-A4B-it")
     parser.add_argument("--config", default="src/config/cot_prompts.yaml")
     parser.add_argument("--datasets_config", default="src/config/datasets.yaml")
     parser.add_argument("--split_config", default="src/config/dataset_split.yaml")
     parser.add_argument("--split", choices=["train", "test", "all"], default="test")
     parser.add_argument("--output_dir", default="outputs/cot_eval")
-    parser.add_argument("--n_eval", type=int, default=None,
-                        help="Override n_eval from config")
+    parser.add_argument("--n_eval", type=int, default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=None)
     parser.add_argument("--plots_only", action="store_true",
                         help="Regenerate plots from existing results.json without re-running inference")
@@ -778,19 +822,21 @@ def main():
     if args.gpu_memory_utilization is not None:
         cfg["gpu_memory_utilization"] = args.gpu_memory_utilization
 
-    prompts_cfg = yaml.safe_load(Path(cfg.get("prompts_config", "src/config/prompts.yaml")).read_text())
+    prompts_cfg = yaml.safe_load(
+        Path(cfg.get("prompts_config", "src/config/prompts.yaml")).read_text()
+    )
 
     if args.plots_only:
         results_path = output_dir / "results.json"
         if not results_path.exists():
-            print(f"No results.json found at {results_path} — run inference first.")
+            print(f"No results.json at {results_path} — run inference first.")
             return
         results = json.loads(results_path.read_text())
         eval_results = results.get("per_class", {})
         print(f"Loaded {len(eval_results)} classes from {results_path}")
     else:
-        datasets_cfg  = datasets_by_name(Path(args.datasets_config))
-        split_raw     = yaml.safe_load(Path(args.split_config).read_text())
+        datasets_cfg = datasets_by_name(Path(args.datasets_config))
+        split_raw    = yaml.safe_load(Path(args.split_config).read_text())
 
         if args.split == "train":
             dataset_names = split_raw.get("train", [])
@@ -802,9 +848,10 @@ def main():
         dataset_names = [d for d in dataset_names if d in datasets_cfg and not datasets_cfg[d].skip]
         print(f"Datasets : {len(dataset_names)}")
         print(f"Config   : n_eval={cfg['n_eval']}  max_tokens_cot={cfg['max_tokens_cot']}  "
+              f"max_tokens_thinking={cfg.get('max_tokens_thinking', 1024)}  "
               f"gpu_util={cfg.get('gpu_memory_utilization', 0.85)}")
 
-        checkpoint = load_checkpoint(output_dir)
+        checkpoint   = load_checkpoint(output_dir)
         eval_results = run_evaluation(
             args.model, datasets_cfg, dataset_names, cfg, prompts_cfg,
             checkpoint, output_dir, args.force, args.seed,
