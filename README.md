@@ -22,6 +22,8 @@ Fine-tuning and evaluation framework for vision-language models on agricultural 
 | vision-augmented-plot | `src/vision_assessment/plot_augmented.py` | Regenerate augmented vision assessment charts (including before/after) from saved metrics JSON (no inference) |
 | 8 — Fine-tune | `src/finetune/train.py` | LoRA fine-tuning on Digital Green dataset with configurable component targeting |
 | 9 — Prompt Optimisation | `src/prompt_optim/optimise.py` | Meta-prompting pipeline: iteratively optimise per-class VLM prompts via Llama-1B, accumulate a hierarchical knowledge base, evaluate generalisation on held-out datasets |
+| 10 — Vocab Grounding | `src/vocab_grounding/run.py` | Inject class-discriminative tokens from the VLM's embedding space into prompts; measure F1 gain vs base OEQ |
+| 11 — CoT Eval | `src/cot_eval/run.py` | Chain-of-thought visual analysis prior to classification (disease/pest symptoms or weed morphology); compare base vs CoT F1 with LLM-as-judge |
 
 ## Prerequisites
 
@@ -596,11 +598,13 @@ to a disease class's image representations should anchor attention to the right 
 - Search full vocab embedding table for tokens with highest `sim_to_target − mean_sim_to_others`
 - Saves `discriminative_vocab.json`
 
-**Phase 2 — Evaluation** (vLLM, fast batch):
+**Phase 2 — Evaluation + Judge** (vLLM, fast batch, single loaded instance):
 - Base prompt: `visual_classification_disease` from `src/config/prompts.yaml` (open-ended, no class list)
 - Contrastive prompt: discriminative tokens prepended bare → `"pustule, lesion. What disease... in this image of a {crop}?"`
-- Measures F1 gain per class across all evaluated datasets
+- LLM-as-judge runs automatically after each class using the same vLLM instance (text-only, reuses `judge_system_vision` + `judge_classification_template` from `src/config/prompts.yaml`)
+- Judge scores shown as black horizontal lines on all bar charts
 
+**Supervised** (labeled image centroids):
 ```bash
 # Phase 1 — grounding analysis (HF transformers, saves discriminative_vocab.json)
 uv run python main.py vocab-grounding \
@@ -609,14 +613,34 @@ uv run python main.py vocab-grounding \
   --phase 1 \
   --output_dir outputs/vocab_grounding
 
-# Phase 2 — evaluation (vLLM, reads discriminative_vocab.json, saves results.json + plots)
+# Phase 2 — evaluation + judge (vLLM, saves results.json + plots)
 uv run python main.py vocab-grounding \
   --model google/gemma-4-26B-A4B-it \
   --split test \
   --phase 2 \
+  --gpu_memory_utilization 0.85 \
   --output_dir outputs/vocab_grounding
+```
 
-# Regenerate plots only (no inference)
+**Zero-shot** (cluster-based centroids, no labels used in Phase 1):
+```bash
+uv run python main.py vocab-grounding \
+  --model google/gemma-4-26B-A4B-it \
+  --split test \
+  --phase 1 \
+  --zero_shot \
+  --output_dir outputs/vocab_grounding_zs
+
+uv run python main.py vocab-grounding \
+  --model google/gemma-4-26B-A4B-it \
+  --split test \
+  --phase 2 \
+  --gpu_memory_utilization 0.85 \
+  --output_dir outputs/vocab_grounding_zs
+```
+
+**Regenerate plots only** (no inference):
+```bash
 uv run python main.py vocab-grounding \
   --phase plots \
   --output_dir outputs/vocab_grounding
@@ -627,11 +651,11 @@ uv run python main.py vocab-grounding \
 ```
 outputs/vocab_grounding/
 ├── discriminative_vocab.json          top discriminative tokens per class + scores
-├── results.json                       F1 base vs contrastive, per class / dataset / task / overall
-├── class_log.jsonl                    per-class evaluation records with raw responses
+├── results.json                       F1 + judge accuracy: base vs contrastive, per class / dataset / task / overall
+├── class_log.jsonl                    per-class evaluation records with raw responses + judge reasoning
 ├── checkpoint.json                    resume state
 └── plots/
-    ├── f1_overall.png                 overall F1 grouped bar chart
+    ├── f1_overall.png                 overall F1 grouped bar chart (black lines = judge scores)
     ├── f1_by_task.png                 F1 by task type
     ├── f1_by_dataset.png              F1 by dataset
     ├── f1_per_class.png               F1 per class
@@ -639,6 +663,56 @@ outputs/vocab_grounding/
     ├── discriminability_vs_gain.png   scatter: does disc score predict F1 gain?
     ├── gain_distribution.png          histogram of F1 gains across classes
     └── threshold_sensitivity.png      coverage vs min_gap threshold
+```
+
+---
+
+### Stage 11 — CoT Eval
+
+Tests whether a chain-of-thought visual analysis step prior to the classification question improves F1.
+Hypothesis: prompting the model to explicitly reason through visual observations (symptoms, morphology,
+damage patterns) before answering anchors attention to task-relevant features.
+
+**Pipeline (single phase — vLLM only):**
+
+For each image, two passes:
+1. **Thinking pass**: `[image] + thinking_prompt` → structured visual observations (up to 512 tokens)
+2. **Classification pass**: `[image + thinking_prompt] + [observations] + classification_question` → class label
+
+Thinking prompts are task-specific:
+- `disease_pest` — identification, affected parts, symptom details (color/shape/texture), pest signs, damage pattern
+- `weed_identification` — leaf morphology, stem/growth habit, reproductive features, candidate species + weed status
+- `crop_identification` — growth stage, visual features, crop condition
+
+Base classification prompts come from `prompts.yaml` (`visual_classification_disease` / `visual_classification_weed`).
+
+```bash
+# Run evaluation + judge (single phase, vLLM only)
+uv run python main.py cot-eval \
+  --model google/gemma-4-26B-A4B-it \
+  --split test \
+  --output_dir outputs/cot_eval
+
+# Regenerate plots only (no inference)
+uv run python main.py cot-eval \
+  --plots_only \
+  --output_dir outputs/cot_eval
+```
+
+**Output structure:**
+
+```
+outputs/cot_eval/
+├── results.json            F1 + judge accuracy: base vs CoT, per class / dataset / task / overall
+├── class_log.jsonl         per-class records: responses, CoT observations, judge reasoning
+├── checkpoint.json         resume state
+└── plots/
+    ├── f1_overall.png           overall F1 grouped bar chart (black lines = judge scores)
+    ├── f1_by_task.png           F1 by task type
+    ├── f1_by_dataset.png        F1 by dataset
+    ├── f1_per_class.png         F1 per class
+    ├── cot_length_vs_gain.png   scatter: does longer CoT analysis predict larger F1 gain?
+    └── gain_distribution.png    histogram of F1 gains across classes
 ```
 
 ---

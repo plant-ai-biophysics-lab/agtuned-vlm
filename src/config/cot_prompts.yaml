@@ -1,0 +1,72 @@
+# Chain-of-thought visual analysis priors for agricultural classification.
+#
+# Hypothesis: asking the model to reason through structured visual observations
+# before the classification question improves F1 by anchoring attention to
+# task-relevant features (symptoms, morphology) prior to diagnosis.
+#
+# Two-pass pipeline per image:
+#   Pass 1: [image] + thinking_prompt          → structured observations
+#   Pass 2: [image + thinking_prompt] + [observations] + classification_question → class label
+#
+# Task type → thinking prompt key is in task_type_to_cot below.
+# Base classification prompts are loaded from src/config/prompts.yaml.
+
+# ── CoT thinking prompts (keyed by task group) ────────────────────────────────
+
+thinking_prompts:
+
+  disease_pest: |
+    Before making a diagnosis, carefully analyze this image:
+
+    1. Identification: What specific plant or crop species is this?
+    2. Affected Parts: Which specific parts of the plant are showing symptoms (e.g., upper leaves, lower leaves, stems, veins, flowers, fruit)?
+    3. Symptom Details: Describe the exact nature of the damage — color (e.g., yellow, brown, black), shape (e.g., circular spots, irregular blotches, necrotic margins), and texture (e.g., powdery, water-soaked, fuzzy) of the affected areas.
+    4. Signs of Pests: Are there visible signs of insects or mites, such as webbing, tiny eggs, frass, or actual bodies?
+    5. Damage Pattern: Is the damage uniform across the whole plant (suggesting environmental or nutrient stress), or isolated and random (suggesting a pest or pathogen)?
+
+  weed_identification: |
+    Before identifying, carefully analyze this image:
+
+    1. Leaf Morphology: Describe the leaf arrangement (opposite, alternate, whorled), shape (lanceolate, ovate, lobed), margins (smooth, serrated, toothed), and venation pattern (parallel, palmate, pinnate).
+    2. Stem and Growth Habit: Is the plant erect, prostrate/creeping, or a climbing vine? Are there visible hairs, thorns, or distinct colors on the stem?
+    3. Reproductive Features: If visible, describe any flowers, seed pods, cones, or buds (noting color, petal count, and arrangement).
+    4. Candidate Species: Based on these exact visual markers, list the top 2-3 most likely botanical matches (Scientific Name and Common Name). State your confidence level for each.
+    5. Weed Status & Ecological Profile: If commonly classified as a weed or invasive species, specify its impact (e.g., agricultural weed, garden nuisance, noxious weed).
+
+  crop_identification: |
+    Before identifying, carefully analyze this image:
+
+    1. Identification: What crop or plant species is shown?
+    2. Growth Stage: What growth or maturity stage is the plant at? Look for seedling, vegetative, flowering, or fruiting indicators.
+    3. Visual Features: Describe the key visual features — color, size, texture, shape — that indicate the growth stage or ripeness.
+    4. Condition: Is the crop healthy, stressed, or at an optimal harvest stage?
+
+# ── Task type routing ─────────────────────────────────────────────────────────
+
+# Maps dataset task_type → thinking_prompt key above
+task_type_to_cot:
+  disease:            disease_pest
+  pest_damage:        disease_pest
+  weed_identification: weed_identification
+  crop_identification: crop_identification
+
+# Maps dataset task_type → key in src/config/prompts.yaml for the base question
+task_type_to_base_prompt:
+  disease:            visual_classification_disease
+  pest_damage:        visual_classification_disease
+  weed_identification: visual_classification_weed
+  crop_identification: visual_classification_weed
+
+# ── LLM-as-judge ──────────────────────────────────────────────────────────────
+# Reuses judge_system_vision + judge_classification_template from prompts.yaml
+
+prompts_config: src/config/prompts.yaml
+
+# ── Evaluation settings ───────────────────────────────────────────────────────
+
+n_eval: 10
+classifier_temperature: 0.0
+max_tokens_cot: 512       # thinking pass — give enough room for structured analysis
+max_tokens_response: 64   # classification pass — expect only the class name
+gpu_memory_utilization: 0.85
+max_model_len: 8192       # must accommodate image + CoT context + response

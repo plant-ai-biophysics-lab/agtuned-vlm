@@ -22,6 +22,7 @@ STAGES = {
     "finetune":           "src.finetune.train",
     "prompt-optim":       "src.prompt_optim.optimise",
     "vocab-grounding":    "src.vocab_grounding.run",
+    "cot-eval":           "src.cot_eval.run",
 }
 
 _HELP = """
@@ -48,6 +49,7 @@ Stages:
     build-dg-jsonl                  — build Digital Green JSONL files from annotations CSV
     prompt-optim        — iteratively optimise per-class prompts via meta-prompting
     vocab-grounding     — inject class-discriminative vocab tokens into prompts, measure F1 gain
+    cot-eval            — chain-of-thought visual analysis prior to classification, measure F1 gain
 
 Examples:
     python main.py generate \\
