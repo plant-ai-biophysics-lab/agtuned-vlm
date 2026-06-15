@@ -58,7 +58,8 @@ from PIL import Image as PILImage
 from src.common.dataset_config import datasets_by_name, clean_class_list, parse_class_label
 from src.common.metrics import resolve_class, apply_judge
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Matches both <think>...</think> and <thought>...</thought> (Gemma-4 uses <thought>)
+_THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
 CONDITIONS = ["base", "cot", "thinking", "cot_thinking"]
 
@@ -191,16 +192,39 @@ def _build_cot_classify_turn(
 
 def _clean(text: str) -> str:
     """
-    Strip <think>...</think> blocks.
-    If the block is unclosed (truncated output), discard everything from <think> onward
-    so a truncated generation doesn't masquerade as a valid response.
+    Strip complete <think>/<thought> blocks.
+    Discard from any remaining unclosed opening tag onward (truncated output).
     """
     text = _THINK_RE.sub("", text)
-    # Discard any remaining unclosed <think> prefix
-    idx = text.lower().find("<think>")
-    if idx != -1:
-        text = text[:idx]
+    for tag in ("<think>", "<thought>"):
+        idx = text.lower().find(tag)
+        if idx != -1:
+            text = text[:idx]
     return text.strip()
+
+
+def _extract_thinking_answer(text: str) -> str:
+    """
+    Gemma-4 with enable_thinking=True renders thinking as:
+      "thought\\n<reasoning>\\n...Final decision: X.X"
+    The actual answer is always the last segment after the final period on the last line.
+    Falls back to the full cleaned text if the pattern isn't found.
+    """
+    text = _clean(text)
+    if not text.lower().startswith("thought"):
+        return text
+    # Take the last non-empty line of the reasoning block
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if not lines:
+        return ""
+    last = lines[-1]
+    # Model repeats the answer: "Anthracnose.Anthracnose" or "healthy.healthy"
+    # Take everything after the last period
+    if "." in last:
+        candidate = last.rsplit(".", 1)[1].strip()
+        if candidate:
+            return candidate
+    return last
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
@@ -282,8 +306,10 @@ def evaluate_class(
     # Pass 4 — native thinking on base question (thinking=True)
     think_inputs = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=True)
                     for img in images]
-    thinking_responses = [_clean(o.outputs[0].text)
-                          for o in llm.generate(think_inputs, thinking_params)]
+    thinking_raw = llm.generate(think_inputs, thinking_params)
+    # Store full cleaned text for logging; extract final answer for F1 + judge
+    thinking_full    = [_clean(o.outputs[0].text) for o in thinking_raw]
+    thinking_responses = [_extract_thinking_answer(t) for t in thinking_full]
 
     # Pass 5 — CoT + native thinking (structured context + bridging question, thinking=True)
     cot_think_inputs = [
@@ -291,10 +317,13 @@ def evaluate_class(
                                  cot_classification_q, enable_thinking=True)
         for img, thought in zip(images, cot_thoughts)
     ]
-    cot_thinking_responses = [_clean(o.outputs[0].text)
-                               for o in llm.generate(cot_think_inputs, thinking_params)]
+    cot_thinking_raw = llm.generate(cot_think_inputs, thinking_params)
+    cot_thinking_full      = [_clean(o.outputs[0].text) for o in cot_thinking_raw]
+    cot_thinking_responses = [_extract_thinking_answer(t) for t in cot_thinking_full]
 
-    return base_responses, cot_responses, thinking_responses, cot_thinking_responses, cot_thoughts
+    return (base_responses, cot_responses,
+            thinking_responses, cot_thinking_responses,
+            cot_thoughts, thinking_full, cot_thinking_full)
 
 
 def _class_f1(responses: list[str], class_label: str, all_classes: list[str]) -> tuple[float, float]:
@@ -413,7 +442,7 @@ def run_evaluation(
 
             (base_responses, cot_responses,
              thinking_responses, cot_thinking_responses,
-             cot_thoughts) = evaluate_class(
+             cot_thoughts, thinking_full, cot_thinking_full) = evaluate_class(
                 llm, tokenizer, image_paths,
                 thinking_prompt, base_prompt,
                 base_classification_q, cot_classification_q,
@@ -491,11 +520,13 @@ def run_evaluation(
 
             append_jsonl(log_path, {
                 **entry,
-                "base_responses":         base_responses,
-                "cot_responses":          cot_responses,
-                "thinking_responses":     thinking_responses,
-                "cot_thinking_responses": cot_thinking_responses,
-                "cot_thoughts":           cot_thoughts,
+                "base_responses":            base_responses,
+                "cot_responses":             cot_responses,
+                "thinking_responses":        thinking_responses,        # extracted final answer
+                "thinking_full":             thinking_full,             # full reasoning blob
+                "cot_thinking_responses":    cot_thinking_responses,    # extracted final answer
+                "cot_thinking_full":         cot_thinking_full,         # full reasoning blob
+                "cot_thoughts":              cot_thoughts,
             })
 
             checkpoint["eval_results"] = eval_results
