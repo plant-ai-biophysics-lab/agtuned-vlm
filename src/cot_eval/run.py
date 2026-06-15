@@ -307,9 +307,32 @@ def _class_f1(responses: list[str], class_label: str, all_classes: list[str]) ->
     return round(float(f1), 4), round(resolvability, 4)
 
 
-def _judge_acc(rows: list[dict], llm, tokenizer, judge_system: str, judge_template: str) -> float:
+def _run_judge(
+    rows: list[dict],
+    llm,
+    tokenizer,
+    judge_system: str,
+    judge_template: str,
+) -> tuple[float, list[dict]]:
+    """Run judge; return (accuracy, judged_rows) so callers can log details."""
     judged = apply_judge(rows, llm, tokenizer, judge_system, judge_template, "gt", "response")
-    return round(sum(r["judged_correct"] for r in judged) / max(len(judged), 1), 4)
+    acc = round(sum(r["judged_correct"] for r in judged) / max(len(judged), 1), 4)
+    return acc, judged
+
+
+def _log_judge(path: Path, cls_key: str, condition: str, judged_rows: list[dict]) -> None:
+    """Append one record per prediction to judge_log.jsonl for debugging."""
+    with open(path, "a") as f:
+        for i, r in enumerate(judged_rows):
+            f.write(json.dumps({
+                "cls_key":        cls_key,
+                "condition":      condition,
+                "sample_idx":     i,
+                "gt":             r.get("gt", ""),
+                "response":       r.get("response", ""),
+                "judged_correct": r.get("judged_correct", 0),
+                "judge_reasoning": r.get("judge_reasoning", ""),
+            }) + "\n")
 
 
 # ── Evaluation phase ──────────────────────────────────────────────────────────
@@ -350,7 +373,8 @@ def run_evaluation(
     thinking_params = SamplingParams(temperature=temp, max_tokens=max_thinking, repetition_penalty=1.05)
 
     eval_results: dict = checkpoint.get("eval_results", {})
-    log_path = output_dir / "class_log.jsonl"
+    log_path       = output_dir / "class_log.jsonl"
+    judge_log_path = output_dir / "judge_log.jsonl"
 
     llm, tokenizer = load_vlm(model_id, gpu_util, max_model_len)
 
@@ -414,13 +438,19 @@ def run_evaluation(
             def _rows(responses):
                 return [{"gt": clean_cls, "response": r} for r in responses]
 
-            base_judge        = _judge_acc(_rows(base_responses),         llm, tokenizer, judge_system, judge_template)
-            cot_judge         = _judge_acc(_rows(cot_responses),          llm, tokenizer, judge_system, judge_template)
-            thinking_judge    = _judge_acc(_rows(thinking_responses),     llm, tokenizer, judge_system, judge_template)
-            cot_thinking_judge = _judge_acc(_rows(cot_thinking_responses), llm, tokenizer, judge_system, judge_template)
+            base_judge,         base_judged         = _run_judge(_rows(base_responses),         llm, tokenizer, judge_system, judge_template)
+            cot_judge,          cot_judged          = _run_judge(_rows(cot_responses),          llm, tokenizer, judge_system, judge_template)
+            thinking_judge,     thinking_judged     = _run_judge(_rows(thinking_responses),     llm, tokenizer, judge_system, judge_template)
+            cot_thinking_judge, cot_thinking_judged = _run_judge(_rows(cot_thinking_responses), llm, tokenizer, judge_system, judge_template)
 
             print(f"    judge  base={base_judge:.3f}  cot={cot_judge:.3f}  "
                   f"thinking={thinking_judge:.3f}  cot+thinking={cot_thinking_judge:.3f}")
+
+            # Write per-prediction judge details to judge_log.jsonl
+            _log_judge(judge_log_path, cls_key, "base",         base_judged)
+            _log_judge(judge_log_path, cls_key, "cot",          cot_judged)
+            _log_judge(judge_log_path, cls_key, "thinking",     thinking_judged)
+            _log_judge(judge_log_path, cls_key, "cot_thinking", cot_thinking_judged)
 
             mean_cot_len = round(float(np.mean([len(t.split()) for t in cot_thoughts])), 1) \
                            if cot_thoughts else 0.0
