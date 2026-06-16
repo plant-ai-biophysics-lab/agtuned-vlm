@@ -351,7 +351,8 @@ def evaluate_class(
     base_params,
     step_params,
     cls_params,
-    thinking_params,
+    thinking_cls_params,
+    thinking_step_params,
     n_eval: int,
 ) -> tuple[list[str], list[str], list[str], list[str], list[list[str]], list[list[str]], list[str], list[str]]:
     """
@@ -396,8 +397,8 @@ def evaluate_class(
     )
 
     # Pass 4 — native thinking on base question (budget = thinking + answer headroom)
-    think_inputs = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=True)
-                    for img in images]
+    think_inputs   = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=True)
+                      for img in images]
     thinking_raw   = llm.generate(think_inputs, thinking_cls_params)
     thinking_full  = [_clean(o.outputs[0].text) for o in thinking_raw]
     thinking_responses = [_extract_thinking_answer(t) for t in thinking_full]
@@ -542,7 +543,7 @@ def run_evaluation(
                 llm, tokenizer, image_paths,
                 steps,
                 base_classification_q, cot_classification_q,
-                base_params, step_params, cls_params, thinking_params, n_eval,
+                base_params, step_params, cls_params, thinking_cls_params, thinking_step_params, n_eval,
             )
 
             if not base_responses:
