@@ -1033,8 +1033,8 @@ def main():
 
         dataset_names = [d for d in dataset_names if d in datasets_cfg and not datasets_cfg[d].skip]
         print(f"Datasets : {len(dataset_names)}")
-        print(f"Config   : n_eval={cfg['n_eval']}  max_tokens_cot={cfg['max_tokens_cot']}  "
-              f"max_tokens_thinking={cfg.get('max_tokens_thinking', 1024)}  "
+        print(f"Config   : n_eval={cfg['n_eval']}  max_tokens_step={cfg.get('max_tokens_step', 256)}  "
+              f"max_tokens_thinking={cfg.get('max_tokens_thinking', 4096)}  "
               f"gpu_util={cfg.get('gpu_memory_utilization', 0.85)}")
 
         checkpoint   = load_checkpoint(output_dir)
