@@ -227,11 +227,108 @@ def _extract_thinking_answer(text: str) -> str:
     return last
 
 
+# ── Multi-turn CoT runner ─────────────────────────────────────────────────────
+
+def _run_cot_multiturn(
+    llm,
+    tokenizer,
+    images: list[PILImage.Image],
+    steps: list[str],
+    classification_q: str,
+    step_params,
+    cls_params,
+    enable_thinking: bool = False,
+) -> tuple[list[str], list[list[str]]]:
+    """
+    Run true multi-turn CoT: one vLLM batch per step, growing conversation per image.
+
+    Turn structure for each image:
+      User:  [image] <step 1 question>
+      Asst:  <answer 1>
+      User:  <step 2 question>          ← no image token; already in history
+      Asst:  <answer 2>
+      ...
+      User:  <classification_q>
+      Asst:  <final class name>
+
+    For enable_thinking=True (CoT+thinking), the model reasons before each answer.
+    Only the extracted final answer (not the full <thought> blob) is stored in
+    history — keeps context length manageable across 5 steps.
+
+    Returns:
+      final_responses        — extracted class-name answer for each image
+      step_responses_grid    — step_responses_grid[step_i][image_i] = answer text
+    """
+    n = len(images)
+    # histories[i] = growing list of message dicts for image i
+    histories: list[list[dict]] = [[] for _ in range(n)]
+    step_responses_grid: list[list[str]] = []
+
+    for step_idx, question in enumerate(steps):
+        inputs = []
+        for i, img in enumerate(images):
+            if step_idx == 0:
+                msgs = [{"role": "user", "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": question},
+                ]}]
+            else:
+                msgs = histories[i] + [{"role": "user", "content": [
+                    {"type": "text", "text": question},
+                ]}]
+            inputs.append({
+                "prompt": _apply_template(tokenizer, msgs, enable_thinking=enable_thinking),
+                "multi_modal_data": {"image": img},
+            })
+
+        raw_outputs = llm.generate(inputs, step_params)
+        step_answers = []
+        for i, out in enumerate(raw_outputs):
+            raw = out.outputs[0].text
+            answer = _extract_thinking_answer(_clean(raw)) if enable_thinking else _clean(raw)
+            step_answers.append(answer)
+
+            if step_idx == 0:
+                histories[i] = [
+                    {"role": "user", "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": question},
+                    ]},
+                    {"role": "assistant", "content": answer},
+                ]
+            else:
+                histories[i] = histories[i] + [
+                    {"role": "user", "content": [{"type": "text", "text": question}]},
+                    {"role": "assistant", "content": answer},
+                ]
+
+        step_responses_grid.append(step_answers)
+
+    # Final classification turn
+    cls_inputs = []
+    for i, img in enumerate(images):
+        msgs = histories[i] + [{"role": "user", "content": [
+            {"type": "text", "text": classification_q},
+        ]}]
+        cls_inputs.append({
+            "prompt": _apply_template(tokenizer, msgs, enable_thinking=enable_thinking),
+            "multi_modal_data": {"image": img},
+        })
+
+    cls_outputs = llm.generate(cls_inputs, cls_params)
+    if enable_thinking:
+        final_responses = [_extract_thinking_answer(_clean(o.outputs[0].text)) for o in cls_outputs]
+    else:
+        final_responses = [_clean(o.outputs[0].text) for o in cls_outputs]
+
+    return final_responses, step_responses_grid
+
+
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
-def get_thinking_prompt(task_type: str, cfg: dict) -> str:
+def get_thinking_steps(task_type: str, cfg: dict) -> list[str]:
     cot_key = cfg["task_type_to_cot"].get(task_type, "disease_pest")
-    return cfg["thinking_prompts"][cot_key].strip()
+    return cfg["thinking_prompts"][cot_key]["steps"]
 
 
 def get_base_prompt(task_type: str, prompts_cfg: dict, cot_cfg: dict, crop: str | None) -> str:
@@ -248,28 +345,31 @@ def evaluate_class(
     llm,
     tokenizer,
     image_paths: list[str],
-    thinking_prompt: str,
-    base_prompt: str,
+    steps: list[str],
     base_classification_q: str,
     cot_classification_q: str,
     base_params,
-    cot_params,
+    step_params,
     cls_params,
     thinking_params,
     n_eval: int,
-) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[list[str]], list[list[str]], list[str], list[str]]:
     """
-    5 vLLM passes:
-      1. base            — [image] + base_prompt + base_classification_q   (thinking=False)
-      2. observations    — [image] + thinking_prompt                        (thinking=False, clean text)
-      3. cot classify    — [image+obs] + cot_classification_q               (thinking=False)
-      4. native thinking — [image] + base_prompt + base_classification_q   (thinking=True)
-      5. cot+thinking    — [image+obs] + cot_classification_q               (thinking=True)
+    4 conditions, true multi-turn CoT:
 
-    base_classification_q  — asks for the specific name directly
-    cot_classification_q   — bridges from the structured analysis to a specific name
+      base         — [image] + base_classification_q                              (thinking=False)
+      cot          — multi-turn: step 1→answer 1→step 2→answer 2→...→classify    (thinking=False)
+      thinking     — [image] + base_classification_q                              (thinking=True)
+      cot_thinking — same multi-turn, thinking=True on every step + final         (thinking=True)
 
-    Returns (base_responses, cot_responses, thinking_responses, cot_thinking_responses, cot_thoughts).
+    CoT uses _run_cot_multiturn: each bullet point is its own vLLM batch with the
+    growing conversation as context. For cot_thinking, the model reasons before each
+    step answer, but only the extracted final answer enters the history.
+
+    Returns:
+      base_responses, cot_responses, thinking_responses, cot_thinking_responses,
+      cot_step_grid, cot_thinking_step_grid,   ← per-step answers [step][image]
+      thinking_full, cot_thinking_full          ← raw reasoning blobs for logging
     """
     paths = image_paths[:n_eval]
     images: list[PILImage.Image] = []
@@ -280,50 +380,45 @@ def evaluate_class(
             print(f"      [warn] {p}: {e}")
 
     if not images:
-        return [], [], [], [], []
+        return [], [], [], [], [], [], [], []
 
-    # Pass 1 — base (direct name instruction, no thinking)
+    # Pass 1 — base
     base_inputs = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=False)
                    for img in images]
     base_responses = [_clean(o.outputs[0].text)
                       for o in llm.generate(base_inputs, base_params)]
 
-    # Pass 2 — structured observations (thinking=False → clean text, no <think> tags)
-    obs_inputs = [_build_single_turn(tokenizer, img, thinking_prompt, enable_thinking=False)
-                  for img in images]
-    cot_thoughts = [_clean(o.outputs[0].text)
-                    for o in llm.generate(obs_inputs, cot_params)]
+    # Passes 2+3 — multi-turn CoT (thinking=False, one step per turn)
+    print(f"      [cot] {len(steps)} steps × {len(images)} images ...")
+    cot_responses, cot_step_grid = _run_cot_multiturn(
+        llm, tokenizer, images, steps, cot_classification_q,
+        step_params, cls_params, enable_thinking=False,
+    )
 
-    # Pass 3 — CoT classify (structured context + bridging question, thinking=False)
-    cot_inputs = [
-        _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought,
-                                 cot_classification_q, enable_thinking=False)
-        for img, thought in zip(images, cot_thoughts)
-    ]
-    cot_responses = [_clean(o.outputs[0].text)
-                     for o in llm.generate(cot_inputs, cls_params)]
-
-    # Pass 4 — native thinking on base question (thinking=True)
+    # Pass 4 — native thinking on base question (budget = thinking + answer headroom)
     think_inputs = [_build_single_turn(tokenizer, img, base_classification_q, enable_thinking=True)
                     for img in images]
-    thinking_raw = llm.generate(think_inputs, thinking_params)
-    # Store full cleaned text for logging; extract final answer for F1 + judge
-    thinking_full    = [_clean(o.outputs[0].text) for o in thinking_raw]
+    thinking_raw   = llm.generate(think_inputs, thinking_cls_params)
+    thinking_full  = [_clean(o.outputs[0].text) for o in thinking_raw]
     thinking_responses = [_extract_thinking_answer(t) for t in thinking_full]
 
-    # Pass 5 — CoT + native thinking (structured context + bridging question, thinking=True)
-    cot_think_inputs = [
-        _build_cot_classify_turn(tokenizer, img, thinking_prompt, thought,
-                                 cot_classification_q, enable_thinking=True)
-        for img, thought in zip(images, cot_thoughts)
+    # Passes 5+6 — multi-turn CoT + native thinking (thinking=True on every turn)
+    # step budget = thinking + step headroom; final cls budget = thinking + response headroom
+    print(f"      [cot+thinking] {len(steps)} steps × {len(images)} images ...")
+    cot_thinking_responses, cot_thinking_step_grid = _run_cot_multiturn(
+        llm, tokenizer, images, steps, cot_classification_q,
+        thinking_step_params, thinking_cls_params, enable_thinking=True,
+    )
+    # Flatten reasoning blobs from the last step for logging (approximation)
+    cot_thinking_full = [
+        " | ".join(cot_thinking_step_grid[s][i] for s in range(len(steps)))
+        for i in range(len(images))
     ]
-    cot_thinking_raw = llm.generate(cot_think_inputs, thinking_params)
-    cot_thinking_full      = [_clean(o.outputs[0].text) for o in cot_thinking_raw]
-    cot_thinking_responses = [_extract_thinking_answer(t) for t in cot_thinking_full]
 
     return (base_responses, cot_responses,
             thinking_responses, cot_thinking_responses,
-            cot_thoughts, thinking_full, cot_thinking_full)
+            cot_step_grid, cot_thinking_step_grid,
+            thinking_full, cot_thinking_full)
 
 
 def _class_f1(responses: list[str], class_label: str, all_classes: list[str]) -> tuple[float, float]:
@@ -379,27 +474,27 @@ def run_evaluation(
 ) -> dict:
     from vllm import SamplingParams
 
-    n_eval       = int(cfg.get("n_eval", 30))
-    temp         = float(cfg.get("classifier_temperature", 0.0))
-    max_cot      = int(cfg.get("max_tokens_cot", 512))
-    max_resp     = int(cfg.get("max_tokens_response", 64))
-    max_thinking = int(cfg.get("max_tokens_thinking", 1024))
-    gpu_util     = float(cfg.get("gpu_memory_utilization", 0.85))
-    max_model_len = int(cfg.get("max_model_len", 8192))
+    n_eval        = int(cfg.get("n_eval", 30))
+    temp          = float(cfg.get("classifier_temperature", 0.0))
+    max_step      = int(cfg.get("max_tokens_step", 256))
+    max_resp      = int(cfg.get("max_tokens_response", 128))
+    max_thinking  = int(cfg.get("max_tokens_thinking", 4096))
+    gpu_util      = float(cfg.get("gpu_memory_utilization", 0.85))
+    max_model_len = int(cfg.get("max_model_len", 12288))
 
     judge_system   = prompts_cfg["judge_system_vision"]
     judge_template = prompts_cfg["judge_classification_template"]
-    # Separate suffixes: base/thinking get a direct "name it" instruction;
-    # CoT passes get a bridging phrase so the model doesn't output a category
     base_suffix = cfg.get("base_classification_suffix",
-                          " Answer with the specific disease, pest, or stress name only. Do not describe — just name it.")
+                          " Answer with the specific disease, pest, or stress name only (if any - healthy otherwise). Do not describe — just name it.")
     cot_suffix  = cfg.get("cot_classification_suffix",
-                          " Based on your analysis above, what is the specific name of the condition shown? Answer with the specific name only.")
+                          " Based on your analysis above, what is the specific name of the condition shown (if any - healthy otherwise)? Answer with the specific name only.")
 
-    base_params     = SamplingParams(temperature=temp, max_tokens=max_resp,     repetition_penalty=1.1)
-    cot_params      = SamplingParams(temperature=temp, max_tokens=max_cot,      repetition_penalty=1.05)
-    cls_params      = SamplingParams(temperature=temp, max_tokens=max_resp,     repetition_penalty=1.1)
-    thinking_params = SamplingParams(temperature=temp, max_tokens=max_thinking, repetition_penalty=1.05)
+    base_params          = SamplingParams(temperature=temp, max_tokens=max_resp,                  repetition_penalty=1.1)
+    step_params          = SamplingParams(temperature=temp, max_tokens=max_step,                  repetition_penalty=1.05)
+    cls_params           = SamplingParams(temperature=temp, max_tokens=max_resp,                  repetition_penalty=1.1)
+    # thinking=True: budget = thinking block + answer headroom
+    thinking_cls_params  = SamplingParams(temperature=temp, max_tokens=max_thinking + max_resp,   repetition_penalty=1.05)
+    thinking_step_params = SamplingParams(temperature=temp, max_tokens=max_thinking + max_step,   repetition_penalty=1.05)
 
     eval_results: dict = checkpoint.get("eval_results", {})
     log_path       = output_dir / "class_log.jsonl"
@@ -421,8 +516,8 @@ def run_evaluation(
             print(f"  [error] Could not load {agml_name}: {e}")
             continue
 
-        all_classes    = clean_class_list(ds_cfg.classes)
-        thinking_prompt = get_thinking_prompt(ds_cfg.task_type, cfg)
+        all_classes = clean_class_list(ds_cfg.classes)
+        steps = get_thinking_steps(ds_cfg.task_type, cfg)
 
         for raw_cls, image_paths in sampled.items():
             crop, clean_cls = parse_class_label(raw_cls, ds_cfg.crop)
@@ -442,11 +537,12 @@ def run_evaluation(
 
             (base_responses, cot_responses,
              thinking_responses, cot_thinking_responses,
-             cot_thoughts, thinking_full, cot_thinking_full) = evaluate_class(
+             cot_step_grid, cot_thinking_step_grid,
+             thinking_full, cot_thinking_full) = evaluate_class(
                 llm, tokenizer, image_paths,
-                thinking_prompt, base_prompt,
+                steps,
                 base_classification_q, cot_classification_q,
-                base_params, cot_params, cls_params, thinking_params, n_eval,
+                base_params, step_params, cls_params, thinking_params, n_eval,
             )
 
             if not base_responses:
@@ -481,8 +577,13 @@ def run_evaluation(
             _log_judge(judge_log_path, cls_key, "thinking",     thinking_judged)
             _log_judge(judge_log_path, cls_key, "cot_thinking", cot_thinking_judged)
 
-            mean_cot_len = round(float(np.mean([len(t.split()) for t in cot_thoughts])), 1) \
-                           if cot_thoughts else 0.0
+            # Mean words per image across all CoT steps
+            all_step_words = [
+                len(cot_step_grid[s][i].split())
+                for s in range(len(steps))
+                for i in range(len(cot_step_grid[0]) if cot_step_grid else 0)
+            ]
+            mean_cot_len = round(float(np.mean(all_step_words)), 1) if all_step_words else 0.0
 
             entry = {
                 "dataset":    agml_name,
@@ -522,11 +623,12 @@ def run_evaluation(
                 **entry,
                 "base_responses":            base_responses,
                 "cot_responses":             cot_responses,
+                "cot_step_grid":             cot_step_grid,             # [step][image] answers
                 "thinking_responses":        thinking_responses,        # extracted final answer
                 "thinking_full":             thinking_full,             # full reasoning blob
                 "cot_thinking_responses":    cot_thinking_responses,    # extracted final answer
-                "cot_thinking_full":         cot_thinking_full,         # full reasoning blob
-                "cot_thoughts":              cot_thoughts,
+                "cot_thinking_step_grid":    cot_thinking_step_grid,   # [step][image] answers
+                "cot_thinking_full":         cot_thinking_full,
             })
 
             checkpoint["eval_results"] = eval_results

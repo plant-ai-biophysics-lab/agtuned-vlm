@@ -13,25 +13,28 @@
 
 # ── CoT thinking prompts (keyed by task group) ────────────────────────────────
 
+# Each thinking_prompt is a list of steps. Each step becomes its own conversation turn,
+# building a growing multi-turn dialogue before the final classification question.
+# For CoT+thinking, the model reasons (enable_thinking=True) before each step answer,
+# but only the extracted final answer is added to the conversation history.
+
 thinking_prompts:
 
-  disease_pest: |
-    Before making a diagnosis, carefully analyze this image:
+  disease_pest:
+    steps:
+      - "What specific plant or crop species is this?"
+      - "Which specific parts of the plant are showing symptoms (e.g., upper leaves, lower leaves, stems, veins, flowers, fruit)?"
+      - "Describe the exact nature of the damage — color (e.g., yellow, brown, black), shape (e.g., circular spots, irregular blotches, necrotic margins), and texture (e.g., powdery, water-soaked, fuzzy) of the affected areas."
+      - "Are there any visible signs of insects or mites, such as webbing, tiny eggs, frass, or actual bodies?"
+      - "Is the damage uniform across the whole plant (suggesting environmental or nutrient stress), or isolated and random (suggesting a pest or pathogen)?"
 
-    1. Identification: What specific plant or crop species is this?
-    2. Affected Parts: Which specific parts of the plant are showing symptoms (e.g., upper leaves, lower leaves, stems, veins, flowers, fruit)?
-    3. Symptom Details: Describe the exact nature of the damage — color (e.g., yellow, brown, black), shape (e.g., circular spots, irregular blotches, necrotic margins), and texture (e.g., powdery, water-soaked, fuzzy) of the affected areas.
-    4. Signs of Pests: Are there visible signs of insects or mites, such as webbing, tiny eggs, frass, or actual bodies?
-    5. Damage Pattern: Is the damage uniform across the whole plant (suggesting environmental or nutrient stress), or isolated and random (suggesting a pest or pathogen)?
-
-  weed_identification: |
-    Before identifying, carefully analyze this image:
-
-    1. Leaf Morphology: Describe the leaf arrangement (opposite, alternate, whorled), shape (lanceolate, ovate, lobed), margins (smooth, serrated, toothed), and venation pattern (parallel, palmate, pinnate).
-    2. Stem and Growth Habit: Is the plant erect, prostrate/creeping, or a climbing vine? Are there visible hairs, thorns, or distinct colors on the stem?
-    3. Reproductive Features: If visible, describe any flowers, seed pods, cones, or buds (noting color, petal count, and arrangement).
-    4. Candidate Species: Based on these exact visual markers, list the top 2-3 most likely botanical matches (Scientific Name and Common Name). State your confidence level for each.
-    5. Weed Status & Ecological Profile: If commonly classified as a weed or invasive species, specify its impact (e.g., agricultural weed, garden nuisance, noxious weed).
+  weed_identification:
+    steps:
+      - "Describe the leaf arrangement (opposite, alternate, whorled), shape (lanceolate, ovate, lobed), margins (smooth, serrated, toothed), and venation pattern (parallel, palmate, pinnate)."
+      - "Is the plant erect, prostrate/creeping, or a climbing vine? Are there visible hairs, thorns, or distinct colors on the stem?"
+      - "If visible, describe any flowers, seed pods, cones, or buds — noting color, petal count, and arrangement."
+      - "Based on the visual markers so far, what are the top 2-3 most likely botanical matches (Scientific Name and Common Name)? State your confidence for each."
+      - "Is this plant commonly classified as a weed or invasive species? If so, specify its agricultural or ecological impact."
 
 # ── Task type routing ─────────────────────────────────────────────────────────
 
@@ -66,8 +69,11 @@ prompts_config: src/config/prompts.yaml
 
 n_eval: 30
 classifier_temperature: 0.0
-max_tokens_cot: 2048       # structured observation pass (thinking=False, clean text) — 5 detailed points
-max_tokens_response: 128    # classification pass (base and cot conditions) — just a class name
-max_tokens_thinking: 4096  # native thinking passes (thinking=True) — <think> block can be verbose
+max_tokens_step: 256        # per CoT step answer (no thinking) — one focused question
+max_tokens_response: 128    # final classification answer — just a class name
+max_tokens_thinking: 4096  # thinking budget per pass — <thought> block alone
+# For cot_thinking: each step budget = max_tokens_thinking + max_tokens_step (4352)
+# For cot_thinking final: budget = max_tokens_thinking + max_tokens_response (4224)
+# These are computed in code — do not set them here.
 gpu_memory_utilization: 0.85
 max_model_len: 12288       # must accommodate image + CoT context + thinking block + response
