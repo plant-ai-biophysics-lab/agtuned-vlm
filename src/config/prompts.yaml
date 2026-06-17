@@ -55,8 +55,8 @@ verify_sanitize: |
   Sanitized description:
 
 # Assessment prompts
-assessment_descriptive: "Answer the following question in exactly one concise sentence describing only the visual appearance. Do not reason step by step. Do not include greetings, headers, bullet points, analysis, or explanations. Output only the sentence.\n\nQuestion: {question}\n\nAnswer:"
-assessment_classification: "Answer the following question with only the class name. Do not reason step by step. Do not include explanations, analysis, or any other text. Output only the class name.\n\nQuestion: {question}\n\nAnswer:"
+assessment_descriptive: "Answer the following question in exactly one to two concise sentences describing only the visual appearance. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the sentences.\n\nQuestion: {question}\n\nAnswer:"
+assessment_classification: "Answer the following question in one to two concise sentences with exactly one answer. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the class name.\n\nQuestion: {question}\n\nAnswer:"
 classification_suffix: " Respond with only the class name, nothing else."
 
 # System prompt applied to all evaluated models during assessment
