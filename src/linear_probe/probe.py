@@ -1043,15 +1043,16 @@ def main(args):
     else:
         datasets = active_datasets(Path(args.config))
 
-    print(f"\nActive datasets: {len(datasets)}")
+    n_datasets = len(datasets)
+    print(f"\nActive datasets: {n_datasets}")
 
     # Phase 1: load each backbone once, extract embeddings for all datasets, unload
     # all_embeddings[backbone_key][agml_name] = (X, labels, train_idx, test_idx, le)
     all_embeddings: dict[str, dict[str, tuple]] = {}
 
-    for ds_cfg in datasets:
+    for ds_i, ds_cfg in enumerate(datasets):
         agml_name = ds_cfg.agml_name
-        print(f"\nLoading samples: {agml_name}")
+        print(f"\n[{ds_i + 1}/{n_datasets}] Loading samples: {agml_name}")
         try:
             if use_dg:
                 samples = load_dg_samples(images_dir, Path(dg_jsonl))
@@ -1084,10 +1085,21 @@ def main(args):
         # Temporarily store samples with split indices keyed by dataset
         all_embeddings.setdefault("_samples", {})[agml_name] = (samples, labels_all, y_enc, train_idx, test_idx, le)
 
+    # Count total backbone passes for progress display
+    _backbone_names = (
+        ([args.dino_model]    if args.dino_model    else [])
+        + ([args.yolo_model]  if args.yolo_model    else [])
+        + ([args.bioclip_model] if args.bioclip_model else [])
+        + (args.models or [])
+    )
+    n_backbones   = len(_backbone_names)
+    backbone_idx  = 0
+
     # DINOv3 pass
     if args.dino_model:
         from tqdm import tqdm
-        print(f"\n{'='*60}\nDINOv3: {args.dino_model}\n{'='*60}")
+        backbone_idx += 1
+        print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] DINOv3: {args.dino_model}\n{'='*60}")
         dino_key = args.dino_model.split("/")[-1].replace(".pt", "")
         ds_items = list(all_embeddings["_samples"].items())
         ds_names = [dsn for dsn, _ in ds_items]
@@ -1117,7 +1129,8 @@ def main(args):
     # YOLO pass
     if args.yolo_model:
         from tqdm import tqdm
-        print(f"\n{'='*60}\nYOLO: {args.yolo_model}\n{'='*60}")
+        backbone_idx += 1
+        print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] YOLO: {args.yolo_model}\n{'='*60}")
         yolo_key = args.yolo_model.replace(".pt", "")
         ds_items = list(all_embeddings["_samples"].items())
         ds_names = [dsn for dsn, _ in ds_items]
@@ -1145,7 +1158,8 @@ def main(args):
     # BioCLIP pass
     if args.bioclip_model:
         from tqdm import tqdm
-        print(f"\n{'='*60}\nBioCLIP: {args.bioclip_model}\n{'='*60}")
+        backbone_idx += 1
+        print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] BioCLIP: {args.bioclip_model}\n{'='*60}")
         bioclip_key = args.bioclip_model.split("/")[-1]
         ds_items = list(all_embeddings["_samples"].items())
         ds_names = [dsn for dsn, _ in ds_items]
@@ -1179,9 +1193,10 @@ def main(args):
     postproj_only_outer = getattr(args, "postproj_only", False)
     for model_id in (args.models or []):
         from tqdm import tqdm
+        backbone_idx += 1
         backbone_key = model_id.split("/")[-1]
         postproj_key = f"{backbone_key}_postproj"
-        print(f"\n{'='*60}\nVLM: {model_id}\n{'='*60}")
+        print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] VLM: {model_id}\n{'='*60}")
 
         ds_items = list(all_embeddings["_samples"].items())
         ds_names = [dsn for dsn, _ in ds_items]
@@ -1320,7 +1335,9 @@ def main(args):
     report_store: dict[str, dict[str, dict]] = defaultdict(dict)
     pred_store: dict[str, dict[str, tuple]] = defaultdict(dict)
 
-    for agml_name in all_embeddings["_samples"]:
+    _lr_ds_names = list(all_embeddings["_samples"].keys())
+    n_lr_ds = len(_lr_ds_names)
+    for ds_probe_i, agml_name in enumerate(_lr_ds_names):
         _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
         results_per_dataset[agml_name] = {"backbones": {}}
 
@@ -1330,7 +1347,7 @@ def main(args):
             X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
             y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-            print(f"\n=== LR probe (per-dataset): {agml_name} / {backbone} ===")
+            print(f"\n=== LR probe [{ds_probe_i + 1}/{n_lr_ds}] {agml_name} / {backbone} ===")
             metrics, y_test_lbl, y_pred_lbl = run_probe(
                 X[train_idx], X[test_idx], y_train, y_test, le, backbone
             )
@@ -1696,8 +1713,8 @@ if __name__ == "__main__":
         help="DINOv3 model ID. Pass 'none' to skip.",
     )
     parser.add_argument(
-        "--bioclip_model", type=str, default="imageomics/bioclip",
-        help="BioCLIP model HF repo ID. Pass 'none' to skip.",
+        "--bioclip_model", type=str, default=None,
+        help="BioCLIP model HF repo ID (default: skipped). Pass 'imageomics/bioclip' to enable.",
     )
     parser.add_argument(
         "--yolo_model", type=str, default="yolo11x-cls.pt",

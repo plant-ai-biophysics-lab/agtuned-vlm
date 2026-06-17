@@ -297,13 +297,16 @@ def run_model(
         enforce_eager=enforce_eager,
     )
 
+    from tqdm import tqdm
+
     desc_rows: list[dict] = []
     cls_rows: list[dict] = []
     agml_cache: dict[str, dict[str, str]] = {}
 
     t_start = time.perf_counter()
 
-    for record in records:
+    pbar = tqdm(records, desc="  Classes", unit="class", dynamic_ncols=True)
+    for record in pbar:
         meta = record["metadata"]
         agml_name = meta["agml_dataset"]
         class_label = meta["class_label"]
@@ -316,8 +319,10 @@ def run_model(
 
         image_names = sample_class_images(image_names, n_samples)
 
+        pbar.set_postfix_str(f"{agml_name} / {class_label}", refresh=False)
+
         if agml_name not in agml_cache:
-            print(f"\n  Building image map: {agml_name}...")
+            tqdm.write(f"\n  Building image map: {agml_name}...")
             dg_dir = images_dir if agml_name == "digital_green" else None
             agml_cache[agml_name] = build_name_map(agml_name, images_dir=dg_dir)
         name_map = agml_cache[agml_name]
@@ -328,11 +333,11 @@ def run_model(
                 images.append(PILImage.open(name_map[name]).convert("RGB"))
                 valid_names.append(name)
             else:
-                print(f"    [warn] {name} not in {agml_name}")
+                tqdm.write(f"    [warn] {name} not in {agml_name}")
         if not images:
             continue
 
-        print(f"  {agml_name} / {class_label}  ({len(images)} images)")
+        tqdm.write(f"  {agml_name} / {class_label}  ({len(images)} images)")
 
         # Description task
         wrapped_desc_q = desc_prompt_template.format(question=visual_desc_q)
@@ -836,11 +841,12 @@ def main(args: argparse.Namespace) -> None:
     summary_metrics: dict[str, dict] = {}
 
     per_model_quant = _parse_model_quantization(args.model_quantization or [])
+    n_models = len(args.models)
 
-    for model_id in args.models:
+    for model_idx, model_id in enumerate(args.models):
         quant = per_model_quant.get(model_id, args.quantization)
         print(f"\n{'='*60}")
-        print(f"Model: {model_id}" + (f"  [quantization={quant}]" if quant else ""))
+        print(f"Model {model_idx + 1}/{n_models}: {model_id}" + (f"  [quantization={quant}]" if quant else ""))
         print(f"{'='*60}")
 
         worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"

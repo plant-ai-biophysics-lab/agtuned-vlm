@@ -233,15 +233,17 @@ def run_inference(
     tokenizer,
     prompt_template: str,
     system_prompt: str = "",
+    step: str = "",
 ) -> tuple[list[str], float, int]:
     formatted = [_apply_chat_template(tokenizer, p, prompt_template, system_prompt=system_prompt) for p in prompts]
-    print(f"\nRunning inference [{label}]...")
+    step_str = f"  [{step}]" if step else ""
+    print(f"\nRunning inference [{label}]{step_str}  ({len(prompts)} records)...")
     t_start = time.perf_counter()
     outputs = llm.generate(formatted, sampling_params=_SAMPLING)
     elapsed = time.perf_counter() - t_start
     responses = [_clean_response(o.outputs[0].text) for o in outputs]
     total_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
-    print(f"  {elapsed:.1f}s | {total_tokens / elapsed:.0f} tok/s")
+    print(f"  Done in {elapsed:.1f}s | {total_tokens / elapsed:.0f} tok/s | {total_tokens} tokens")
     return responses, elapsed, total_tokens
 
 
@@ -277,7 +279,7 @@ def run_descriptions(
     questions = [r["messages"][0]["content"] for r in records]
     ground_truths = [r["messages"][1]["content"] for r in records]
 
-    responses, elapsed, _ = run_inference(llm, questions, "descriptions", tokenizer, prompt_template, system_prompt=system_prompt)
+    responses, elapsed, _ = run_inference(llm, questions, "descriptions", tokenizer, prompt_template, system_prompt=system_prompt, step="step 1/2")
 
     rows = []
     for record, resp, gt in zip(records, responses, ground_truths):
@@ -308,7 +310,7 @@ def run_classifications(
     questions = [r["messages"][0]["content"] + classification_suffix for r in records]
     ground_truths = [r["messages"][1]["content"] for r in records]
 
-    responses, elapsed, _ = run_inference(llm, questions, "classification", tokenizer, prompt_template, system_prompt=system_prompt)
+    responses, elapsed, _ = run_inference(llm, questions, "classification", tokenizer, prompt_template, system_prompt=system_prompt, step="step 2/2")
 
     rows = []
     for record, resp, gt in zip(records, responses, ground_truths):
@@ -803,11 +805,12 @@ def main(args: argparse.Namespace) -> None:
     summary_metrics: dict[str, dict] = {}
 
     per_model_quant = _parse_model_quantization(args.model_quantization or [])
+    n_models = len(args.models)
 
-    for model_id in args.models:
+    for model_idx, model_id in enumerate(args.models):
         quant = per_model_quant.get(model_id, args.quantization)
         print(f"\n{'='*60}")
-        print(f"Model: {model_id}" + (f"  [quantization={quant}]" if quant else ""))
+        print(f"Model {model_idx + 1}/{n_models}: {model_id}" + (f"  [quantization={quant}]" if quant else ""))
         print(f"{'='*60}")
 
         # Run each model in a subprocess so the OS fully reclaims GPU memory on exit
