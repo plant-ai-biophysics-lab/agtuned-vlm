@@ -4,25 +4,12 @@ import runpy
 import sys
 
 STAGES = {
-    "generate":      "src.data_generation.generate",
-    "build-db":      "src.data_generation.build_reference_db",
-    "verify":        "src.data_generation.verify",
-    "patch-healthy": "src.data_generation.patch_healthy",
     "probe":         "src.linear_probe.probe",
     "language":      "src.language_assessment.assess",
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
     "vision-plot":   "src.vision_assessment.plot",
     "collate":       "src.collate_results",
-    "hypothesis":         "src.hypothesis_plot",
-    "error-overlap":      "src.error_overlap.analyze",
-    "vision-augmented":      "src.vision_assessment.assess_augmented",
-    "vision-augmented-plot": "src.vision_assessment.plot_augmented",
-    "build-dg-jsonl":        "src.data_generation.build_digital_green_jsonl",
-    "finetune":           "src.finetune.train",
-    "prompt-optim":       "src.prompt_optim.optimise",
-    "vocab-grounding":    "src.vocab_grounding.run",
-    "cot-eval":           "src.cot_eval.run",
 }
 
 _HELP = """
@@ -32,41 +19,14 @@ Usage:
     python main.py <stage> [stage-args...]
 
 Stages:
-    generate    Stage 1a — generate synthetic descriptions from AgML images
-    build-db    Stage 1b — export CSV + build reference DB (Wikipedia / IDtools / CGIAR)
-    verify      Stage 1c — rewrite descriptions grounded in reference sources
-    patch-healthy       — patch healthy classes in descriptions_corrected.csv in-place
-    probe       Stage 2  — linear probe across all AgML datasets
-    language    Stage 3  — language assessment (text-only models)
-    language-plot       — regenerate language assessment charts from saved metrics JSON
-    vision      Stage 4  — vision assessment (multimodal models)
-    vision-plot         — regenerate vision assessment charts from saved metrics JSON
-    collate     Stage 5  — collate all metrics into a results table
-    hypothesis          — hypothesis matrix charts from results_table.csv
-    error-overlap       — analyse error overlap between language and vision
-    vision-augmented        Stage 7  — augmented vision assessment (hint injection)
-    vision-augmented-plot           — regenerate augmented vision assessment charts from saved metrics JSON
-    build-dg-jsonl                  — build Digital Green JSONL files from annotations CSV
-    prompt-optim        — iteratively optimise per-class prompts via meta-prompting
-    vocab-grounding     — inject class-discriminative vocab tokens into prompts, measure F1 gain
-    cot-eval            — chain-of-thought visual analysis prior to classification, measure F1 gain
+    probe           Stage 1 — linear probe: frozen-embedding separability across backbones
+    language        Stage 2 — language assessment: text-only agricultural VQA (ROUGE-SS + F1)
+    language-plot           — regenerate language assessment charts from saved metrics JSON
+    vision          Stage 3 — vision assessment: multimodal VQA with image input (ROUGE-SS + F1)
+    vision-plot             — regenerate vision assessment charts from saved metrics JSON
+    collate         Stage 4 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
-    python main.py generate \\
-        --model      Qwen/Qwen3.6-27B \\
-        --config     src/config/datasets.yaml \\
-        --prompts    src/config/prompts.yaml \\
-        --output_dir outputs/data_generation/
-
-    python main.py build-db \\
-        --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \\
-        --output_db          outputs/data_generation/reference_db.json
-
-    python main.py verify \\
-        --descriptions_csv outputs/data_generation/descriptions_export.csv \\
-        --reference_db     outputs/data_generation/reference_db.json \\
-        --output_csv       outputs/data_generation/descriptions_corrected.csv
-
     python main.py probe \\
         --config src/config/datasets.yaml \\
         --output_dir outputs/linear_probe/
@@ -76,7 +36,7 @@ Examples:
         --classification_jsonl outputs/data_generation/agml_classification.jsonl \\
         --config src/config/datasets.yaml \\
         --prompts src/config/prompts.yaml \\
-        --models openai/gpt-oss-20b meta-llama/Llama-4-Scout-17B-16E-Instruct \\
+        --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \\
         --output_dir outputs/language_assessment/
 
     python main.py vision \\
@@ -85,12 +45,6 @@ Examples:
         --prompts src/config/prompts.yaml \\
         --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \\
         --output_dir outputs/vision_assessment/
-
-    python main.py hypothesis \\
-        --input_dir  outputs/ \\
-        --output_dir outputs/
-    # Thresholds default to the naive baseline row in results_table.csv.
-    # Override individually with --lp_threshold, --lang_cls_threshold, etc.
 
 Pass --help after the stage name for all available options:
     python main.py probe --help

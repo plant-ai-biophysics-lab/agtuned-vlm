@@ -37,6 +37,7 @@ from src.common.io import (
     write_csv,
 )
 from src.common.metrics import (
+    THINK_RE,
     aggregate_by_task,
     aggregate_rouge,
     apply_judge,
@@ -49,13 +50,13 @@ from src.common.metrics import (
     naive_uniform_baseline_per_dataset,
     resolve_class,
     rouge_scores_per_sample,
+    sample_class_images,
 )
 
 DESC_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.1)
 CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
 
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
 _REASONING_RE = re.compile(
     r"\b(we need to|the user wants|the instruction|let me|i need to|i should|i will|"
@@ -113,11 +114,12 @@ def _parse_model_quantization(entries: list[str]) -> dict[str, str]:
 
 
 def _clean_response(text: str) -> str:
-    # Strip think blocks
-    text = _THINK_RE.sub("", text).strip()
-    think_start = text.lower().find("<think>")
-    if think_start != -1:
-        text = text[:think_start].strip()
+    # Strip complete think/thought blocks, then discard any unclosed tag onward
+    text = THINK_RE.sub("", text).strip()
+    for tag in ("<think>", "<thought>"):
+        idx = text.lower().find(tag)
+        if idx != -1:
+            text = text[:idx].strip()
 
     # Strip markdown (headers, bold/italic, bullet markers) — keep inner text
     text = _MARKDOWN_RE.sub(r"\1", text)
@@ -305,8 +307,7 @@ def run_model(
         visual_desc_q = meta["visual_question"]
         visual_cls_q = meta.get("visual_cls_question")
 
-        if n_samples:
-            image_names = image_names[:n_samples]
+        image_names = sample_class_images(image_names, n_samples)
 
         if agml_name not in agml_cache:
             print(f"\n  Building image map: {agml_name}...")

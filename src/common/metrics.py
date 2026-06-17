@@ -19,7 +19,8 @@ for _corpus in ("wordnet", "omw-1.4"):
     except LookupError:
         nltk.download(_corpus, quiet=True)
 
-_THINK_RE_JUDGE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+_THINK_RE_JUDGE = THINK_RE  # alias kept for internal use
 _JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=1024)
 
 
@@ -122,6 +123,20 @@ def naive_classification_baseline(refs: list[str]) -> dict:
     shuffled = refs.copy()
     np.random.default_rng(42).shuffle(shuffled)
     return compute_classification_metrics(refs, shuffled)
+
+
+def sample_class_images(image_names: list[str], n: int | None, seed: int = 42) -> list[str]:
+    """Return up to n image names from image_names, shuffled with a fixed seed.
+
+    Ensures vision assessment always evaluates the same images regardless of
+    filesystem ordering, making results reproducible and comparable across runs.
+    """
+    if not n or n >= len(image_names):
+        return image_names
+    rng = np.random.default_rng(seed)
+    indices = rng.choice(len(image_names), size=n, replace=False)
+    indices.sort()
+    return [image_names[i] for i in indices]
 
 
 def model_color_map(models: list[str]) -> dict[str, tuple]:

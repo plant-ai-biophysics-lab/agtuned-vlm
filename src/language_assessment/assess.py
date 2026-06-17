@@ -35,6 +35,7 @@ from src.common.io import (
     write_csv,
 )
 from src.common.metrics import (
+    THINK_RE,
     aggregate_by_task,
     aggregate_rouge,
     apply_judge,
@@ -57,7 +58,6 @@ _SAMPLING = SamplingParams(
 )
 
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
 _REASONING_RE = re.compile(
     r"\b(we need to|the user wants|the instruction|let me|i need to|i should|i will|"
@@ -100,11 +100,12 @@ def _parse_model_quantization(entries: list[str]) -> dict[str, str]:
 
 
 def _clean_response(text: str) -> str:
-    # Strip think blocks
-    text = _THINK_RE.sub("", text).strip()
-    think_start = text.lower().find("<think>")
-    if think_start != -1:
-        text = text[:think_start].strip()
+    # Strip complete think/thought blocks, then discard any unclosed tag onward
+    text = THINK_RE.sub("", text).strip()
+    for tag in ("<think>", "<thought>"):
+        idx = text.lower().find(tag)
+        if idx != -1:
+            text = text[:idx].strip()
 
     # Strip answer/bracket artifacts
     bracket = text.find("[Answer")
