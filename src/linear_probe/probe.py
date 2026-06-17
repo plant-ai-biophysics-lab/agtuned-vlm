@@ -1530,6 +1530,18 @@ def main(args):
     save_json(output_dir / "linear_probe_results.json", results)
     print(f"\nResults saved to {output_dir / 'linear_probe_results.json'}")
 
+    # Save test split so vision assessment can evaluate the exact same images
+    test_split: dict[str, dict[str, list[str]]] = {}
+    for agml_name, (samples, _, _, _, test_idx, _) in all_embeddings.get("_samples", {}).items():
+        by_class: dict[str, list[str]] = {}
+        for i in test_idx:
+            label = samples[i]["label"]
+            fname = Path(samples[i]["path"]).name
+            by_class.setdefault(label, []).append(fname)
+        test_split[agml_name] = by_class
+    save_json(output_dir / "test_split.json", test_split)
+    print(f"Test split saved to {output_dir / 'test_split.json'}")
+
     # Summary tables
     print("\n=== LR Combined (all classes) ===")
     print(f"  {'Backbone':<30} {'F1 Macro':>10} {'Accuracy':>10}")

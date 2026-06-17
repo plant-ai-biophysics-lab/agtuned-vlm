@@ -184,7 +184,8 @@ def load_llm(
     model_id: str,
     quantization: str | None = None,
     max_num_seqs: int = 128,
-    gpu_memory_utilization: float = 0.7,
+    gpu_memory_utilization: float = 0.9,
+    max_model_len: int = 4096,
     enforce_eager: bool = False,
 ) -> tuple[LLM, object]:
     from transformers import AutoTokenizer
@@ -198,7 +199,7 @@ def load_llm(
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
-        max_model_len=2048,
+        max_model_len=max_model_len,
         gpu_memory_utilization=gpu_memory_utilization,
         max_num_seqs=max_num_seqs,
         quantization=quantization,
@@ -707,17 +708,23 @@ def _worker_language(kwargs: dict) -> None:
 
     from src.common.dataset_config import DatasetConfig
 
-    model_id      = kwargs["model_id"]
-    quantization  = kwargs["quantization"]
-    max_num_seqs  = kwargs.get("max_num_seqs", 128)
-    enforce_eager = kwargs.get("enforce_eager", False)
-    out_path      = kwargs["out_path"]
+    model_id              = kwargs["model_id"]
+    quantization          = kwargs["quantization"]
+    max_num_seqs          = kwargs.get("max_num_seqs", 128)
+    gpu_memory_utilization = kwargs.get("gpu_memory_utilization", 0.9)
+    max_model_len         = kwargs.get("max_model_len", 4096)
+    enforce_eager         = kwargs.get("enforce_eager", False)
+    out_path              = kwargs["out_path"]
 
     # Reconstruct DatasetConfig objects from plain dicts
     datasets_cfg = {k: DatasetConfig(**v) for k, v in kwargs["datasets_cfg"].items()}
 
     system_prompt = kwargs.get("system_prompt", "")
-    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
+    llm, tokenizer = load_llm(
+        model_id, quantization=quantization, max_num_seqs=max_num_seqs,
+        gpu_memory_utilization=gpu_memory_utilization, max_model_len=max_model_len,
+        enforce_eager=enforce_eager,
+    )
     desc_rows = run_descriptions(llm, tokenizer, kwargs["desc_records"], kwargs["prompt_template"], system_prompt=system_prompt)
     cls_rows  = run_classifications(
         llm, tokenizer, kwargs["cls_records"],
@@ -809,6 +816,8 @@ def main(args: argparse.Namespace) -> None:
             model_id=model_id,
             quantization=quant,
             max_num_seqs=args.max_num_seqs,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len,
             enforce_eager=args.enforce_eager,
             desc_records=desc_records,
             cls_records=cls_records,
@@ -1054,6 +1063,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_num_seqs", type=int, default=128,
         help="Max concurrent sequences for vLLM (auto-lowered for Mamba models)",
+    )
+    parser.add_argument(
+        "--gpu_memory_utilization", type=float, default=0.9,
+        help="Fraction of GPU VRAM vLLM may use for weights + KV cache (default 0.9)",
+    )
+    parser.add_argument(
+        "--max_model_len", type=int, default=4096,
+        help="Maximum sequence length (tokens) vLLM will allocate KV cache for (default 4096)",
     )
     parser.add_argument(
         "--enforce_eager", action="store_true",

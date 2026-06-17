@@ -192,7 +192,8 @@ def load_llm(
     model_id: str,
     quantization: str | None = None,
     max_num_seqs: int = 64,
-    gpu_memory_utilization: float = 0.7,
+    gpu_memory_utilization: float = 0.9,
+    max_model_len: int = 8192,
     enforce_eager: bool = False,
 ) -> tuple[LLM, object]:
     if _is_mamba(model_id):
@@ -204,7 +205,7 @@ def load_llm(
     llm = LLM(
         model=model_id,
         dtype="bfloat16",
-        max_model_len=16384,
+        max_model_len=max_model_len,
         gpu_memory_utilization=gpu_memory_utilization,
         max_num_seqs=max_num_seqs,
         limit_mm_per_prompt={"image": 1},
@@ -283,12 +284,18 @@ def run_model(
     output_dir: Path,
     quantization: str | None = None,
     max_num_seqs: int = 64,
+    gpu_memory_utilization: float = 0.9,
+    max_model_len: int = 8192,
     enforce_eager: bool = False,
     images_dir: Path | None = None,
     system_prompt: str = "",
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
-    llm, tokenizer = load_llm(model_id, quantization=quantization, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager)
+    llm, tokenizer = load_llm(
+        model_id, quantization=quantization, max_num_seqs=max_num_seqs,
+        gpu_memory_utilization=gpu_memory_utilization, max_model_len=max_model_len,
+        enforce_eager=enforce_eager,
+    )
 
     desc_rows: list[dict] = []
     cls_rows: list[dict] = []
@@ -753,6 +760,8 @@ def _worker_vision(kwargs: dict) -> None:
         output_dir=Path(kwargs["output_dir"]),
         quantization=kwargs["quantization"],
         max_num_seqs=kwargs.get("max_num_seqs", 64),
+        gpu_memory_utilization=kwargs.get("gpu_memory_utilization", 0.9),
+        max_model_len=kwargs.get("max_model_len", 8192),
         enforce_eager=kwargs.get("enforce_eager", False),
         images_dir=Path(kwargs["images_dir"]) if kwargs.get("images_dir") else None,
         system_prompt=kwargs.get("system_prompt", ""),
@@ -799,6 +808,27 @@ def main(args: argparse.Namespace) -> None:
         ])
 
     ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
+
+    # Override per-class image_names with linear probe test split if provided
+    test_split_path = getattr(args, "test_split", None)
+    if test_split_path:
+        test_split = json.loads(Path(test_split_path).read_text())
+        overridden, skipped = 0, 0
+        filtered = []
+        for r in records:
+            meta = r.get("metadata", {})
+            ds = meta.get("agml_dataset", "")
+            cls = meta.get("class_label", "")
+            fnames = test_split.get(ds, {}).get(cls)
+            if fnames:
+                r = {**r, "metadata": {**meta, "image_names": fnames}}
+                filtered.append(r)
+                overridden += 1
+            else:
+                skipped += 1
+        records = filtered
+        print(f"Test split loaded from {test_split_path}: {overridden} classes overridden, {skipped} skipped (not in split)")
+
     print(f"Records: {len(records)}  |  Active datasets: {len(active_set)}")
 
     all_model_desc_metrics: dict[str, dict[str, dict]] = {}
@@ -825,6 +855,8 @@ def main(args: argparse.Namespace) -> None:
             output_dir=str(output_dir),
             quantization=quant,
             max_num_seqs=args.max_num_seqs,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len,
             enforce_eager=args.enforce_eager,
             images_dir=str(images_dir_val) if images_dir_val else None,
             system_prompt=assessment_system,
@@ -1021,6 +1053,11 @@ if __name__ == "__main__":
              "'digital_green' uses --dg_descriptions_jsonl + --dg_config + --images_dir",
     )
     parser.add_argument(
+        "--test_split", default=None,
+        help="Path to test_split.json produced by 'probe' — restricts each class to the same "
+             "images used as the linear probe test set for a controlled comparison",
+    )
+    parser.add_argument(
         "--dg_descriptions_jsonl", default="outputs/data_generation/dg_descriptions.jsonl",
         help="Digital Green descriptions JSONL (used when --dataset_source digital_green)",
     )
@@ -1085,7 +1122,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--max_num_seqs", type=int, default=64,
-        help="Max concurrent sequences for vLLM (lower to ≤35 for Mamba-architecture models)",
+        help="Max concurrent sequences for vLLM (lower to reduce KV-cache pressure on small GPUs)",
+    )
+    parser.add_argument(
+        "--gpu_memory_utilization", type=float, default=0.9,
+        help="Fraction of GPU VRAM vLLM may use for weights + KV cache (default 0.9)",
+    )
+    parser.add_argument(
+        "--max_model_len", type=int, default=8192,
+        help="Maximum sequence length (tokens) vLLM will allocate KV cache for (default 8192)",
     )
     parser.add_argument(
         "--enforce_eager", action="store_true",
