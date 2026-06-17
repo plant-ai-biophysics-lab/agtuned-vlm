@@ -816,6 +816,9 @@ def main(args: argparse.Namespace) -> None:
 
     # Override per-class image_names with linear probe test split if provided
     test_split_path = getattr(args, "test_split", None)
+    if test_split_path and not Path(test_split_path).exists():
+        print(f"[warn] test_split not found at {test_split_path} — using all available images per class")
+        test_split_path = None
     if test_split_path:
         test_split = json.loads(Path(test_split_path).read_text())
         overridden, skipped = 0, 0
@@ -1059,7 +1062,7 @@ if __name__ == "__main__":
              "'digital_green' uses --dg_descriptions_jsonl + --dg_config + --images_dir",
     )
     parser.add_argument(
-        "--test_split", default=None,
+        "--test_split", default="outputs/linear_probe/test_split.json",
         help="Path to test_split.json produced by 'probe' — restricts each class to the same "
              "images used as the linear probe test set for a controlled comparison",
     )
