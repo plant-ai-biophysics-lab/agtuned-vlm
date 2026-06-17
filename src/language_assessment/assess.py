@@ -1080,4 +1080,6 @@ if __name__ == "__main__":
         help="Disable CUDA graph capture (workaround for Triton kernel crashes with AWQ models)",
     )
     args = parser.parse_args()
+    if not args.judge_model and args.models:
+        args.judge_model = args.models[0]
     main(args)
