@@ -61,7 +61,7 @@ python main.py probe \
 | `--dino_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 backbone. Pass `none` to skip |
 | `--yolo_model` | `yolo11x-cls.pt` | YOLO classification backbone. Pass `none` to skip |
 | `--bioclip_model` | `imageomics/bioclip` | BioCLIP backbone. Pass `none` to skip |
-| `--n_samples` | all | Max images per dataset (stratified subsample, seed 42) |
+| `--n_samples` | all | Max images **per class** (balanced, seed 42) |
 | `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large VLMs |
 | `--all_experiments` | off | Also run FC per-dataset and FC combined probes |
 | `--postproj_only` | off | For VLMs: extract only post-projector embeddings |
@@ -116,7 +116,7 @@ python main.py language \
 |------|---------|-------------|
 | `--models` | required | Space-separated list of model IDs |
 | `--multimodal_models` | none | Subset of `--models` that are VLMs (shown with hatching in charts) |
-| `--n_samples` | all | Limit records per JSONL |
+| `--n_samples` | all | Limit total records per JSONL (caps number of classes evaluated) |
 | `--judge_model` | none | LLM-as-a-judge model for classification |
 | `--enforce_eager` | off | Disable CUDA graph capture |
 | `--dataset_source` | `agml` | `agml` or `digital_green` |
@@ -158,7 +158,7 @@ python main.py vision \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--models` | required | Space-separated list of multimodal model IDs |
-| `--n_samples` | all | Max images per class (seeded sample, consistent across runs) |
+| `--n_samples` | all | Max images **per class** (seeded sample, consistent across runs) |
 | `--judge_model` | none | LLM-as-a-judge model for classification |
 | `--enforce_eager` | off | Disable CUDA graph capture |
 | `--dataset_source` | `agml` | `agml` or `digital_green` |

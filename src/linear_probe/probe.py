@@ -153,14 +153,19 @@ def load_dg_samples(images_dir: Path, dg_descriptions_jsonl: Path) -> list[dict]
     return samples
 
 
-def subsample_stratified(samples: list[dict], n_samples: int) -> list[dict]:
-    """Stratified subsample to preserve class distribution."""
-    labels = [s["label"] for s in samples]
-    le = LabelEncoder()
-    y = le.fit_transform(labels)
-    splitter = StratifiedShuffleSplit(n_splits=1, train_size=n_samples, random_state=42)
-    sub_idx, _ = next(splitter.split(np.zeros(len(y)), y))
-    return [samples[i] for i in sub_idx]
+def subsample_per_class(samples: list[dict], n_per_class: int, seed: int = 42) -> list[dict]:
+    """Cap each class to n_per_class images (seeded shuffle) for a balanced comparison."""
+    rng = np.random.default_rng(seed)
+    by_class: dict[str, list[int]] = {}
+    for i, s in enumerate(samples):
+        by_class.setdefault(s["label"], []).append(i)
+    selected: list[int] = []
+    for indices in by_class.values():
+        if len(indices) > n_per_class:
+            indices = rng.choice(indices, size=n_per_class, replace=False).tolist()
+        selected.extend(indices)
+    selected.sort()
+    return [samples[i] for i in selected]
 
 
 # ── Gemma4 backbone ────────────────────────────────────────────────────────────
@@ -1062,9 +1067,12 @@ def main(args):
             print(f"  [error] {e}")
             continue
 
-        if args.n_samples and args.n_samples < len(samples):
-            samples = subsample_stratified(samples, args.n_samples)
-            print(f"  Subsampled to {len(samples)} images")
+        if args.n_samples:
+            before = len(samples)
+            samples = subsample_per_class(samples, args.n_samples)
+            if len(samples) < before:
+                n_classes_total = len({s["label"] for s in samples})
+                print(f"  Capped to {args.n_samples} images/class → {len(samples)} total ({n_classes_total} classes)")
 
         # Drop classes with fewer than 2 samples — StratifiedShuffleSplit requires ≥2
         label_counts = Counter(s["label"] for s in samples)
@@ -1079,7 +1087,14 @@ def main(args):
         labels_all = [s["label"] for s in samples]
         le = LabelEncoder()
         y_enc = le.fit_transform(labels_all)
-        splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        n_classes = len(le.classes_)
+        # test split must have ≥1 sample per class; 20% may be too small when n_samples is low
+        test_size = max(int(len(y_enc) * 0.2), n_classes)
+        test_size = min(test_size, len(y_enc) - n_classes)  # leave ≥1 per class for train
+        if test_size <= 0:
+            print(f"  [skip] {agml_name} — not enough samples to split ({len(y_enc)} total, {n_classes} classes)")
+            continue
+        splitter = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
         train_idx, test_idx = next(splitter.split(np.zeros(len(y_enc)), y_enc))
 
         # Temporarily store samples with split indices keyed by dataset
@@ -1725,7 +1740,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n_samples", type=int, default=None,
-        help="Max samples per dataset (stratified). Default: all.",
+        help="Max images per class (balanced, seeded). Default: all.",
     )
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
