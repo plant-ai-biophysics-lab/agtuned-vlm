@@ -1076,7 +1076,7 @@ if __name__ == "__main__":
         help="Local directory of Digital Green images (used when --dataset_source digital_green)",
     )
     parser.add_argument(
-        "--descriptions_jsonl", default="outputs/data_generation/agml_descriptions.jsonl",
+        "--descriptions_jsonl", default="dataset/agml_descriptions.jsonl",
         help="Path to agml_descriptions.jsonl",
     )
     parser.add_argument(

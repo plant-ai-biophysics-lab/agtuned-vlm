@@ -1009,11 +1009,11 @@ if __name__ == "__main__":
         help="Digital Green datasets YAML written by build-dg-jsonl (used when --dataset_source digital_green)",
     )
     parser.add_argument(
-        "--descriptions_jsonl", default="outputs/data_generation/agml_descriptions.jsonl",
+        "--descriptions_jsonl", default="dataset/agml_descriptions.jsonl",
         help="Path to agml_descriptions.jsonl",
     )
     parser.add_argument(
-        "--classification_jsonl", default="outputs/data_generation/agml_classification.jsonl",
+        "--classification_jsonl", default="dataset/agml_classification.jsonl",
         help="Path to agml_classification.jsonl",
     )
     parser.add_argument(

@@ -33,6 +33,29 @@ python main.py probe --help    # show options for a specific stage
 
 ---
 
+### Stage 0 — Data Generation (pre-built, committed to repo)
+
+The JSONL files required by language and vision assessment are committed to `dataset/` and ready to use:
+
+| File | Used by |
+|------|---------|
+| `dataset/agml_descriptions.jsonl` | `language` and `vision` stages (`--descriptions_jsonl`) |
+| `dataset/agml_classification.jsonl` | `language` stage (`--classification_jsonl`) |
+
+If you need to regenerate them (e.g. for a new dataset or updated prompts), use `src/legacy/data_generation/generate.py`:
+
+```bash
+uv run python src/legacy/data_generation/generate.py \
+  --config     src/config/datasets.yaml \
+  --prompts    src/config/prompts.yaml \
+  --model      google/gemma-4-26B-A4B-it \
+  --output_dir outputs/data_generation/
+```
+
+Add `--force` to regenerate all classes from scratch. Progress is checkpointed so re-runs skip completed classes.
+
+---
+
 ### Stage 1 — Linear Probe
 
 Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially.
@@ -103,13 +126,9 @@ Evaluates models on text-only agricultural VQA. VLMs can also be evaluated here 
 
 ```bash
 python main.py language \
-  --descriptions_jsonl   outputs/data_generation/agml_descriptions.jsonl \
-  --classification_jsonl outputs/data_generation/agml_classification.jsonl \
-  --config               src/config/datasets.yaml \
-  --prompts              src/config/prompts.yaml \
-  --models               google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
-  --multimodal_models    google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
-  --output_dir           outputs/language_assessment/
+  --models            google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --multimodal_models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --output_dir        outputs/language_assessment/
 ```
 
 | Flag | Default | Description |
@@ -148,11 +167,8 @@ Evaluates multimodal models on image + text VQA. Images are sampled with a fixed
 
 ```bash
 python main.py vision \
-  --descriptions_jsonl outputs/data_generation/agml_descriptions.jsonl \
-  --config             src/config/datasets.yaml \
-  --prompts            src/config/prompts.yaml \
-  --models             google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
-  --output_dir         outputs/vision_assessment/
+  --models     google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --output_dir outputs/vision_assessment/
 ```
 
 | Flag | Default | Description |
