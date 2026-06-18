@@ -1104,6 +1104,17 @@ def main(args):
         # Temporarily store samples with split indices keyed by dataset
         all_embeddings.setdefault("_samples", {})[agml_name] = (samples, labels_all, y_enc, train_idx, test_idx, le)
 
+    # Save test split immediately after dataset loading so vision assessment can use it
+    # even if the probe run is cancelled before backbone extraction completes.
+    test_split_early: dict[str, dict[str, list[str]]] = {}
+    for _dsname, (_samp, _, _, _, _tidx, _) in all_embeddings.get("_samples", {}).items():
+        by_cls: dict[str, list[str]] = {}
+        for i in _tidx:
+            by_cls.setdefault(_samp[i]["label"], []).append(Path(_samp[i]["path"]).name)
+        test_split_early[_dsname] = by_cls
+    save_json(output_dir / "test_split.json", test_split_early)
+    print(f"Test split saved to {output_dir / 'test_split.json'} ({len(test_split_early)} datasets)")
+
     # Count total backbone passes for progress display
     _backbone_names = (
         ([args.dino_model]    if args.dino_model    else [])
