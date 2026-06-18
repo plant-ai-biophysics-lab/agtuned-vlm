@@ -84,7 +84,7 @@ python main.py probe \
 | `--dino_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 backbone. Pass `none` to skip |
 | `--yolo_model` | `yolo11x-cls.pt` | YOLO classification backbone. Pass `none` to skip |
 | `--bioclip_model` | `imageomics/bioclip` | BioCLIP backbone. Pass `none` to skip |
-| `--n_samples` | all | Max images **per class** (balanced, seed 42) |
+| `--n_samples` | all | Max images **per class for training** (seed 42). Test uses all remaining images. |
 | `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large VLMs |
 | `--all_experiments` | off | Also run FC per-dataset and FC combined probes |
 | `--postproj_only` | off | For VLMs: extract only post-projector embeddings |

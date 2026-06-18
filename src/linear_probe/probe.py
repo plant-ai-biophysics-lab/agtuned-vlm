@@ -1067,14 +1067,7 @@ def main(args):
             print(f"  [error] {e}")
             continue
 
-        if args.n_samples:
-            before = len(samples)
-            samples = subsample_per_class(samples, args.n_samples)
-            if len(samples) < before:
-                n_classes_total = len({s["label"] for s in samples})
-                print(f"  Capped to {args.n_samples} images/class → {len(samples)} total ({n_classes_total} classes)")
-
-        # Drop classes with fewer than 2 samples — StratifiedShuffleSplit requires ≥2
+        # Drop classes with fewer than 2 samples (need ≥1 train + ≥1 test)
         label_counts = Counter(s["label"] for s in samples)
         samples = [s for s in samples if label_counts[s["label"]] >= 2]
         if not samples:
@@ -1084,18 +1077,29 @@ def main(args):
         if dropped:
             print(f"  [warn] {agml_name} — dropped {dropped} singleton class(es)")
 
+        # Split per class: up to n_samples per class → train, all remaining → test
+        # This ensures n_samples caps training data only; test uses all held-out images.
+        rng = np.random.default_rng(42)
+        by_class: dict[str, list[int]] = {}
+        for i, s in enumerate(samples):
+            by_class.setdefault(s["label"], []).append(i)
+        train_idx_list, test_idx_list = [], []
+        for indices in by_class.values():
+            shuffled = rng.permutation(indices).tolist()
+            n_train = min(args.n_samples, len(shuffled) - 1) if args.n_samples else len(shuffled) - 1
+            n_train = max(n_train, 1)
+            train_idx_list.extend(shuffled[:n_train])
+            test_idx_list.extend(shuffled[n_train:])
+        train_idx = np.array(sorted(train_idx_list))
+        test_idx  = np.array(sorted(test_idx_list))
+
+        if args.n_samples:
+            n_cls = len(by_class)
+            print(f"  Train: up to {args.n_samples} images/class ({len(train_idx)} total) | Test: all remaining ({len(test_idx)} total, {n_cls} classes)")
+
         labels_all = [s["label"] for s in samples]
         le = LabelEncoder()
         y_enc = le.fit_transform(labels_all)
-        n_classes = len(le.classes_)
-        # test split must have ≥1 sample per class; 20% may be too small when n_samples is low
-        test_size = max(int(len(y_enc) * 0.2), n_classes)
-        test_size = min(test_size, len(y_enc) - n_classes)  # leave ≥1 per class for train
-        if test_size <= 0:
-            print(f"  [skip] {agml_name} — not enough samples to split ({len(y_enc)} total, {n_classes} classes)")
-            continue
-        splitter = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
-        train_idx, test_idx = next(splitter.split(np.zeros(len(y_enc)), y_enc))
 
         # Temporarily store samples with split indices keyed by dataset
         all_embeddings.setdefault("_samples", {})[agml_name] = (samples, labels_all, y_enc, train_idx, test_idx, le)
@@ -1740,7 +1744,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n_samples", type=int, default=None,
-        help="Max images per class (balanced, seeded). Default: all.",
+        help="Max images per class for training (seeded). Test uses all remaining images. Default: all.",
     )
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
