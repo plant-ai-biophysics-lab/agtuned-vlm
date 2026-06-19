@@ -106,12 +106,15 @@ def main() -> None:
     all_model_desc_metrics: dict[str, dict[str, dict]] = {}
     all_model_cls_metrics: dict[str, dict[str, dict]] = {}
     all_judge_metrics: dict[str, dict] = {}
+    all_judge_by_task: dict[str, dict] = {}
 
     for model_id, m in results.get("models", {}).items():
         all_model_desc_metrics[model_id] = m.get("description_per_dataset", {})
         all_model_cls_metrics[model_id] = m.get("classification_per_dataset", {})
         if m.get("judge"):
             all_judge_metrics[model_id] = m["judge"]
+        if m.get("judge_by_task"):
+            all_judge_by_task[model_id] = m["judge_by_task"]
 
     if not all_model_desc_metrics:
         print("ERROR: no model results found in metrics JSON.")
@@ -145,7 +148,7 @@ def main() -> None:
 
     print("\n=== Generating plots ===")
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall, all_judge_by_task)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall)

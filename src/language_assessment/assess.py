@@ -459,6 +459,7 @@ def plot_cls_summary_per_task(
     naive_cls_metrics: dict[str, dict] | None = None,
     all_judge_metrics: dict[str, dict] | None = None,
     uniform_cls_metrics: dict | None = None,
+    all_judge_by_task: dict[str, dict] | None = None,
 ) -> None:
     """Grouped bar chart: classification metrics per task_type, one group per model."""
     multimodal_models = multimodal_models or set()
@@ -500,11 +501,13 @@ def plot_cls_summary_per_task(
             offset = (i - (len(models) - 1) / 2) * width
             bars = ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
                           hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
-            jval = all_judge_metrics.get(model_key, {}).get(judge_key) if judge_key else None
-            for bar in bars:
+            for ti, (bar, tt) in enumerate(zip(bars, task_types)):
                 h = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                         f"{h:.2f}", ha="center", va="bottom", fontsize=7)
+                jval = None
+                if judge_key and all_judge_by_task:
+                    jval = all_judge_by_task.get(model_key, {}).get(tt, {}).get(judge_key)
                 if jval is not None:
                     _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
                     judge_label_drawn = True
@@ -885,6 +888,11 @@ def main(args: argparse.Namespace) -> None:
             )
             write_csv(cls_csv, cls_rows)
             summary_metrics[model_id]["judge"] = judged_summary(cls_rows)
+            by_task_judge: dict[str, dict] = {}
+            for tt in sorted(set(r.get("task_type", "") for r in cls_rows)):
+                task_rows = [r for r in cls_rows if r.get("task_type") == tt]
+                by_task_judge[tt] = judged_summary(task_rows)
+            summary_metrics[model_id]["judge_by_task"] = by_task_judge
 
         del judge_llm, judge_tok
         gc.collect()
@@ -964,8 +972,9 @@ def main(args: argparse.Namespace) -> None:
     multimodal_set = set(args.multimodal_models or [])
     print("\n=== Generating plots ===")
     judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
+    judge_by_task = {mid: m["judge_by_task"] for mid, m in summary_metrics.items() if m.get("judge_by_task")}
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
+    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall, judge_by_task)
     plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
