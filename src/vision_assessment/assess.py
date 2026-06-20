@@ -27,7 +27,7 @@ import numpy as np
 from PIL import Image as PILImage
 from vllm import LLM, SamplingParams
 
-from src.common.dataset_config import datasets_by_name
+from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
 from src.common.io import (
     Tee,
     load_jsonl,
@@ -816,6 +816,9 @@ def main(args: argparse.Namespace) -> None:
         ])
 
     ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
+
+    if not use_dg:
+        prefetch_agml_datasets([ds for ds in datasets_cfg.values() if not ds.skip])
 
     # Override per-class image_names with linear probe test split if provided
     test_split_path = getattr(args, "test_split", None)

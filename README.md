@@ -136,7 +136,7 @@ python main.py language \
 | `--models` | required | Space-separated list of model IDs |
 | `--multimodal_models` | none | Subset of `--models` that are VLMs (shown with hatching in charts) |
 | `--n_samples` | all | Limit total records per JSONL (caps number of classes evaluated) |
-| `--judge_model` | none | LLM-as-a-judge model for classification |
+| `--judge_model` | first model in `--models` | LLM-as-a-judge model for classification |
 | `--enforce_eager` | off | Disable CUDA graph capture |
 | `--dataset_source` | `agml` | `agml` or `digital_green` |
 
@@ -175,7 +175,7 @@ python main.py vision \
 |------|---------|-------------|
 | `--models` | required | Space-separated list of multimodal model IDs |
 | `--n_samples` | all | Max images **per class** (seeded sample, consistent across runs) |
-| `--judge_model` | none | LLM-as-a-judge model for classification |
+| `--judge_model` | first model in `--models` | LLM-as-a-judge model for classification |
 | `--enforce_eager` | off | Disable CUDA graph capture |
 | `--dataset_source` | `agml` | `agml` or `digital_green` |
 

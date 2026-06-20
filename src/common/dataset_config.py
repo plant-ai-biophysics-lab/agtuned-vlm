@@ -55,6 +55,21 @@ def datasets_by_name(config_path: Path) -> dict[str, DatasetConfig]:
     return {d.agml_name: d for d in load_datasets(config_path)}
 
 
+def prefetch_agml_datasets(datasets: list[DatasetConfig]) -> None:
+    """Trigger AgML downloads for all datasets upfront before any model loading."""
+    import agml
+    names = [d.agml_name for d in datasets]
+    print(f"\n=== Prefetching {len(names)} AgML datasets ===")
+    for i, name in enumerate(names, 1):
+        print(f"  [{i}/{len(names)}] {name}", end=" ", flush=True)
+        try:
+            agml.data.AgMLDataLoader(name)
+            print("ok")
+        except Exception as e:
+            print(f"ERROR: {e}")
+    print()
+
+
 def clean_class_list(raw_classes: list[str]) -> list[str]:
     cleaned = []
     for c in raw_classes:

@@ -43,7 +43,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoImageProcessor, AutoModel, AutoModelForImageTextToText, AutoProcessor
 
-from src.common.dataset_config import active_datasets, DatasetConfig
+from src.common.dataset_config import active_datasets, DatasetConfig, prefetch_agml_datasets
 from src.common.io import save_json, update_pipeline_results
 
 # Path to the layer selections config written by app/layer_explorer.py
@@ -1050,6 +1050,9 @@ def main(args):
 
     n_datasets = len(datasets)
     print(f"\nActive datasets: {n_datasets}")
+
+    if not use_dg:
+        prefetch_agml_datasets(datasets)
 
     # Phase 1: load each backbone once, extract embeddings for all datasets, unload
     # all_embeddings[backbone_key][agml_name] = (X, labels, train_idx, test_idx, le)
