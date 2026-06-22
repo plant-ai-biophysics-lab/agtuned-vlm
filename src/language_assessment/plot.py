@@ -20,7 +20,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.common.dataset_config import datasets_by_name
 from src.language_assessment.assess import (
     plot_cls_summary_per_dataset,
     plot_cls_summary_per_task,
@@ -112,19 +111,19 @@ def main() -> None:
         sys.exit(1)
 
     results = json.loads(metrics_path.read_text())
-    datasets_cfg = datasets_by_name(Path(args.config))
-    ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
     multimodal_set = set(args.multimodal_models)
 
-    # Reconstruct per-model per-dataset dicts from saved JSON
     all_model_desc_metrics: dict[str, dict[str, dict]] = {}
     all_model_cls_metrics: dict[str, dict[str, dict]] = {}
-
+    all_model_cls_by_task: dict[str, dict[str, dict]] = {}
+    all_model_desc_by_task: dict[str, dict[str, dict]] = {}
     all_judge_metrics: dict[str, dict] = {}
     all_judge_by_task: dict[str, dict] = {}
     for model_id, m in results.get("models", {}).items():
         all_model_desc_metrics[model_id] = m.get("description_per_dataset", {})
         all_model_cls_metrics[model_id] = m.get("classification_per_dataset", {})
+        all_model_cls_by_task[model_id] = m.get("classification_per_task", {})
+        all_model_desc_by_task[model_id] = m.get("description_per_task", {})
         if m.get("judge"):
             all_judge_metrics[model_id] = m["judge"]
         if m.get("judge_by_task"):
@@ -152,6 +151,8 @@ def main() -> None:
         or _macro_average(naive.get("classification", {}), ["accuracy", "contains_accuracy", "f1_macro"])
     )
 
+    from src.common.dataset_config import datasets_by_name
+    datasets_cfg = datasets_by_name(Path(args.config))
     active_datasets = {name: ds for name, ds in datasets_cfg.items() if not ds.skip}
     per_ds_f1 = [1.0 / max(len(ds.clean_classes), 1) for ds in active_datasets.values()]
     uniform_cls_overall = {"f1_macro": round(float(np.mean(per_ds_f1)), 4), "accuracy": round(float(np.mean(per_ds_f1)), 4)} if per_ds_f1 else None
@@ -166,8 +167,8 @@ def main() -> None:
 
     print("\n=== Generating plots ===")
     plot_cls_summary_per_dataset(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_metrics, ds_to_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall, all_judge_by_task)
-    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
+    plot_cls_summary_per_task(all_model_cls_by_task, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall, all_judge_by_task)
+    plot_desc_summary_per_task(all_model_desc_by_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, all_judge_metrics, uniform_cls_overall)
 

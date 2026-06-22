@@ -19,6 +19,7 @@ class DatasetConfig:
     location: list = None
     skip: bool = False
     notes: str = ""
+    class_overrides: dict = None  # {clean_class_label: task_type}
 
     @property
     def clean_classes(self) -> list[str]:
@@ -27,6 +28,13 @@ class DatasetConfig:
     @property
     def is_disease_task(self) -> bool:
         return self.task_type in DISEASE_TASK_TYPES
+
+    def effective_task_type(self, class_label: str) -> str:
+        """Return the task_type for a specific class, respecting class_overrides."""
+        if self.class_overrides:
+            if class_label in self.class_overrides:
+                return self.class_overrides[class_label]
+        return self.task_type
 
 
 def load_datasets(config_path: Path) -> list[DatasetConfig]:
@@ -43,6 +51,7 @@ def load_datasets(config_path: Path) -> list[DatasetConfig]:
             location=d.get("location", []),
             skip=d.get("skip", False),
             notes=d.get("notes", ""),
+            class_overrides=d.get("class_overrides", {}),
         ))
     return result
 

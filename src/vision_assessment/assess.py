@@ -310,7 +310,8 @@ def run_model(
         meta = record["metadata"]
         agml_name = meta["agml_dataset"]
         class_label = meta["class_label"]
-        task_type = meta["task_type"]
+        ds_cfg_eff = datasets_cfg.get(agml_name)
+        task_type = ds_cfg_eff.effective_task_type(class_label) if ds_cfg_eff else meta["task_type"]
         crop = meta["crop"]
         image_names = meta["image_names"]
         synth_desc = record["messages"][1]["content"]
@@ -409,6 +410,31 @@ def compute_cls_metrics_per_dataset(cls_rows: list[dict]) -> dict[str, dict]:
     return result
 
 
+def compute_cls_metrics_per_task(cls_rows: list[dict]) -> dict[str, dict]:
+    """Returns {task_type: classification_metrics} grouped by class-level task_type."""
+    by_task: dict[str, list[dict]] = defaultdict(list)
+    for row in cls_rows:
+        tt = row.get("task_type", "")
+        if tt:
+            by_task[tt].append(row)
+    result = {}
+    for tt, rows in by_task.items():
+        refs = [r["class_label"] for r in rows]
+        preds = [r["resolved_class"] for r in rows]
+        result[tt] = compute_classification_metrics(refs, preds)
+    return result
+
+
+def compute_desc_metrics_per_task(desc_rows: list[dict]) -> dict[str, dict]:
+    """Returns {task_type: rouge_summary} grouped by class-level task_type."""
+    by_task: dict[str, list[dict]] = defaultdict(list)
+    for row in desc_rows:
+        tt = row.get("task_type", "")
+        if tt:
+            by_task[tt].append(row)
+    return {tt: aggregate_rouge(rows) for tt, rows in by_task.items()}
+
+
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
 def _hatch(model_key: str, multimodal_models: set[str]) -> str:
@@ -499,8 +525,7 @@ def plot_cls_summary_per_dataset(
 
 
 def plot_cls_summary_per_task(
-    all_cls_results: dict[str, dict[str, dict]],
-    ds_to_task: dict[str, str],
+    all_cls_by_task: dict[str, dict[str, dict]],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
     naive_cls_metrics: dict | None = None,
@@ -510,25 +535,15 @@ def plot_cls_summary_per_task(
 ) -> None:
     multimodal_models = multimodal_models or set()
     all_judge_metrics = all_judge_metrics or {}
-    task_types = sorted(set(ds_to_task.values()))
+    task_types = sorted(set(tt for per_task in all_cls_by_task.values() for tt in per_task))
     if not task_types:
         return
 
-    models = list(all_cls_results.keys())
+    models = list(all_cls_by_task.keys())
     metrics = ["accuracy", "f1_macro"]
     color_map = model_color_map(models)
     x = np.arange(len(task_types))
     width = 0.8 / len(models)
-
-    task_scores: dict[str, dict[str, dict[str, list]]] = {
-        mk: {tt: {m: [] for m in metrics} for tt in task_types} for mk in models
-    }
-    for model_key, per_ds in all_cls_results.items():
-        for ds, m in per_ds.items():
-            tt = ds_to_task.get(ds)
-            if tt:
-                for metric in metrics:
-                    task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
 
     subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
     fig, axes = plt.subplots(1, len(metrics),
@@ -538,11 +553,8 @@ def plot_cls_summary_per_task(
         ax = axes[mi]
         judge_key = _JUDGE_METRIC_MAP.get(metric)
         for i, model_key in enumerate(models):
-            vals = [
-                float(np.mean(task_scores[model_key][tt][metric]))
-                if task_scores[model_key][tt][metric] else 0.0
-                for tt in task_types
-            ]
+            per_task = all_cls_by_task.get(model_key, {})
+            vals = [per_task.get(tt, {}).get(metric, 0.0) for tt in task_types]
             offset = (i - (len(models) - 1) / 2) * width
             bars = ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
                           hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
@@ -572,32 +584,21 @@ def plot_cls_summary_per_task(
 
 
 def plot_desc_summary_per_task(
-    all_desc_results: dict[str, dict[str, dict]],
-    ds_to_task: dict[str, str],
+    all_desc_by_task: dict[str, dict[str, dict]],
     output_dir: Path,
     multimodal_models: set[str] | None = None,
     naive_desc_metrics: dict | None = None,
 ) -> None:
     multimodal_models = multimodal_models or set()
-    task_types = sorted(set(ds_to_task.values()))
+    task_types = sorted(set(tt for per_task in all_desc_by_task.values() for tt in per_task))
     if not task_types:
         return
 
-    models = list(all_desc_results.keys())
+    models = list(all_desc_by_task.keys())
     metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
     color_map = model_color_map(models)
     x = np.arange(len(task_types))
     width = 0.8 / len(models)
-
-    task_scores: dict[str, dict[str, dict[str, list]]] = {
-        mk: {tt: {m: [] for m in metrics} for tt in task_types} for mk in models
-    }
-    for model_key, per_ds in all_desc_results.items():
-        for ds, m in per_ds.items():
-            tt = ds_to_task.get(ds)
-            if tt:
-                for metric in metrics:
-                    task_scores[model_key][tt][metric].append(m.get(metric, 0.0))
 
     metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
     subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
@@ -606,11 +607,8 @@ def plot_desc_summary_per_task(
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, model_key in enumerate(models):
-            vals = [
-                float(np.mean(task_scores[model_key][tt][metric]))
-                if task_scores[model_key][tt][metric] else 0.0
-                for tt in task_types
-            ]
+            per_task = all_desc_by_task.get(model_key, {})
+            vals = [per_task.get(tt, {}).get(metric, 0.0) for tt in task_types]
             offset = (i - (len(models) - 1) / 2) * width
             bars = ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
                           hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
@@ -879,26 +877,25 @@ def main(args: argparse.Namespace) -> None:
         desc_rows = worker_result["desc_rows"]
         cls_rows  = worker_result["cls_rows"]
 
-        desc_per_ds = compute_desc_metrics_per_dataset(desc_rows)
-        cls_per_ds = compute_cls_metrics_per_dataset(cls_rows)
+        desc_per_ds   = compute_desc_metrics_per_dataset(desc_rows)
+        cls_per_ds    = compute_cls_metrics_per_dataset(cls_rows)
+        desc_per_task = compute_desc_metrics_per_task(desc_rows)
+        cls_per_task  = compute_cls_metrics_per_task(cls_rows)
 
         desc_overall = aggregate_rouge(desc_rows)
         cls_refs = [r["class_label"] for r in cls_rows]
         cls_preds = [r["resolved_class"] for r in cls_rows]
         cls_overall = compute_classification_metrics(cls_refs, cls_preds)
 
-        desc_by_task = aggregate_by_task(desc_per_ds, ds_to_task)
-        cls_by_task = aggregate_by_task(cls_per_ds, ds_to_task)
-
         all_model_desc_metrics[model_id] = desc_per_ds
-        all_model_cls_metrics[model_id] = cls_by_task
+        all_model_cls_metrics[model_id]  = cls_per_task
         summary_metrics[model_id] = {
             "description_overall": desc_overall,
             "description_per_dataset": desc_per_ds,
-            "description_by_task": desc_by_task,
+            "description_per_task": desc_per_task,
             "classification_overall": cls_overall,
             "classification_per_dataset": cls_per_ds,
-            "classification_by_task": cls_by_task,
+            "classification_per_task": cls_per_task,
         }
 
         write_csv(output_dir / f"desc_{_safe_name(model_id)}.csv", desc_rows)
@@ -1040,8 +1037,8 @@ def main(args: argparse.Namespace) -> None:
 
     print("\n=== Generating plots ===")
     plot_cls_summary_per_dataset(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
-    plot_cls_summary_per_task(all_model_cls_per_ds, ds_to_task, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall, judge_by_task)
-    plot_desc_summary_per_task(all_model_desc_metrics, ds_to_task, output_dir, multimodal_set, naive_ov_desc)
+    plot_cls_summary_per_task(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall, judge_by_task)
+    plot_desc_summary_per_task({mid: m.get("description_per_task", {}) for mid, m in summary_metrics.items()}, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
 

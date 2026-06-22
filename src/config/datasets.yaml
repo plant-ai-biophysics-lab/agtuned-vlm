@@ -67,6 +67,8 @@ datasets:
       - Target Spot
       - Tomato Mosaic Virus
       - Tomato Yellow Leaf Curl Virus
+    class_overrides:
+      Spider Mites Two-spotted Spider Mite: pest_damage
     location: [worldwide, worldwide]
     skip: false
 
@@ -84,7 +86,7 @@ datasets:
 
   - agml_name: paddy_disease_classification
     crop: paddy
-    task_type: disease  # note: 'hispa' is a pest, rest are diseases
+    task_type: disease
     n_images: 10407
     classes:
       - bacterial_leaf_blight
@@ -97,6 +99,8 @@ datasets:
       - hispa
       - normal
       - tungro
+    class_overrides:
+      hispa: pest_damage
     location: [asia, india]
     skip: false
     notes: "'hispa' is a pest (rice hispa beetle); rest are fungal/bacterial diseases"
@@ -115,7 +119,7 @@ datasets:
 
   - agml_name: chilli_leaf_classification
     crop: chilli
-    task_type: disease  # note: 'mites_and_trips' is a pest
+    task_type: disease
     n_images: 10974
     classes:
       - cercospora
@@ -123,13 +127,16 @@ datasets:
       - mites_and_trips
       - nutritional
       - powdery_mildew
+    class_overrides:
+      mites and trips: pest_damage
+      nutritional: pest_damage
     location: [asia, india]
     skip: false
     notes: "'mites_and_trips' is a pest class; 'nutritional' is abiotic stress"
 
   - agml_name: orange_leaf_disease_classification
     crop: orange
-    task_type: disease  # note: citrus_mealybugs and spiny_whitefly are pests
+    task_type: disease
     n_images: 5813
     classes:
       - citrus_canker
@@ -143,6 +150,9 @@ datasets:
       - spiny_whitefly
       - yellow_dragon
       - yellow_leaves
+    class_overrides:
+      citrus mealybugs: pest_damage
+      spiny whitefly: pest_damage
     location: [asia, bangladesh]
     skip: false
     notes: "'citrus_mealybugs' and 'spiny_whitefly' are pest classes mixed in"
@@ -175,7 +185,7 @@ datasets:
 
   - agml_name: arabica_coffee_leaf_disease_classification
     crop: arabica_coffee
-    task_type: disease  # note: 'Miner' is a pest (coffee leaf miner)
+    task_type: disease
     n_images: 58549
     classes:
       - Cerscospora
@@ -183,6 +193,8 @@ datasets:
       - Leaf_rust
       - Miner
       - Phoma
+    class_overrides:
+      Miner: pest_damage
     location: [africa, kenya]
     skip: false
     notes: "'Miner' refers to the coffee leaf miner pest"
@@ -227,7 +239,7 @@ datasets:
 
   - agml_name: tea_leaf_disease_classification
     crop: tea
-    task_type: disease  # note: 'helopeltis' is a pest
+    task_type: disease
     n_images: 5867
     classes:
       - algal_spot
@@ -236,6 +248,8 @@ datasets:
       - healthy
       - helopeltis
       - red_spot
+    class_overrides:
+      helopeltis: pest_damage
     location: [asia, india]
     skip: false
     notes: "'helopeltis' is a tea pest (mosquito bug)"
