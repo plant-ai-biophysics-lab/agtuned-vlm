@@ -187,16 +187,17 @@ def aggregate_by_task(
 
 def judged_summary(rows: list[dict]) -> dict:
     """Returns judge_accuracy, n_judged, and optionally judge_f1_macro."""
-    judged = [r for r in rows if "judged_correct" in r]
+    judged = [r for r in rows if "judged_correct" in r and r["judged_correct"] != ""]
     if not judged:
         return {}
+    jc = [int(r["judged_correct"]) for r in judged]
     result = {
-        "judge_accuracy": round(sum(r["judged_correct"] for r in judged) / len(judged), 4),
+        "judge_accuracy": round(sum(jc) / len(jc), 4),
         "n_judged": len(judged),
     }
     if "resolved_class" in judged[0] and "class_label" in judged[0]:
         refs = [r["class_label"] for r in judged]
-        preds = [r["class_label"] if r["judged_correct"] else r["resolved_class"] for r in judged]
+        preds = [r["class_label"] if jc[i] else r["resolved_class"] for i, r in enumerate(judged)]
         labels = sorted(set(refs))
         result["judge_f1_macro"] = round(
             f1_score(refs, preds, average="macro", labels=labels, zero_division=0), 4
