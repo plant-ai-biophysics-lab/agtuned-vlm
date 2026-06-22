@@ -83,6 +83,7 @@ python main.py probe \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--models` | none | One or more HuggingFace VLM model IDs |
+| `--cache_embeddings` | off | Save extracted embeddings to `.npz` files (required for `cluster` stage) |
 | `--dino_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 backbone. Pass `none` to skip |
 | `--yolo_model` | `yolo11x-cls.pt` | YOLO classification backbone. Pass `none` to skip |
 | `--bioclip_model` | `imageomics/bioclip` | BioCLIP backbone. Pass `none` to skip |
@@ -107,6 +108,43 @@ outputs/linear_probe/
 ├── class_accuracy_vs_frequency/
 ├── tsne/ + tsne_legends/
 └── confusion_matrices/ + per_class_f1/ + loss_curves/
+```
+
+---
+
+### Stage 1b — Clustering Evaluation
+
+Measures whether frozen visual features naturally cluster by class **without using labels for training** — a stricter, label-free complement to the linear probe. The linear probe can compensate for weak features by learning a good hyperplane; clustering cannot. Labels are only used for scoring after clustering is complete.
+
+Requires `--cache_embeddings` to have been set on the probe run. Reads existing `.npz` files — no GPU needed, runs on CPU.
+
+```bash
+python main.py cluster \
+  --cache_dir  outputs/linear_probe/embedding_cache/ \
+  --output_dir outputs/clustering_eval/
+```
+
+Add `--max_samples 1000` for a quick local sanity check (subsamples each dataset before clustering). Run without it on the cluster for full results.
+
+| Metric | Measures | Range | Interpretation |
+|--------|----------|-------|----------------|
+| **NMI** | How much cluster assignments share information with true classes | 0 → 1 | > 0.5 is strong |
+| **ARI** | Cluster-to-class agreement, chance-corrected | −1 → 1 | 0 = random; > 0.5 is strong; negative = worse than random |
+| **Silhouette** | Intra-cluster compactness vs inter-cluster separation (no labels used) | −1 → 1 | > 0.3 is strong; **negative means images are closer to a different cluster than their own** — the encoder has no meaningful class grouping |
+
+All three metrics are computed on PCA-50 reduced features. Bigger is better for all three.
+
+**Output structure:**
+
+```
+outputs/clustering_eval/
+├── clustering_metrics.json
+├── clustering_overall.png               ← mean NMI/ARI/Sil per backbone
+├── clustering_per_task.png              ← per task type
+├── clustering_heatmap_nmi.png           ← backbone × dataset heatmap
+├── clustering_heatmap_ari.png
+├── clustering_heatmap_silhouette.png
+└── clustering_scatter_nmi_vs_sil.png    ← NMI vs Silhouette per (backbone, dataset)
 ```
 
 ---
