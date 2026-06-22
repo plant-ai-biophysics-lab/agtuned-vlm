@@ -139,34 +139,38 @@ def _to_bool(val) -> bool | None:
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_winning_classes(
-    lang_dir: Path, model_id: str
+    lang_dir: Path, model_id: str, all_classes: bool = False,
 ) -> dict[tuple[str, str], str]:
-    """Return {(dataset, class): description_response} for judged-correct classes."""
+    """Return {(dataset, class): description_response}.
+
+    all_classes=False (default): only judged-correct classes.
+    all_classes=True: all classes that have a description response.
+    """
     cls_file  = lang_dir / f"cls_{_safe_name(model_id)}.csv"
     desc_file = lang_dir / f"desc_{_safe_name(model_id)}.csv"
 
-    if not cls_file.exists():
-        print(f"  [warn] lang cls CSV not found: {cls_file}")
-        return {}
     if not desc_file.exists():
         print(f"  [warn] lang desc CSV not found: {desc_file}")
         return {}
 
-    # Find classes with judged_correct == 1
-    winning: set[tuple[str, str]] = set()
-    for row in _read_csv(cls_file):
-        if _to_bool(row.get("judged_correct")) is True:
-            winning.add((row["agml_dataset"], row["class_label"]))
+    if not all_classes:
+        if not cls_file.exists():
+            print(f"  [warn] lang cls CSV not found: {cls_file}")
+            return {}
+        winning: set[tuple[str, str]] = set()
+        for row in _read_csv(cls_file):
+            if _to_bool(row.get("judged_correct")) is True:
+                winning.add((row["agml_dataset"], row["class_label"]))
+        if not winning:
+            print("  [warn] No judged-correct classes found in language assessment.")
+            return {}
+    else:
+        winning = None  # type: ignore[assignment]
 
-    if not winning:
-        print("  [warn] No judged-correct classes found in language assessment.")
-        return {}
-
-    # Map winning classes to their description response
     desc_map: dict[tuple[str, str], str] = {}
     for row in _read_csv(desc_file):
         key = (row.get("agml_dataset", ""), row.get("class_label", ""))
-        if key in winning:
+        if winning is None or key in winning:
             desc_map[key] = row.get("prediction", "")
 
     return desc_map
@@ -443,6 +447,7 @@ def plot_comparison(
     baseline_per_ds: dict[str, dict[str, dict]],
     augmented_per_ds: dict[str, dict[str, dict]],
     output_dir: Path,
+    suffix: str = "filtered",
 ) -> None:
     models = sorted(set(baseline_per_ds) | set(augmented_per_ds))
     keys, series, colors, hatches = _build_series(models, baseline_per_ds, augmented_per_ds)
@@ -478,7 +483,7 @@ def plot_comparison(
 
     fig.suptitle("Description-Augmented Vision — Per Dataset (judged-correct classes only)", fontsize=10)
     plt.tight_layout()
-    path = output_dir / "cls_comparison_per_dataset.png"
+    path = output_dir / f"cls_comparison_per_dataset_{suffix}.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -489,6 +494,7 @@ def plot_task_comparison(
     augmented_per_ds: dict[str, dict[str, dict]],
     ds_to_task: dict[str, str],
     output_dir: Path,
+    suffix: str = "filtered",
 ) -> None:
     task_types = sorted(set(ds_to_task.values()))
     if not task_types:
@@ -534,7 +540,7 @@ def plot_task_comparison(
 
     fig.suptitle("Description-Augmented Vision — By Task Type", fontsize=10)
     plt.tight_layout()
-    path = output_dir / "cls_comparison_per_task.png"
+    path = output_dir / f"cls_comparison_per_task_{suffix}.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -544,6 +550,7 @@ def plot_overall_comparison(
     baseline_per_ds: dict[str, dict[str, dict]],
     augmented_per_ds: dict[str, dict[str, dict]],
     output_dir: Path,
+    suffix: str = "filtered",
 ) -> None:
     models = sorted(set(baseline_per_ds) | set(augmented_per_ds))
     keys, series, colors, hatches = _build_series(models, baseline_per_ds, augmented_per_ds)
@@ -575,7 +582,7 @@ def plot_overall_comparison(
     ax.legend(fontsize=7)
     fig.suptitle("Description-Augmented Vision — Overall (judged-correct classes only)", fontsize=10)
     plt.tight_layout()
-    path = output_dir / "cls_overall_comparison.png"
+    path = output_dir / f"cls_overall_comparison_{suffix}.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -619,17 +626,21 @@ def main(args: argparse.Namespace) -> None:
         print(f"Model {model_idx + 1}/{n_models}: {model_id}")
         print(f"{'='*60}")
 
-        # Step 1: find winning (judged-correct) classes from language assessment
-        print("\nStep 1/3: Loading judged-correct classes from language assessment...")
-        desc_map = load_winning_classes(lang_dir, model_id)
+        # Step 1: find classes to augment
+        filter_label = "all" if args.all_classes else "filtered"
+        if args.all_classes:
+            print("\nStep 1/3: Loading all classes with descriptions...")
+        else:
+            print("\nStep 1/3: Loading judged-correct classes from language assessment...")
+        desc_map = load_winning_classes(lang_dir, model_id, all_classes=args.all_classes)
         if not desc_map:
-            print(f"  [skip] No winning classes found for {model_id}")
+            print(f"  [skip] No classes found for {model_id}")
             continue
         winning = set(desc_map.keys())
-        print(f"  Found {len(winning)} judged-correct classes")
+        print(f"  Found {len(winning)} classes ({'all' if args.all_classes else 'judged-correct only'})")
 
         # Step 2: load and filter existing vision baseline
-        print("\nStep 2/3: Loading baseline vision scores (filtered to winning classes)...")
+        print(f"\nStep 2/3: Loading baseline vision scores (filtered to {len(winning)} classes)...")
         baseline_rows = load_baseline_cls_rows(vis_dir, model_id, winning)
         if not baseline_rows:
             print(f"  [warn] No baseline vision rows found for {model_id}")
@@ -641,9 +652,10 @@ def main(args: argparse.Namespace) -> None:
             [r.get("resolved_class", "") for r in baseline_rows],
         ) if baseline_rows else {}
 
-        # Step 3: run augmented inference (skip if CSV already exists and --force not set)
+        # Step 3: run augmented inference (skip if CSV already exists and --resume set)
         safe = _safe_name(model_id)
-        aug_csv_path = output_dir / f"aug_cls_{safe}.csv"
+        aug_csv_path      = output_dir / f"aug_cls_{filter_label}_{safe}.csv"
+        baseline_csv_path = output_dir / f"baseline_cls_{filter_label}_{safe}.csv"
 
         if aug_csv_path.exists() and args.resume:
             print(f"\nStep 3/3: Inference CSV already exists — skipping ({aug_csv_path.name})")
@@ -670,7 +682,7 @@ def main(args: argparse.Namespace) -> None:
                 enforce_eager=args.enforce_eager,
             )
             write_csv(aug_csv_path, aug_rows)
-            write_csv(output_dir / f"baseline_cls_{safe}.csv", baseline_rows)
+            write_csv(baseline_csv_path, baseline_rows)
 
         aug_per_ds = compute_cls_metrics_per_dataset(aug_rows)
         aug_overall = compute_classification_metrics(
@@ -707,7 +719,7 @@ def main(args: argparse.Namespace) -> None:
             if model_id not in summary:
                 continue
             safe = _safe_name(model_id)
-            aug_csv = output_dir / f"aug_cls_{safe}.csv"
+            aug_csv = output_dir / f"aug_cls_{filter_label}_{safe}.csv"
             import csv as _csv
             with open(aug_csv, newline="", encoding="utf-8") as f:
                 aug_rows = list(_csv.DictReader(f))
@@ -731,15 +743,17 @@ def main(args: argparse.Namespace) -> None:
         del judge_llm, judge_tok
         gc.collect()
 
-    # Save metrics JSON
-    save_json(output_dir / "desc_augmented_metrics.json", {"models": summary})
-    print(f"\nMetrics saved to {output_dir / 'desc_augmented_metrics.json'}")
+    # Save metrics JSON (one per filter mode so runs don't overwrite each other)
+    metrics_path = output_dir / f"desc_augmented_metrics_{filter_label}.json"
+    save_json(metrics_path, {"models": summary, "filter": filter_label})
+    print(f"\nMetrics saved to {metrics_path}")
 
     print("\n=== Generating plots ===")
-    plot_comparison(baseline_per_model, augmented_per_model, output_dir)
-    plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir)
-    plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir)
-    plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models)
+    plot_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
+    plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir, suffix=filter_label)
+    plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
+    plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
+                     filter_label=filter_label)
     print("\nDone.")
 
 
@@ -749,6 +763,7 @@ def plot_transitions(
     ds_to_task: dict[str, str],
     output_dir: Path,
     models: list[str],
+    filter_label: str = "filtered",
 ) -> None:
     """Stacked bar: fixed / both_right / both_wrong / broken — overall, per task, per dataset."""
     CATS   = ["fixed", "both_right", "both_wrong", "broken"]
@@ -758,7 +773,7 @@ def plot_transitions(
     for model_id in models:
         safe     = _safe_name(model_id)
         vis_file = vis_dir / f"cls_{safe}.csv"
-        aug_file = aug_dir / f"aug_cls_{safe}.csv"
+        aug_file = aug_dir / f"aug_cls_{filter_label}_{safe}.csv"
         if not vis_file.exists() or not aug_file.exists():
             print(f"  [skip] missing CSVs for {model_id}")
             continue
@@ -841,7 +856,7 @@ def plot_transitions(
             fontsize=11,
         )
         plt.tight_layout()
-        path = output_dir / f"transitions_{safe}.png"
+        path = output_dir / f"transitions_{filter_label}_{safe}.png"
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path}")
@@ -875,6 +890,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument("--max_num_seqs",  type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--all_classes", action="store_true",
+                        help="Use all classes with descriptions, not just judged-correct ones")
     parser.add_argument("--resume", action="store_true",
                         help="Skip inference/judging if output CSVs already exist")
 

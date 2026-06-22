@@ -242,16 +242,30 @@ outputs/vision_assessment/
 
 ### Stage 4 — Description-Augmented Vision
 
-Tests whether prepending a language description of a class helps the model classify that class from an image. Only runs on classes where the language assessment produced a judged-correct answer.
+Tests whether prepending a language description of a class helps the model classify that class from an image. Supports two modes run separately:
 
-Flow: language cls CSV → find judged-correct classes → load their description responses → re-run vision inference with description prepended → compare baseline vs augmented accuracy.
+- **Filtered** (default): only classes where the language assessment produced a judged-correct answer
+- **Unfiltered** (`--all_classes`): all classes that have a description response
+
+Flow: language cls/desc CSVs → select classes → load description responses → re-run vision inference with description prepended → compare baseline vs augmented accuracy.
+
+All output files include `filtered` or `all` in their name so both runs coexist in the same `--output_dir`.
 
 ```bash
+# Filtered run (judged-correct classes only)
 python main.py aug-vision \
   --models     google/gemma-4-26B-A4B-it \
   --lang_dir   outputs/language_assessment/ \
   --vis_dir    outputs/vision_assessment/ \
   --output_dir outputs/desc_augmented_vision/
+
+# Unfiltered run (all classes with descriptions)
+python main.py aug-vision \
+  --models      google/gemma-4-26B-A4B-it \
+  --lang_dir    outputs/language_assessment/ \
+  --vis_dir     outputs/vision_assessment/ \
+  --output_dir  outputs/desc_augmented_vision/ \
+  --all_classes
 ```
 
 | Flag | Default | Description |
@@ -260,6 +274,7 @@ python main.py aug-vision \
 | `--lang_dir` | `outputs/language_assessment/` | Language assessment output directory |
 | `--vis_dir` | `outputs/vision_assessment/` | Vision assessment output directory (for baseline rows) |
 | `--test_split` | `outputs/linear_probe/test_split.json` | Same test split used in probe and vision assessment |
+| `--all_classes` | off | Use all classes with descriptions instead of only judged-correct ones |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge for augmented predictions |
 | `--resume` | off | Skip inference/judging if output CSVs already exist |
 | `--enforce_eager` | off | Disable CUDA graph capture |
@@ -277,12 +292,14 @@ python main.py aug-vision-plot \
 
 ```
 outputs/desc_augmented_vision/
-├── aug_cls_<model>.csv / baseline_cls_<model>.csv
-├── desc_augmented_metrics.json
-├── cls_comparison_per_dataset.png
-├── cls_comparison_per_task.png
-├── cls_overall_comparison.png
-└── cls_transitions_<model>.png
+├── aug_cls_filtered_<model>.csv / baseline_cls_filtered_<model>.csv
+├── aug_cls_all_<model>.csv      / baseline_cls_all_<model>.csv
+├── desc_augmented_metrics_filtered.json
+├── desc_augmented_metrics_all.json
+├── cls_comparison_per_dataset_filtered.png / cls_comparison_per_dataset_all.png
+├── cls_comparison_per_task_filtered.png    / cls_comparison_per_task_all.png
+├── cls_overall_comparison_filtered.png     / cls_overall_comparison_all.png
+└── transitions_filtered_<model>.png        / transitions_all_<model>.png
 ```
 
 ---

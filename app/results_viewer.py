@@ -601,6 +601,114 @@ def render_class_explorer(
                     )
 
 
+# ── Descriptions tab ──────────────────────────────────────────────────────────
+
+def render_descriptions(lang_df: pd.DataFrame) -> None:
+    """Fast, image-free browser for per-class language description responses."""
+    if lang_df.empty:
+        st.warning("No language assessment CSV files found. Run the language stage first.")
+        return
+
+    desc_cols = ["model", "agml_dataset", "class_label", "task_type",
+                 "lang_desc_response", "lang_desc_gt", "lang_rouge_ss", "lang_rouge1"]
+    missing = [c for c in desc_cols if c not in lang_df.columns]
+    if missing:
+        st.error(f"Missing columns: {missing}")
+        return
+
+    df = lang_df[desc_cols].copy()
+    df = df[df["lang_desc_response"].notna() & (df["lang_desc_response"] != "")]
+    if df.empty:
+        st.info("No description responses found in language assessment data.")
+        return
+
+    # ── Sidebar filters ───────────────────────────────────────────────────────
+    all_models   = sorted(df["model"].unique())
+    all_datasets = sorted(df["agml_dataset"].unique())
+    all_tasks    = sorted(df["task_type"].dropna().unique())
+
+    sel_model   = st.sidebar.selectbox("Model (desc)",   ["(all)"] + all_models,   key="desc_model")
+    sel_dataset = st.sidebar.selectbox("Dataset (desc)", ["(all)"] + all_datasets, key="desc_dataset")
+    sel_task    = st.sidebar.selectbox("Task (desc)",    ["(all)"] + all_tasks,    key="desc_task")
+
+    mask = pd.Series(True, index=df.index)
+    if sel_model   != "(all)": mask &= df["model"]        == sel_model
+    if sel_dataset != "(all)": mask &= df["agml_dataset"] == sel_dataset
+    if sel_task    != "(all)": mask &= df["task_type"]    == sel_task
+    df = df[mask].reset_index(drop=True)
+
+    if df.empty:
+        st.info("No rows match the selected filters.")
+        return
+
+    # ── Summary table ─────────────────────────────────────────────────────────
+    st.markdown(
+        f"### Description responses &nbsp; "
+        f"<span style='color:#aaa;font-size:0.8em'>{len(df)} classes</span>",
+        unsafe_allow_html=True,
+    )
+
+    disp = df[["agml_dataset", "class_label", "model", "task_type",
+               "lang_rouge_ss", "lang_rouge1"]].copy()
+    disp.columns = ["Dataset", "Class", "Model", "Task", "ROUGE-SS", "ROUGE-1"]
+    for col in ("ROUGE-SS", "ROUGE-1"):
+        disp[col] = pd.to_numeric(disp[col], errors="coerce")
+
+    st.dataframe(
+        disp.style
+            .background_gradient(subset=["ROUGE-SS", "ROUGE-1"], cmap="RdYlGn", vmin=0, vmax=1)
+            .format({"ROUGE-SS": "{:.3f}", "ROUGE-1": "{:.3f}"}, na_rep="—"),
+        use_container_width=True,
+        height=300,
+    )
+
+    st.divider()
+
+    # ── Detail view ───────────────────────────────────────────────────────────
+    st.markdown("### Browse by class")
+
+    all_classes = sorted(df["class_label"].unique())
+    sel_cls = st.selectbox("Class", all_classes, key="desc_cls")
+
+    cls_rows = df[df["class_label"] == sel_cls]
+    cls_models = sorted(cls_rows["model"].unique())
+    sel_cls_model = st.selectbox("Model", cls_models, key="desc_cls_model")
+
+    row = cls_rows[cls_rows["model"] == sel_cls_model]
+    if row.empty:
+        st.info("No data for this combination.")
+        return
+    row = row.iloc[0]
+
+    rss = _to_float(row.get("lang_rouge_ss"))
+    r1  = _to_float(row.get("lang_rouge1"))
+    st.markdown(
+        f"**{sel_cls}** &nbsp; "
+        f"<span style='color:#aaa;font-size:0.85em'>"
+        f"{row['agml_dataset']} · {sel_cls_model}</span> &nbsp; "
+        + _pill("ROUGE-SS", rss) + _pill("ROUGE-1", r1),
+        unsafe_allow_html=True,
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Model response**")
+        st.markdown(
+            f"<div style='padding:12px;background:#1e1e1e;border-radius:6px;"
+            f"min-height:80px;white-space:pre-wrap'>"
+            f"{row.get('lang_desc_response') or '—'}</div>",
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown("**Ground truth**")
+        st.markdown(
+            f"<div style='padding:12px;background:#1e1e1e;border-radius:6px;"
+            f"min-height:80px;white-space:pre-wrap'>"
+            f"{row.get('lang_desc_gt') or '—'}</div>",
+            unsafe_allow_html=True,
+        )
+
+
 # ── App entry point ───────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -611,16 +719,21 @@ def main() -> None:
     )
     st.title("🌾 AgML Results Viewer")
 
-    lang_df, vis_df        = load_assessment_data(str(_LANG_DIR), str(_VIS_DIR))
+    lang_df, vis_df           = load_assessment_data(str(_LANG_DIR), str(_VIS_DIR))
     lang_metrics, vis_metrics = load_metrics_json(str(_LANG_DIR), str(_VIS_DIR))
 
-    tab_summary, tab_explorer = st.tabs(["📊 Summary", "🔍 Class Explorer"])
+    tab_summary, tab_explorer, tab_desc = st.tabs(
+        ["📊 Summary", "🔍 Class Explorer", "📝 Descriptions"]
+    )
 
     with tab_summary:
         render_summary(str(_RES_CSV))
 
     with tab_explorer:
         render_class_explorer(lang_df, vis_df, lang_metrics, vis_metrics)
+
+    with tab_desc:
+        render_descriptions(lang_df)
 
 
 if __name__ == "__main__":
