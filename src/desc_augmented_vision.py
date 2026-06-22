@@ -702,36 +702,42 @@ def main(args: argparse.Namespace) -> None:
             [r.get("resolved_class", "") for r in baseline_rows],
         ) if baseline_rows else {}
 
-        # Step 3: run augmented inference
-        print(f"\nStep 3/3: Running description-augmented vision inference...")
-        aug_rows = run_augmented_model(
-            model_id=model_id,
-            desc_map=desc_map,
-            datasets_cfg=active_cfg,
-            test_split=test_split,
-            descriptions_jsonl_path=descriptions_jsonl,
-            cls_prompt_template=cls_prompt_template,
-            aug_prompt_template=aug_prompt_template,
-            system_prompt=system_prompt,
-            n_samples=args.n_samples,
-            output_dir=output_dir,
-            quantization=args.quantization,
-            gpu_memory_utilization=args.gpu_memory_utilization,
-            max_model_len=args.max_model_len,
-            max_num_seqs=args.max_num_seqs,
-            enforce_eager=args.enforce_eager,
-        )
+        # Step 3: run augmented inference (skip if CSV already exists and --force not set)
+        safe = _safe_name(model_id)
+        aug_csv_path = output_dir / f"aug_cls_{safe}.csv"
+
+        if aug_csv_path.exists() and args.resume:
+            print(f"\nStep 3/3: Inference CSV already exists — skipping ({aug_csv_path.name})")
+            import csv as _csv
+            with open(aug_csv_path, newline="", encoding="utf-8") as f:
+                aug_rows = list(_csv.DictReader(f))
+        else:
+            print(f"\nStep 3/3: Running description-augmented vision inference...")
+            aug_rows = run_augmented_model(
+                model_id=model_id,
+                desc_map=desc_map,
+                datasets_cfg=active_cfg,
+                test_split=test_split,
+                descriptions_jsonl_path=descriptions_jsonl,
+                cls_prompt_template=cls_prompt_template,
+                aug_prompt_template=aug_prompt_template,
+                system_prompt=system_prompt,
+                n_samples=args.n_samples,
+                output_dir=output_dir,
+                quantization=args.quantization,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                max_model_len=args.max_model_len,
+                max_num_seqs=args.max_num_seqs,
+                enforce_eager=args.enforce_eager,
+            )
+            write_csv(aug_csv_path, aug_rows)
+            write_csv(output_dir / f"baseline_cls_{safe}.csv", baseline_rows)
 
         aug_per_ds = compute_cls_metrics_per_dataset(aug_rows)
         aug_overall = compute_classification_metrics(
             [r["class_label"] for r in aug_rows],
             [r.get("resolved_class", "") for r in aug_rows],
         ) if aug_rows else {}
-
-        # Save CSVs
-        safe = _safe_name(model_id)
-        write_csv(output_dir / f"aug_cls_{safe}.csv", aug_rows)
-        write_csv(output_dir / f"baseline_cls_{safe}.csv", baseline_rows)
 
         baseline_per_model[model_id]  = baseline_per_ds
         augmented_per_model[model_id] = aug_per_ds
@@ -766,6 +772,10 @@ def main(args: argparse.Namespace) -> None:
             import csv as _csv
             with open(aug_csv, newline="", encoding="utf-8") as f:
                 aug_rows = list(_csv.DictReader(f))
+            if args.resume and aug_rows and "judged_correct" in aug_rows[0]:
+                print(f"  [{model_id}] already judged — skipping")
+                summary[model_id]["judge"] = judged_summary(aug_rows)
+                continue
             print(f"  Judging {model_id} ({len(aug_rows)} rows)...")
             aug_rows = apply_judge(
                 rows=aug_rows,
@@ -832,6 +842,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument("--max_num_seqs",  type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip inference/judging if output CSVs already exist")
 
     args = parser.parse_args()
     if not args.judge_model and args.models:
