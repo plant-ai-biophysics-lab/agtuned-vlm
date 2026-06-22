@@ -11,7 +11,9 @@ Evaluation framework for vision-language models on agricultural image understand
 | language-plot | `src/language_assessment/plot.py` | Regenerate language assessment charts without re-running inference |
 | 3 — Vision Assessment | `src/vision_assessment/assess.py` | Multimodal VQA with image input (ROUGE-SS + F1-macro) |
 | vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts without re-running inference |
-| 4 — Collate | `src/collate_results.py` | Merge all stage metrics into `results_table.csv` + `results_table.tex` |
+| 4 — Aug Vision | `src/desc_augmented_vision.py` | Test whether language descriptions of judged-correct classes improve vision classification |
+| aug-vision-plot | `src/desc_augmented_vision_plot.py` | Regenerate aug-vision charts from saved CSVs |
+| 5 — Collate | `src/collate_results.py` | Merge all stage metrics into `results_table.csv` + `results_table.tex` |
 
 All stages share a single metrics module (`src/common/metrics.py`): same `resolve_class`, `compute_classification_metrics`, `apply_judge`, and image sampling (`sample_class_images`, seed 42) across every experiment.
 
@@ -58,7 +60,7 @@ Add `--force` to regenerate all classes from scratch. Progress is checkpointed s
 
 ### Stage 1 — Linear Probe
 
-Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially.
+Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially. Writes `test_split.json` immediately after dataset loading — this file is used by Stages 3 and 4 to evaluate the exact same images.
 
 **Default mode** runs LR per-dataset + LR combined. Add `--all_experiments` to also run FC probes.
 
@@ -96,6 +98,7 @@ python main.py probe \
 
 ```
 outputs/linear_probe/
+├── test_split.json                        ← used by vision & aug-vision stages
 ├── linear_probe_results.json
 ├── linear_probe_results_intermediate.json
 ├── feature_dimensions.txt
@@ -126,8 +129,8 @@ Evaluates models on text-only agricultural VQA. VLMs can also be evaluated here 
 
 ```bash
 python main.py language \
-  --models            google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
-  --multimodal_models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --models            google/gemma-4-26B-A4B-it \
+  --multimodal_models google/gemma-4-26B-A4B-it \
   --output_dir        outputs/language_assessment/
 ```
 
@@ -135,18 +138,18 @@ python main.py language \
 |------|---------|-------------|
 | `--models` | required | Space-separated list of model IDs |
 | `--multimodal_models` | none | Subset of `--models` that are VLMs (shown with hatching in charts) |
+| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Pre-built descriptions JSONL |
+| `--classification_jsonl` | `dataset/agml_classification.jsonl` | Pre-built classification JSONL |
 | `--n_samples` | all | Limit total records per JSONL (caps number of classes evaluated) |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge model for classification |
 | `--enforce_eager` | off | Disable CUDA graph capture |
-| `--dataset_source` | `agml` | `agml` or `digital_green` |
 
 #### Regenerate charts without re-running inference
 
 ```bash
 python main.py language-plot \
   --output_dir        outputs/language_assessment/ \
-  --config            src/config/datasets.yaml \
-  --multimodal_models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B
+  --multimodal_models google/gemma-4-26B-A4B-it
 ```
 
 **Output structure:**
@@ -163,28 +166,28 @@ outputs/language_assessment/
 
 ### Stage 3 — Vision Assessment
 
-Evaluates multimodal models on image + text VQA. Images are sampled with a fixed seed (42) per class so results are reproducible and directly comparable across models and runs.
+Evaluates multimodal models on image + text VQA. Uses the same test images as the linear probe (`test_split.json`) so results are directly comparable. Images are sampled with a fixed seed (42) per class when no test split is provided.
 
 ```bash
 python main.py vision \
-  --models     google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \
+  --models     google/gemma-4-26B-A4B-it \
   --output_dir outputs/vision_assessment/
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--models` | required | Space-separated list of multimodal model IDs |
-| `--n_samples` | all | Max images **per class** (seeded sample, consistent across runs) |
+| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Pre-built descriptions JSONL |
+| `--test_split` | `outputs/linear_probe/test_split.json` | Image split from linear probe (ensures same test images) |
+| `--n_samples` | all | Max images **per class** (used only if no test split) |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge model for classification |
 | `--enforce_eager` | off | Disable CUDA graph capture |
-| `--dataset_source` | `agml` | `agml` or `digital_green` |
 
 #### Regenerate charts without re-running inference
 
 ```bash
 python main.py vision-plot \
-  --output_dir outputs/vision_assessment/ \
-  --config     src/config/datasets.yaml
+  --output_dir outputs/vision_assessment/
 ```
 
 **Output structure:**
@@ -199,9 +202,54 @@ outputs/vision_assessment/
 
 ---
 
+### Stage 4 — Description-Augmented Vision
+
+Tests whether prepending a language description of a class helps the model classify that class from an image. Only runs on classes where the language assessment produced a judged-correct answer.
+
+Flow: language cls CSV → find judged-correct classes → load their description responses → re-run vision inference with description prepended → compare baseline vs augmented accuracy.
+
+```bash
+python main.py aug-vision \
+  --models     google/gemma-4-26B-A4B-it \
+  --lang_dir   outputs/language_assessment/ \
+  --vis_dir    outputs/vision_assessment/ \
+  --output_dir outputs/desc_augmented_vision/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--models` | required | Space-separated list of multimodal model IDs |
+| `--lang_dir` | `outputs/language_assessment/` | Language assessment output directory |
+| `--vis_dir` | `outputs/vision_assessment/` | Vision assessment output directory (for baseline rows) |
+| `--test_split` | `outputs/linear_probe/test_split.json` | Same test split used in probe and vision assessment |
+| `--judge_model` | first model in `--models` | LLM-as-a-judge for augmented predictions |
+| `--resume` | off | Skip inference/judging if output CSVs already exist |
+| `--enforce_eager` | off | Disable CUDA graph capture |
+
+#### Regenerate charts without re-running inference
+
+```bash
+python main.py aug-vision-plot \
+  --models     google/gemma-4-26B-A4B-it \
+  --vis_dir    outputs/vision_assessment/ \
+  --output_dir outputs/desc_augmented_vision/
+```
+
+**Output structure:**
+
+```
+outputs/desc_augmented_vision/
+├── aug_cls_<model>.csv / baseline_cls_<model>.csv
+├── desc_augmented_metrics.json
+├── cls_comparison_per_dataset.png
+├── cls_comparison_per_task.png
+├── cls_overall_comparison.png
+└── cls_transitions_<model>.png
+```
+
 ---
 
-### Stage 4 — Collate results
+### Stage 5 — Collate results
 
 Merges outputs from all stages into `results_table.csv` and `results_table.tex`.
 
@@ -233,7 +281,7 @@ streamlit run app/results_viewer.py -- \
 
 ## Metric consistency
 
-All three experiments share the same evaluation code in `src/common/metrics.py`:
+All experiments share the same evaluation code in `src/common/metrics.py`:
 
 | Concern | Implementation |
 |---------|---------------|

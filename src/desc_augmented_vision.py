@@ -40,8 +40,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image as PILImage
 from tqdm import tqdm
-from vllm import LLM, SamplingParams
-
 from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
 from src.common.io import load_prompts, save_json, write_csv
 from src.common.metrics import (
@@ -52,13 +50,17 @@ from src.common.metrics import (
     contains_match,
     judged_summary,
     model_color_map,
-    naive_classification_baseline,
-    naive_uniform_baseline_per_dataset,
     resolve_class,
     sample_class_images,
 )
 
-CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
+try:
+    from vllm import LLM, SamplingParams
+    CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
+except ImportError:
+    LLM = None  # type: ignore[assignment,misc]
+    SamplingParams = None  # type: ignore[assignment,misc]
+    CLS_PARAMS = None
 
 _REPEAT_RE   = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
@@ -269,14 +271,18 @@ def build_name_map(agml_name: str) -> dict[str, str]:
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
-def compute_cls_metrics_per_dataset(cls_rows: list[dict]) -> dict[str, dict]:
+def compute_cls_metrics_per_dataset(cls_rows: list[dict], use_judged: bool = False) -> dict[str, dict]:
     by_ds: dict[str, list[dict]] = defaultdict(list)
     for row in cls_rows:
         by_ds[row["agml_dataset"]].append(row)
     result = {}
     for ds, rows in by_ds.items():
-        refs  = [r["class_label"] for r in rows]
-        preds = [r.get("resolved_class", "") for r in rows]
+        refs = [r["class_label"] for r in rows]
+        if use_judged:
+            # treat judged_correct==1 as a correct prediction (class_label), else wrong
+            preds = [r["class_label"] if int(r.get("judged_correct") or 0) else "" for r in rows]
+        else:
+            preds = [r.get("resolved_class", "") for r in rows]
         result[ds] = compute_classification_metrics(refs, preds)
     return result
 
@@ -408,69 +414,58 @@ def _hatch(model_key: str, multimodal_models: set[str]) -> str:
     return "///" if model_key in multimodal_models else ""
 
 
-def _draw_naive_line(ax, naive_overall: dict | None, metric: str,
-                     label: bool = False, uniform_overall: dict | None = None) -> None:
-    if naive_overall:
-        value = naive_overall.get(metric)
-        if value is not None:
-            ax.axhline(value, color="red", linestyle="--", linewidth=1.2,
-                       label="naive (shuffled)" if label else "_nolegend_")
-    if uniform_overall:
-        value = uniform_overall.get(metric)
-        if value is not None:
-            ax.axhline(value, color="steelblue", linestyle="--", linewidth=1.2,
-                       label="naive (1/k classes)" if label else "_nolegend_")
+_SERIES_STYLES: list[dict] = [
+    {"color": "#e67e22", "hatch": ""},     # vision baseline
+    {"color": "#2ecc71", "hatch": "///"},  # augmented
+]
+_SERIES_SUFFIXES = [" (vision)", " (augmented)"]
+
+
+def _build_series(
+    models: list[str],
+    baseline_per_ds: dict[str, dict[str, dict]],
+    augmented_per_ds: dict[str, dict[str, dict]],
+) -> tuple[list[str], list[dict], list[str], list[str]]:
+    """Return (keys, per_ds_list, colors, hatches) in vision/augmented order."""
+    keys, per_ds_list, colors, hatches = [], [], [], []
+    for model in models:
+        short = model.split("/")[-1]
+        for suffix, src, style in zip(_SERIES_SUFFIXES, [baseline_per_ds, augmented_per_ds], _SERIES_STYLES):
+            if src.get(model):
+                keys.append(f"{short}{suffix}")
+                per_ds_list.append(src[model])
+                colors.append(style["color"])
+                hatches.append(style["hatch"])
+    return keys, per_ds_list, colors, hatches
 
 
 def plot_comparison(
     baseline_per_ds: dict[str, dict[str, dict]],
     augmented_per_ds: dict[str, dict[str, dict]],
     output_dir: Path,
-    naive_cls_overall: dict | None = None,
-    uniform_cls_overall: dict | None = None,
 ) -> None:
-    """Side-by-side comparison: baseline (filtered) vs description-augmented."""
-    all_datasets = sorted(
-        set(ds for m in baseline_per_ds.values() for ds in m)
-        | set(ds for m in augmented_per_ds.values() for ds in m)
-    )
-    if not all_datasets:
+    models = sorted(set(baseline_per_ds) | set(augmented_per_ds))
+    keys, series, colors, hatches = _build_series(models, baseline_per_ds, augmented_per_ds)
+
+    all_datasets = sorted(set(ds for src in series for ds in src))
+    if not all_datasets or not keys:
         return
 
-    # Build combined model keys: "model (baseline)" and "model (augmented)"
-    models = sorted(baseline_per_ds.keys())
-    combined: dict[str, dict[str, dict]] = {}
-    colors: dict[str, str] = {}
-    base_palette  = ["#3498db", "#2ecc71", "#9b59b6", "#f39c12"]
-    aug_palette   = ["#1a5276", "#1e8449", "#6c3483", "#9a6b00"]
-    for i, model in enumerate(models):
-        bkey = f"{model.split('/')[-1]} (baseline)"
-        akey = f"{model.split('/')[-1]} (augmented)"
-        combined[bkey] = baseline_per_ds.get(model, {})
-        combined[akey] = augmented_per_ds.get(model, {})
-        colors[bkey] = base_palette[i % len(base_palette)]
-        colors[akey] = aug_palette[i % len(aug_palette)]
-
-    all_keys = list(combined.keys())
     metrics = ["accuracy", "f1_macro"]
     x = np.arange(len(all_datasets))
-    width = 0.8 / len(all_keys)
+    width = 0.8 / len(keys)
 
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(max(12, len(all_datasets) * len(all_keys) * 0.4 + 2), 5))
+                             figsize=(max(12, len(all_datasets) * len(keys) * 0.4 + 2), 5))
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
-        for i, key in enumerate(all_keys):
-            vals = [combined[key].get(ds, {}).get(metric, 0.0) for ds in all_datasets]
-            offset = (i - (len(all_keys) - 1) / 2) * width
-            ls = "--" if "(augmented)" in key else "-"
-            ax.bar(x + offset, vals, width, label=key, color=colors[key],
-                   alpha=0.85, edgecolor="black", linewidth=0.5,
-                   linestyle=ls)
+        for i, (key, src, color, hatch) in enumerate(zip(keys, series, colors, hatches)):
+            vals = [src.get(ds, {}).get(metric, 0.0) for ds in all_datasets]
+            offset = (i - (len(keys) - 1) / 2) * width
+            ax.bar(x + offset, vals, width, label=key, color=color, hatch=hatch,
+                   alpha=0.85, edgecolor="black", linewidth=0.5)
             for j, v in enumerate(vals):
-                ax.text(x[j] + offset, v + 0.005, f"{v:.2f}",
-                        ha="center", va="bottom", fontsize=6)
-        _draw_naive_line(ax, naive_cls_overall, metric, label=True, uniform_overall=uniform_cls_overall)
+                ax.text(x[j] + offset, v + 0.005, f"{v:.2f}", ha="center", va="bottom", fontsize=6)
         ax.set_xticks(x)
         ax.set_xticklabels(
             [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
@@ -481,7 +476,7 @@ def plot_comparison(
         ax.set_ylabel("Score")
         ax.legend(fontsize=7)
 
-    fig.suptitle("Description-Augmented Vision — Baseline vs Augmented (judged-correct classes only)", fontsize=10)
+    fig.suptitle("Description-Augmented Vision — Per Dataset (judged-correct classes only)", fontsize=10)
     plt.tight_layout()
     path = output_dir / "cls_comparison_per_dataset.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -494,16 +489,13 @@ def plot_task_comparison(
     augmented_per_ds: dict[str, dict[str, dict]],
     ds_to_task: dict[str, str],
     output_dir: Path,
-    naive_cls_overall: dict | None = None,
-    uniform_cls_overall: dict | None = None,
 ) -> None:
     task_types = sorted(set(ds_to_task.values()))
     if not task_types:
         return
 
-    models = sorted(baseline_per_ds.keys())
-    base_palette = ["#3498db", "#2ecc71", "#9b59b6", "#f39c12"]
-    aug_palette  = ["#1a5276", "#1e8449", "#6c3483", "#9a6b00"]
+    models = sorted(set(baseline_per_ds) | set(augmented_per_ds))
+    keys, series, colors, hatches = _build_series(models, baseline_per_ds, augmented_per_ds)
 
     def _by_task(per_ds: dict[str, dict]) -> dict[str, dict]:
         task_rows: dict[str, list] = defaultdict(list)
@@ -512,45 +504,27 @@ def plot_task_comparison(
             if tt:
                 task_rows[tt].append(m)
         return {
-            tt: {
-                metric: float(np.mean([r.get(metric, 0.0) for r in rows]))
-                for metric in ["accuracy", "f1_macro"]
-            }
+            tt: {metric: float(np.mean([r.get(metric, 0.0) for r in rows]))
+                 for metric in ["accuracy", "f1_macro"]}
             for tt, rows in task_rows.items()
         }
 
-    all_keys = list(models)
+    by_task_list = [_by_task(src) for src in series]
     metrics = ["accuracy", "f1_macro"]
     x = np.arange(len(task_types))
-    width = 0.8 / (len(all_keys) * 2)
+    width = 0.8 / len(keys)
 
     fig, axes = plt.subplots(1, len(metrics),
-                             figsize=(max(8, len(task_types) * len(all_keys) * 1.2 + 2), 5))
-    slot = 0
-    for i, model in enumerate(all_keys):
-        bkey = f"{model.split('/')[-1]} (baseline)"
-        akey = f"{model.split('/')[-1]} (augmented)"
-        b_by_task = _by_task(baseline_per_ds.get(model, {}))
-        a_by_task = _by_task(augmented_per_ds.get(model, {}))
-
-        for mi, metric in enumerate(metrics):
-            ax = axes[mi]
-            bvals = [b_by_task.get(tt, {}).get(metric, 0.0) for tt in task_types]
-            avals = [a_by_task.get(tt, {}).get(metric, 0.0) for tt in task_types]
-            b_offset = (slot * 2     - (len(all_keys) * 2 - 1) / 2) * width
-            a_offset = (slot * 2 + 1 - (len(all_keys) * 2 - 1) / 2) * width
-            ax.bar(x + b_offset, bvals, width, label=bkey, color=base_palette[i % len(base_palette)],
-                   alpha=0.85, edgecolor="black", linewidth=0.5)
-            ax.bar(x + a_offset, avals, width, label=akey, color=aug_palette[i % len(aug_palette)],
-                   alpha=0.85, edgecolor="black", linewidth=0.5, hatch="///")
-            for j, (bv, av) in enumerate(zip(bvals, avals)):
-                ax.text(x[j] + b_offset, bv + 0.005, f"{bv:.2f}", ha="center", va="bottom", fontsize=6)
-                ax.text(x[j] + a_offset, av + 0.005, f"{av:.2f}", ha="center", va="bottom", fontsize=6)
-        slot += 1
-
+                             figsize=(max(8, len(task_types) * len(keys) * 0.6 + 2), 5))
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
-        _draw_naive_line(ax, naive_cls_overall, metric, label=True, uniform_overall=uniform_cls_overall)
+        for i, (key, bt, color, hatch) in enumerate(zip(keys, by_task_list, colors, hatches)):
+            vals = [bt.get(tt, {}).get(metric, 0.0) for tt in task_types]
+            offset = (i - (len(keys) - 1) / 2) * width
+            ax.bar(x + offset, vals, width, label=key, color=color, hatch=hatch,
+                   alpha=0.85, edgecolor="black", linewidth=0.5)
+            for j, v in enumerate(vals):
+                ax.text(x[j] + offset, v + 0.005, f"{v:.2f}", ha="center", va="bottom", fontsize=6)
         ax.set_xticks(x)
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
@@ -570,49 +544,30 @@ def plot_overall_comparison(
     baseline_per_ds: dict[str, dict[str, dict]],
     augmented_per_ds: dict[str, dict[str, dict]],
     output_dir: Path,
-    naive_cls_overall: dict | None = None,
-    uniform_cls_overall: dict | None = None,
 ) -> None:
-    models = sorted(baseline_per_ds.keys())
-    metrics = ["accuracy", "f1_macro"]
-    base_palette = ["#3498db", "#2ecc71", "#9b59b6", "#f39c12"]
-    aug_palette  = ["#1a5276", "#1e8449", "#6c3483", "#9a6b00"]
+    models = sorted(set(baseline_per_ds) | set(augmented_per_ds))
+    keys, series, colors, hatches = _build_series(models, baseline_per_ds, augmented_per_ds)
 
     def _overall(per_ds: dict[str, dict]) -> dict[str, float]:
-        all_rows = [v for rows in per_ds.values() for v in [rows]]
-        if not all_rows:
+        rows = list(per_ds.values())
+        if not rows:
             return {}
-        return {
-            metric: float(np.mean([r.get(metric, 0.0) for r in all_rows]))
-            for metric in metrics
-        }
+        return {metric: float(np.mean([r.get(metric, 0.0) for r in rows]))
+                for metric in ["accuracy", "f1_macro"]}
 
-    all_keys = []
-    vals_map: dict[str, dict] = {}
-    colors: dict[str, str] = {}
-    for i, model in enumerate(models):
-        bkey = f"{model.split('/')[-1]} (baseline)"
-        akey = f"{model.split('/')[-1]} (augmented)"
-        all_keys += [bkey, akey]
-        vals_map[bkey] = _overall(baseline_per_ds.get(model, {}))
-        vals_map[akey] = _overall(augmented_per_ds.get(model, {}))
-        colors[bkey] = base_palette[i % len(base_palette)]
-        colors[akey] = aug_palette[i % len(aug_palette)]
-
+    metrics = ["accuracy", "f1_macro"]
     x = np.arange(len(metrics))
-    width = 0.8 / len(all_keys)
+    width = 0.8 / len(keys)
 
-    fig, ax = plt.subplots(figsize=(max(6, len(all_keys) * 1.5), 5))
-    for i, key in enumerate(all_keys):
-        vals = [vals_map[key].get(m, 0.0) for m in metrics]
-        offset = (i - (len(all_keys) - 1) / 2) * width
-        ax.bar(x + offset, vals, width, label=key, color=colors[key],
-               alpha=0.85, edgecolor="black", linewidth=0.5,
-               hatch="///" if "(augmented)" in key else "")
+    fig, ax = plt.subplots(figsize=(max(6, len(keys) * 1.5), 5))
+    for i, (key, src, color, hatch) in enumerate(zip(keys, series, colors, hatches)):
+        vals = [_overall(src).get(m, 0.0) for m in metrics]
+        offset = (i - (len(keys) - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=key, color=color, hatch=hatch,
+               alpha=0.85, edgecolor="black", linewidth=0.5)
         for j, v in enumerate(vals):
             ax.text(x[j] + offset, v + 0.005, f"{v:.2f}", ha="center", va="bottom", fontsize=8)
 
-    _draw_naive_line(ax, naive_cls_overall, "f1_macro", label=True, uniform_overall=uniform_cls_overall)
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace("_", " ").title() for m in metrics])
     ax.set_ylim(0, 1.15)
@@ -780,22 +735,116 @@ def main(args: argparse.Namespace) -> None:
     save_json(output_dir / "desc_augmented_metrics.json", {"models": summary})
     print(f"\nMetrics saved to {output_dir / 'desc_augmented_metrics.json'}")
 
-    # Naive baselines over the filtered set (union of all baseline rows)
-    all_baseline_rows = [
-        r for model_id in args.models
-        for r in _read_baseline_rows_cached(output_dir, model_id)
-    ]
-    if all_baseline_rows:
-        naive_cls_overall   = naive_classification_baseline([r["class_label"] for r in all_baseline_rows])
-        uniform_cls_overall = naive_uniform_baseline_per_dataset(all_baseline_rows)
-    else:
-        naive_cls_overall = uniform_cls_overall = None
-
     print("\n=== Generating plots ===")
-    plot_comparison(baseline_per_model, augmented_per_model, output_dir, naive_cls_overall, uniform_cls_overall)
-    plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir, naive_cls_overall, uniform_cls_overall)
-    plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, naive_cls_overall, uniform_cls_overall)
+    plot_comparison(baseline_per_model, augmented_per_model, output_dir)
+    plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir)
+    plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir)
+    plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models)
     print("\nDone.")
+
+
+def plot_transitions(
+    vis_dir: Path,
+    aug_dir: Path,
+    ds_to_task: dict[str, str],
+    output_dir: Path,
+    models: list[str],
+) -> None:
+    """Stacked bar: fixed / both_right / both_wrong / broken — overall, per task, per dataset."""
+    CATS   = ["fixed", "both_right", "both_wrong", "broken"]
+    LABELS = ["Fixed (✗→✓)", "Both correct", "Both wrong", "Broken (✓→✗)"]
+    COLORS = ["#2ecc71", "#3498db", "#95a5a6", "#e74c3c"]
+
+    for model_id in models:
+        safe     = _safe_name(model_id)
+        vis_file = vis_dir / f"cls_{safe}.csv"
+        aug_file = aug_dir / f"aug_cls_{safe}.csv"
+        if not vis_file.exists() or not aug_file.exists():
+            print(f"  [skip] missing CSVs for {model_id}")
+            continue
+
+        vis_rows = _read_csv(vis_file)
+        aug_rows = _read_csv(aug_file)
+
+        vis_map = {(r["agml_dataset"], r["class_label"], r["image_name"]): r for r in vis_rows}
+        aug_map = {(r["agml_dataset"], r["class_label"], r["image_name"]): r for r in aug_rows}
+        common  = set(vis_map) & set(aug_map)
+
+        # Categorise each image
+        task_counts: dict[str, dict[str, int]] = defaultdict(lambda: {c: 0 for c in CATS})
+        ds_counts:   dict[str, dict[str, int]] = defaultdict(lambda: {c: 0 for c in CATS})
+        overall: dict[str, int] = {c: 0 for c in CATS}
+
+        for key in common:
+            ds   = key[0]
+            task = ds_to_task.get(ds, "unknown")
+            vr   = vis_map[key]
+            ar   = aug_map[key]
+            v_ok = int(vr.get("judged_correct") or vr.get("correct") or 0)
+            a_ok = int(ar.get("judged_correct") or ar.get("correct") or 0)
+            cat  = (
+                "fixed"      if not v_ok and     a_ok else
+                "broken"     if     v_ok and not a_ok else
+                "both_right" if     v_ok and     a_ok else
+                "both_wrong"
+            )
+            overall[cat]         += 1
+            task_counts[task][cat] += 1
+            ds_counts[ds][cat]    += 1
+
+        # ── Figure: 3 panels (overall | per task | per dataset) ──────────────
+        task_order = sorted(task_counts)
+        ds_order   = sorted(ds_counts, key=lambda d: -(ds_counts[d]["fixed"] - ds_counts[d]["broken"]))
+
+        fig, axes = plt.subplots(
+            1, 3,
+            figsize=(max(22, len(ds_order) * 1.1 + 8), 6),
+            gridspec_kw={"width_ratios": [1, len(task_order), len(ds_order)]},
+        )
+
+        def _stacked_bar(ax, groups: list[str], counts_map: dict, title: str, xlabel: str = "") -> None:
+            x      = np.arange(len(groups))
+            bottom = np.zeros(len(groups))
+            for cat, label, color in zip(CATS, LABELS, COLORS):
+                vals = np.array([counts_map[g][cat] for g in groups], dtype=float)
+                bars = ax.bar(x, vals, bottom=bottom, label=label, color=color, edgecolor="white", linewidth=0.4)
+                for bar, v in zip(bars, vals):
+                    if v > max(sum(sum(counts_map[g].values()) for g in groups) / len(groups) * 0.05, 30):
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2,
+                            bar.get_y() + bar.get_height() / 2,
+                            f"{int(v)}", ha="center", va="center", fontsize=7, color="white", fontweight="bold",
+                        )
+                bottom += vals
+            totals = [sum(counts_map[g].values()) for g in groups]
+            for i, (tot, net) in enumerate(zip(totals, [counts_map[g]["fixed"] - counts_map[g]["broken"] for g in groups])):
+                ax.text(i, tot + totals[0] * 0.01, f"net {net:+d}", ha="center", va="bottom", fontsize=7, color="#333")
+            ax.set_xticks(x)
+            ax.set_xticklabels(
+                [g.replace("_classification", "").replace("_", " ") for g in groups],
+                rotation=35 if len(groups) > 3 else 0, ha="right" if len(groups) > 3 else "center", fontsize=8,
+            )
+            ax.set_title(title, fontsize=10)
+            ax.set_ylabel("Images")
+            if xlabel:
+                ax.set_xlabel(xlabel)
+
+        _stacked_bar(axes[0], ["overall"], {"overall": overall}, "Overall")
+        _stacked_bar(axes[1], task_order, task_counts, "By Task Type")
+        _stacked_bar(axes[2], ds_order,   ds_counts,  "By Dataset")
+
+        axes[0].legend(loc="upper right", fontsize=8)
+
+        fig.suptitle(
+            f"Vision → Augmented Vision Transitions\n{model_id.split('/')[-1]} "
+            f"(judged-correct lang classes only, n={len(common):,})",
+            fontsize=11,
+        )
+        plt.tight_layout()
+        path = output_dir / f"transitions_{safe}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
 
 
 def _read_baseline_rows_cached(output_dir: Path, model_id: str) -> list[dict]:

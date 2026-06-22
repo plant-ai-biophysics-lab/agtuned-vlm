@@ -11,7 +11,13 @@ import numpy as np
 from nltk.corpus import wordnet
 from rouge_score import rouge_scorer as rs_scorer
 from sklearn.metrics import accuracy_score, f1_score
-from vllm import LLM, SamplingParams
+try:
+    from vllm import LLM, SamplingParams
+    _JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=1024)
+except ImportError:
+    LLM = None  # type: ignore[assignment,misc]
+    SamplingParams = None  # type: ignore[assignment,misc]
+    _JUDGE_PARAMS = None
 
 for _corpus in ("wordnet", "omw-1.4"):
     try:
@@ -21,7 +27,6 @@ for _corpus in ("wordnet", "omw-1.4"):
 
 THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _THINK_RE_JUDGE = THINK_RE  # alias kept for internal use
-_JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=1024)
 
 
 @lru_cache(maxsize=16384)

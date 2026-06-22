@@ -28,54 +28,6 @@ datasets:
     location: [africa, uganda]
     skip: false
 
-  - agml_name: plant_village_classification
-    crop: multiple  # apple, blueberry, cherry, corn, grape, orange, peach, pepper, potato, raspberry, soybean, squash, strawberry, tomato
-    task_type: disease
-    n_images: 55448
-    classes:
-      - Apple___Apple_scab
-      - Apple___Black_rot
-      - Apple___Cedar_apple_rust
-      - Apple___healthy
-      - Background_without_leaves
-      - Blueberry___healthy
-      - Cherry___Powdery_mildew
-      - Cherry___healthy
-      - Corn___Cercospora_leaf_spot Gray_leaf_spot
-      - Corn___Common_rust
-      - Corn___Northern_Leaf_Blight
-      - Corn___healthy
-      - Grape___Black_rot
-      - Grape___Esca_(Black_Measles)
-      - Grape___Leaf_blight_(Isariopsis_Leaf_Spot)
-      - Grape___healthy
-      - Orange___Haunglongbing_(Citrus_greening)
-      - Peach___Bacterial_spot
-      - Peach___healthy
-      - Pepper,_bell___Bacterial_spot
-      - Pepper,_bell___healthy
-      - Potato___Early_blight
-      - Potato___Late_blight
-      - Potato___healthy
-      - Raspberry___healthy
-      - Soybean___healthy
-      - Squash___Powdery_mildew
-      - Strawberry___Leaf_scorch
-      - Strawberry___healthy
-      - Tomato___Bacterial_spot
-      - Tomato___Early_blight
-      - Tomato___Late_blight
-      - Tomato___Leaf_Mold
-      - Tomato___Septoria_leaf_spot
-      - Tomato___Spider_mites Two-spotted_spider_mite
-      - Tomato___Target_Spot
-      - Tomato___Tomato_Yellow_Leaf_Curl_Virus
-      - Tomato___Tomato_mosaic_virus
-      - Tomato___healthy
-    location: [north_america, usa]
-    skip: false
-    notes: "Multi-crop; class label encodes both crop and condition separated by ___"
-
   - agml_name: guava_disease_pakistan
     crop: guava
     task_type: disease
@@ -87,43 +39,6 @@ datasets:
       - Rust
     location: [asia, pakistan]
     skip: false
-
-  - agml_name: plant_doc_classification
-    crop: multiple  # corn, tomato, potato, blueberry, grape, pepper, cherry, peach, soybean, strawberry, apple, squash, raspberry
-    task_type: disease
-    n_images: 2598
-    classes:
-      - Corn leaf blight
-      - Tomato Early blight leaf
-      - Potato leaf early blight
-      - Potato leaf late blight
-      - Blueberry leaf
-      - grape leaf black rot
-      - Bell_pepper leaf spot
-      - Cherry leaf
-      - Peach leaf
-      - Soyabean leaf
-      - Strawberry leaf
-      - Apple Scab Leaf
-      - Corn rust leaf
-      - Apple leaf
-      - Corn Gray leaf spot
-      - Tomato leaf mosaic virus
-      - Tomato mold leaf
-      - Tomato leaf yellow virus
-      - Tomato leaf bacterial spot
-      - Tomato leaf late blight
-      - Squash Powdery mildew leaf
-      - Bell_pepper leaf
-      - grape leaf
-      - Apple rust leaf
-      - Tomato Septoria leaf spot
-      - Tomato leaf
-      - Raspberry leaf
-      - Tomato two spotted spider mites leaf
-    location: [worldwide, worldwide]
-    skip: false
-    notes: "Some classes are healthy leaves (e.g. 'Blueberry leaf'); consider filtering at generation time"
 
   - agml_name: corn_maize_leaf_disease
     crop: corn

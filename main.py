@@ -9,6 +9,8 @@ STAGES = {
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
     "vision-plot":   "src.vision_assessment.plot",
+    "aug-vision":    "src.desc_augmented_vision",
+    "aug-vision-plot": "src.desc_augmented_vision_plot",
     "collate":       "src.collate_results",
 }
 
@@ -24,7 +26,9 @@ Stages:
     language-plot           — regenerate language assessment charts from saved metrics JSON
     vision          Stage 3 — vision assessment: multimodal VQA with image input (ROUGE-SS + F1)
     vision-plot             — regenerate vision assessment charts from saved metrics JSON
-    collate         Stage 4 — collate all stage metrics into results_table.csv / .tex
+    aug-vision      Stage 4 — description-augmented vision: test if language descriptions improve vision cls
+    aug-vision-plot         — regenerate aug-vision charts from saved CSVs
+    collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
     python main.py probe \\
