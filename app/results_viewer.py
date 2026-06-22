@@ -72,53 +72,47 @@ def load_assessment_data(lang_dir: str, vis_dir: str) -> tuple[pd.DataFrame, pd.
     lang_cls_files  = sorted(ld.glob("cls_*.csv"))
     lang_desc_files = sorted(ld.glob("desc_*.csv"))
 
-    def _lang_cls_by_key(path: Path) -> dict[str, dict]:
-        model = _model_name(path.stem, "cls_")
-        rows = _read_csv(path)
-        out: dict[str, dict] = {}
-        for r in rows:
-            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
-            out[key] = {**r, "model": model}
-        return out
-
-    def _lang_desc_by_key(path: Path) -> dict[str, dict]:
-        model = _model_name(path.stem, "desc_")
-        rows = _read_csv(path)
-        out: dict[str, dict] = {}
-        for r in rows:
-            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
-            out[key] = {**r, "model": model}
-        return out
-
-    # pair cls + desc files by model name
     cls_map  = {_model_name(p.stem, "cls_"):  p for p in lang_cls_files}
     desc_map = {_model_name(p.stem, "desc_"): p for p in lang_desc_files}
     all_lang_models = sorted(set(cls_map) | set(desc_map))
 
     for model in all_lang_models:
-        cls_by_key  = _lang_cls_by_key(cls_map[model])  if model in cls_map  else {}
-        desc_by_key = _lang_desc_by_key(desc_map[model]) if model in desc_map else {}
+        cls_rows_raw  = _read_csv(cls_map[model])  if model in cls_map  else []
+        desc_rows_raw = _read_csv(desc_map[model]) if model in desc_map else []
+
+        cls_by_key: dict[tuple, dict] = {}
+        for r in cls_rows_raw:
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
+            cls_by_key[key] = r
+
+        desc_by_key: dict[tuple, dict] = {}
+        for r in desc_rows_raw:
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
+            desc_by_key[key] = r
+
         all_keys = sorted(set(cls_by_key) | set(desc_by_key))
         for key in all_keys:
             c = cls_by_key.get(key, {})
             d = desc_by_key.get(key, {})
+            is_judged = "judged_correct" in c
             lang_rows.append({
-                "model":               model,
-                "agml_dataset":        key[0],
-                "class_label":         key[1],
-                "task_type":           c.get("task_type") or d.get("task_type", ""),
+                "model":                    model,
+                "agml_dataset":             key[0],
+                "class_label":              key[1],
+                "task_type":                c.get("task_type") or d.get("task_type", ""),
                 # classification
-                "lang_cls_response":   c.get("prediction", ""),
-                "lang_cls_resolved":   c.get("resolved_class", ""),
-                "lang_cls_correct":    _to_bool(c.get("judged_correct") or c.get("correct")),
-                "lang_cls_judged":     "judged_correct" in c,
-                "lang_cls_resolvable": _to_bool(c.get("resolvable")),
-                "lang_cls_contains":   _to_bool(c.get("contains_match")),
+                "lang_cls_response":        c.get("prediction", ""),
+                "lang_cls_resolved":        c.get("resolved_class", ""),
+                "lang_cls_resolvable":      _to_bool(c.get("resolvable")),
+                "lang_cls_contains":        _to_bool(c.get("contains_match")),
+                "lang_cls_resolved_correct": _to_bool(c.get("correct")),
+                "lang_cls_judged_correct":   _to_bool(c.get("judged_correct")) if is_judged else None,
+                "lang_cls_judged":          is_judged,
                 # description
-                "lang_desc_response":  d.get("prediction", ""),
-                "lang_desc_gt":        d.get("ground_truth", ""),
-                "lang_rouge_ss":       _to_float(d.get("rouge_ss")),
-                "lang_rouge1":         _to_float(d.get("rouge1")),
+                "lang_desc_response":       d.get("prediction", ""),
+                "lang_desc_gt":             d.get("ground_truth", ""),
+                "lang_rouge_ss":            _to_float(d.get("rouge_ss")),
+                "lang_rouge1":              _to_float(d.get("rouge1")),
             })
 
     lang_df = pd.DataFrame(lang_rows) if lang_rows else pd.DataFrame()
@@ -135,7 +129,6 @@ def load_assessment_data(lang_dir: str, vis_dir: str) -> tuple[pd.DataFrame, pd.
         cls_rows_raw  = _read_csv(cls_vmap[model])  if model in cls_vmap  else []
         desc_rows_raw = _read_csv(desc_vmap[model]) if model in desc_vmap else []
 
-        # desc: index by (dataset, class, image_name) for fast lookup
         desc_by_img: dict[tuple, dict] = {}
         for r in desc_rows_raw:
             k = (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
@@ -145,25 +138,27 @@ def load_assessment_data(lang_dir: str, vis_dir: str) -> tuple[pd.DataFrame, pd.
             img = r.get("image_name", "")
             dk = (r.get("agml_dataset", ""), r.get("class_label", ""), img)
             d = desc_by_img.get(dk, {})
+            is_judged = "judged_correct" in r
             vis_rows.append({
-                "model":              model,
-                "agml_dataset":       r.get("agml_dataset", ""),
-                "class_label":        r.get("class_label", ""),
-                "task_type":          r.get("task_type", ""),
-                "crop":               r.get("crop", ""),
-                "image_name":         img,
+                "model":                    model,
+                "agml_dataset":             r.get("agml_dataset", ""),
+                "class_label":              r.get("class_label", ""),
+                "task_type":                r.get("task_type", ""),
+                "crop":                     r.get("crop", ""),
+                "image_name":               img,
                 # classification
-                "vis_cls_response":   r.get("prediction", ""),
-                "vis_cls_resolved":   r.get("resolved_class", ""),
-                "vis_cls_correct":    _to_bool(r.get("judged_correct") or r.get("correct")),
-                "vis_cls_judged":     "judged_correct" in r,
-                "vis_cls_resolvable": _to_bool(r.get("resolvable")),
-                "vis_cls_contains":   _to_bool(r.get("contains_match")),
+                "vis_cls_response":         r.get("prediction", ""),
+                "vis_cls_resolved":         r.get("resolved_class", ""),
+                "vis_cls_resolvable":       _to_bool(r.get("resolvable")),
+                "vis_cls_contains":         _to_bool(r.get("contains_match")),
+                "vis_cls_resolved_correct": _to_bool(r.get("correct")),
+                "vis_cls_judged_correct":   _to_bool(r.get("judged_correct")) if is_judged else None,
+                "vis_cls_judged":           is_judged,
                 # description
-                "vis_desc_response":  d.get("prediction", ""),
-                "vis_desc_gt":        d.get("ground_truth", ""),
-                "vis_rouge_ss":       _to_float(d.get("rouge_ss")),
-                "vis_rouge1":         _to_float(d.get("rouge1")),
+                "vis_desc_response":        d.get("prediction", ""),
+                "vis_desc_gt":              d.get("ground_truth", ""),
+                "vis_rouge_ss":             _to_float(d.get("rouge_ss")),
+                "vis_rouge1":               _to_float(d.get("rouge1")),
             })
 
     vis_df = pd.DataFrame(vis_rows) if vis_rows else pd.DataFrame()
@@ -172,7 +167,6 @@ def load_assessment_data(lang_dir: str, vis_dir: str) -> tuple[pd.DataFrame, pd.
 
 @st.cache_data
 def load_metrics_json(lang_dir: str, vis_dir: str) -> tuple[dict, dict]:
-    """Load *_assessment_metrics.json for aggregate F1 values."""
     def _load(path: Path) -> dict:
         return json.loads(path.read_text()) if path.exists() else {}
     return (
@@ -218,16 +212,61 @@ def _score_color(v: float | None) -> str:
     return "#e74c3c"
 
 
-def _pill(label: str, value, fmt: str = ".3f") -> str:
+def _pill(label: str, value, fmt: str = ".3f", color: str | None = None) -> str:
     if value is None:
         return ""
-    color = _score_color(float(value))
+    c = color or _score_color(float(value))
     v_str = format(float(value), fmt) if isinstance(value, (int, float)) else str(value)
     return (
-        f'<span style="background:{color};color:white;padding:2px 8px;'
+        f'<span style="background:{c};color:white;padding:2px 8px;'
         f'border-radius:10px;font-size:0.78em;margin-right:4px">'
         f'{label}: {v_str}</span>'
     )
+
+
+def _ds_judge_acc(df: pd.DataFrame, ds: str, model: str,
+                  judged_col: str, ds_col: str = "agml_dataset") -> float | None:
+    """Compute judge accuracy for a (dataset, model) pair from CSV rows."""
+    if df.empty or judged_col not in df.columns:
+        return None
+    sub = df[(df[ds_col] == ds) & (df["model"] == model)]
+    vals = sub[judged_col].dropna()
+    if vals.empty:
+        return None
+    return round(vals.astype(float).mean(), 3)
+
+
+def _correct_badge(resolved: bool | None, judged: bool | None) -> str:
+    """Render separate resolved and judged correct badges."""
+    parts = []
+    # resolved
+    if resolved is not None:
+        color = "#2ecc71" if resolved else "#e74c3c"
+        icon = "✓" if resolved else "✗"
+        parts.append(
+            f'<span style="color:{color};font-weight:bold">{icon}</span>'
+            f'<span style="color:#aaa;font-size:0.8em"> resolved</span>'
+        )
+    # judged
+    if judged is not None:
+        color = "#3498db" if judged else "#e67e22"
+        icon = "✓" if judged else "✗"
+        parts.append(
+            f'<span style="color:{color};font-weight:bold">{icon}</span>'
+            f'<span style="color:#aaa;font-size:0.8em"> judged</span>'
+        )
+    return " &nbsp; ".join(parts) if parts else "<span style='color:#888'>—</span>"
+
+
+def _desc_pill(label: str, rouge_ss: float | None, baseline: float | None) -> str:
+    """Pill colored green/red based on whether rouge_ss beats the baseline."""
+    if rouge_ss is None:
+        return ""
+    if baseline is not None:
+        color = "#2ecc71" if rouge_ss > baseline else "#e74c3c"
+    else:
+        color = _score_color(rouge_ss)
+    return _pill(label, rouge_ss, color=color)
 
 
 # ── Summary tab ───────────────────────────────────────────────────────────────
@@ -241,7 +280,6 @@ def render_summary(results_csv: str) -> None:
         )
         return
 
-    # Rename headers for display
     rename = {
         "type": "Type", "model": "Model", "params": "Params",
         "lp_f1": "LP F1",
@@ -267,8 +305,9 @@ def render_summary(results_csv: str) -> None:
 
 # ── Class Explorer tab ────────────────────────────────────────────────────────
 
-def _per_class_f1(df: pd.DataFrame, correct_col: str) -> float | None:
-    """Compute accuracy (correct / total) for a class subset."""
+def _per_class_acc(df: pd.DataFrame, correct_col: str) -> float | None:
+    if correct_col not in df.columns:
+        return None
     vals = df[correct_col].dropna()
     if vals.empty:
         return None
@@ -298,7 +337,6 @@ def render_class_explorer(
     )
     sel_model = st.sidebar.selectbox("Model", ["(all)"] + all_models)
 
-    # Filter
     def _filter(df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             return df
@@ -311,8 +349,19 @@ def render_class_explorer(
     lf = _filter(lang_df)
     vf = _filter(vis_df)
 
+    # ── Naive description baselines from metrics JSON ─────────────────────────
+    lang_naive_rss: dict[str, float] = {}
+    vis_naive_rss:  dict[str, float] = {}
+    for ds, m in lang_metrics.get("naive", {}).get("description_per_dataset", {}).items():
+        v = _to_float(m.get("rouge_ss") if isinstance(m, dict) else None)
+        if v is not None:
+            lang_naive_rss[ds] = v
+    for ds, m in vis_metrics.get("naive", {}).get("description_per_dataset", {}).items():
+        v = _to_float(m.get("rouge_ss") if isinstance(m, dict) else None)
+        if v is not None:
+            vis_naive_rss[ds] = v
+
     # ── Build per-class summary table ─────────────────────────────────────────
-    # Collect (dataset, class, model) keys
     lang_keys = set(zip(lf["agml_dataset"], lf["class_label"], lf["model"])) if not lf.empty else set()
     vis_keys  = set(zip(vf["agml_dataset"], vf["class_label"], vf["model"])) if not vf.empty else set()
     all_keys  = sorted(lang_keys | vis_keys)
@@ -326,43 +375,43 @@ def render_class_explorer(
         l_sub = lf[(lf["agml_dataset"] == ds) & (lf["class_label"] == cls) & (lf["model"] == model)] if not lf.empty else pd.DataFrame()
         v_sub = vf[(vf["agml_dataset"] == ds) & (vf["class_label"] == cls) & (vf["model"] == model)] if not vf.empty else pd.DataFrame()
 
-        # Lang: typically one row per class
         l_row = l_sub.iloc[0] if not l_sub.empty else {}
 
-        # Description (ground truth is the same across models — take from lang or vis)
         desc_gt = (l_row.get("lang_desc_gt") if isinstance(l_row, dict) else l_row.get("lang_desc_gt", "")) or ""
         if not desc_gt and not v_sub.empty:
             desc_gt = v_sub.iloc[0].get("vis_desc_gt", "") or ""
 
-        # Dataset-level F1 from metrics JSON (not per-class)
-        lang_ds_f1    = lang_metrics.get("models", {}).get(model, {}).get("classification_per_dataset", {}).get(ds, {}).get("f1_macro")
-        lang_ds_jf1   = lang_metrics.get("models", {}).get(model, {}).get("judge", {}).get("judge_f1_macro")
-        vis_ds_f1     = vis_metrics.get("models", {}).get(model, {}).get("classification_per_dataset", {}).get(ds, {}).get("f1_macro")
-        vis_ds_jf1    = vis_metrics.get("models", {}).get(model, {}).get("judge", {}).get("judge_f1_macro")
+        # Dataset-level F1 from metrics JSON
+        lang_ds_f1 = lang_metrics.get("models", {}).get(model, {}).get("classification_per_dataset", {}).get(ds, {}).get("f1_macro")
+        vis_ds_f1  = vis_metrics.get("models", {}).get(model, {}).get("classification_per_dataset", {}).get(ds, {}).get("f1_macro")
 
-        # Per-class accuracy (correct rate for this specific class)
-        lang_cls_acc = _per_class_f1(l_sub, "lang_cls_correct") if not l_sub.empty else None
-        vis_cls_acc  = _per_class_f1(v_sub, "vis_cls_correct")  if not v_sub.empty else None
+        # Dataset-level judged F1 computed from CSV rows (more reliable than JSON)
+        lang_ds_jf1 = _ds_judge_acc(lang_df, ds, model, "lang_cls_judged_correct")
+        vis_ds_jf1  = _ds_judge_acc(vis_df,  ds, model, "vis_cls_judged_correct")
 
-        # ROUGE-SS: lang is single value; vis is mean over images
-        lang_rss = l_row.get("lang_rouge_ss") if not isinstance(l_row, dict) else l_row.get("lang_rouge_ss") if l_row else None
+        # Per-class accuracy
+        lang_cls_acc  = _per_class_acc(l_sub, "lang_cls_resolved_correct") if not l_sub.empty else None
+        lang_cls_jacc = _per_class_acc(l_sub, "lang_cls_judged_correct")   if not l_sub.empty else None
+        vis_cls_acc   = _per_class_acc(v_sub, "vis_cls_resolved_correct")  if not v_sub.empty else None
+        vis_cls_jacc  = _per_class_acc(v_sub, "vis_cls_judged_correct")    if not v_sub.empty else None
+
+        # ROUGE-SS
+        lang_rss = l_row.get("lang_rouge_ss") if not isinstance(l_row, dict) else (l_row.get("lang_rouge_ss") if l_row else None)
         vis_rss  = round(v_sub["vis_rouge_ss"].dropna().astype(float).mean(), 3) if not v_sub.empty and "vis_rouge_ss" in v_sub else None
 
         summary_rows.append({
-            "dataset": ds,
-            "class": cls,
-            "model": model,
+            "dataset": ds, "class": cls, "model": model,
             "_desc_gt": desc_gt,
-            "_l_sub_len": len(l_sub),
-            "_v_sub_len": len(v_sub),
             "lang_ds_f1":   round(lang_ds_f1, 3)  if lang_ds_f1  is not None else None,
-            "lang_ds_jf1":  round(lang_ds_jf1, 3) if lang_ds_jf1 is not None else None,
+            "lang_ds_jf1":  lang_ds_jf1,
             "vis_ds_f1":    round(vis_ds_f1, 3)   if vis_ds_f1   is not None else None,
-            "vis_ds_jf1":   round(vis_ds_jf1, 3)  if vis_ds_jf1  is not None else None,
-            "lang_cls_acc": lang_cls_acc,
-            "vis_cls_acc":  vis_cls_acc,
-            "lang_rss":     round(lang_rss, 3) if lang_rss is not None else None,
-            "vis_rss":      vis_rss,
+            "vis_ds_jf1":   vis_ds_jf1,
+            "lang_cls_acc":  lang_cls_acc,
+            "lang_cls_jacc": lang_cls_jacc,
+            "vis_cls_acc":   vis_cls_acc,
+            "vis_cls_jacc":  vis_cls_jacc,
+            "lang_rss": round(lang_rss, 3) if lang_rss is not None else None,
+            "vis_rss":  vis_rss,
         })
 
     summary_df = pd.DataFrame(summary_rows)
@@ -372,17 +421,19 @@ def render_class_explorer(
     st.caption(f"{len(summary_df)} class × model combinations")
 
     display_cols = {
-        "dataset":      "Dataset",
-        "class":        "Class",
-        "model":        "Model",
-        "lang_ds_f1":   "Lang F1 (dataset)",
-        "lang_ds_jf1":  "Lang F1 judged",
-        "vis_ds_f1":    "Vision F1 (dataset)",
-        "vis_ds_jf1":   "Vision F1 judged",
-        "lang_cls_acc": "Lang class acc.",
-        "vis_cls_acc":  "Vision class acc.",
-        "lang_rss":     "Lang ROUGE-SS",
-        "vis_rss":      "Vision ROUGE-SS",
+        "dataset":       "Dataset",
+        "class":         "Class",
+        "model":         "Model",
+        "lang_ds_f1":    "Lang F1",
+        "lang_ds_jf1":   "Lang F1 (judged)",
+        "vis_ds_f1":     "Vision F1",
+        "vis_ds_jf1":    "Vision F1 (judged)",
+        "lang_cls_acc":  "Lang cls acc.",
+        "lang_cls_jacc": "Lang cls acc. (judged)",
+        "vis_cls_acc":   "Vision cls acc.",
+        "vis_cls_jacc":  "Vision cls acc. (judged)",
+        "lang_rss":      "Lang ROUGE-SS",
+        "vis_rss":       "Vision ROUGE-SS",
     }
     disp = summary_df[[c for c in display_cols if c in summary_df.columns]].rename(columns=display_cols)
 
@@ -413,9 +464,8 @@ def render_class_explorer(
         st.info("No data for this combination.")
         return
     row_info = row_info.iloc[0]
-
-    # Header
     ds_label = row_info["dataset"]
+
     st.markdown(
         f"**{sel_cls}** &nbsp; "
         f"<span style='color:#aaa;font-size:0.85em'>{ds_label} · {sel_cls_model}</span>",
@@ -424,19 +474,20 @@ def render_class_explorer(
 
     # Metric pills
     pills = (
-        _pill("Lang F1",       row_info.get("lang_ds_f1"))
-        + _pill("Lang F1 judged",  row_info.get("lang_ds_jf1"))
-        + _pill("Lang cls acc.",   row_info.get("lang_cls_acc"))
-        + _pill("Lang ROUGE-SS",   row_info.get("lang_rss"))
+        _pill("Lang F1",              row_info.get("lang_ds_f1"))
+        + _pill("Lang F1 judged",     row_info.get("lang_ds_jf1"), color="#3498db")
+        + _pill("Lang cls acc.",      row_info.get("lang_cls_acc"))
+        + _pill("Lang cls judged",    row_info.get("lang_cls_jacc"), color="#3498db")
+        + _pill("Lang ROUGE-SS",      row_info.get("lang_rss"))
         + " &nbsp;&nbsp; "
-        + _pill("Vis F1",      row_info.get("vis_ds_f1"))
-        + _pill("Vis F1 judged",   row_info.get("vis_ds_jf1"))
-        + _pill("Vis cls acc.",    row_info.get("vis_cls_acc"))
-        + _pill("Vis ROUGE-SS",    row_info.get("vis_rss"))
+        + _pill("Vis F1",             row_info.get("vis_ds_f1"))
+        + _pill("Vis F1 judged",      row_info.get("vis_ds_jf1"), color="#3498db")
+        + _pill("Vis cls acc.",       row_info.get("vis_cls_acc"))
+        + _pill("Vis cls judged",     row_info.get("vis_cls_jacc"), color="#3498db")
+        + _pill("Vis ROUGE-SS",       row_info.get("vis_rss"))
     )
     st.markdown(pills, unsafe_allow_html=True)
 
-    # Description ground truth
     desc_gt = row_info.get("_desc_gt", "")
     if desc_gt:
         with st.expander("Reference description (ground truth)", expanded=False):
@@ -452,6 +503,8 @@ def render_class_explorer(
         st.info("No language assessment data.")
     else:
         l_row = l_sub.iloc[0]
+        lang_baseline_rss = lang_naive_rss.get(ds_label)
+
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Classification**")
@@ -460,14 +513,10 @@ def render_class_explorer(
                 f"min-height:50px'>{l_row.get('lang_cls_response') or '—'}</div>",
                 unsafe_allow_html=True,
             )
-            correct = _to_bool(l_row.get("lang_cls_correct"))
-            judged  = l_row.get("lang_cls_judged", False)
+            resolved_ok = _to_bool(l_row.get("lang_cls_resolved_correct"))
+            judged_ok   = _to_bool(l_row.get("lang_cls_judged_correct"))
             st.markdown(
-                f"<small style='color:#aaa'>Correct: <b style='color:{_score_color(1 if correct else 0)}'>"
-                f"{_fmt_bool(correct)}</b>"
-                + (" (judged)" if judged else " (resolved)")
-                + f" &nbsp; resolved: {_fmt_bool(_to_bool(l_row.get('lang_cls_resolvable')))}"
-                + "</small>",
+                "<small>" + _correct_badge(resolved_ok, judged_ok) + "</small>",
                 unsafe_allow_html=True,
             )
         with c2:
@@ -479,10 +528,11 @@ def render_class_explorer(
             )
             rss = _to_float(l_row.get("lang_rouge_ss"))
             r1  = _to_float(l_row.get("lang_rouge1"))
+            baseline_note = f" vs baseline {lang_baseline_rss:.3f}" if lang_baseline_rss is not None else ""
             st.markdown(
                 f"<small style='color:#aaa'>"
-                + (_pill("ROUGE-SS", rss) if rss is not None else "")
-                + (_pill("ROUGE-1",  r1)  if r1  is not None else "")
+                + _desc_pill("ROUGE-SS" + baseline_note, rss, lang_baseline_rss)
+                + (_pill("ROUGE-1", r1) if r1 is not None else "")
                 + "</small>",
                 unsafe_allow_html=True,
             )
@@ -496,20 +546,29 @@ def render_class_explorer(
     if v_sub.empty:
         st.info("No vision assessment data.")
     else:
-        n_correct = int(v_sub["vis_cls_correct"].dropna().astype(float).sum()) if "vis_cls_correct" in v_sub else 0
-        n_total   = len(v_sub)
-        st.caption(f"{n_total} images evaluated · {n_correct}/{n_total} correct")
+        vis_baseline_rss = vis_naive_rss.get(ds_label)
+
+        n_resolved = int(v_sub["vis_cls_resolved_correct"].dropna().astype(float).sum()) if "vis_cls_resolved_correct" in v_sub else 0
+        n_judged   = int(v_sub["vis_cls_judged_correct"].dropna().astype(float).sum())   if "vis_cls_judged_correct" in v_sub else 0
+        n_has_judge = int(v_sub["vis_cls_judged_correct"].notna().sum())                  if "vis_cls_judged_correct" in v_sub else 0
+        n_total = len(v_sub)
+
+        caption = f"{n_total} images · {n_resolved}/{n_total} correct (resolved)"
+        if n_has_judge:
+            caption += f" · {n_judged}/{n_has_judge} correct (judged)"
+        st.caption(caption)
 
         for _, vrow in v_sub.iterrows():
-            img_name = vrow.get("image_name", "—")
-            correct  = _to_bool(vrow.get("vis_cls_correct"))
-            icon = "✓" if correct else ("✗" if correct is not None else "?")
-            color = "#2ecc71" if correct else ("#e74c3c" if correct is not None else "#888")
+            img_name    = vrow.get("image_name", "—")
+            resolved_ok = _to_bool(vrow.get("vis_cls_resolved_correct"))
+            judged_ok   = _to_bool(vrow.get("vis_cls_judged_correct"))
 
-            with st.expander(
-                f"{icon}  {img_name}",
-                expanded=False,
-            ):
+            # Expander icon: prefer judged if available, else resolved
+            primary_ok = judged_ok if judged_ok is not None else resolved_ok
+            icon  = "✓" if primary_ok else ("✗" if primary_ok is not None else "?")
+            color = "#2ecc71" if primary_ok else ("#e74c3c" if primary_ok is not None else "#888")
+
+            with st.expander(f"{icon}  {img_name}", expanded=False):
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("**Classification**")
@@ -518,12 +577,8 @@ def render_class_explorer(
                         f"min-height:40px'>{vrow.get('vis_cls_response') or '—'}</div>",
                         unsafe_allow_html=True,
                     )
-                    judged = vrow.get("vis_cls_judged", False)
                     st.markdown(
-                        f"<small style='color:#aaa'>Correct: <b style='color:{color}'>{icon}</b>"
-                        + (" (judged)" if judged else " (resolved)")
-                        + f" &nbsp; resolved: {_fmt_bool(_to_bool(vrow.get('vis_cls_resolvable')))}"
-                        + "</small>",
+                        "<small>" + _correct_badge(resolved_ok, judged_ok) + "</small>",
                         unsafe_allow_html=True,
                     )
                 with c2:
@@ -536,10 +591,11 @@ def render_class_explorer(
                     )
                     rss = _to_float(vrow.get("vis_rouge_ss"))
                     r1  = _to_float(vrow.get("vis_rouge1"))
+                    baseline_note = f" vs {vis_baseline_rss:.3f}" if vis_baseline_rss is not None else ""
                     st.markdown(
                         "<small style='color:#aaa'>"
-                        + (_pill("ROUGE-SS", rss) if rss is not None else "")
-                        + (_pill("ROUGE-1",  r1)  if r1  is not None else "")
+                        + _desc_pill("ROUGE-SS" + baseline_note, rss, vis_baseline_rss)
+                        + (_pill("ROUGE-1", r1) if r1 is not None else "")
                         + "</small>",
                         unsafe_allow_html=True,
                     )
@@ -555,7 +611,7 @@ def main() -> None:
     )
     st.title("🌾 AgML Results Viewer")
 
-    lang_df, vis_df   = load_assessment_data(str(_LANG_DIR), str(_VIS_DIR))
+    lang_df, vis_df        = load_assessment_data(str(_LANG_DIR), str(_VIS_DIR))
     lang_metrics, vis_metrics = load_metrics_json(str(_LANG_DIR), str(_VIS_DIR))
 
     tab_summary, tab_explorer = st.tabs(["📊 Summary", "🔍 Class Explorer"])
