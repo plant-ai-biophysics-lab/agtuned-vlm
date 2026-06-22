@@ -502,25 +502,9 @@ def plot_task_comparison(
         return
 
     models = sorted(baseline_per_ds.keys())
-    combined: dict[str, dict[str, dict]] = {}
-    colors: dict[str, str] = {}
     base_palette = ["#3498db", "#2ecc71", "#9b59b6", "#f39c12"]
     aug_palette  = ["#1a5276", "#1e8449", "#6c3483", "#9a6b00"]
-    for i, model in enumerate(models):
-        bkey = f"{model.split('/')[-1]} (baseline)"
-        akey = f"{model.split('/')[-1]} (augmented)"
-        combined[bkey] = {
-            tt: compute_classification_metrics(
-                [r for ds, rows in baseline_per_ds.get(model, {}).items()
-                 if ds_to_task.get(ds) == tt for r in ["_dummy_"]],
-                []
-            )
-            for tt in task_types
-        }
-        colors[bkey] = base_palette[i % len(base_palette)]
-        colors[akey] = aug_palette[i % len(aug_palette)]
 
-    # Aggregate per task from per-dataset results
     def _by_task(per_ds: dict[str, dict]) -> dict[str, dict]:
         task_rows: dict[str, list] = defaultdict(list)
         for ds, m in per_ds.items():
