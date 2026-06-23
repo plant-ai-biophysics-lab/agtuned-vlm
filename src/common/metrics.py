@@ -11,6 +11,24 @@ import numpy as np
 from nltk.corpus import wordnet
 from rouge_score import rouge_scorer as rs_scorer
 from sklearn.metrics import accuracy_score, f1_score
+
+_sem_sim_model = None
+
+def _get_sem_sim_model():
+    global _sem_sim_model
+    if _sem_sim_model is None:
+        from sentence_transformers import SentenceTransformer
+        _sem_sim_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return _sem_sim_model
+
+
+def sem_sim_score(prediction: str, reference: str) -> float:
+    """Cosine similarity between sentence embeddings of prediction and reference."""
+    if not prediction or not reference:
+        return 0.0
+    model = _get_sem_sim_model()
+    embs = model.encode([prediction, reference], convert_to_numpy=True, normalize_embeddings=True)
+    return round(float(np.dot(embs[0], embs[1])), 4)
 try:
     from vllm import LLM, SamplingParams
     _JUDGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=1024)
@@ -58,7 +76,7 @@ def rouge_ss_score(prediction: str, reference: str) -> float:
 
 
 def rouge_scores_per_sample(prediction: str, reference: str) -> dict[str, float]:
-    """Returns {rouge1, rouge2, rougeL, rouge_ss} for a single prediction/reference pair."""
+    """Returns {rouge1, rouge2, rougeL, rouge_ss, sem_sim} for a single prediction/reference pair."""
     scorer = rs_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     s = scorer.score(reference, prediction)
     return {
@@ -66,12 +84,13 @@ def rouge_scores_per_sample(prediction: str, reference: str) -> dict[str, float]
         "rouge2": round(s["rouge2"].fmeasure, 4),
         "rougeL": round(s["rougeL"].fmeasure, 4),
         "rouge_ss": rouge_ss_score(prediction, reference),
+        "sem_sim": sem_sim_score(prediction, reference),
     }
 
 
 def aggregate_rouge(rows: list[dict]) -> dict[str, float]:
-    """Mean of rouge1/rouge2/rougeL/rouge_ss over rows that have those keys."""
-    keys = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    """Mean of rouge1/rouge2/rougeL/rouge_ss/sem_sim over rows that have those keys."""
+    keys = ["rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"]
     result = {}
     for k in keys:
         vals = []
