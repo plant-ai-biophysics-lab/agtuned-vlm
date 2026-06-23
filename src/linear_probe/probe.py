@@ -1360,34 +1360,37 @@ def main(args):
     loss_dir = output_dir / "loss_curves";      loss_dir.mkdir(exist_ok=True)
 
     all_experiments = getattr(args, "all_experiments", False)
+    run_per_dataset = getattr(args, "per_dataset", False)
 
-    # Phase 2a: LR per-dataset (always runs — cheap after embeddings extracted)
-    # Per-dataset plots (confusion matrix, t-SNE, per-class F1) gated behind --all_experiments
+    # Phase 2a: LR per-dataset (opt-in via --per_dataset)
     results_per_dataset: dict[str, dict] = {}
     embeddings_store: dict[str, dict[str, tuple]] = defaultdict(dict)
     report_store: dict[str, dict[str, dict]] = defaultdict(dict)
     pred_store: dict[str, dict[str, tuple]] = defaultdict(dict)
 
-    _lr_ds_names = list(all_embeddings["_samples"].keys())
-    n_lr_ds = len(_lr_ds_names)
-    for ds_probe_i, agml_name in enumerate(_lr_ds_names):
-        _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
-        results_per_dataset[agml_name] = {"backbones": {}}
+    if run_per_dataset:
+        _lr_ds_names = list(all_embeddings["_samples"].keys())
+        n_lr_ds = len(_lr_ds_names)
+        for ds_probe_i, agml_name in enumerate(_lr_ds_names):
+            _, _, _, train_idx, test_idx, le = all_embeddings["_samples"][agml_name]
+            results_per_dataset[agml_name] = {"backbones": {}}
 
-        for backbone in available_backbones:
-            if agml_name not in all_embeddings.get(backbone, {}):
-                continue
-            X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
-            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+            for backbone in available_backbones:
+                if agml_name not in all_embeddings.get(backbone, {}):
+                    continue
+                X, labels_all, y_enc, train_idx, test_idx, le = all_embeddings[backbone][agml_name]
+                y_train, y_test = y_enc[train_idx], y_enc[test_idx]
 
-            print(f"\n=== LR probe [{ds_probe_i + 1}/{n_lr_ds}] {agml_name} / {backbone} ===")
-            metrics, y_test_lbl, y_pred_lbl = run_probe(
-                X[train_idx], X[test_idx], y_train, y_test, le, backbone
-            )
-            results_per_dataset[agml_name]["backbones"][backbone] = metrics
-            embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
-            report_store[agml_name][backbone] = metrics["per_class_report_dict"]
-            pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
+                print(f"\n=== LR probe [{ds_probe_i + 1}/{n_lr_ds}] {agml_name} / {backbone} ===")
+                metrics, y_test_lbl, y_pred_lbl = run_probe(
+                    X[train_idx], X[test_idx], y_train, y_test, le, backbone
+                )
+                results_per_dataset[agml_name]["backbones"][backbone] = metrics
+                embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
+                report_store[agml_name][backbone] = metrics["per_class_report_dict"]
+                pred_store[agml_name][backbone] = (y_test_lbl, y_pred_lbl)
+    else:
+        print("\n[skip] LR per-dataset — pass --per_dataset to enable")
 
     # Phase 2b: FC per-dataset  (only with --all_experiments)
     fc_per_dataset: dict[str, dict] = {}
@@ -1785,6 +1788,10 @@ if __name__ == "__main__":
         "--all_experiments", action="store_true",
         help="Run all 4 probe variants (LR per-dataset, LR combined, FC per-dataset, FC combined). "
              "Default runs LR combined only.",
+    )
+    parser.add_argument(
+        "--per_dataset", action="store_true",
+        help="Also run LR probe per-dataset (one probe per dataset). Default: combined only.",
     )
     parser.add_argument(
         "--replot", action="store_true",

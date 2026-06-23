@@ -62,12 +62,12 @@ Add `--force` to regenerate all classes from scratch. Progress is checkpointed s
 
 Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially. Writes `test_split.json` immediately after dataset loading — this file is used by Stages 3 and 4 to evaluate the exact same images.
 
-**Default mode** runs LR per-dataset + LR combined. Add `--all_experiments` to also run FC probes.
+**Default mode** runs LR combined only. Add `--per_dataset` to also run LR per-dataset. Add `--all_experiments` to also run FC probes.
 
 | Experiment | Probe | Scope | When |
 |------------|-------|-------|------|
-| LR per-dataset | Logistic regression | One probe per dataset | Always |
 | LR combined | Logistic regression | All datasets merged | Always |
+| LR per-dataset | Logistic regression | One probe per dataset | `--per_dataset` |
 | FC per-dataset | Single `nn.Linear` + Adam | One probe per dataset | `--all_experiments` |
 | FC combined | Single `nn.Linear` + Adam | All datasets merged | `--all_experiments` |
 | Post-proj LR combined | LR on post-projector embeddings | All datasets merged | VLMs only, always |
@@ -89,6 +89,7 @@ python main.py probe \
 | `--bioclip_model` | `imageomics/bioclip` | BioCLIP backbone. Pass `none` to skip |
 | `--n_samples` | all | Max images **per class for training** (seed 42). Test uses all remaining images. |
 | `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large VLMs |
+| `--per_dataset` | off | Also run LR probe per-dataset (one probe per dataset) |
 | `--all_experiments` | off | Also run FC per-dataset and FC combined probes |
 | `--postproj_only` | off | For VLMs: extract only post-projector embeddings |
 | `--replot` | off | Reload saved results and regenerate all plots without re-running inference |
