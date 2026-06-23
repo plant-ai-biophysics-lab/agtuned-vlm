@@ -577,10 +577,11 @@ def _split_from_labels(
     by_class: dict[str, list[int]] = {}
     for i, lbl in enumerate(labels_all):
         by_class.setdefault(lbl, []).append(i)
+    _n = n_samples if n_samples is not None else 10
     train_idx_list, test_idx_list = [], []
     for indices in by_class.values():
         shuffled = rng.permutation(indices).tolist()
-        n_train = min(n_samples, len(shuffled) - 1) if n_samples else len(shuffled) - 1
+        n_train = min(_n, len(shuffled) - 1)
         n_train = max(n_train, 1)
         train_idx_list.extend(shuffled[:n_train])
         test_idx_list.extend(shuffled[n_train:])
@@ -590,9 +591,13 @@ def _split_from_labels(
 
 
 def build_combined_split(
-    all_embeddings: dict, backbone: str
+    all_embeddings: dict, backbone: str, n_samples: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder, list[str]] | None:
-    """Concatenate embeddings from all datasets for one backbone into a single split."""
+    """Concatenate embeddings from all datasets for one backbone into a single split.
+
+    Uses n_samples per class for training (default 10), rest goes to test —
+    consistent with the per-dataset split logic.
+    """
     X_parts, label_parts = [], []
     for agml_name, (X, labels_all, *_) in all_embeddings.get(backbone, {}).items():
         X_parts.append(X)
@@ -602,20 +607,30 @@ def build_combined_split(
         return None
 
     X_all = np.concatenate(X_parts, axis=0)
-    le = LabelEncoder()
-    y_all = le.fit_transform(label_parts)
 
     # Drop classes with fewer than 2 samples
     counts = Counter(label_parts)
     keep = np.array([counts[label_parts[i]] >= 2 for i in range(len(label_parts))])
-    X_all, y_all = X_all[keep], y_all[keep]
+    X_all = X_all[keep]
     label_parts = [label_parts[i] for i in range(len(label_parts)) if keep[i]]
-    # Re-encode after filtering
+
+    # Per-class split: n_samples → train, rest → test
+    rng = np.random.default_rng(42)
+    by_class: dict[str, list[int]] = {}
+    for i, lbl in enumerate(label_parts):
+        by_class.setdefault(lbl, []).append(i)
+    train_idx_list, test_idx_list = [], []
+    for indices in by_class.values():
+        shuffled = rng.permutation(indices).tolist()
+        n_train = min(n_samples, len(shuffled) - 1)
+        n_train = max(n_train, 1)
+        train_idx_list.extend(shuffled[:n_train])
+        test_idx_list.extend(shuffled[n_train:])
+    train_idx = np.array(sorted(train_idx_list))
+    test_idx  = np.array(sorted(test_idx_list))
+
     le = LabelEncoder()
     y_all = le.fit_transform(label_parts)
-
-    splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    train_idx, test_idx = next(splitter.split(np.zeros(len(y_all)), y_all))
     return X_all[train_idx], X_all[test_idx], y_all[train_idx], y_all[test_idx], le, label_parts
 
 
@@ -1107,8 +1122,10 @@ def main(args):
         if dropped:
             print(f"  [warn] {agml_name} — dropped {dropped} singleton class(es)")
 
-        # Split per class: up to n_samples per class → train, all remaining → test
-        # This ensures n_samples caps training data only; test uses all held-out images.
+        # Split per class: up to n_samples per class → train, all remaining → test.
+        # Default is 10 per class; pass --n_samples to override.
+        # Combined probe always uses 80/20 stratified split regardless of this value.
+        _n_samples_per_class = args.n_samples if args.n_samples is not None else 10
         rng = np.random.default_rng(42)
         by_class: dict[str, list[int]] = {}
         for i, s in enumerate(samples):
@@ -1116,7 +1133,7 @@ def main(args):
         train_idx_list, test_idx_list = [], []
         for indices in by_class.values():
             shuffled = rng.permutation(indices).tolist()
-            n_train = min(args.n_samples, len(shuffled) - 1) if args.n_samples else len(shuffled) - 1
+            n_train = min(_n_samples_per_class, len(shuffled) - 1)
             n_train = max(n_train, 1)
             train_idx_list.extend(shuffled[:n_train])
             test_idx_list.extend(shuffled[n_train:])
@@ -1453,56 +1470,57 @@ def main(args):
                     f"{agml_name}_{backbone}_fc", loss_dir,
                 )
 
-    # Phase 2c: LR combined (always runs — default mode)
-    lr_combined: dict[str, dict] = {}
-    lr_comb_pred_store:   dict[str, tuple] = {}   # backbone → (y_true, y_pred)
-    lr_comb_embed_store:  dict[str, tuple] = {}   # backbone → (X_all, y_all_labels)
-    lr_comb_report_store: dict[str, dict]  = {}
-    for backbone in available_backbones:
-        split = build_combined_split(all_embeddings, backbone)
-        if split is None:
-            continue
-        X_tr, X_te, y_tr, y_te, le_comb, label_parts = split
-        print(f"\n=== LR probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
-        metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, backbone)
-        lr_combined[backbone] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
-        lr_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
-        X_all = np.concatenate([X_tr, X_te], axis=0)
-        y_all_lbl = le_comb.inverse_transform(
-            np.concatenate([y_tr, y_te], axis=0)
-        ).tolist()
-        lr_comb_embed_store[backbone]  = (X_all, y_all_lbl)
-        lr_comb_report_store[backbone] = metrics["per_class_report_dict"]
+    _n_combined = args.n_samples if args.n_samples is not None else 10
 
-        # Save intermediate metrics after each backbone so partial results survive crashes
-        save_json(output_dir / "linear_probe_results_intermediate.json", {
-            "lr_combined": lr_combined,
-            "lr_combined_reports": lr_comb_report_store,
-        })
-
-    # Phase 2d: FC combined  (only with --all_experiments)
+    # Phase 2c: FC combined (default mode — GPU-accelerated, fixed epoch budget)
     fc_combined: dict[str, dict] = {}
     fc_comb_pred_store:   dict[str, tuple] = {}
     fc_comb_report_store: dict[str, dict]  = {}
 
-    if all_experiments:
+    for backbone in available_backbones:
+        split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
+        if split is None:
+            continue
+        X_tr, X_te, y_tr, y_te, le_comb, _ = split
+        print(f"\n=== FC probe (combined): {backbone}  classes={len(le_comb.classes_)}  train/class={_n_combined} ===")
+        metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
+            X_tr, X_te, y_tr, y_te, le_comb, backbone,
+            epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
+        )
+        fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
+        fc_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
+        fc_comb_report_store[backbone] = metrics["per_class_report_dict"]
+        plot_loss_curve(
+            metrics["train_losses"], metrics["val_losses"],
+            f"combined_{backbone}_fc", loss_dir,
+        )
+        save_json(output_dir / "linear_probe_results_intermediate.json", {
+            "fc_combined": fc_combined,
+            "fc_combined_reports": fc_comb_report_store,
+        })
+
+    # Phase 2d: LR combined (opt-in via --lr_combined)
+    lr_combined: dict[str, dict] = {}
+    lr_comb_pred_store:   dict[str, tuple] = {}
+    lr_comb_embed_store:  dict[str, tuple] = {}
+    lr_comb_report_store: dict[str, dict]  = {}
+
+    if getattr(args, "lr_combined", False):
         for backbone in available_backbones:
-            split = build_combined_split(all_embeddings, backbone)
+            split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
             if split is None:
                 continue
-            X_tr, X_te, y_tr, y_te, le_comb, _ = split
-            print(f"\n=== FC probe (combined): {backbone}  classes={len(le_comb.classes_)} ===")
-            metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
-                X_tr, X_te, y_tr, y_te, le_comb, backbone,
-                epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
-            )
-            fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
-            fc_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
-            fc_comb_report_store[backbone] = metrics["per_class_report_dict"]
-            plot_loss_curve(
-                metrics["train_losses"], metrics["val_losses"],
-                f"combined_{backbone}_fc", loss_dir,
-            )
+            X_tr, X_te, y_tr, y_te, le_comb, label_parts = split
+            print(f"\n=== LR probe (combined): {backbone}  classes={len(le_comb.classes_)}  train/class={_n_combined} ===")
+            metrics, y_test_lbl, y_pred_lbl = run_probe(X_tr, X_te, y_tr, y_te, le_comb, backbone)
+            lr_combined[backbone] = {k: v for k, v in metrics.items() if k != "per_class_report_dict"}
+            lr_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
+            X_all = np.concatenate([X_tr, X_te], axis=0)
+            y_all_lbl = le_comb.inverse_transform(np.concatenate([y_tr, y_te], axis=0)).tolist()
+            lr_comb_embed_store[backbone]  = (X_all, y_all_lbl)
+            lr_comb_report_store[backbone] = metrics["per_class_report_dict"]
+    else:
+        print("\n[skip] LR combined — pass --lr_combined to enable")
 
     # Phase 2e: LR combined on post-projector embeddings (VLMs only — always runs)
     postproj_lr_combined: dict[str, dict] = {}          # {backbone_postproj: metrics}
@@ -1793,7 +1811,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n_samples", type=int, default=None,
-        help="Max images per class for training (seeded). Test uses all remaining images. Default: all.",
+        help="Max images per class for training in per-dataset split (default: 10). "
+             "Test uses all remaining images. Ignored by combined probe (always 80/20 stratified).",
     )
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
@@ -1823,7 +1842,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--per_dataset", action="store_true",
-        help="Also run LR probe per-dataset (one probe per dataset). Default: combined only.",
+        help="Also run LR probe per-dataset (one probe per dataset). Default: combined FC only.",
+    )
+    parser.add_argument(
+        "--lr_combined", action="store_true",
+        help="Also run LR probe on combined embeddings (slower, CPU-bound). Default: FC combined only.",
     )
     parser.add_argument(
         "--replot", action="store_true",

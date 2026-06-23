@@ -62,22 +62,23 @@ Add `--force` to regenerate all classes from scratch. Progress is checkpointed s
 
 Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially. Writes `test_split.json` immediately after dataset loading — this file is used by Stages 3 and 4 to evaluate the exact same images.
 
-**Default mode** runs LR combined only. Add `--per_dataset` to also run LR per-dataset. Add `--all_experiments` to also run FC probes.
+**Default mode** runs FC combined only (GPU-accelerated, 10 train images per class). Add flags to enable additional experiments.
 
 | Experiment | Probe | Scope | When |
 |------------|-------|-------|------|
-| LR combined | Logistic regression | All datasets merged | Always |
-| LR per-dataset | Logistic regression | One probe per dataset | `--per_dataset` |
-| FC per-dataset | Single `nn.Linear` + Adam | One probe per dataset | `--all_experiments` |
-| FC combined | Single `nn.Linear` + Adam | All datasets merged | `--all_experiments` |
-| Post-proj LR combined | LR on post-projector embeddings | All datasets merged | VLMs only, always |
+| FC combined | `nn.Linear` + Adam (GPU) | All datasets merged, 10/class train | Always (default) |
+| LR combined | Logistic regression (CPU) | All datasets merged, 10/class train | `--lr_combined` |
+| LR per-dataset | Logistic regression | One probe per dataset, 10/class train | `--per_dataset` |
+| FC per-dataset | `nn.Linear` + Adam (GPU) | One probe per dataset | `--all_experiments` |
+| Post-proj FC/LR combined | Post-projector embeddings | All datasets merged | VLMs only, always |
 
 ```bash
+# Default: FC combined, 10 train images per class
 python main.py probe \
   --config     src/config/datasets.yaml \
   --output_dir outputs/linear_probe/ \
   --models     google/gemma-4-26B-A4B-it \
-  --n_samples  300
+  --cache_embeddings
 ```
 
 | Flag | Default | Description |
@@ -87,10 +88,14 @@ python main.py probe \
 | `--dino_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | DINOv3 backbone. Pass `none` to skip |
 | `--yolo_model` | `yolo11x-cls.pt` | YOLO classification backbone. Pass `none` to skip |
 | `--bioclip_model` | `imageomics/bioclip` | BioCLIP backbone. Pass `none` to skip |
-| `--n_samples` | all | Max images **per class for training** (seed 42). Test uses all remaining images. |
+| `--n_samples` | 10 | Max images **per class for training** in per-dataset split (seed 42); rest goes to test. Ignored by combined probe which always uses 80/20 stratified split. |
 | `--quantize` | none | `4bit` or `8bit` (BitsAndBytes) for large VLMs |
 | `--per_dataset` | off | Also run LR probe per-dataset (one probe per dataset) |
-| `--all_experiments` | off | Also run FC per-dataset and FC combined probes |
+| `--lr_combined` | off | Also run LR probe on combined embeddings (CPU-bound, slower than FC) |
+| `--all_experiments` | off | Also run FC per-dataset probes |
+| `--fc_epochs` | 100 | Training epochs for FC probe |
+| `--fc_lr` | 1e-3 | Adam learning rate for FC probe |
+| `--fc_batch_size` | 256 | Batch size for FC probe |
 | `--postproj_only` | off | For VLMs: extract only post-projector embeddings |
 | `--replot` | off | Reload saved results and regenerate all plots without re-running inference |
 
