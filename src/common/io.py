@@ -46,6 +46,11 @@ def save_json(path: Path, data: dict) -> None:
         json.dump(data, f, indent=2)
 
 
+def read_csv(path: Path) -> list[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
 def write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         return

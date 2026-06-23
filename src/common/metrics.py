@@ -74,7 +74,13 @@ def aggregate_rouge(rows: list[dict]) -> dict[str, float]:
     keys = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
     result = {}
     for k in keys:
-        vals = [r[k] for r in rows if k in r]
+        vals = []
+        for r in rows:
+            if k in r and r[k] not in ("", None):
+                try:
+                    vals.append(float(r[k]))
+                except (TypeError, ValueError):
+                    pass
         if vals:
             result[k] = round(float(np.mean(vals)), 4)
     return result

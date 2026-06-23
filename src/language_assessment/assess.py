@@ -30,6 +30,7 @@ from src.common.io import (
     Tee,
     load_jsonl,
     load_prompts,
+    read_csv,
     save_json,
     update_pipeline_results,
     write_csv,
@@ -816,27 +817,37 @@ def main(args: argparse.Namespace) -> None:
         print(f"Model {model_idx + 1}/{n_models}: {model_id}" + (f"  [quantization={quant}]" if quant else ""))
         print(f"{'='*60}")
 
-        # Run each model in a subprocess so the OS fully reclaims GPU memory on exit
-        worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"
-        _run_in_subprocess(_worker_language, dict(
-            model_id=model_id,
-            quantization=quant,
-            max_num_seqs=args.max_num_seqs,
-            gpu_memory_utilization=args.gpu_memory_utilization,
-            max_model_len=args.max_model_len,
-            enforce_eager=args.enforce_eager,
-            desc_records=desc_records,
-            cls_records=cls_records,
-            prompt_template=prompt_template,
-            classification_suffix=classification_suffix,
-            datasets_cfg={k: vars(v) for k, v in datasets_cfg.items()},
-            system_prompt=assessment_system,
-            out_path=str(worker_out),
-        ))
-        worker_result = json.loads(worker_out.read_text())
-        worker_out.unlink()
-        desc_rows = worker_result["desc_rows"]
-        cls_rows  = worker_result["cls_rows"]
+        cls_csv  = output_dir / f"cls_{_safe_name(model_id)}.csv"
+        desc_csv = output_dir / f"desc_{_safe_name(model_id)}.csv"
+
+        if args.skip_existing and cls_csv.exists() and desc_csv.exists():
+            print(f"  [skip] loading existing CSVs for {model_id}")
+            cls_rows  = read_csv(cls_csv)
+            desc_rows = read_csv(desc_csv)
+        else:
+            # Run each model in a subprocess so the OS fully reclaims GPU memory on exit
+            worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"
+            _run_in_subprocess(_worker_language, dict(
+                model_id=model_id,
+                quantization=quant,
+                max_num_seqs=args.max_num_seqs,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                max_model_len=args.max_model_len,
+                enforce_eager=args.enforce_eager,
+                desc_records=desc_records,
+                cls_records=cls_records,
+                prompt_template=prompt_template,
+                classification_suffix=classification_suffix,
+                datasets_cfg={k: vars(v) for k, v in datasets_cfg.items()},
+                system_prompt=assessment_system,
+                out_path=str(worker_out),
+            ))
+            worker_result = json.loads(worker_out.read_text())
+            worker_out.unlink()
+            desc_rows = worker_result["desc_rows"]
+            cls_rows  = worker_result["cls_rows"]
+            write_csv(cls_csv,  cls_rows)
+            write_csv(desc_csv, desc_rows)
 
         desc_per_ds   = compute_desc_metrics_per_dataset(desc_rows)
         cls_per_ds    = compute_cls_metrics_per_dataset(cls_rows)
@@ -861,9 +872,6 @@ def main(args: argparse.Namespace) -> None:
             "classification_per_task": cls_per_task,
         }
 
-        write_csv(output_dir / f"desc_{_safe_name(model_id)}.csv", desc_rows)
-        write_csv(output_dir / f"cls_{_safe_name(model_id)}.csv", cls_rows)
-
     # LLM judge (classification only)
     if args.judge_model:
         print(f"\n=== LLM Judge: {args.judge_model} ===")
@@ -877,22 +885,24 @@ def main(args: argparse.Namespace) -> None:
             cls_csv = output_dir / f"cls_{_safe_name(model_id)}.csv"
             if not cls_csv.exists():
                 continue
-            import csv as _csv
-            with open(cls_csv, newline="", encoding="utf-8") as f:
-                cls_rows = list(_csv.DictReader(f))
+            cls_rows = read_csv(cls_csv)
 
-            print(f"  Judging {model_id} ({len(cls_rows)} rows)...")
-            cls_rows = apply_judge(
-                rows=cls_rows,
-                llm=judge_llm,
-                tokenizer=judge_tok,
-                system_prompt=prompts["judge_system_language"],
-                judge_template=prompts["judge_classification_template"],
-                gt_key="ground_truth",
-                pred_key="prediction",
-                confidence_threshold=args.judge_confidence_threshold,
-            )
-            write_csv(cls_csv, cls_rows)
+            already_judged = bool(cls_rows and cls_rows[0].get("judged_correct", "") != "")
+            if args.skip_existing and already_judged:
+                print(f"  [skip] already judged: {model_id}")
+            else:
+                print(f"  Judging {model_id} ({len(cls_rows)} rows)...")
+                cls_rows = apply_judge(
+                    rows=cls_rows,
+                    llm=judge_llm,
+                    tokenizer=judge_tok,
+                    system_prompt=prompts["judge_system_language"],
+                    judge_template=prompts["judge_classification_template"],
+                    gt_key="ground_truth",
+                    pred_key="prediction",
+                    confidence_threshold=args.judge_confidence_threshold,
+                )
+                write_csv(cls_csv, cls_rows)
             summary_metrics[model_id]["judge"] = judged_summary(cls_rows)
             by_task_judge: dict[str, dict] = {}
             for tt in sorted(set(r.get("task_type", "") for r in cls_rows)):
@@ -1093,6 +1103,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--enforce_eager", action="store_true",
         help="Disable CUDA graph capture (workaround for Triton kernel crashes with AWQ models)",
+    )
+    parser.add_argument(
+        "--skip_existing", action="store_true",
+        help="Skip inference and judging for models whose output CSVs already exist; load from disk instead",
     )
     args = parser.parse_args()
     if not args.judge_model and args.models:
