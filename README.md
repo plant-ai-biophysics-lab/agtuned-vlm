@@ -270,7 +270,9 @@ python main.py aug-vision \
   --all_classes
 
 # Sub-step: use vision-generated descriptions (per-image alignment) + correlation plot
-# Must run Stage 3 first. Add --resume to skip re-running the main aug-vision inference.
+# Run AFTER the filtered/all aug-vision runs above are complete.
+# --resume skips re-running the ground-truth aug-vision inference (loads existing CSV).
+# Only the vision-description sub-step runs fresh and outputs the correlation plot.
 python main.py aug-vision \
   --models                  google/gemma-4-26B-A4B-it \
   --lang_dir                outputs/language_assessment/ \
