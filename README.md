@@ -180,6 +180,7 @@ python main.py language \
 | `--classification_jsonl` | `dataset/agml_classification.jsonl` | Pre-built classification JSONL |
 | `--n_samples` | all | Limit total records per JSONL (caps number of classes evaluated) |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge model for classification |
+| `--skip_existing` | off | Skip inference + judging for models whose CSVs already exist; load from disk instead (use when adding a new model to an existing run) |
 | `--enforce_eager` | off | Disable CUDA graph capture |
 
 #### Regenerate charts without re-running inference
@@ -219,6 +220,7 @@ python main.py vision \
 | `--test_split` | `outputs/linear_probe/test_split.json` | Image split from linear probe (ensures same test images) |
 | `--n_samples` | all | Max images **per class** (used only if no test split) |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge model for classification |
+| `--skip_existing` | off | Skip inference + judging for models whose CSVs already exist; load from disk instead |
 | `--enforce_eager` | off | Disable CUDA graph capture |
 
 #### Regenerate charts without re-running inference
@@ -266,6 +268,16 @@ python main.py aug-vision \
   --vis_dir     outputs/vision_assessment/ \
   --output_dir  outputs/desc_augmented_vision/ \
   --all_classes
+
+# Sub-step: use vision-generated descriptions (per-image alignment) + correlation plot
+# Must run Stage 3 first. Add --resume to skip re-running the main aug-vision inference.
+python main.py aug-vision \
+  --models                  google/gemma-4-26B-A4B-it \
+  --lang_dir                outputs/language_assessment/ \
+  --vis_dir                 outputs/vision_assessment/ \
+  --output_dir              outputs/desc_augmented_vision/ \
+  --use_vision_descriptions \
+  --resume
 ```
 
 | Flag | Default | Description |
@@ -275,6 +287,7 @@ python main.py aug-vision \
 | `--vis_dir` | `outputs/vision_assessment/` | Vision assessment output directory (for baseline rows) |
 | `--test_split` | `outputs/linear_probe/test_split.json` | Same test split used in probe and vision assessment |
 | `--all_classes` | off | Use all classes with descriptions instead of only judged-correct ones |
+| `--use_vision_descriptions` | off | Sub-step: inject per-image vision-generated descriptions (from Stage 3 desc CSV) instead of reference descriptions; produces `vis_desc_aug_cls_<model>.csv` and a correlation scatter plot (F1 vs rouge_ss / sem_sim) |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge for augmented predictions |
 | `--resume` | off | Skip inference/judging if output CSVs already exist |
 | `--enforce_eager` | off | Disable CUDA graph capture |
@@ -296,10 +309,16 @@ outputs/desc_augmented_vision/
 ├── aug_cls_all_<model>.csv      / baseline_cls_all_<model>.csv
 ├── desc_augmented_metrics_filtered.json
 ├── desc_augmented_metrics_all.json
+├── aug_cls_filtered_<model>.csv / baseline_cls_filtered_<model>.csv
+├── aug_cls_all_<model>.csv      / baseline_cls_all_<model>.csv
+├── vis_desc_aug_cls_<model>.csv             ← per-image vision-desc sub-step output
+├── desc_augmented_metrics_filtered.json
+├── desc_augmented_metrics_all.json
 ├── cls_comparison_per_dataset_filtered.png / cls_comparison_per_dataset_all.png
 ├── cls_comparison_per_task_filtered.png    / cls_comparison_per_task_all.png
 ├── cls_overall_comparison_filtered.png     / cls_overall_comparison_all.png
-└── transitions_filtered_<model>.png        / transitions_all_<model>.png
+├── transitions_filtered_<model>.png        / transitions_all_<model>.png
+└── desc_quality_correlation_vis_desc_<model>.png  ← F1 vs rouge_ss / sem_sim scatter
 ```
 
 ---
@@ -342,7 +361,7 @@ All experiments share the same evaluation code in `src/common/metrics.py`:
 |---------|---------------|
 | Class resolution | `resolve_class` — exact match then single-match substring fallback |
 | Classification metrics | `compute_classification_metrics` — accuracy, contains_accuracy, F1-macro, F1-weighted |
-| ROUGE | `rouge_scores_per_sample` — rouge1, rouge2, rougeL, rouge_ss (WordNet synonym expansion) |
+| ROUGE + sem_sim | `rouge_scores_per_sample` — rouge1, rouge2, rougeL, rouge_ss (WordNet synonym expansion), sem_sim (cosine similarity via `sentence-transformers/all-MiniLM-L6-v2`, loaded lazily) |
 | LLM-as-judge | `apply_judge` — JSON `{is_match, confidence}` parsed from model output |
 | Think-block stripping | `THINK_RE` — covers both `<think>` and `<thought>` (Gemma-4) |
 | Image sampling | `sample_class_images(names, n, seed=42)` — seeded shuffle, consistent across runs |

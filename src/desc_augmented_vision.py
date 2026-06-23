@@ -195,6 +195,35 @@ def load_test_split(test_split_path: str | None) -> dict[str, dict[str, list[str
     return {}
 
 
+def load_vision_desc_map(
+    vis_dir: Path, model_id: str,
+) -> dict[tuple[str, str], dict[str, dict]]:
+    """Load per-image descriptions from vision assessment desc CSV.
+
+    Returns {(dataset, class): {image_name: {description, rouge_ss, sem_sim, ...}}}
+    Only images that were actually described are included, ensuring correct alignment.
+    """
+    desc_file = vis_dir / f"desc_{_safe_name(model_id)}.csv"
+    if not desc_file.exists():
+        print(f"  [warn] vision desc CSV not found: {desc_file}")
+        return {}
+    result: dict[tuple[str, str], dict[str, dict]] = defaultdict(dict)
+    for row in _read_csv(desc_file):
+        ds        = row.get("agml_dataset", "")
+        cls_label = row.get("class_label", "")
+        img_name  = row.get("image_name", "")
+        if not (ds and cls_label and img_name):
+            continue
+        result[(ds, cls_label)][img_name] = {
+            "description": row.get("prediction", ""),
+            "rouge_ss":    row.get("rouge_ss", ""),
+            "sem_sim":     row.get("sem_sim", ""),
+            "rouge1":      row.get("rouge1", ""),
+            "rougeL":      row.get("rougeL", ""),
+        }
+    return dict(result)
+
+
 # ── vLLM helpers ─────────────────────────────────────────────────────────────
 
 _MAMBA_MODEL_PREFIXES = {"mamba", "jamba", "zamba", "falcon_mamba", "bamba", "qwen"}
@@ -409,6 +438,125 @@ def run_augmented_model(
     destroy_llm(llm)
     del tokenizer
 
+    return cls_rows
+
+
+def run_augmented_model_vision_desc(
+    model_id: str,
+    vision_desc_map: dict[tuple[str, str], dict[str, dict]],
+    datasets_cfg: dict,
+    descriptions_jsonl_path: Path,
+    aug_prompt_template: str,
+    system_prompt: str,
+    n_samples: int | None,
+    output_dir: Path,
+    quantization: str | None = None,
+    gpu_memory_utilization: float = 0.9,
+    max_model_len: int = 8192,
+    max_num_seqs: int = 64,
+    enforce_eager: bool = False,
+) -> list[dict]:
+    """Run augmented vision classification using per-image vision-generated descriptions.
+
+    Each image is matched to its own description from the vision assessment desc CSV,
+    so the description and image are guaranteed to be aligned.
+    """
+    from src.common.io import load_jsonl
+    cls_q_map: dict[tuple[str, str], dict] = {}
+    for record in load_jsonl(descriptions_jsonl_path):
+        meta = record.get("metadata", {})
+        key = (meta.get("agml_dataset", ""), meta.get("class_label", ""))
+        cls_q_map[key] = meta
+
+    llm, tokenizer = load_llm(
+        model_id, quantization=quantization,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        max_num_seqs=max_num_seqs,
+        enforce_eager=enforce_eager,
+    )
+
+    cls_rows: list[dict] = []
+    agml_cache: dict[str, dict[str, str]] = {}
+    winning_keys = sorted(vision_desc_map.keys())
+
+    t_start = time.perf_counter()
+    pbar = tqdm(winning_keys, desc="  Classes", unit="class", dynamic_ncols=True)
+
+    for key in pbar:
+        ds, cls_label = key
+        img_desc_map  = vision_desc_map[key]  # {image_name: {description, rouge_ss, ...}}
+        meta          = cls_q_map.get(key, {})
+        task_type     = meta.get("task_type", "")
+        crop          = meta.get("crop", "")
+        visual_cls_q  = meta.get("visual_cls_question")
+
+        if not visual_cls_q:
+            tqdm.write(f"  [skip] {ds} / {cls_label} — no visual_cls_question in JSONL")
+            continue
+
+        # Use only images that were described; respect n_samples with same seed
+        image_names = sample_class_images(sorted(img_desc_map.keys()), n_samples)
+        pbar.set_postfix_str(f"{ds} / {cls_label}", refresh=False)
+
+        if ds not in agml_cache:
+            tqdm.write(f"\n  Building image map: {ds}...")
+            agml_cache[ds] = build_name_map(ds)
+        name_map = agml_cache[ds]
+
+        ds_cfg       = datasets_cfg.get(ds)
+        clean_classes = ds_cfg.clean_classes if ds_cfg else []
+
+        # Build one prompt per image (each has its own description)
+        prompts: list[dict] = []
+        valid_meta: list[dict] = []
+        for img_name in image_names:
+            if img_name not in name_map:
+                tqdm.write(f"    [warn] {img_name} not in {ds}")
+                continue
+            img_info    = img_desc_map[img_name]
+            description = img_info["description"]
+            if not description:
+                continue
+            image = PILImage.open(name_map[img_name]).convert("RGB")
+            aug_question = aug_prompt_template.format(
+                description=description,
+                question=visual_cls_q,
+            )
+            prompts.append(build_multimodal_prompt(tokenizer, image, aug_question, system_prompt))
+            valid_meta.append({"img_name": img_name, **img_info})
+
+        if not prompts:
+            continue
+
+        tqdm.write(f"  {ds} / {cls_label}  ({len(prompts)} images)")
+        outputs = llm.generate(prompts, sampling_params=CLS_PARAMS)
+
+        for out, vmeta in zip(outputs, valid_meta):
+            pred     = _clean_response(out.outputs[0].text)
+            resolved = resolve_class(pred, clean_classes)
+            correct  = resolved is not None and resolved.lower() == cls_label.lower()
+            cls_rows.append({
+                "agml_dataset":    ds,
+                "class_label":     cls_label,
+                "task_type":       task_type,
+                "crop":            crop,
+                "image_name":      vmeta["img_name"],
+                "prediction":      pred,
+                "resolved_class":  resolved or "",
+                "ground_truth":    cls_label,
+                "correct":         int(correct),
+                "contains_match":  int(contains_match(resolved or pred, cls_label)),
+                "resolvable":      int(resolved is not None),
+                "vis_description": vmeta["description"],
+                "desc_rouge_ss":   vmeta["rouge_ss"],
+                "desc_sem_sim":    vmeta["sem_sim"],
+            })
+
+    elapsed = time.perf_counter() - t_start
+    print(f"\nInference time: {elapsed:.1f}s")
+    destroy_llm(llm)
+    del tokenizer
     return cls_rows
 
 
@@ -754,7 +902,126 @@ def main(args: argparse.Namespace) -> None:
     plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
+
+    # ── Sub-step: vision-generated descriptions ────────────────────────────────
+    if args.use_vision_descriptions:
+        print("\n=== Sub-step: Vision-Generated Description Augmentation ===")
+        for model_id in args.models:
+            print(f"\n  Model: {model_id}")
+            safe         = _safe_name(model_id)
+            vis_desc_map = load_vision_desc_map(vis_dir, model_id)
+            if not vis_desc_map:
+                print(f"  [skip] no vision desc CSV found for {model_id}")
+                continue
+            n_cls = len(vis_desc_map)
+            n_img = sum(len(v) for v in vis_desc_map.values())
+            print(f"  Loaded {n_img} image descriptions across {n_cls} classes")
+
+            vis_aug_csv = output_dir / f"vis_desc_aug_cls_{safe}.csv"
+            if vis_aug_csv.exists() and args.resume:
+                print(f"  [resume] loading existing: {vis_aug_csv.name}")
+                vis_aug_rows = _read_csv(vis_aug_csv)
+            else:
+                vis_aug_rows = run_augmented_model_vision_desc(
+                    model_id=model_id,
+                    vision_desc_map=vis_desc_map,
+                    datasets_cfg=active_cfg,
+                    descriptions_jsonl_path=descriptions_jsonl,
+                    aug_prompt_template=aug_prompt_template,
+                    system_prompt=system_prompt,
+                    n_samples=args.n_samples,
+                    output_dir=output_dir,
+                    quantization=args.quantization,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                    max_model_len=args.max_model_len,
+                    max_num_seqs=args.max_num_seqs,
+                    enforce_eager=args.enforce_eager,
+                )
+                write_csv(vis_aug_csv, vis_aug_rows)
+                print(f"  Saved: {vis_aug_csv.name}")
+
+            print(f"  Generating correlation plot...")
+            plot_desc_quality_correlation(vis_aug_rows, output_dir, suffix=f"vis_desc_{safe}")
+
     print("\nDone.")
+
+
+def plot_desc_quality_correlation(
+    aug_rows: list[dict],
+    output_dir: Path,
+    suffix: str = "vis_desc",
+) -> None:
+    """Scatter: per-class accuracy vs mean rouge_ss and mean sem_sim of generated descriptions."""
+    from sklearn.metrics import f1_score as sk_f1
+
+    by_class: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in aug_rows:
+        by_class[(row["agml_dataset"], row["class_label"])].append(row)
+
+    points = []
+    for (ds, cls), rows in by_class.items():
+        refs  = [r["class_label"] for r in rows]
+        preds = [r.get("resolved_class", "") for r in rows]
+        f1    = sk_f1(refs, preds, average="macro",
+                      labels=sorted(set(refs)), zero_division=0)
+
+        rs_vals  = [float(r["desc_rouge_ss"]) for r in rows
+                    if r.get("desc_rouge_ss") not in ("", None)]
+        ss_vals  = [float(r["desc_sem_sim"])  for r in rows
+                    if r.get("desc_sem_sim")  not in ("", None)]
+        if not rs_vals:
+            continue
+        points.append({
+            "ds": ds, "cls": cls,
+            "task_type": rows[0].get("task_type", "unknown"),
+            "f1":       f1,
+            "rouge_ss": float(np.mean(rs_vals)),
+            "sem_sim":  float(np.mean(ss_vals)) if ss_vals else None,
+        })
+
+    if not points:
+        print("  [skip] no data for desc quality correlation plot")
+        return
+
+    task_types  = sorted(set(p["task_type"] for p in points))
+    task_colors = {tt: plt.cm.tab10.colors[i % 10] for i, tt in enumerate(task_types)}
+
+    score_keys  = [("rouge_ss", "ROUGE-SS"), ("sem_sim", "Semantic Similarity")]
+    fig, axes   = plt.subplots(1, 2, figsize=(12, 5))
+
+    for ax, (sk, xlabel) in zip(axes, score_keys):
+        valid = [p for p in points if p.get(sk) is not None]
+        if not valid:
+            ax.set_visible(False)
+            continue
+        xs     = [p[sk] for p in valid]
+        ys     = [p["f1"]    for p in valid]
+        colors = [task_colors[p["task_type"]] for p in valid]
+
+        ax.scatter(xs, ys, c=colors, alpha=0.75, s=70,
+                   edgecolors="black", linewidths=0.5)
+
+        corr = float(np.corrcoef(xs, ys)[0, 1])
+        z    = np.polyfit(xs, ys, 1)
+        x_ln = np.linspace(min(xs), max(xs), 100)
+        ax.plot(x_ln, np.poly1d(z)(x_ln), "k--", alpha=0.5, linewidth=1)
+
+        ax.set_xlabel(xlabel, fontsize=10)
+        ax.set_ylabel("Per-class F1", fontsize=10)
+        ax.set_title(f"F1 vs {xlabel}  (r = {corr:.3f}, n = {len(valid)} classes)", fontsize=10)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+
+        for tt in task_types:
+            ax.scatter([], [], c=task_colors[tt], label=_task_label(tt), s=40)
+        ax.legend(fontsize=7)
+
+    fig.suptitle("Description Quality vs Classification F1\n(vision-generated descriptions)", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / f"desc_quality_correlation_{suffix}.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
 
 
 def plot_transitions(
@@ -894,6 +1161,9 @@ if __name__ == "__main__":
                         help="Use all classes with descriptions, not just judged-correct ones")
     parser.add_argument("--resume", action="store_true",
                         help="Skip inference/judging if output CSVs already exist")
+    parser.add_argument("--use_vision_descriptions", action="store_true",
+                        help="Sub-step: run augmented inference using per-image vision-generated "
+                             "descriptions (from vis_dir desc CSV) and plot F1 vs rouge_ss/sem_sim")
 
     args = parser.parse_args()
     if not args.judge_model and args.models:
