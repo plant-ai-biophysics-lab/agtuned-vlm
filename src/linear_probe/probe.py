@@ -562,6 +562,33 @@ def get_combined_class_counts(all_embeddings: dict, backbone: str) -> Counter:
     return counts
 
 
+def _split_from_labels(
+    X: np.ndarray, labels_all: list[str], n_samples: int | None = None
+) -> tuple:
+    """Rebuild y_enc / train_idx / test_idx / le from X and labels_all.
+
+    Used when loading embeddings from cache so that X and labels_all are
+    always aligned (cache may have a different row count than _samples on a
+    different machine).
+    """
+    le = LabelEncoder()
+    y_enc = le.fit_transform(labels_all)
+    rng = np.random.default_rng(42)
+    by_class: dict[str, list[int]] = {}
+    for i, lbl in enumerate(labels_all):
+        by_class.setdefault(lbl, []).append(i)
+    train_idx_list, test_idx_list = [], []
+    for indices in by_class.values():
+        shuffled = rng.permutation(indices).tolist()
+        n_train = min(n_samples, len(shuffled) - 1) if n_samples else len(shuffled) - 1
+        n_train = max(n_train, 1)
+        train_idx_list.extend(shuffled[:n_train])
+        test_idx_list.extend(shuffled[n_train:])
+    train_idx = np.array(sorted(train_idx_list))
+    test_idx  = np.array(sorted(test_idx_list))
+    return X, labels_all, y_enc, train_idx, test_idx, le
+
+
 def build_combined_split(
     all_embeddings: dict, backbone: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder, list[str]] | None:
@@ -1142,21 +1169,22 @@ def main(args):
         )
         if all_dino_cached:
             print(f"  [cache] All DINOv3 embeddings cached — skipping model load")
-            for agml_name, (_, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
-                X, _ = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb")
-                all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            for agml_name, _ in ds_items:
+                X, cached_labels = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb")
+                all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
         else:
             dino_processor, dino_model = load_dino(args.dino_model, device)
             for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
                 cached = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
-                    X, _ = cached
+                    X, cached_labels = cached
                     print(f"  [cache hit] {dino_key} / {agml_name}")
+                    all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
                 else:
                     X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
                     if use_embedding_cache:
                         save_cached_embeddings(cache_dir, dino_key, agml_name, "emb", X, labels_all)
-                all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+                    all_embeddings[dino_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
             unload(dino_model)
 
     # YOLO pass
@@ -1173,20 +1201,21 @@ def main(args):
         )
         if all_yolo_cached:
             print(f"  [cache] All YOLO embeddings cached — skipping model load")
-            for agml_name, (_, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
-                X, _ = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb")
-                all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            for agml_name, _ in ds_items:
+                X, cached_labels = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb")
+                all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
         else:
             for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
                 cached = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
-                    X, _ = cached
+                    X, cached_labels = cached
                     print(f"  [cache hit] {yolo_key} / {agml_name}")
+                    all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
                 else:
                     X = extract_yolo_embeddings(samples, args.yolo_model, device)
                     if use_embedding_cache:
                         save_cached_embeddings(cache_dir, yolo_key, agml_name, "emb", X, labels_all)
-                all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+                    all_embeddings[yolo_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
 
     # BioCLIP pass
     if args.bioclip_model:
@@ -1202,21 +1231,22 @@ def main(args):
         )
         if all_bioclip_cached:
             print(f"  [cache] All BioCLIP embeddings cached — skipping model load")
-            for agml_name, (_, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
-                X, _ = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb")
-                all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+            for agml_name, _ in ds_items:
+                X, cached_labels = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb")
+                all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
         else:
             bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
             for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="BioCLIP datasets", unit="ds"):
                 cached = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
-                    X, _ = cached
+                    X, cached_labels = cached
                     print(f"  [cache hit] {bioclip_key} / {agml_name}")
+                    all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
                 else:
                     X, _ = extract_bioclip_embeddings(samples, bioclip_model, bioclip_preprocess, device)
                     if use_embedding_cache:
                         save_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb", X, labels_all)
-                all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+                    all_embeddings[bioclip_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
             unload(bioclip_model)
 
     # VLM passes (one per --models entry, loaded and unloaded sequentially)
@@ -1317,26 +1347,28 @@ def main(args):
             if not postproj_only:
                 cached = load_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", pre_layer_path) if use_embedding_cache else None
                 if cached is not None:
-                    X, _ = cached
+                    X, cached_labels = cached
                     print(f"  [cache hit] {backbone_key} / {agml_name} pre")
+                    all_embeddings[backbone_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
                 else:
                     X, _ = extract_vlm_embeddings(samples, processor, vlm, pre_module, desc=backbone_key)
                     if use_embedding_cache:
                         save_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", X, labels_all, pre_layer_path)
-                all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
+                    all_embeddings[backbone_key][agml_name] = (X, labels_all, y_enc, train_idx, test_idx, le)
                 if backbone_key not in feature_dims:
                     feature_dims[backbone_key] = {"pre": int(X.shape[1])}
 
             if has_postproj and post_module is not None:
                 cached_post = load_cached_embeddings(cache_dir, postproj_key, agml_name, "post", post_layer_path) if use_embedding_cache else None
                 if cached_post is not None:
-                    X_post, _ = cached_post
+                    X_post, cached_labels_post = cached_post
                     print(f"  [cache hit] {postproj_key} / {agml_name} post")
+                    postproj_embeddings[postproj_key][agml_name] = _split_from_labels(X_post, cached_labels_post, args.n_samples)
                 else:
                     X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, post_module, desc=postproj_key)
                     if use_embedding_cache:
                         save_cached_embeddings(cache_dir, postproj_key, agml_name, "post", X_post, labels_all, post_layer_path)
-                postproj_embeddings[postproj_key][agml_name] = (X_post, labels_all, y_enc, train_idx, test_idx, le)
+                    postproj_embeddings[postproj_key][agml_name] = (X_post, labels_all, y_enc, train_idx, test_idx, le)
                 if "post" not in feature_dims.get(backbone_key, {}):
                     feature_dims[backbone_key]["post"] = int(X_post.shape[1])
 
