@@ -1355,7 +1355,7 @@ def main(args: argparse.Namespace) -> None:
             cls_by_cls, all_datasets, models, color_map, multimodal_set,
             "F1 per Class", "Vision Assessment — Classification Per Dataset (per-class spread)",
             output_dir / f"cls_per_dataset_{suffix}.png", chart_type=chart_type,
-            naive_line=uniform_f1)
+            naive_line=uniform_f1, ds_to_task=ds_to_task)
         plot_overall_distribution(
             desc_by_ds, models, color_map, multimodal_set, "Sem Sim",
             "Vision Assessment — Description Overall", output_dir / f"desc_overall_{suffix}.png",
@@ -1369,7 +1369,7 @@ def main(args: argparse.Namespace) -> None:
             desc_by_smp, all_datasets, models, color_map, multimodal_set,
             "Sem Sim per Sample", "Vision Assessment — Description Per Dataset (per-sample spread)",
             output_dir / f"desc_per_dataset_{suffix}.png", chart_type=chart_type,
-            naive_line=naive_sem_sim)
+            naive_line=naive_sem_sim, ds_to_task=ds_to_task)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"

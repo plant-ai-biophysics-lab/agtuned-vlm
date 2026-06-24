@@ -90,6 +90,69 @@ def _render_errorbar(
                     fmt="none", color="black", capsize=3, linewidth=1.2, zorder=4)
 
 
+_TASK_PALETTE = ["#e41a1c", "#377eb8", "#4daf4a", "#ff7f00", "#984ea3", "#a65628"]
+
+def _task_color_map(tasks: list[str]) -> dict[str, str]:
+    return {t: _TASK_PALETTE[i % len(_TASK_PALETTE)] for i, t in enumerate(sorted(tasks))}
+
+
+def _draw_split_violin(
+    ax, center: float, model_vals: list[float], judge_vals: list[float],
+    color, vw: float, hatch: str, model_label: str, judge_label: str,
+) -> None:
+    """Left half = model distribution, right half = judge distribution, same color."""
+
+    def _clip_left(body):
+        for path in body.get_paths():
+            path.vertices[:, 0] = np.minimum(path.vertices[:, 0], center)
+
+    def _clip_right(body):
+        for path in body.get_paths():
+            path.vertices[:, 0] = np.maximum(path.vertices[:, 0], center)
+
+    def _clip_lc_left(lc):
+        segs = lc.get_segments()
+        for s in segs: s[:, 0] = np.minimum(s[:, 0], center)
+        lc.set_segments(segs)
+
+    def _clip_lc_right(lc):
+        segs = lc.get_segments()
+        for s in segs: s[:, 0] = np.maximum(s[:, 0], center)
+        lc.set_segments(segs)
+
+    if len(model_vals) >= 3:
+        p = ax.violinplot(model_vals, positions=[center], widths=vw,
+                          showmeans=True, showmedians=False, showextrema=False)
+        body = p["bodies"][0]
+        body.set_facecolor(color); body.set_edgecolor("black")
+        body.set_alpha(0.72); body.set_linewidth(0.5)
+        if hatch: body.set_hatch(hatch)
+        body.set_label(model_label)
+        _clip_left(body)
+        if "cmeans" in p:
+            _clip_lc_left(p["cmeans"])
+            p["cmeans"].set_color(color); p["cmeans"].set_linewidth(1.5)
+    elif model_vals:
+        ax.scatter([center - vw * 0.18], [float(np.mean(model_vals))], color=color,
+                   s=50, marker="D", edgecolors="black", linewidths=0.5, label=model_label)
+
+    if len(judge_vals) >= 3:
+        p_j = ax.violinplot(judge_vals, positions=[center], widths=vw,
+                            showmeans=True, showmedians=False, showextrema=False)
+        body_j = p_j["bodies"][0]
+        body_j.set_facecolor(color); body_j.set_edgecolor("black")
+        body_j.set_alpha(0.35); body_j.set_linewidth(0.5)
+        body_j.set_label(judge_label)
+        _clip_right(body_j)
+        if "cmeans" in p_j:
+            _clip_lc_right(p_j["cmeans"])
+            p_j["cmeans"].set_color(color); p_j["cmeans"].set_linewidth(1.5)
+    elif judge_vals:
+        ax.scatter([center + vw * 0.18], [float(np.mean(judge_vals))], color=color,
+                   s=50, marker="D", edgecolors="black", linewidths=0.5, alpha=0.38,
+                   label=judge_label)
+
+
 # ── Data gathering helpers ─────────────────────────────────────────────────────
 
 def gather_cls_values_by_dataset(
@@ -247,15 +310,18 @@ def plot_overall_distribution(
         if judge_values_by_model else []
 
     if chart_type == "strip":
-        _render_violin(ax, x, values_list, colors, labels, width_per_group=0.6, hatches=hatches)
-        judge_drawn = False
-        for xi, (jvals, color) in enumerate(zip(judge_list, colors)):
-            if jvals:
-                jxs = np.full(len(jvals), xi) + _jitter(len(jvals), width=0.08)
-                ax.scatter(jxs, jvals, color=color, alpha=0.35, s=22, marker="x",
-                           linewidths=1.2, zorder=3,
-                           label="judge" if not judge_drawn else "_nolegend_")
-                judge_drawn = True
+        if judge_list and any(judge_list):
+            judge_drawn = False
+            vw = 0.6 * 0.7  # violin width per model slot
+            for i, (vals, jvals, color, label, hatch) in enumerate(
+                    zip(values_list, judge_list, colors, labels, hatches)):
+                center = float(x[i])
+                _draw_split_violin(ax, center, vals, jvals, color, vw, hatch,
+                                   label, "judge" if not judge_drawn else "_nolegend_")
+                if jvals:
+                    judge_drawn = True
+        else:
+            _render_violin(ax, x, values_list, colors, labels, width_per_group=0.6, hatches=hatches)
     else:
         if judge_list:
             slot_w = 0.7 / max(len(models), 1)
@@ -326,41 +392,54 @@ def plot_per_task_distribution(
     hatches = ["///" if m in multimodal_models else "" for m in models]
 
     judge_drawn = False
+    slot_w = 0.8 / max(len(models), 1)
+    sub_w  = slot_w * 0.46
+
     if chart_type == "strip":
         for xi, task in enumerate(task_types):
-            vals_list = [values_by_model_by_task.get(m, {}).get(task, []) for m in models]
-            _render_violin(ax, np.array([xi]), vals_list, colors,
-                          [l if xi == 0 else "_nolegend_" for l in labels],
-                          width_per_group=0.7, hatches=hatches)
-            if judge_values_by_model_by_task:
-                for mi, (m, color) in enumerate(zip(models, colors)):
-                    jvals = judge_values_by_model_by_task.get(m, {}).get(task, [])
-                    if jvals:
-                        jxs = np.full(len(jvals), xi) + _jitter(len(jvals), width=0.07)
-                        ax.scatter(jxs, jvals, color=color, alpha=0.35, s=22, marker="x",
-                                   linewidths=1.2, zorder=3,
-                                   label="judge" if not judge_drawn else "_nolegend_")
-                        judge_drawn = True
+            vals_list  = [values_by_model_by_task.get(m, {}).get(task, []) for m in models]
+            jvals_list = [judge_values_by_model_by_task.get(m, {}).get(task, []) for m in models] \
+                         if judge_values_by_model_by_task else []
+            if jvals_list and any(jvals_list):
+                for mi, (vals, jvals, color, hatch) in enumerate(
+                        zip(vals_list, jvals_list, colors, hatches)):
+                    offset = (mi - (len(models) - 1) / 2) * slot_w
+                    center = xi + offset
+                    lbl = labels[mi] if xi == 0 else "_nolegend_"
+                    jlbl = "judge" if not judge_drawn else "_nolegend_"
+                    _draw_split_violin(ax, center, vals, jvals, color, sub_w * 2,
+                                       hatch, lbl, jlbl)
+                    if jvals: judge_drawn = True
+            else:
+                _render_violin(ax, np.array([xi]), vals_list, colors,
+                               [l if xi == 0 else "_nolegend_" for l in labels],
+                               width_per_group=0.7, hatches=hatches)
     else:
         for xi, task in enumerate(task_types):
-            vals_list = [values_by_model_by_task.get(m, {}).get(task, []) for m in models]
-            _render_errorbar(ax, np.array([xi]), vals_list, colors,
-                             [l if xi == 0 else "_nolegend_" for l in labels],
-                             bar_width=0.8, hatches=hatches)
-            if judge_values_by_model_by_task:
-                slot_w = 0.8 / max(len(models), 1)
-                sub_w  = slot_w * 0.46
-                for mi, (m, color) in enumerate(zip(models, colors)):
-                    jvals = judge_values_by_model_by_task.get(m, {}).get(task, [])
-                    if not jvals:
-                        continue
+            vals_list  = [values_by_model_by_task.get(m, {}).get(task, []) for m in models]
+            jvals_list = [judge_values_by_model_by_task.get(m, {}).get(task, []) for m in models] \
+                         if judge_values_by_model_by_task else []
+            has_judge = jvals_list and any(jvals_list)
+            for mi, (vals, color, hatch) in enumerate(zip(vals_list, colors, hatches)):
+                label = labels[mi] if xi == 0 else "_nolegend_"
+                offset = (mi - (len(models) - 1) / 2) * slot_w
+                bar_w  = sub_w if has_judge else slot_w * 0.9
+                shift  = -sub_w / 2 if has_judge else 0
+                if vals:
+                    mean, std = float(np.mean(vals)), float(np.std(vals))
+                    ax.bar(xi + offset + shift, mean, bar_w, color=color, alpha=0.85,
+                           edgecolor="black", linewidth=0.5, label=label, hatch=hatch)
+                    ax.errorbar(xi + offset + shift, mean, yerr=std, fmt="none",
+                                color="black", capsize=3, linewidth=1.2, zorder=4)
+            if has_judge:
+                for mi, (jvals, color) in enumerate(zip(jvals_list, colors)):
+                    if not jvals: continue
                     offset = (mi - (len(models) - 1) / 2) * slot_w
-                    mean = float(np.mean(jvals))
-                    std  = float(np.std(jvals))
-                    ax.bar(xi + offset + sub_w / 2, mean, sub_w, color=color, alpha=0.4,
+                    jmean, jstd = float(np.mean(jvals)), float(np.std(jvals))
+                    ax.bar(xi + offset + sub_w / 2, jmean, sub_w, color=color, alpha=0.4,
                            edgecolor="black", linewidth=0.5,
                            label="judge" if not judge_drawn else "_nolegend_")
-                    ax.errorbar(xi + offset + sub_w / 2, mean, yerr=std, fmt="none",
+                    ax.errorbar(xi + offset + sub_w / 2, jmean, yerr=jstd, fmt="none",
                                 color="black", capsize=3, linewidth=1.2, zorder=4)
                     judge_drawn = True
 
@@ -396,6 +475,7 @@ def plot_per_dataset_distribution(
     output_path: Path,
     chart_type: str = "strip",
     naive_line: float | None = None,
+    ds_to_task: dict[str, str] | None = None,
 ) -> None:
     """Strip or errorbar: x = datasets, distribution = per-class/per-sample values."""
     x = np.arange(len(datasets))
@@ -427,6 +507,12 @@ def plot_per_dataset_distribution(
         [d.replace("_classification", "").replace("_", " ") for d in datasets],
         rotation=45, ha="right", fontsize=7,
     )
+    if ds_to_task:
+        task_cmap = _task_color_map(sorted(set(ds_to_task.values())))
+        for tick, ds in zip(ax.get_xticklabels(), datasets):
+            task = ds_to_task.get(ds, "")
+            tick.set_color(task_cmap.get(task, "black"))
+
     ax.set_ylim(0, 1.15)
     ax.set_ylabel(metric_label)
     ax.set_title(title, fontsize=11)
@@ -435,6 +521,12 @@ def plot_per_dataset_distribution(
     for h, l in zip(handles, lbls):
         if l not in seen:
             seen.add(l); h2.append(h); l2.append(l)
+    if ds_to_task:
+        import matplotlib.patches as mpatches
+        task_cmap = _task_color_map(sorted(set(ds_to_task.values())))
+        task_handles = [mpatches.Patch(color=c, label=t) for t, c in task_cmap.items()]
+        h2 = task_handles + h2
+        l2 = [t for t in task_cmap] + l2
     ax.legend(h2, l2, fontsize=7)
     plt.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
