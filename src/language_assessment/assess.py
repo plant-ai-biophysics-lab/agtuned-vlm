@@ -555,12 +555,12 @@ def plot_desc_summary_per_task(
         return
 
     models = list(all_desc_by_task.keys())
-    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"]
     color_map = model_color_map(models)
     x = np.arange(len(task_types))
     width = 0.8 / len(models)
 
-    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
+    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS", "sem_sim": "Sem Sim"}
     subplot_w = max(4, len(task_types) * (len(models) * 0.6 + 0.4))
     fig, axes = plt.subplots(1, len(metrics),
                              figsize=(subplot_w * len(metrics), 6), sharey=False)
