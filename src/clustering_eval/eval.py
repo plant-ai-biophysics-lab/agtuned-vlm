@@ -75,23 +75,52 @@ def _display(backbone_key: str) -> str:
 # ── Linear probe F1 loader ────────────────────────────────────────────────────
 
 def load_probe_f1(probe_dir: Path) -> dict[str, dict[str, float]]:
-    """Scan probe_dir for linear_probe_results.json files.
+    """Derive per-dataset F1 from FC combined predictions + test_split class mapping.
+
+    Reads fc_comb_preds.json (y_true/y_pred per backbone) and test_split.json
+    ({dataset: {class: [files]}}) to group predictions by dataset, then computes
+    F1 macro per (backbone, dataset).
 
     Returns {backbone_key: {dataset_name: f1_macro}}.
     """
+    from sklearn.metrics import f1_score as sk_f1
+
+    preds_path = probe_dir / "fc_comb_preds.json"
+    split_path = probe_dir / "test_split.json"
+    if not preds_path.exists() or not split_path.exists():
+        return {}
+    try:
+        preds = json.loads(preds_path.read_text())
+        split = json.loads(split_path.read_text())
+    except Exception:
+        return {}
+
+    # class name → dataset name (lowercase for robust matching)
+    class_to_dataset: dict[str, str] = {}
+    for dataset, classes in split.items():
+        for cls in classes:
+            class_to_dataset[cls.lower()] = dataset
+
     probe_f1: dict[str, dict[str, float]] = defaultdict(dict)
-    for json_path in sorted(probe_dir.rglob("linear_probe_results.json")):
-        try:
-            data = json.loads(json_path.read_text())
-        except Exception:
+    for backbone, pred_data in preds.items():
+        y_true_all = pred_data.get("y_true", [])
+        y_pred_all = pred_data.get("y_pred", [])
+        if not y_true_all:
             continue
-        dataset = data.get("agml_dataset", "")
-        if not dataset:
-            continue
-        for backbone, metrics in data.get("backbones", {}).items():
-            f1 = metrics.get("f1_macro")
-            if f1 is not None:
-                probe_f1[backbone][dataset] = float(f1)
+
+        # Group indices by dataset
+        ds_indices: dict[str, list[int]] = defaultdict(list)
+        for i, label in enumerate(y_true_all):
+            ds = class_to_dataset.get(label.lower())
+            if ds:
+                ds_indices[ds].append(i)
+
+        for dataset, idxs in ds_indices.items():
+            yt = [y_true_all[i] for i in idxs]
+            yp = [y_pred_all[i] for i in idxs]
+            f1 = sk_f1(yt, yp, average="macro", zero_division=0)
+            probe_f1[backbone][dataset] = round(float(f1), 4)
+
     return dict(probe_f1)
 
 
