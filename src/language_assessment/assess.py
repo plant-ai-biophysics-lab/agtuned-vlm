@@ -464,6 +464,7 @@ def plot_cls_summary_per_dataset(
             offset = (i - (len(models) - 1) / 2) * width
             ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
                    hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+        _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
         ax.set_xticklabels(
             [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
@@ -527,6 +528,7 @@ def plot_cls_summary_per_task(
                 if jval is not None:
                     _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
                     judge_label_drawn = True
+        _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
@@ -685,6 +687,7 @@ def plot_overall_cls_summary(
                 if jval is not None:
                     _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
                     judge_label_drawn = True
+        _draw_naive_line(ax, naive_cls_metrics, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
         ax.set_xticklabels(
             [mk.split("/")[-1] for mk in models], rotation=30, ha="right", fontsize=8
@@ -700,6 +703,106 @@ def plot_overall_cls_summary(
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_metric_correlation(
+    all_model_desc_rows: dict[str, list[dict]],
+    all_model_cls_rows: dict[str, list[dict]],
+    output_dir: Path,
+) -> None:
+    """Two scatter plots per model:
+    1. Per-sample: rouge_ss vs sem_sim (and rougeL vs sem_sim)
+    2. Per-class: mean desc quality (rouge_ss / sem_sim) vs classification F1
+    """
+    from sklearn.metrics import f1_score as sk_f1
+    corr_dir = output_dir / "metric_correlations"
+    corr_dir.mkdir(exist_ok=True)
+
+    for model_id, desc_rows in all_model_desc_rows.items():
+        cls_rows = all_model_cls_rows.get(model_id, [])
+        safe = _safe_name(model_id)
+
+        # ── 1. Per-sample description metric correlations ──
+        pairs = [
+            ("rouge_ss", "sem_sim",  "ROUGE-SS", "Sem Sim"),
+            ("rougeL",   "sem_sim",  "ROUGE-L",  "Sem Sim"),
+            ("rouge_ss", "rougeL",   "ROUGE-SS", "ROUGE-L"),
+        ]
+        fig, axes = plt.subplots(1, len(pairs), figsize=(5 * len(pairs), 4))
+        for ax, (xk, yk, xl, yl) in zip(axes, pairs):
+            xs = [float(r.get(xk, 0) or 0) for r in desc_rows]
+            ys = [float(r.get(yk, 0) or 0) for r in desc_rows]
+            if not xs:
+                continue
+            r = float(np.corrcoef(xs, ys)[0, 1]) if len(xs) > 1 else 0.0
+            ax.scatter(xs, ys, alpha=0.3, s=10)
+            m, b = np.polyfit(xs, ys, 1)
+            x_line = np.linspace(min(xs), max(xs), 100)
+            ax.plot(x_line, m * x_line + b, color="red", linewidth=1.2)
+            ax.set_xlabel(xl); ax.set_ylabel(yl)
+            ax.set_title(f"{xl} vs {yl}\nr = {r:.3f}")
+        fig.suptitle(f"Per-Sample Metric Correlation — {model_id.split('/')[-1]}", fontsize=10)
+        plt.tight_layout()
+        fig.savefig(corr_dir / f"per_sample_{safe}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {corr_dir / f'per_sample_{safe}.png'}")
+
+        # ── 2. Per-class: desc quality vs classification F1 ──
+        if not cls_rows:
+            continue
+        # Build per-class F1 from cls_rows
+        refs  = [r.get("ground_truth", "") for r in cls_rows]
+        preds = [r.get("resolved_class") or "" for r in cls_rows]
+        classes = sorted(set(refs))
+        try:
+            per_class_f1 = dict(zip(
+                classes,
+                sk_f1(refs, preds, average=None, labels=classes, zero_division=0),
+            ))
+        except Exception:
+            continue
+
+        # Build per-class mean desc metrics — match by class_label
+        from collections import defaultdict as _dd
+        cls_desc: dict[str, list] = _dd(lambda: {"rouge_ss": [], "sem_sim": [], "rougeL": []})
+        for row in desc_rows:
+            lbl = row.get("class_label") or row.get("ground_truth", "")
+            for k in ("rouge_ss", "sem_sim", "rougeL"):
+                v = row.get(k)
+                if v not in (None, ""):
+                    try:
+                        cls_desc[lbl][k].append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+
+        pairs_cross = [
+            ("rouge_ss", "ROUGE-SS"),
+            ("sem_sim",  "Sem Sim"),
+            ("rougeL",   "ROUGE-L"),
+        ]
+        fig, axes = plt.subplots(1, len(pairs_cross), figsize=(5 * len(pairs_cross), 4))
+        for ax, (dk, dl) in zip(axes, pairs_cross):
+            xs, ys, lbls = [], [], []
+            for cls in classes:
+                vals = cls_desc[cls][dk]
+                if vals and cls in per_class_f1:
+                    xs.append(float(np.mean(vals)))
+                    ys.append(per_class_f1[cls])
+                    lbls.append(cls)
+            if not xs:
+                continue
+            r = float(np.corrcoef(xs, ys)[0, 1]) if len(xs) > 1 else 0.0
+            ax.scatter(xs, ys, alpha=0.6, s=20)
+            m, b = np.polyfit(xs, ys, 1)
+            x_line = np.linspace(min(xs), max(xs), 100)
+            ax.plot(x_line, m * x_line + b, color="red", linewidth=1.2)
+            ax.set_xlabel(f"Mean {dl} (description)"); ax.set_ylabel("F1 (classification)")
+            ax.set_title(f"{dl} vs F1\nr = {r:.3f}")
+        fig.suptitle(f"Per-Class Desc Quality vs Classification F1 — {model_id.split('/')[-1]}", fontsize=10)
+        plt.tight_layout()
+        fig.savefig(corr_dir / f"per_class_f1_{safe}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {corr_dir / f'per_class_f1_{safe}.png'}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -806,6 +909,8 @@ def main(args: argparse.Namespace) -> None:
     all_model_cls_metrics: dict[str, dict[str, dict]] = {}
     all_model_desc_by_task: dict[str, dict[str, dict]] = {}
     all_model_cls_by_task: dict[str, dict[str, dict]] = {}
+    all_model_desc_rows: dict[str, list[dict]] = {}
+    all_model_cls_rows: dict[str, list[dict]] = {}
     summary_metrics: dict[str, dict] = {}
 
     per_model_quant = _parse_model_quantization(args.model_quantization or [])
@@ -863,6 +968,8 @@ def main(args: argparse.Namespace) -> None:
         all_model_cls_metrics[model_id]   = cls_per_ds
         all_model_desc_by_task[model_id]  = desc_per_task
         all_model_cls_by_task[model_id]   = cls_per_task
+        all_model_desc_rows[model_id]     = desc_rows
+        all_model_cls_rows[model_id]      = cls_rows
         summary_metrics[model_id] = {
             "description_overall": desc_overall,
             "description_per_dataset": desc_per_ds,
@@ -996,6 +1103,7 @@ def main(args: argparse.Namespace) -> None:
     plot_desc_summary_per_task(all_model_desc_by_task, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
+    plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
