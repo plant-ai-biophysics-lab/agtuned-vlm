@@ -1190,6 +1190,7 @@ def main(args: argparse.Namespace) -> None:
                     confidence_threshold=args.judge_confidence_threshold,
                 )
                 write_csv(cls_csv, cls_rows)
+            all_model_cls_rows[model_id] = cls_rows  # update with judged_correct fields
             summary_metrics[model_id]["judge"] = judged_summary(cls_rows)
             by_task_judge: dict[str, dict] = {}
             for tt in sorted(set(r.get("task_type", "") for r in cls_rows)):
