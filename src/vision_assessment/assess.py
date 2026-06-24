@@ -35,6 +35,7 @@ from src.common.distribution_plots import (
     gather_desc_per_sample_by_dataset,
     gather_desc_values_by_dataset,
     gather_desc_values_by_task,
+    gather_desc_values_by_task_from_per_sample,
     gather_judge_per_class_by_dataset,
     gather_judge_values_by_dataset,
     plot_overall_distribution,
@@ -1379,8 +1380,8 @@ def main(args: argparse.Namespace) -> None:
     _dt_key = lambda k: (k[1], k[0]) if isinstance(k, tuple) else ("", k)
     cls_dataset_tasks = sorted(set(k for m in cls_by_cls.values() for k in m), key=_dt_key)
     desc_by_ds   = gather_desc_values_by_dataset(all_model_desc_metrics)
-    desc_by_task = gather_desc_values_by_task(all_model_desc_metrics, ds_to_task)
     desc_by_smp       = gather_desc_per_sample_by_dataset(all_model_desc_rows, ds_to_task=ds_to_task)
+    desc_by_task = gather_desc_values_by_task_from_per_sample(desc_by_smp)
     desc_dataset_tasks = sorted(set(k for m in desc_by_smp.values() for k in m), key=_dt_key)
     judge_by_ds_dist   = gather_judge_values_by_dataset(judge_by_dataset)
     judge_by_task_dist = gather_cls_values_by_task_from_per_class(judge_by_cls)

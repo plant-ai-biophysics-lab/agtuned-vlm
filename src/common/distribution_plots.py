@@ -292,6 +292,28 @@ def gather_desc_per_sample_by_dataset(
     return out
 
 
+def gather_desc_values_by_task_from_per_sample(
+    desc_by_smp: dict[str, dict[tuple | str, list[float]]],
+) -> dict[str, dict[str, list[float]]]:
+    """Derive per-task description values from already-split (ds, task) per-sample data.
+
+    For each (ds, task) group, computes mean sem_sim across samples (one point per
+    dataset-task pair), then groups those means by task.  Correctly captures
+    pest_damage rows from class_override datasets, unlike gather_desc_values_by_task
+    which only uses the dataset-level task_type.
+    """
+    out: dict[str, dict[str, list[float]]] = {}
+    for model, by_dt in desc_by_smp.items():
+        by_task: dict[str, list[float]] = {}
+        for key, vals in by_dt.items():
+            task = key[1] if isinstance(key, tuple) else ""
+            if not task or not vals:
+                continue
+            by_task.setdefault(task, []).append(float(np.mean(vals)))
+        out[model] = by_task
+    return out
+
+
 def gather_judge_values_by_dataset(
     judge_by_dataset: dict[str, dict[str, dict]],
     metric: str = "judge_f1_macro",
