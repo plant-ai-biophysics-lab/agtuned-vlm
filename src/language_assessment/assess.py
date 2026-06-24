@@ -449,30 +449,27 @@ def plot_cls_summary_per_dataset(
         return
 
     models = list(all_cls_results.keys())
-    metrics = ["accuracy", "f1_macro", "f1_weighted"]
     color_map = model_color_map(models)
     x = np.arange(len(all_datasets))
     width = 0.8 / len(models)
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(max(12, len(all_datasets) * len(models) * 0.5), 5), sharey=False)
-    for mi, metric in enumerate(metrics):
-        ax = axes[mi]
-        for i, model_key in enumerate(models):
-            per_ds = all_cls_results[model_key]
-            vals = [per_ds.get(ds, {}).get(metric, 0.0) for ds in all_datasets]
-            offset = (i - (len(models) - 1) / 2) * width
-            ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
-                   hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
-        _draw_naive_line(ax, None, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
-        ax.set_xticks(x)
-        ax.set_xticklabels(
-            [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
-            rotation=45, ha="right", fontsize=7,
-        )
-        ax.set_ylim(0, 1.15)
-        ax.set_title(metric.replace("_", " ").title())
-        ax.set_ylabel("Score")
-        ax.legend(fontsize=7)
+    fig, ax = plt.subplots(figsize=(max(10, len(all_datasets) * len(models) * 0.5), 5))
+    for i, model_key in enumerate(models):
+        per_ds = all_cls_results[model_key]
+        vals = [per_ds.get(ds, {}).get("f1_macro", 0.0) for ds in all_datasets]
+        offset = (i - (len(models) - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=model_key.split("/")[-1], color=color_map[model_key], alpha=0.85,
+               hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+    _draw_naive_line(ax, None, "f1_macro", label=True, uniform_overall=uniform_cls_metrics)
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
+        rotation=45, ha="right", fontsize=7,
+    )
+    ax.set_ylim(0, 1.15)
+    ax.set_title("F1 Macro")
+    ax.set_ylabel("Score")
+    ax.legend(fontsize=7)
 
     fig.suptitle("Language Assessment — Classification Per Dataset", fontsize=11)
     plt.tight_layout()
