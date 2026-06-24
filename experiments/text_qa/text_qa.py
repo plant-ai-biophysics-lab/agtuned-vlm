@@ -276,6 +276,7 @@ def per_sample_rougeL(predictions: list[str], references: list[str]) -> list[flo
 
 
 def compute_metrics(predictions: list[str], references: list[str]) -> dict:
+    from src.common.metrics import sem_sim_score
     rouge_scores = rouge.compute(predictions=predictions, references=references)
     em_scores = exact_match.compute(
         predictions=[p.lower() for p in predictions],
@@ -285,6 +286,7 @@ def compute_metrics(predictions: list[str], references: list[str]) -> dict:
         r.lower() in p.lower() for p, r in zip(predictions, references)
     ) / len(predictions)
     rss = np.mean([rouge_ss_score(p, r) for p, r in zip(predictions, references)])
+    ss  = np.mean([sem_sim_score(p, r)   for p, r in zip(predictions, references)])
 
     return {
         "contains_match": round(contains_match, 4),
@@ -293,6 +295,7 @@ def compute_metrics(predictions: list[str], references: list[str]) -> dict:
         "rouge2_raw":     round(rouge_scores["rouge2"], 4),
         "rougeL_raw":     round(rouge_scores["rougeL"], 4),
         "rouge_ss_raw":   round(float(rss), 4),
+        "sem_sim_raw":    round(float(ss),  4),
     }
 
 
@@ -554,6 +557,7 @@ METRIC_LABELS = {
     "rouge2_raw":   "ROUGE-2",
     "rougeL_raw":   "ROUGE-L",
     "rouge_ss_raw": "ROUGE-SS",
+    "sem_sim_raw":  "Sem Sim",
 }
 
 
@@ -967,11 +971,11 @@ def main(args):
     tee = _Tee(output_dir / "summary.txt")
 
     tee.print("\n=== Generation Metrics ===")
-    tee.print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10} {'ROUGE-SS':>10}")
-    tee.print(f"  {'-'*94}")
+    tee.print(f"  {'Model':<40} {'Contains':>10} {'ExactMatch':>12} {'ROUGE-1':>10} {'ROUGE-2':>10} {'ROUGE-L':>10} {'ROUGE-SS':>10} {'SemSim':>10}")
+    tee.print(f"  {'-'*106}")
     for key, m in results["models"].items():
         tag = " (naive)" if key == "naive" else ""
-        tee.print(f"  {key + tag:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f} {m.get('rouge_ss_raw', 0):>10.4f}")
+        tee.print(f"  {key + tag:<40} {m['contains_match']:>10.4f} {m['exact_match']:>12.4f} {m['rouge1_raw']:>10.4f} {m['rouge2_raw']:>10.4f} {m['rougeL_raw']:>10.4f} {m.get('rouge_ss_raw', 0):>10.4f} {m.get('sem_sim_raw', 0):>10.4f}")
 
     # Classification metrics (only present when --datasets_config + --idtools_jsonl)
     has_cls = any("classification" in m for m in results["models"].values())
