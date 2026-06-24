@@ -72,6 +72,62 @@ def _display(backbone_key: str) -> str:
     return label
 
 
+# ── Linear probe F1 loader ────────────────────────────────────────────────────
+
+def load_probe_f1(probe_dir: Path) -> dict[str, dict[str, float]]:
+    """Scan probe_dir for linear_probe_results.json files.
+
+    Returns {backbone_key: {dataset_name: f1_macro}}.
+    """
+    probe_f1: dict[str, dict[str, float]] = defaultdict(dict)
+    for json_path in sorted(probe_dir.rglob("linear_probe_results.json")):
+        try:
+            data = json.loads(json_path.read_text())
+        except Exception:
+            continue
+        dataset = data.get("agml_dataset", "")
+        if not dataset:
+            continue
+        for backbone, metrics in data.get("backbones", {}).items():
+            f1 = metrics.get("f1_macro")
+            if f1 is not None:
+                probe_f1[backbone][dataset] = float(f1)
+    return dict(probe_f1)
+
+
+def plot_probe_f1_per_dataset(probe_f1: dict[str, dict[str, float]], output_dir: Path) -> None:
+    """Grouped bar chart: x=datasets, bars=backbones, y=F1 macro."""
+    backbones = sorted(probe_f1)
+    if not backbones:
+        return
+    all_datasets = sorted(set(ds for b in backbones for ds in probe_f1[b]))
+    if not all_datasets:
+        return
+
+    colors = _backbone_color(backbones)
+    width  = 0.8 / len(backbones)
+    x      = np.arange(len(all_datasets))
+
+    fig, ax = plt.subplots(figsize=(max(10, len(all_datasets) * len(backbones) * 0.35), 5))
+    for i, b in enumerate(backbones):
+        vals   = [probe_f1[b].get(ds, np.nan) for ds in all_datasets]
+        offset = (i - (len(backbones) - 1) / 2) * width
+        ax.bar(x + offset, vals, width * 0.9, label=_display(b), color=colors[b], alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(all_datasets, rotation=45, ha="right", fontsize=7)
+    ax.set_ylabel("F1 Macro")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("Linear Probe — F1 Macro per Dataset")
+    ax.legend(fontsize=8, loc="upper right")
+    ax.grid(axis="y", linewidth=0.4, alpha=0.5)
+    fig.tight_layout()
+    path = output_dir / "probe_f1_per_dataset.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved {path}")
+
+
 # ── NPZ discovery ──────────────────────────────────────────────────────────────
 
 _NPZ_RE = re.compile(r"^(.+?)__(.+?)__(emb|pre|post)__(.+?)\.npz$")
@@ -477,6 +533,12 @@ def main(args: argparse.Namespace) -> None:
     plot_per_dataset(results, output_dir)
     plot_metric_scatter(results, output_dir)
 
+    probe_f1 = load_probe_f1(Path(args.probe_dir))
+    if probe_f1:
+        plot_probe_f1_per_dataset(probe_f1, output_dir)
+    else:
+        print(f"  No linear_probe_results.json found under {args.probe_dir} — skipping F1 chart")
+
     for group, metrics in _METRIC_GROUPS.items():
         group_title = _GROUP_TITLES[group]
         for chart_type, suffix in [("strip", "strip"), ("errorbar", "errorbar")]:
@@ -500,6 +562,8 @@ if __name__ == "__main__":
                         help="Directory containing .npz embedding cache files from linear probe")
     parser.add_argument("--output_dir", default="outputs/clustering_eval/")
     parser.add_argument("--config",      default="src/config/datasets.yaml")
+    parser.add_argument("--probe_dir",   default="outputs/linear_probe/",
+                        help="Root directory searched recursively for linear_probe_results.json files")
     parser.add_argument("--max_samples", type=int, default=None,
                         help="Subsample each dataset to this many images before clustering (for local testing)")
     args = parser.parse_args()
