@@ -848,10 +848,10 @@ def plot_metric_correlation(
         plt.close(fig)
         print(f"  Saved: {corr_dir / f'per_sample_{safe}.png'}")
 
-        # ── 2. Per-class: desc quality vs classification F1 ──
+        # ── 2. Per-class: desc quality vs classification F1 (resolver + judge) ──
         if not cls_rows:
             continue
-        # Build per-class F1 from cls_rows
+        from collections import defaultdict as _dd
         refs  = [r.get("ground_truth", "") for r in cls_rows]
         preds = [r.get("resolved_class") or "" for r in cls_rows]
         classes = sorted(set(refs))
@@ -863,8 +863,23 @@ def plot_metric_correlation(
         except Exception:
             continue
 
-        # Build per-class mean desc metrics — match by class_label
-        from collections import defaultdict as _dd
+        # Judge F1 per class: judged_correct=1 → pred=ref, else pred=resolved_class
+        judged_rows = [r for r in cls_rows if r.get("judged_correct", "") != ""]
+        per_class_judge_f1: dict[str, float] = {}
+        if judged_rows:
+            j_refs  = [r.get("ground_truth", "") for r in judged_rows]
+            j_preds = [r.get("ground_truth", "") if int(r["judged_correct"])
+                       else (r.get("resolved_class") or "__unresolved__")
+                       for r in judged_rows]
+            j_classes = sorted(set(j_refs))
+            try:
+                per_class_judge_f1 = dict(zip(
+                    j_classes,
+                    sk_f1(j_refs, j_preds, average=None, labels=j_classes, zero_division=0),
+                ))
+            except Exception:
+                pass
+
         cls_desc: dict[str, list] = _dd(lambda: {"rouge_ss": [], "sem_sim": [], "rougeL": []})
         for row in desc_rows:
             lbl = row.get("class_label") or row.get("ground_truth", "")
@@ -876,29 +891,35 @@ def plot_metric_correlation(
                     except (TypeError, ValueError):
                         pass
 
-        pairs_cross = [
-            ("rouge_ss", "ROUGE-SS"),
-            ("sem_sim",  "Sem Sim"),
-            ("rougeL",   "ROUGE-L"),
-        ]
-        fig, axes = plt.subplots(1, len(pairs_cross), figsize=(5 * len(pairs_cross), 4))
-        for ax, (dk, dl) in zip(axes, pairs_cross):
-            xs, ys, lbls = [], [], []
-            for cls in classes:
-                vals = cls_desc[cls][dk]
-                if vals and cls in per_class_f1:
-                    xs.append(float(np.mean(vals)))
-                    ys.append(per_class_f1[cls])
-                    lbls.append(cls)
-            if not xs:
-                continue
-            r = float(np.corrcoef(xs, ys)[0, 1]) if len(xs) > 1 else 0.0
-            ax.scatter(xs, ys, alpha=0.6, s=20)
-            m, b = np.polyfit(xs, ys, 1)
-            x_line = np.linspace(min(xs), max(xs), 100)
-            ax.plot(x_line, m * x_line + b, color="red", linewidth=1.2)
-            ax.set_xlabel(f"Mean {dl} (description)"); ax.set_ylabel("F1 (classification)")
-            ax.set_title(f"{dl} vs F1\nr = {r:.3f}")
+        pairs_cross = [("rouge_ss", "ROUGE-SS"), ("sem_sim", "Sem Sim"), ("rougeL", "ROUGE-L")]
+        n_rows = 2 if per_class_judge_f1 else 1
+        fig, axes_grid = plt.subplots(n_rows, len(pairs_cross),
+                                      figsize=(5 * len(pairs_cross), 4 * n_rows))
+        if n_rows == 1:
+            axes_grid = [axes_grid]
+
+        for row_i, (f1_map, row_label) in enumerate([
+            (per_class_f1,       "Resolver F1"),
+            (per_class_judge_f1, "Judge F1"),
+        ][:n_rows]):
+            for ax, (dk, dl) in zip(axes_grid[row_i], pairs_cross):
+                xs, ys = [], []
+                for cls in classes:
+                    vals = cls_desc[cls][dk]
+                    if vals and cls in f1_map:
+                        xs.append(float(np.mean(vals)))
+                        ys.append(f1_map[cls])
+                if not xs:
+                    continue
+                r = float(np.corrcoef(xs, ys)[0, 1]) if len(xs) > 1 else 0.0
+                ax.scatter(xs, ys, alpha=0.6, s=20)
+                m, b = np.polyfit(xs, ys, 1)
+                x_line = np.linspace(min(xs), max(xs), 100)
+                ax.plot(x_line, m * x_line + b, color="red", linewidth=1.2)
+                ax.set_xlabel(f"Mean {dl} (description)")
+                ax.set_ylabel(row_label)
+                ax.set_title(f"{dl} vs {row_label}\nr = {r:.3f}")
+
         fig.suptitle(f"Per-Class Desc Quality vs Classification F1 — {model_id.split('/')[-1]}", fontsize=10)
         plt.tight_layout()
         fig.savefig(corr_dir / f"per_class_f1_{safe}.png", dpi=150, bbox_inches="tight")
@@ -1046,6 +1067,7 @@ def main(args: argparse.Namespace) -> None:
         dg_desc    = getattr(args, "dg_descriptions_jsonl", None) or "outputs/data_generation/dg_descriptions.jsonl"
         dg_cls     = getattr(args, "dg_classification_jsonl", None) or "outputs/data_generation/dg_classification.jsonl"
         datasets_cfg = datasets_by_name(Path(dg_config))
+        skip_desc_set: set[str] = set()
         desc_records = _apply_healthy_override(list(load_jsonl(Path(dg_desc), args.n_samples)))
         cls_records  = list(load_jsonl(Path(dg_cls), args.n_samples))
     else:
@@ -1108,7 +1130,8 @@ def main(args: argparse.Namespace) -> None:
         if args.skip_existing and cls_csv.exists() and desc_csv.exists():
             print(f"  [skip] loading existing CSVs for {model_id}")
             cls_rows  = read_csv(cls_csv)
-            desc_rows = read_csv(desc_csv)
+            desc_rows = [r for r in read_csv(desc_csv)
+                         if r.get("agml_dataset") not in skip_desc_set]
         else:
             # Run each model in a subprocess so the OS fully reclaims GPU memory on exit
             worker_out = output_dir / f"_worker_{_safe_name(model_id)}.json"
@@ -1305,10 +1328,12 @@ def main(args: argparse.Namespace) -> None:
     cls_by_cls        = gather_cls_per_class_by_dataset(all_model_cls_rows, "ground_truth", "resolved_class", ds_to_task)
     judge_by_cls      = gather_judge_per_class_by_dataset(all_model_cls_rows, "ground_truth", ds_to_task)
     cls_by_task  = gather_cls_values_by_task_from_per_class(cls_by_cls)
-    cls_dataset_tasks = sorted(set(k for m in cls_by_cls.values() for k in m))
+    _dt_key = lambda k: (k[1], k[0]) if isinstance(k, tuple) else ("", k)
+    cls_dataset_tasks = sorted(set(k for m in cls_by_cls.values() for k in m), key=_dt_key)
     desc_by_ds   = gather_desc_values_by_dataset(all_model_desc_metrics)
     desc_by_task = gather_desc_values_by_task(all_model_desc_metrics, ds_to_task)
-    desc_by_smp  = gather_desc_per_sample_by_dataset(all_model_desc_rows)
+    desc_by_smp       = gather_desc_per_sample_by_dataset(all_model_desc_rows, ds_to_task=ds_to_task)
+    desc_dataset_tasks = sorted(set(k for m in desc_by_smp.values() for k in m), key=_dt_key)
     judge_by_ds_dist   = gather_judge_values_by_dataset(judge_by_dataset)
     judge_by_task_dist = gather_cls_values_by_task_from_per_class(judge_by_cls)
 
@@ -1341,10 +1366,10 @@ def main(args: argparse.Namespace) -> None:
             output_dir / f"desc_per_task_{suffix}.png", chart_type=chart_type,
             naive_line=naive_sem_sim)
         plot_per_dataset_distribution(
-            desc_by_smp, all_datasets, models, color_map, multimodal_set,
+            desc_by_smp, desc_dataset_tasks, models, color_map, multimodal_set,
             "Sem Sim per Sample", "Language Assessment — Description Per Dataset (per-sample spread)",
             output_dir / f"desc_per_dataset_{suffix}.png", chart_type=chart_type,
-            naive_line=naive_sem_sim, ds_to_task=ds_to_task)
+            naive_line=naive_sem_sim)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"

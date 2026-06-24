@@ -270,17 +270,25 @@ def gather_desc_values_by_task(
 def gather_desc_per_sample_by_dataset(
     all_desc_rows: dict[str, list[dict]],
     metric: str = "sem_sim",
-) -> dict[str, dict[str, list[float]]]:
-    """Returns {model: {dataset: [per-sample metric values]}}."""
-    out: dict[str, dict[str, list[float]]] = {}
+    ds_to_task: dict[str, str] | None = None,
+) -> dict[str, dict[tuple | str, list[float]]]:
+    """Returns {model: {(dataset, task): [per-sample metric values]}}.
+
+    Groups by (dataset, task_type) so datasets with class_overrides spanning
+    multiple task types appear as separate entries, matching the classification
+    per-dataset x-axis.
+    """
+    out: dict[str, dict] = {}
     for model, rows in all_desc_rows.items():
-        by_ds: dict[str, list[float]] = {}
+        by_dt: dict[tuple, list[float]] = {}
         for r in rows:
             ds = r.get("agml_dataset", "")
             v  = r.get(metric)
-            if ds and v is not None:
-                by_ds.setdefault(ds, []).append(float(v))
-        out[model] = by_ds
+            if not ds or v is None:
+                continue
+            task = r.get("task_type") or (ds_to_task.get(ds, "") if ds_to_task else "")
+            by_dt.setdefault((ds, task), []).append(float(v))
+        out[model] = by_dt
     return out
 
 
