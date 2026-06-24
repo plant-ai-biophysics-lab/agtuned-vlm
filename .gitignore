@@ -19,6 +19,7 @@ unsloth_compiled_cache
 /yolo11x-cls.pt
 /annotations.csv
 /outputs
+outputs_*
 /src/config/datasets_test.yaml
 
 # more

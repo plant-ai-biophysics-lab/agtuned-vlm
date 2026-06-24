@@ -370,7 +370,7 @@ def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.nd
 
     def _hook(module, input, output):
         t = output[0] if isinstance(output, (list, tuple)) else output
-        captured.append(t.detach().flatten(1).mean(0).cpu().float())
+        captured.append(t.detach().mean(dim=(-2, -1)).squeeze(0).cpu().float())
 
     penultimate = list(yolo.model.model.children())[-2]
     handle = penultimate.register_forward_hook(_hook)
