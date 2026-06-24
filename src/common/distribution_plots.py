@@ -62,7 +62,7 @@ def _render_violin(
         body.set_label(label)
         for part in ("cbars", "cmins", "cmaxes", "cmeans"):
             if part in parts:
-                parts[part].set_color(color)
+                parts[part].set_color("black")
                 parts[part].set_linewidth(1.2)
 
 
@@ -131,7 +131,7 @@ def _draw_split_violin(
         _clip_left(body)
         if "cmeans" in p:
             _clip_lc_left(p["cmeans"])
-            p["cmeans"].set_color(color); p["cmeans"].set_linewidth(1.5)
+            p["cmeans"].set_color("black"); p["cmeans"].set_linewidth(1.5)
     elif model_vals:
         ax.scatter([center - vw * 0.18], [float(np.mean(model_vals))], color=color,
                    s=50, marker="D", edgecolors="black", linewidths=0.5, label=model_label)
@@ -146,7 +146,7 @@ def _draw_split_violin(
         _clip_right(body_j)
         if "cmeans" in p_j:
             _clip_lc_right(p_j["cmeans"])
-            p_j["cmeans"].set_color(color); p_j["cmeans"].set_linewidth(1.5)
+            p_j["cmeans"].set_color("black"); p_j["cmeans"].set_linewidth(1.5)
     elif judge_vals:
         ax.scatter([center + vw * 0.18], [float(np.mean(judge_vals))], color=color,
                    s=50, marker="D", edgecolors="black", linewidths=0.5, alpha=0.38,
