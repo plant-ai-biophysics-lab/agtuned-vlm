@@ -99,8 +99,33 @@ def _pca_reduce(X: np.ndarray, n_components: int) -> np.ndarray:
     return PCA(n_components=n_components, svd_solver="randomized", random_state=42).fit_transform(X)
 
 
+def _inter_centroid_dist(X: np.ndarray, y: np.ndarray, k: int) -> float:
+    """Mean pairwise cosine distance between per-class centroids."""
+    centroids = np.array([X[y == i].mean(axis=0) for i in range(k)])
+    norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+    centroids_n = centroids / (norms + 1e-10)
+    cos_sim = centroids_n @ centroids_n.T
+    triu = np.triu_indices(k, k=1)
+    return float(np.mean(1.0 - cos_sim[triu])) if len(triu[0]) > 0 else 0.0
+
+
+def _fisher_dr(X: np.ndarray, y: np.ndarray, k: int, n: int) -> float:
+    """Simplified Fisher's discriminant ratio: between-class / within-class scatter."""
+    mu = X.mean(axis=0)
+    between = sum(
+        np.sum(y == i) * float(np.linalg.norm(X[y == i].mean(axis=0) - mu) ** 2)
+        for i in range(k)
+    ) / n
+    within = sum(
+        float(np.mean(np.sum((X[y == i] - X[y == i].mean(axis=0)) ** 2, axis=1)))
+        * np.sum(y == i)
+        for i in range(k)
+    ) / n
+    return between / (within + 1e-10)
+
+
 def cluster_dataset(embeddings: np.ndarray, labels: list[str]) -> dict:
-    """Run k-means and return NMI, ARI, silhouette."""
+    """Run k-means and return NMI, ARI, silhouette + inter-centroid dist + Fisher DR."""
     le = LabelEncoder()
     y = le.fit_transform(labels)
     k = len(le.classes_)
@@ -109,7 +134,7 @@ def cluster_dataset(embeddings: np.ndarray, labels: list[str]) -> dict:
     if k < 2 or n < k:
         return {}
 
-    with tqdm(total=3, desc="    pca", leave=False, ncols=60) as pbar:
+    with tqdm(total=5, desc="    pca", leave=False, ncols=60) as pbar:
         X_red = _pca_reduce(embeddings.astype(np.float32), _PCA_DIMS)
         pbar.update(1)
 
@@ -130,10 +155,20 @@ def cluster_dataset(embeddings: np.ndarray, labels: list[str]) -> dict:
             sil = float(silhouette_score(X_red, y))
         pbar.update(1)
 
+        pbar.set_description("    inter-centroid")
+        icd = _inter_centroid_dist(X_red, y, k)
+        pbar.update(1)
+
+        pbar.set_description("    fisher")
+        fdr = _fisher_dr(X_red, y, k, n)
+        pbar.update(1)
+
     return {
         "nmi": round(nmi, 4),
         "ari": round(ari, 4),
         "silhouette": round(sil, 4),
+        "inter_centroid_dist": round(icd, 4),
+        "fisher_dr": round(min(fdr, 1e6), 4),
         "n_samples": n,
         "n_classes": k,
     }
@@ -141,8 +176,11 @@ def cluster_dataset(embeddings: np.ndarray, labels: list[str]) -> dict:
 
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
-_METRICS = ["nmi", "ari", "silhouette"]
-_METRIC_LABELS = {"nmi": "NMI", "ari": "ARI", "silhouette": "Silhouette"}
+_METRICS = ["nmi", "ari", "silhouette", "inter_centroid_dist", "fisher_dr"]
+_METRIC_LABELS = {
+    "nmi": "NMI", "ari": "ARI", "silhouette": "Silhouette",
+    "inter_centroid_dist": "Inter-Centroid Dist", "fisher_dr": "Fisher DR",
+}
 _COLORS = plt.cm.tab10.colors
 
 
@@ -353,8 +391,8 @@ def main(args: argparse.Namespace) -> None:
     print(f"Metrics saved to {output_dir / 'clustering_metrics.json'}\n")
 
     # Summary table
-    print(f"{'Backbone':<45} {'NMI':>6} {'ARI':>6} {'Sil':>6}")
-    print("-" * 65)
+    print(f"{'Backbone':<45} {'NMI':>6} {'ARI':>6} {'Sil':>6} {'ICD':>6} {'FDR':>8}")
+    print("-" * 80)
     for b in sorted(results):
         ms = [m for m in results[b].values() if m]
         if not ms:
@@ -362,7 +400,9 @@ def main(args: argparse.Namespace) -> None:
         nmi = np.mean([m["nmi"] for m in ms])
         ari = np.mean([m["ari"] for m in ms])
         sil = np.mean([m["silhouette"] for m in ms])
-        print(f"  {_display(b):<43} {nmi:>6.3f} {ari:>6.3f} {sil:>6.3f}")
+        icd = np.mean([m.get("inter_centroid_dist", 0) for m in ms])
+        fdr = np.mean([m.get("fisher_dr", 0) for m in ms])
+        print(f"  {_display(b):<43} {nmi:>6.3f} {ari:>6.3f} {sil:>6.3f} {icd:>6.3f} {fdr:>8.3f}")
 
     print("\n=== Generating plots ===")
     plot_overall(results, output_dir)

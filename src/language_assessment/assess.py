@@ -848,6 +848,81 @@ def plot_metric_correlation(
         print(f"  Saved: {corr_dir / f'per_class_f1_{safe}.png'}")
 
 
+def plot_difficulty_correlation(
+    all_cls_results: dict[str, dict[str, dict]],
+    all_desc_results: dict[str, dict[str, dict]],
+    clustering_metrics_path: Path,
+    output_dir: Path,
+) -> None:
+    """Scatter: per-dataset class separability (difficulty) vs assessment F1/sem_sim."""
+    if not clustering_metrics_path.exists():
+        print(f"  Skipping difficulty correlation — not found: {clustering_metrics_path}")
+        return
+
+    with open(clustering_metrics_path) as f:
+        clust: dict[str, dict[str, dict]] = json.load(f)
+
+    diff_dir = output_dir / "difficulty_correlation"
+    diff_dir.mkdir(parents=True, exist_ok=True)
+
+    diff_metrics = [
+        ("silhouette",          "Silhouette"),
+        ("inter_centroid_dist", "Inter-Centroid Dist"),
+        ("fisher_dr",           "Fisher DR"),
+    ]
+    perf_metrics = [("f1_macro", "F1 Macro"), ("sem_sim", "Sem Sim")]
+
+    all_datasets = sorted(set(
+        ds for m in list(all_cls_results.values()) + list(all_desc_results.values())
+        for ds in m
+    ))
+
+    def _mean_perf(results: dict[str, dict[str, dict]], metric: str, ds: str) -> float | None:
+        vals = [m[ds][metric] for m in results.values() if ds in m and metric in m[ds]]
+        return float(np.mean(vals)) if vals else None
+
+    for backbone, ds_clust in clust.items():
+        short = backbone.split("/")[-1]
+        n_diff = len(diff_metrics)
+        n_perf = len(perf_metrics)
+        fig, axes = plt.subplots(n_perf, n_diff,
+                                 figsize=(4 * n_diff, 4 * n_perf), squeeze=False)
+
+        for pi, (pm, pl) in enumerate(perf_metrics):
+            results_src = all_cls_results if pm == "f1_macro" else all_desc_results
+            for di, (dm, dl) in enumerate(diff_metrics):
+                ax = axes[pi][di]
+                xs, ys, ds_names = [], [], []
+                for ds in all_datasets:
+                    diff_val = ds_clust.get(ds, {}).get(dm)
+                    perf_val = _mean_perf(results_src, pm, ds)
+                    if diff_val is not None and perf_val is not None:
+                        xs.append(diff_val)
+                        ys.append(perf_val)
+                        ds_names.append(ds.replace("_classification", "").replace("_", " "))
+                if len(xs) < 2:
+                    ax.set_visible(False)
+                    continue
+                r = float(np.corrcoef(xs, ys)[0, 1])
+                ax.scatter(xs, ys, alpha=0.75, s=40, edgecolors="black", linewidths=0.4)
+                for x, y, name in zip(xs, ys, ds_names):
+                    ax.annotate(name, (x, y), fontsize=5, alpha=0.7,
+                                xytext=(3, 3), textcoords="offset points")
+                m_, b_ = np.polyfit(xs, ys, 1)
+                x_line = np.linspace(min(xs), max(xs), 100)
+                ax.plot(x_line, m_ * x_line + b_, color="red", linewidth=1.2)
+                ax.set_xlabel(f"{dl} (↑ easier)"); ax.set_ylabel(pl)
+                ax.set_title(f"{dl} vs {pl}\nr = {r:.3f}", fontsize=9)
+
+        fig.suptitle(f"Dataset Difficulty vs Performance — {short}", fontsize=11)
+        plt.tight_layout()
+        safe = short.replace("/", "_")
+        path = diff_dir / f"difficulty_vs_perf_{safe}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def _worker_language(kwargs: dict) -> None:
@@ -1148,6 +1223,8 @@ def main(args: argparse.Namespace) -> None:
     plot_desc_sem_sim_per_dataset(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
     plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
+    plot_difficulty_correlation(all_model_cls_metrics, all_model_desc_metrics,
+                                Path(args.clustering_metrics), output_dir)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
@@ -1261,6 +1338,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip_existing", action="store_true",
         help="Skip inference and judging for models whose output CSVs already exist; load from disk instead",
+    )
+    parser.add_argument(
+        "--clustering_metrics", default="outputs/clustering_eval/clustering_metrics.json",
+        help="Path to clustering_metrics.json from clustering eval (for difficulty correlation plots)",
     )
     args = parser.parse_args()
     if not args.judge_model and args.models:
