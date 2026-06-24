@@ -841,7 +841,7 @@ def plot_projector_before_after(
     ax.set_xticks(x)
     ax.set_xticklabels([b.split("/")[-1] for b in labels], rotation=15, ha="right")
     ax.set_ylim(0, 1.2)
-    ax.set_ylabel("LR F1 Macro (mean across datasets)")
+    ax.set_ylabel("F1 Macro")
     ax.set_title("Projector Separability: Pre vs Post-Projector\n"
                  "Ratio > 1 = projector preserves/improves class structure  "
                  "Ratio < 1 = projector destroys class structure")
@@ -849,6 +849,56 @@ def plot_projector_before_after(
     plt.tight_layout()
 
     path = output_dir / "projector_before_after.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_projector_task_comparison(
+    by_task_pre: dict[str, dict[str, float]],   # {task: {backbone: f1}}
+    by_task_post: dict[str, dict[str, float]],  # {task: {backbone_postproj: f1}}
+    output_dir: Path,
+):
+    """Per-task grouped bar chart: pre vs post-projector F1 for each VLM backbone."""
+    # Collect VLM backbones that have both pre and post entries
+    backbones = []
+    for b in next(iter(by_task_pre.values()), {}).keys():
+        post_key = f"{b}_postproj"
+        if any(post_key in by_task_post.get(tt, {}) for tt in by_task_pre):
+            backbones.append(b)
+    if not backbones or not by_task_pre:
+        return
+
+    task_types = sorted(by_task_pre.keys())
+    x = np.arange(len(task_types))
+    n_backbones = len(backbones)
+    width = 0.8 / (n_backbones * 2)
+
+    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 3), 5))
+    colors_pre  = plt.cm.tab10.colors[:n_backbones]
+    colors_post = [tuple(min(c * 1.4, 1.0) for c in col) for col in colors_pre]
+
+    for i, backbone in enumerate(backbones):
+        post_key = f"{backbone}_postproj"
+        short = backbone.split("/")[-1]
+        pre_vals  = [by_task_pre.get(tt, {}).get(backbone, 0.0)  for tt in task_types]
+        post_vals = [by_task_post.get(tt, {}).get(post_key, 0.0) for tt in task_types]
+        base = (i * 2 - (n_backbones - 1)) * width
+        b1 = ax.bar(x + base,         pre_vals,  width, label=f"{short} pre",  color=colors_pre[i])
+        b2 = ax.bar(x + base + width,  post_vals, width, label=f"{short} post", color=colors_post[i], alpha=0.8)
+        for bar, v in list(zip(b1, pre_vals)) + list(zip(b2, post_vals)):
+            ax.text(bar.get_x() + bar.get_width() / 2, v + 0.005,
+                    f"{v:.2f}", ha="center", va="bottom", fontsize=6)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_ylim(0, 1.2)
+    ax.set_ylabel("F1 Macro")
+    ax.set_title("Projector Separability by Task Type: Pre vs Post-Projector (FC combined)")
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+
+    path = output_dir / "projector_by_task.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -1015,10 +1065,17 @@ def plot_master_comparison(results: dict, output_dir: Path):
 
 
 def plot_task_summary(results: dict, output_dir: Path):
-    """Bar chart comparing backbone F1 per task type using LR combined scores."""
-    # Prefer by_task_lr_combined (consistent with LR combined classifier);
-    # fall back to by_task (per-dataset mean) for old result files.
-    by_task = results.get("by_task_lr_combined") or results.get("by_task", {})
+    """Bar chart comparing backbone F1 per task type; LR combined preferred, FC combined fallback."""
+    by_task = (
+        results.get("by_task_lr_combined")
+        or results.get("by_task_fc_combined")
+        or results.get("by_task", {})
+    )
+    probe_label = (
+        "LR combined" if results.get("by_task_lr_combined")
+        else "FC combined" if results.get("by_task_fc_combined")
+        else "per-dataset mean"
+    )
     task_types = list(by_task.keys())
     if not task_types:
         return
@@ -1045,7 +1102,7 @@ def plot_task_summary(results: dict, output_dir: Path):
     ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("F1 Macro")
-    ax.set_title("Linear Probe — F1 by Task Type (LR combined)")
+    ax.set_title(f"Linear Probe — F1 by Task Type ({probe_label})")
     ax.legend()
     plt.tight_layout()
 
@@ -1105,7 +1162,7 @@ def _plots_only_mode(args, output_dir: Path) -> None:
 
     if results.get("lr_combined") or results.get("fc_combined"):
         plot_overall_summary(results, output_dir)
-    if results.get("by_task_lr_combined") or results.get("by_task"):
+    if results.get("by_task_lr_combined") or results.get("by_task_fc_combined") or results.get("by_task"):
         plot_task_summary(results, output_dir)
 
     for backbone, (X_te, y_te) in fc_comb_embed_store.items():
@@ -1119,8 +1176,14 @@ def _plots_only_mode(args, output_dir: Path) -> None:
     if lr_comb_report_store:
         plot_per_class_f1(lr_comb_report_store, "combined_lr", f1_dir)
 
-    if results.get("postproj_lr_combined") and results.get("lr_combined"):
+    if results.get("lr_combined") and results.get("postproj_lr_combined"):
         plot_projector_before_after(results["lr_combined"], results["postproj_lr_combined"], output_dir)
+    elif results.get("fc_combined") and results.get("postproj_fc_combined"):
+        plot_projector_before_after(results["fc_combined"], results["postproj_fc_combined"], output_dir)
+    if results.get("by_task_fc_combined") and results.get("by_task_postproj_fc_combined"):
+        plot_projector_task_comparison(
+            results["by_task_fc_combined"], results["by_task_postproj_fc_combined"], output_dir
+        )
 
     print(f"\nPlots saved to {output_dir}/")
 
@@ -1618,6 +1681,23 @@ def main(args):
         y_all_lbl = le_comb.inverse_transform(np.concatenate([y_tr, y_te], axis=0)).tolist()
         postproj_lr_comb_embed_store[postproj_key] = (X_all, y_all_lbl)
 
+    # Phase 2e-FC: FC combined on post-projector embeddings (VLMs only — always runs)
+    postproj_fc_combined: dict[str, dict] = {}
+    postproj_fc_comb_report_store: dict[str, dict] = {}
+    for postproj_key in postproj_embeddings:
+        split = build_combined_split(postproj_embeddings, postproj_key, n_samples=_n_combined)
+        if split is None:
+            continue
+        X_tr, X_te, y_tr, y_te, le_comb, _ = split
+        print(f"\n=== FC probe (post-proj combined): {postproj_key}  classes={len(le_comb.classes_)} ===")
+        metrics, y_test_lbl, y_pred_lbl = run_fc_probe(
+            X_tr, X_te, y_tr, y_te, le_comb, postproj_key,
+            epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
+        )
+        postproj_fc_combined[postproj_key] = {k: v for k, v in metrics.items() if k != "train_losses"}
+        postproj_fc_comb_report_store[postproj_key] = metrics["per_class_report_dict"]
+        plot_loss_curve(metrics["train_losses"], f"postproj_{postproj_key}_fc", loss_dir)
+
     # Phase 3: aggregate by task type and overall
     ds_to_task = {ds.agml_name: ds.task_type for ds in datasets}
 
@@ -1661,6 +1741,42 @@ def main(args):
         for tt, backbone_map in by_task_combined_backbone.items()
     }
 
+    # Same breakdown for FC combined (pre-projector)
+    _by_task_fc_backbone: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for backbone, report in fc_comb_report_store.items():
+        for cls, metrics in report.items():
+            if cls in _skip:
+                continue
+            tt = _class_to_task.get(cls)
+            if tt:
+                _by_task_fc_backbone[tt][backbone].append(metrics.get("f1-score", 0.0))
+
+    by_task_fc_combined = {
+        tt: {
+            backbone: round(float(np.mean(vals)), 4)
+            for backbone, vals in backbone_map.items()
+        }
+        for tt, backbone_map in _by_task_fc_backbone.items()
+    }
+
+    # FC post-projector task breakdown
+    _by_task_postproj_fc: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for backbone, report in postproj_fc_comb_report_store.items():
+        for cls, metrics in report.items():
+            if cls in _skip:
+                continue
+            tt = _class_to_task.get(cls)
+            if tt:
+                _by_task_postproj_fc[tt][backbone].append(metrics.get("f1-score", 0.0))
+
+    by_task_postproj_fc_combined = {
+        tt: {
+            backbone: round(float(np.mean(vals)), 4)
+            for backbone, vals in backbone_map.items()
+        }
+        for tt, backbone_map in _by_task_postproj_fc.items()
+    }
+
     results = {
         # LR per-dataset (always populated)
         "per_dataset": {
@@ -1701,11 +1817,15 @@ def main(args):
         "lr_combined": lr_combined,
         "lr_combined_reports": lr_comb_report_store,
         "by_task_lr_combined": by_task_lr_combined,
-        # FC combined  (populated only with --all_experiments)
+        # FC combined (always runs)
         "fc_combined": fc_combined,
+        "by_task_fc_combined": by_task_fc_combined,
         # Post-projector LR combined (VLMs only — always runs)
         "postproj_lr_combined": postproj_lr_combined,
         "postproj_lr_combined_reports": postproj_lr_comb_report_store,
+        # Post-projector FC combined (VLMs only — always runs)
+        "postproj_fc_combined": postproj_fc_combined,
+        "by_task_postproj_fc_combined": by_task_postproj_fc_combined,
     }
 
     # Save results
@@ -1764,13 +1884,19 @@ def main(args):
     # Overall backbone comparison (uses fc_combined if lr_combined not run)
     if results["lr_combined"] or results["fc_combined"]:
         plot_overall_summary(results, output_dir)
-    if results.get("by_task_lr_combined") or results.get("by_task"):
+    if results.get("by_task_lr_combined") or results.get("by_task_fc_combined") or results.get("by_task"):
         plot_task_summary(results, output_dir)
     if all_experiments and results["overall"]:
         plot_master_comparison(results, output_dir)
 
-    if postproj_lr_combined:
+    # Projector before/after: prefer LR vs LR (apples-to-apples); fall back to FC vs FC
+    if results["lr_combined"] and postproj_lr_combined:
         plot_projector_before_after(results["lr_combined"], postproj_lr_combined, output_dir)
+    elif results["fc_combined"] and postproj_fc_combined:
+        plot_projector_before_after(results["fc_combined"], postproj_fc_combined, output_dir)
+    # Per-task projector comparison (FC)
+    if by_task_fc_combined and by_task_postproj_fc_combined:
+        plot_projector_task_comparison(by_task_fc_combined, by_task_postproj_fc_combined, output_dir)
 
     # FC combined plots (always — default probe mode)
     for backbone, (X_te, y_te) in fc_comb_embed_store.items():
@@ -1794,12 +1920,14 @@ def main(args):
     if combined_class_counts:
         plot_long_tail(combined_class_counts, output_dir)
 
-    # Per-class accuracy vs frequency (pre + post projector, LR combined)
-    if lr_comb_report_store and combined_class_counts:
+    # Per-class accuracy vs frequency (pre + post projector; FC default, LR if run)
+    _pre_reports_for_freq = lr_comb_report_store or fc_comb_report_store
+    _post_reports_for_freq = postproj_lr_comb_report_store or postproj_fc_comb_report_store
+    if _pre_reports_for_freq and combined_class_counts:
         plot_class_accuracy_vs_frequency(
             combined_class_counts,
-            lr_comb_report_store,
-            postproj_lr_comb_report_store,
+            _pre_reports_for_freq,
+            _post_reports_for_freq,
             output_dir,
         )
 
@@ -1994,7 +2122,7 @@ if __name__ == "__main__":
         # Overall backbone comparison (LR combined)
         if results.get("lr_combined"):
             plot_overall_summary(results, output_dir)
-        if results.get("by_task_lr_combined") or results.get("by_task"):
+        if results.get("by_task_lr_combined") or results.get("by_task_fc_combined") or results.get("by_task"):
             plot_task_summary(results, output_dir)
 
         print(f"Plots saved to {output_dir}/")
