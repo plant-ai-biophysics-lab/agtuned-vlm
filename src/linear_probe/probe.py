@@ -503,7 +503,7 @@ def run_fc_probe(
 
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True)
 
-    train_losses, val_losses = [], []
+    train_losses = []
     for epoch in range(epochs):
         fc.train()
         epoch_loss = 0.0
@@ -516,13 +516,8 @@ def run_fc_probe(
             epoch_loss += loss.item() * len(xb)
         train_losses.append(epoch_loss / len(X_tr))
 
-        fc.eval()
-        with torch.no_grad():
-            val_loss = criterion(fc(X_te), y_te_t).item()
-        val_losses.append(val_loss)
-
         if (epoch + 1) % max(1, epochs // 10) == 0:
-            print(f"  epoch {epoch+1:>4}/{epochs}  train_loss={train_losses[-1]:.4f}  val_loss={val_loss:.4f}")
+            print(f"  epoch {epoch+1:>4}/{epochs}  train_loss={train_losses[-1]:.4f}")
 
     fc.eval()
     with torch.no_grad():
@@ -547,7 +542,6 @@ def run_fc_probe(
         "f1_weighted": round(f1_weighted, 4),
         "per_class_report_dict": report_dict,
         "train_losses": train_losses,
-        "val_losses": val_losses,
     }
     return metrics, y_test_labels, y_pred_labels
 
@@ -754,12 +748,14 @@ def plot_per_class_f1(backbone_reports: dict[str, dict], dataset_name: str, outp
 
 
 def plot_overall_summary(results: dict, output_dir: Path):
-    """Bar chart comparing backbone F1 using LR combined (one global classifier)."""
-    backbones = list(results["lr_combined"].keys())
+    """Bar chart comparing backbone F1; uses LR combined if available, falls back to FC combined."""
+    combined = results.get("lr_combined") or results.get("fc_combined", {})
+    probe_label = "LR combined" if results.get("lr_combined") else "FC combined"
+    backbones = list(combined.keys())
     if not backbones:
         return
-    f1_macros = [results["lr_combined"][b]["f1_macro"] for b in backbones]
-    accuracies = [results["lr_combined"][b]["accuracy"] for b in backbones]
+    f1_macros = [combined[b]["f1_macro"] for b in backbones]
+    accuracies = [combined[b]["accuracy"] for b in backbones]
 
     x = np.arange(len(backbones))
     width = 0.35
@@ -778,7 +774,7 @@ def plot_overall_summary(results: dict, output_dir: Path):
     ax.set_xticklabels([b.split("/")[-1] for b in backbones], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("Score")
-    ax.set_title("Linear Probe — Overall Backbone Comparison (LR combined, all classes)")
+    ax.set_title(f"Linear Probe — Overall Backbone Comparison ({probe_label}, all classes)")
     ax.legend()
     plt.tight_layout()
 
@@ -788,14 +784,13 @@ def plot_overall_summary(results: dict, output_dir: Path):
     print(f"  Saved: {path}")
 
 
-def plot_loss_curve(train_losses: list[float], val_losses: list[float], label: str, output_dir: Path):
+def plot_loss_curve(train_losses: list[float], label: str, output_dir: Path):
     fig, ax = plt.subplots(figsize=(8, 4))
     epochs = range(1, len(train_losses) + 1)
     ax.plot(epochs, train_losses, label="Train loss")
-    ax.plot(epochs, val_losses, label="Val loss", linestyle="--")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Cross-entropy loss")
-    ax.set_title(f"FC Probe Loss — {label}")
+    ax.set_title(f"FC Probe Training Loss — {label}")
     ax.legend()
     plt.tight_layout()
     path = output_dir / f"fc_loss_{_safe_name(label)}.png"
@@ -1062,6 +1057,74 @@ def plot_task_summary(results: dict, output_dir: Path):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _plots_only_mode(args, output_dir: Path) -> None:
+    """Regenerate all plots from saved probe results without rerunning embeddings/training."""
+    import json
+
+    tsne_dir = output_dir / "tsne";              tsne_dir.mkdir(exist_ok=True, parents=True)
+    cm_dir   = output_dir / "confusion_matrices"; cm_dir.mkdir(exist_ok=True, parents=True)
+    f1_dir   = output_dir / "per_class_f1";     f1_dir.mkdir(exist_ok=True, parents=True)
+
+    results_path = output_dir / "linear_probe_results.json"
+    if not results_path.exists():
+        print(f"ERROR: {results_path} not found. Run the full probe first.")
+        return
+
+    with open(results_path) as _f:
+        results = json.load(_f)
+
+    # Reconstruct fc_comb_report_store from saved results
+    fc_comb_report_store: dict[str, dict] = {
+        b: m["per_class_report_dict"]
+        for b, m in results.get("fc_combined", {}).items()
+        if "per_class_report_dict" in m
+    }
+
+    # Load pred store
+    preds_path = output_dir / "fc_comb_preds.json"
+    fc_comb_pred_store: dict[str, tuple] = {}
+    if preds_path.exists():
+        with open(preds_path) as _f:
+            _raw = json.load(_f)
+        fc_comb_pred_store = {b: (v["y_true"], v["y_pred"]) for b, v in _raw.items()}
+    else:
+        print(f"  [warn] {preds_path} not found — confusion matrices skipped")
+
+    # Load embed store (for t-SNE)
+    fc_comb_embed_store: dict[str, tuple] = {}
+    embed_dir = output_dir / "fc_comb_embeds"
+    for backbone in results.get("fc_combined", {}):
+        npz_path = embed_dir / f"{_safe_name(backbone)}.npz"
+        if npz_path.exists():
+            data = np.load(str(npz_path), allow_pickle=True)
+            fc_comb_embed_store[backbone] = (data["X"], list(data["y_labels"]))
+        else:
+            print(f"  [warn] embed file missing for {backbone} — t-SNE skipped")
+
+    print("\n=== Generating plots (plots_only mode) ===")
+
+    if results.get("lr_combined") or results.get("fc_combined"):
+        plot_overall_summary(results, output_dir)
+    if results.get("by_task_lr_combined") or results.get("by_task"):
+        plot_task_summary(results, output_dir)
+
+    for backbone, (X_te, y_te) in fc_comb_embed_store.items():
+        plot_tsne(X_te, y_te, f"combined_{backbone}_fc", tsne_dir)
+    if fc_comb_report_store:
+        plot_per_class_f1(fc_comb_report_store, "combined_fc", f1_dir)
+    for backbone, (y_true, y_pred) in fc_comb_pred_store.items():
+        plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_fc", cm_dir)
+
+    lr_comb_report_store = results.get("lr_combined_reports", {})
+    if lr_comb_report_store:
+        plot_per_class_f1(lr_comb_report_store, "combined_lr", f1_dir)
+
+    if results.get("postproj_lr_combined") and results.get("lr_combined"):
+        plot_projector_before_after(results["lr_combined"], results["postproj_lr_combined"], output_dir)
+
+    print(f"\nPlots saved to {output_dir}/")
+
+
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
@@ -1073,6 +1136,10 @@ def main(args):
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(args, "plots_only", False):
+        _plots_only_mode(args, output_dir)
+        return
 
     use_embedding_cache = getattr(args, "cache_embeddings", False)
     cache_dir = Path(getattr(args, "cache_dir", None) or (output_dir / "embedding_cache"))
@@ -1461,12 +1528,12 @@ def main(args):
                     epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
                 )
                 fc_per_dataset[agml_name]["backbones"][backbone] = {
-                    k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")
+                    k: v for k, v in metrics.items() if k != "train_losses"
                 }
                 fc_pred_store[agml_name][backbone]   = (y_test_lbl, y_pred_lbl)
                 fc_report_store[agml_name][backbone] = metrics["per_class_report_dict"]
                 plot_loss_curve(
-                    metrics["train_losses"], metrics["val_losses"],
+                    metrics["train_losses"],
                     f"{agml_name}_{backbone}_fc", loss_dir,
                 )
 
@@ -1476,6 +1543,7 @@ def main(args):
     fc_combined: dict[str, dict] = {}
     fc_comb_pred_store:   dict[str, tuple] = {}
     fc_comb_report_store: dict[str, dict]  = {}
+    fc_comb_embed_store:  dict[str, tuple] = {}  # {backbone: (X_te_np, y_test_labels)}
 
     for backbone in available_backbones:
         split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
@@ -1487,17 +1555,28 @@ def main(args):
             X_tr, X_te, y_tr, y_te, le_comb, backbone,
             epochs=fc_epochs, lr=fc_lr, batch_size=fc_batch_size,
         )
-        fc_combined[backbone] = {k: v for k, v in metrics.items() if k not in ("train_losses", "val_losses")}
+        fc_combined[backbone] = {k: v for k, v in metrics.items() if k != "train_losses"}
         fc_comb_pred_store[backbone]   = (y_test_lbl, y_pred_lbl)
         fc_comb_report_store[backbone] = metrics["per_class_report_dict"]
+        fc_comb_embed_store[backbone]  = (X_te, y_test_lbl)
         plot_loss_curve(
-            metrics["train_losses"], metrics["val_losses"],
+            metrics["train_losses"],
             f"combined_{backbone}_fc", loss_dir,
         )
         save_json(output_dir / "linear_probe_results_intermediate.json", {
             "fc_combined": fc_combined,
             "fc_combined_reports": fc_comb_report_store,
         })
+
+    # Persist FC combined stores so --plots_only can regenerate plots without retraining
+    _embed_dir = output_dir / "fc_comb_embeds"
+    _embed_dir.mkdir(exist_ok=True)
+    for _b, (_X, _y) in fc_comb_embed_store.items():
+        np.savez(str(_embed_dir / f"{_safe_name(_b)}.npz"), X=_X, y_labels=np.array(_y, dtype=object))
+    save_json(output_dir / "fc_comb_preds.json", {
+        b: {"y_true": yt, "y_pred": yp}
+        for b, (yt, yp) in fc_comb_pred_store.items()
+    })
 
     # Phase 2d: LR combined (opt-in via --lr_combined)
     lr_combined: dict[str, dict] = {}
@@ -1682,8 +1761,8 @@ def main(args):
     # Plots
     print("\n=== Generating plots ===")
 
-    # Overall backbone comparison + task-type summary (always — Phase 2a always runs now)
-    if results["lr_combined"]:
+    # Overall backbone comparison (uses fc_combined if lr_combined not run)
+    if results["lr_combined"] or results["fc_combined"]:
         plot_overall_summary(results, output_dir)
     if results.get("by_task_lr_combined") or results.get("by_task"):
         plot_task_summary(results, output_dir)
@@ -1693,7 +1772,15 @@ def main(args):
     if postproj_lr_combined:
         plot_projector_before_after(results["lr_combined"], postproj_lr_combined, output_dir)
 
-    # LR combined plots (always)
+    # FC combined plots (always — default probe mode)
+    for backbone, (X_te, y_te) in fc_comb_embed_store.items():
+        plot_tsne(X_te, y_te, f"combined_{backbone}_fc", tsne_dir)
+    if fc_comb_report_store:
+        plot_per_class_f1(fc_comb_report_store, "combined_fc", f1_dir)
+    for backbone, (y_true, y_pred) in fc_comb_pred_store.items():
+        plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_fc", cm_dir)
+
+    # LR combined plots (opt-in via --lr_combined)
     for backbone, (X_te, y_te) in lr_comb_embed_store.items():
         plot_tsne(X_te, y_te, f"combined_{backbone}_lr", tsne_dir)
     for postproj_key, (X_all, y_all) in postproj_lr_comb_embed_store.items():
@@ -1730,14 +1817,11 @@ def main(args):
                 plot_per_class_f1(fc_report_store[agml_name], f"{agml_name}_fc", f1_dir)
             for backbone, (y_true, y_pred) in fc_pred_store[agml_name].items():
                 plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_fc", cm_dir)
-        if fc_comb_report_store:
-            plot_per_class_f1(fc_comb_report_store, "combined_fc", f1_dir)
-        for backbone, (y_true, y_pred) in fc_comb_pred_store.items():
-            plot_confusion_matrix(y_true, y_pred, f"combined_{backbone}_fc", cm_dir)
 
-    # Update pipeline results CSV
+    # Update pipeline results CSV (fc_combined is default; lr_combined overrides if run)
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
-    for backbone, m in results["lr_combined"].items():
+    _probe_results_for_csv = results["lr_combined"] or results["fc_combined"]
+    for backbone, m in _probe_results_for_csv.items():
         update_pipeline_results(
             csv_path=pipeline_csv,
             model=backbone,
@@ -1860,6 +1944,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cache_dir", type=str, default=None,
         help="Directory to store embedding cache files. Defaults to <output_dir>/embedding_cache/.",
+    )
+    parser.add_argument(
+        "--plots_only", action="store_true",
+        help="Regenerate plots from a previous run without re-extracting embeddings or retraining. "
+             "Requires linear_probe_results.json, fc_comb_preds.json, and fc_comb_embeds/ in --output_dir.",
     )
     args = parser.parse_args()
 
