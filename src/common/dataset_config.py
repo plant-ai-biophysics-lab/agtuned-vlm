@@ -18,6 +18,7 @@ class DatasetConfig:
     n_images: int = 0
     location: list = None
     skip: bool = False
+    skip_description: bool = False
     notes: str = ""
     class_overrides: dict = None  # {clean_class_label: task_type}
 
@@ -50,6 +51,7 @@ def load_datasets(config_path: Path) -> list[DatasetConfig]:
             classes=d.get("classes", []),
             location=d.get("location", []),
             skip=d.get("skip", False),
+            skip_description=d.get("skip_description", False),
             notes=d.get("notes", ""),
             class_overrides=d.get("class_overrides", {}),
         ))

@@ -1080,7 +1080,7 @@ def main(args: argparse.Namespace) -> None:
     else:
         images_dir_val = None
         datasets_cfg = datasets_by_name(Path(args.config))
-        active_set = {name for name, ds in datasets_cfg.items() if not ds.skip}
+        active_set = {name for name, ds in datasets_cfg.items() if not ds.skip and not ds.skip_description}
         records = _apply_healthy_override([
             r for r in load_jsonl(Path(args.descriptions_jsonl), args.n_samples)
             if r.get("metadata", {}).get("agml_dataset") in active_set

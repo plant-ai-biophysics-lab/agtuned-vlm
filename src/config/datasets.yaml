@@ -401,3 +401,25 @@ datasets:
     location: [oceania, australia]
     skip: false
     notes: "Invasive weed species in Australian rangelands; 'negative' = no weed"
+
+  # ── Multi-crop datasets (classification only, no description) ────────────────
+
+  - agml_name: plant_village_classification
+    crop: null
+    task_type: disease
+    n_images: 55448
+    classes: []
+    location: [worldwide, worldwide]
+    skip: false
+    skip_description: true
+    notes: "39 classes across 14 crops; description ground truth is too heterogeneous for meaningful Q3/Q4 evaluation"
+
+  - agml_name: plant_doc_classification
+    crop: null
+    task_type: disease
+    n_images: 2598
+    classes: []
+    location: [worldwide, worldwide]
+    skip: false
+    skip_description: true
+    notes: "28 classes across multiple crops; description ground truth is too heterogeneous for meaningful Q3/Q4 evaluation"

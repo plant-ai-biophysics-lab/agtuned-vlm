@@ -1050,7 +1050,11 @@ def main(args: argparse.Namespace) -> None:
         cls_records  = list(load_jsonl(Path(dg_cls), args.n_samples))
     else:
         datasets_cfg = datasets_by_name(Path(args.config))
-        desc_records = _apply_healthy_override(load_jsonl(Path(args.descriptions_jsonl), args.n_samples))
+        skip_desc_set = {name for name, ds in datasets_cfg.items() if ds.skip_description}
+        desc_records = _apply_healthy_override([
+            r for r in load_jsonl(Path(args.descriptions_jsonl), args.n_samples)
+            if r.get("metadata", {}).get("agml_dataset") not in skip_desc_set
+        ])
         cls_records  = load_jsonl(Path(args.classification_jsonl), args.n_samples)
 
     ds_to_task = {name: ds.task_type for name, ds in datasets_cfg.items()}
