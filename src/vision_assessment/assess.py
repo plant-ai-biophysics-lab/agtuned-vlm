@@ -28,6 +28,19 @@ from PIL import Image as PILImage
 from vllm import LLM, SamplingParams
 
 from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
+from src.common.distribution_plots import (
+    gather_cls_per_class_by_dataset,
+    gather_cls_values_by_dataset,
+    gather_cls_values_by_task,
+    gather_desc_per_sample_by_dataset,
+    gather_desc_values_by_dataset,
+    gather_desc_values_by_task,
+    gather_judge_values_by_dataset,
+    gather_judge_values_by_task,
+    plot_overall_distribution,
+    plot_per_dataset_distribution,
+    plot_per_task_distribution,
+)
 from src.common.io import (
     Tee,
     load_jsonl,
@@ -481,8 +494,10 @@ def plot_cls_summary_per_dataset(
     multimodal_models: set[str] | None = None,
     naive_cls_metrics: dict | None = None,
     uniform_cls_metrics: dict | None = None,
+    all_judge_by_dataset: dict[str, dict] | None = None,
 ) -> None:
     multimodal_models = multimodal_models or set()
+    all_judge_by_dataset = all_judge_by_dataset or {}
     all_datasets = []
     for model_results in all_cls_results.values():
         for ds in model_results:
@@ -496,13 +511,28 @@ def plot_cls_summary_per_dataset(
     x = np.arange(len(all_datasets))
     width = 0.8 / len(models)
 
+    judge_label_drawn = False
     fig, ax = plt.subplots(figsize=(max(10, len(all_datasets) * len(models) * 0.5), 5))
     for i, model_key in enumerate(models):
         per_ds = all_cls_results[model_key]
-        vals = [per_ds.get(ds, {}).get("f1_macro", 0.0) for ds in all_datasets]
         offset = (i - (len(models) - 1) / 2) * width
-        ax.bar(x + offset, vals, width, label=model_key.split("/")[-1], color=color_map[model_key], alpha=0.85,
-               hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+        color  = color_map[model_key]
+        hatch  = _hatch(model_key, multimodal_models)
+        has_judge = bool(all_judge_by_dataset.get(model_key))
+        sub_w = width * 0.46 if has_judge else width
+        for xi, ds in enumerate(all_datasets):
+            val = per_ds.get(ds, {}).get("f1_macro", 0.0)
+            lbl = model_key.split("/")[-1] if xi == 0 else "_nolegend_"
+            ax.bar(xi + offset - (sub_w / 2 if has_judge else 0), val, sub_w,
+                   color=color, alpha=0.85, hatch=hatch,
+                   edgecolor="black", linewidth=0.5, label=lbl)
+            if has_judge:
+                jval = all_judge_by_dataset.get(model_key, {}).get(ds, {}).get("judge_f1_macro")
+                if jval is not None:
+                    jlbl = "judge" if not judge_label_drawn else "_nolegend_"
+                    ax.bar(xi + offset + sub_w / 2, jval, sub_w,
+                           color=color, alpha=0.4, edgecolor="black", linewidth=0.5, label=jlbl)
+                    judge_label_drawn = True
     _draw_naive_line(ax, None, "f1_macro", label=True, uniform_overall=uniform_cls_metrics)
     ax.set_xticks(x)
     ax.set_xticklabels(
@@ -597,24 +627,30 @@ def plot_cls_summary_per_task(
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         judge_key = _JUDGE_METRIC_MAP.get(metric)
+        has_judge_any = bool(judge_key and all_judge_by_task)
+        sub_w = width * 0.46 if has_judge_any else width
         for i, model_key in enumerate(models):
             per_task = all_cls_by_task.get(model_key, {})
-            vals = [per_task.get(tt, {}).get(metric, 0.0) for tt in task_types]
             offset = (i - (len(models) - 1) / 2) * width
-            bars = ax.bar(x + offset, vals, width, label=model_key, color=color_map[model_key], alpha=0.85,
-                          hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
-            for ti, (bar, tt) in enumerate(zip(bars, task_types)):
-                h = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
-                        f"{h:.2f}", ha="center", va="bottom", fontsize=7)
-                jval = None
-                if judge_key and all_judge_by_task:
+            color  = color_map[model_key]
+            hatch  = _hatch(model_key, multimodal_models)
+            for ti, tt in enumerate(task_types):
+                val = per_task.get(tt, {}).get(metric, 0.0)
+                lbl = model_key if ti == 0 else "_nolegend_"
+                bx = ti + offset - (sub_w / 2 if has_judge_any else 0)
+                ax.bar(bx, val, sub_w, color=color, alpha=0.85, hatch=hatch,
+                       edgecolor="black", linewidth=0.5, label=lbl)
+                ax.text(bx + sub_w / 2, val + 0.005, f"{val:.2f}",
+                        ha="center", va="bottom", fontsize=6)
+                if has_judge_any:
                     jval = all_judge_by_task.get(model_key, {}).get(tt, {}).get(judge_key)
-                if jval is not None:
-                    _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
-                    judge_label_drawn = True
+                    if jval is not None:
+                        jlbl = "judge" if not judge_label_drawn else "_nolegend_"
+                        ax.bar(ti + offset + sub_w / 2, jval, sub_w,
+                               color=color, alpha=0.4, edgecolor="black", linewidth=0.5, label=jlbl)
+                        judge_label_drawn = True
         _draw_naive_line(ax, None, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
-        ax.set_xticks(x)
+        ax.set_xticks(np.arange(len(task_types)))
         ax.set_xticklabels([_task_label(tt) for tt in task_types], rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.15)
         ax.set_title(metric.replace("_", " ").title())
@@ -755,20 +791,24 @@ def plot_overall_cls_summary(
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
         judge_key = _JUDGE_METRIC_MAP.get(metric)
+        has_judge_any = bool(judge_key and all_judge_metrics)
+        sub_w = bar_w * 0.46 if has_judge_any else bar_w
         vals = [
             float(np.mean([m.get(metric, 0.0) for m in all_cls_results[mk].values()]))
             if all_cls_results[mk] else 0.0
             for mk in models
         ]
         for xi, (mk, v) in enumerate(zip(models, vals)):
-            bar = ax.bar(xi, v, bar_w, color=color_map[mk], alpha=0.85,
-                         hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5,
-                         label=mk)[0]
-            ax.text(xi, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
-            if judge_key:
+            bx = xi - (sub_w / 2 if has_judge_any else 0)
+            ax.bar(bx, v, sub_w, color=color_map[mk], alpha=0.85,
+                   hatch=_hatch(mk, multimodal_models), edgecolor="black", linewidth=0.5, label=mk)
+            ax.text(bx + sub_w / 2, v + 0.008, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+            if has_judge_any:
                 jval = all_judge_metrics.get(mk, {}).get(judge_key)
                 if jval is not None:
-                    _draw_judge_marker(ax, bar, jval, label=(not judge_label_drawn))
+                    jlbl = "judge" if not judge_label_drawn else "_nolegend_"
+                    ax.bar(xi + sub_w / 2, jval, sub_w,
+                           color=color_map[mk], alpha=0.4, edgecolor="black", linewidth=0.5, label=jlbl)
                     judge_label_drawn = True
         _draw_naive_line(ax, None, metric, label=(mi == 0), uniform_overall=uniform_cls_metrics)
         ax.set_xticks(x)
@@ -1183,6 +1223,11 @@ def main(args: argparse.Namespace) -> None:
                 task_rows = [r for r in cls_rows if r.get("task_type") == tt]
                 by_task_judge[tt] = judged_summary(task_rows)
             summary_metrics[model_id]["judge_by_task"] = by_task_judge
+            by_dataset_judge: dict[str, dict] = {}
+            for ds in sorted(set(r.get("agml_dataset", "") for r in cls_rows)):
+                ds_rows = [r for r in cls_rows if r.get("agml_dataset") == ds]
+                by_dataset_judge[ds] = judged_summary(ds_rows)
+            summary_metrics[model_id]["judge_by_dataset"] = by_dataset_judge
 
         del judge_llm, judge_tok
         gc.collect()
@@ -1264,9 +1309,10 @@ def main(args: argparse.Namespace) -> None:
     ])
     judge_metrics = {mid: m["judge"] for mid, m in summary_metrics.items() if m.get("judge")}
     judge_by_task = {mid: m["judge_by_task"] for mid, m in summary_metrics.items() if m.get("judge_by_task")}
+    judge_by_dataset = {mid: m["judge_by_dataset"] for mid, m in summary_metrics.items() if m.get("judge_by_dataset")}
 
     print("\n=== Generating plots ===")
-    plot_cls_summary_per_dataset(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall)
+    plot_cls_summary_per_dataset(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, uniform_cls_overall, judge_by_dataset)
     plot_cls_summary_per_task(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall, judge_by_task)
     plot_desc_summary_per_task({mid: m.get("description_per_task", {}) for mid, m in summary_metrics.items()}, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
@@ -1275,6 +1321,51 @@ def main(args: argparse.Namespace) -> None:
     plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
     plot_difficulty_correlation(all_model_cls_per_ds, all_model_desc_metrics,
                                 Path(args.clustering_metrics), output_dir)
+
+    # ── Distribution charts (strip + errorbar) ──────────────────────────────
+    models        = list(all_model_cls_per_ds.keys())
+    color_map     = model_color_map(models)
+    all_datasets  = sorted(set(ds for m in all_model_cls_per_ds.values() for ds in m))
+    task_types    = sorted(set(ds_to_task.get(ds, "") for ds in all_datasets) - {""})
+
+    cls_by_ds    = gather_cls_values_by_dataset(all_model_cls_per_ds)
+    cls_by_task  = gather_cls_values_by_task(all_model_cls_per_ds, ds_to_task)
+    cls_by_cls   = gather_cls_per_class_by_dataset(all_model_cls_rows, "class_label", "resolved_class")
+    desc_by_ds   = gather_desc_values_by_dataset(all_model_desc_metrics)
+    desc_by_task = gather_desc_values_by_task(all_model_desc_metrics, ds_to_task)
+    desc_by_smp  = gather_desc_per_sample_by_dataset(all_model_desc_rows)
+    judge_by_ds_dist   = gather_judge_values_by_dataset(judge_by_dataset)
+    judge_by_task_dist = gather_judge_values_by_task(judge_by_dataset, ds_to_task)
+
+    uniform_f1 = uniform_cls_overall.get("f1_macro") if uniform_cls_overall else None
+
+    for chart_type, suffix in [("strip", "strip"), ("errorbar", "errorbar")]:
+        plot_overall_distribution(
+            cls_by_ds, models, color_map, multimodal_set, "F1 Macro",
+            "Vision Assessment — Classification Overall", output_dir / f"cls_overall_{suffix}.png",
+            chart_type=chart_type, naive_line=uniform_f1,
+            judge_values_by_model=judge_by_ds_dist)
+        plot_per_task_distribution(
+            cls_by_task, task_types, models, color_map, multimodal_set, _task_label,
+            "F1 Macro", "Vision Assessment — Classification Per Task",
+            output_dir / f"cls_per_task_{suffix}.png", chart_type=chart_type, naive_line=uniform_f1,
+            judge_values_by_model_by_task=judge_by_task_dist)
+        plot_per_dataset_distribution(
+            cls_by_cls, all_datasets, models, color_map, multimodal_set,
+            "F1 per Class", "Vision Assessment — Classification Per Dataset (per-class spread)",
+            output_dir / f"cls_per_dataset_{suffix}.png", chart_type=chart_type)
+        plot_overall_distribution(
+            desc_by_ds, models, color_map, multimodal_set, "Sem Sim",
+            "Vision Assessment — Description Overall", output_dir / f"desc_overall_{suffix}.png",
+            chart_type=chart_type)
+        plot_per_task_distribution(
+            desc_by_task, task_types, models, color_map, multimodal_set, _task_label,
+            "Sem Sim", "Vision Assessment — Description Per Task",
+            output_dir / f"desc_per_task_{suffix}.png", chart_type=chart_type)
+        plot_per_dataset_distribution(
+            desc_by_smp, all_datasets, models, color_map, multimodal_set,
+            "Sem Sim per Sample", "Vision Assessment — Description Per Dataset (per-sample spread)",
+            output_dir / f"desc_per_dataset_{suffix}.png", chart_type=chart_type)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"

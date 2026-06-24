@@ -30,6 +30,11 @@ import json
 import re
 from collections import defaultdict
 
+from src.common.distribution_plots import (
+    plot_clustering_overall_distribution,
+    plot_clustering_per_task_distribution,
+)
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
@@ -178,10 +183,18 @@ def cluster_dataset(embeddings: np.ndarray, labels: list[str]) -> dict:
 
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
+_METRIC_GROUPS = {
+    "unsupervised": ["nmi", "ari"],
+    "separability": ["silhouette", "inter_centroid_dist", "fisher_dr"],
+}
 _METRICS = ["nmi", "ari", "silhouette", "inter_centroid_dist", "fisher_dr"]
 _METRIC_LABELS = {
     "nmi": "NMI", "ari": "ARI", "silhouette": "Silhouette",
     "inter_centroid_dist": "Inter-Centroid Dist (norm)", "fisher_dr": "Fisher DR",
+}
+_GROUP_TITLES = {
+    "unsupervised": "Unsupervised Recovery (k-means vs ground truth)",
+    "separability": "Geometric Separability (ground-truth class boundaries)",
 }
 _COLORS = plt.cm.tab10.colors
 
@@ -190,20 +203,19 @@ def _backbone_color(backbones: list[str]) -> dict[str, tuple]:
     return {b: _COLORS[i % len(_COLORS)] for i, b in enumerate(backbones)}
 
 
-def plot_overall(results: dict, output_dir: Path) -> None:
-    """One bar per backbone per metric, averaged across all datasets."""
+def _plot_overall_group(results: dict, metrics: list[str], title: str, path: Path) -> None:
     backbones = sorted(results)
     colors = _backbone_color(backbones)
-    x = np.arange(len(_METRICS))
+    x = np.arange(len(metrics))
     width = 0.8 / len(backbones)
 
-    fig, ax = plt.subplots(figsize=(max(7, len(backbones) * 1.8), 5))
+    fig, ax = plt.subplots(figsize=(max(6, len(metrics) * len(backbones) * 0.9), 5))
     for i, b in enumerate(backbones):
         ds_metrics = results[b]
         vals = [
             float(np.mean([m[metric] for m in ds_metrics.values() if metric in m]))
             if ds_metrics else 0.0
-            for metric in _METRICS
+            for metric in metrics
         ]
         offset = (i - (len(backbones) - 1) / 2) * width
         bars = ax.bar(x + offset, vals, width, label=_display(b),
@@ -211,23 +223,27 @@ def plot_overall(results: dict, output_dir: Path) -> None:
         for bar, v in zip(bars, vals):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
                     f"{v:.3f}", ha="center", va="bottom", fontsize=7)
-
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.4)
     ax.set_xticks(x)
-    ax.set_xticklabels([_METRIC_LABELS[m] for m in _METRICS], fontsize=10)
+    ax.set_xticklabels([_METRIC_LABELS[m] for m in metrics], fontsize=10)
     ax.set_ylim(-0.15, 1.05)
     ax.set_ylabel("Score")
     ax.legend(fontsize=7, bbox_to_anchor=(1.01, 1), loc="upper left")
-    ax.set_title("Clustering Quality — Overall (mean across datasets)", fontsize=11)
+    ax.set_title(f"Clustering Quality — {title} (mean across datasets)", fontsize=11)
     plt.tight_layout()
-    path = output_dir / "clustering_overall.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
 
-def plot_per_task(results: dict, ds_to_task: dict[str, str], output_dir: Path) -> None:
-    """Per task-type grouped bar, one panel per metric."""
+def plot_overall(results: dict, output_dir: Path) -> None:
+    for group, metrics in _METRIC_GROUPS.items():
+        _plot_overall_group(results, metrics, _GROUP_TITLES[group],
+                            output_dir / f"clustering_overall_{group}.png")
+
+
+def _plot_per_task_group(results: dict, ds_to_task: dict[str, str],
+                         metrics: list[str], title: str, path: Path) -> None:
     backbones = sorted(results)
     task_types = sorted(set(ds_to_task.values()))
     if not task_types:
@@ -235,10 +251,13 @@ def plot_per_task(results: dict, ds_to_task: dict[str, str], output_dir: Path) -
     colors = _backbone_color(backbones)
     x = np.arange(len(task_types))
     width = 0.8 / len(backbones)
+    subplot_w = max(4, len(task_types) * len(backbones) * 0.7 + 2)
 
-    fig, axes = plt.subplots(1, len(_METRICS),
-                             figsize=(max(10, len(task_types) * len(backbones) * 0.7 + 2), 5))
-    for mi, metric in enumerate(_METRICS):
+    fig, axes = plt.subplots(1, len(metrics),
+                             figsize=(subplot_w * len(metrics), 5))
+    if len(metrics) == 1:
+        axes = [axes]
+    for mi, metric in enumerate(metrics):
         ax = axes[mi]
         for i, b in enumerate(backbones):
             by_task: dict[str, list[float]] = defaultdict(list)
@@ -261,13 +280,55 @@ def plot_per_task(results: dict, ds_to_task: dict[str, str], output_dir: Path) -
         ax.set_title(_METRIC_LABELS[metric])
         ax.set_ylabel("Score")
         ax.legend(fontsize=6)
-
-    fig.suptitle("Clustering Quality — By Task Type", fontsize=11)
+    fig.suptitle(f"Clustering Quality — {title} — By Task Type", fontsize=11)
     plt.tight_layout()
-    path = output_dir / "clustering_per_task.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_per_task(results: dict, ds_to_task: dict[str, str], output_dir: Path) -> None:
+    for group, metrics in _METRIC_GROUPS.items():
+        _plot_per_task_group(results, ds_to_task, metrics, _GROUP_TITLES[group],
+                             output_dir / f"clustering_per_task_{group}.png")
+
+
+def plot_per_dataset_bars(results: dict, output_dir: Path) -> None:
+    """Grouped bar charts: one subplot per metric, x-axis = datasets, bars = backbones."""
+    backbones = sorted(results)
+    all_datasets = sorted(set(ds for b in backbones for ds in results[b]))
+    if not all_datasets or not backbones:
+        return
+    colors = _backbone_color(backbones)
+    ds_labels = [d.replace("_classification", "").replace("_", " ") for d in all_datasets]
+    x = np.arange(len(all_datasets))
+    width = 0.8 / len(backbones)
+
+    for group, metrics in _METRIC_GROUPS.items():
+        fig, axes = plt.subplots(len(metrics), 1,
+                                 figsize=(max(14, len(all_datasets) * len(backbones) * 0.35),
+                                          4 * len(metrics)))
+        if len(metrics) == 1:
+            axes = [axes]
+        for mi, metric in enumerate(metrics):
+            ax = axes[mi]
+            for i, b in enumerate(backbones):
+                vals = [results[b].get(ds, {}).get(metric, 0.0) for ds in all_datasets]
+                offset = (i - (len(backbones) - 1) / 2) * width
+                ax.bar(x + offset, vals, width, label=_display(b),
+                       color=colors[b], alpha=0.85, edgecolor="black", linewidth=0.4)
+            ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.4)
+            ax.set_xticks(x)
+            ax.set_xticklabels(ds_labels, rotation=45, ha="right", fontsize=7)
+            ax.set_ylim(-0.15, 1.05)
+            ax.set_ylabel(_METRIC_LABELS[metric])
+            ax.legend(fontsize=6)
+        fig.suptitle(f"Clustering Quality — {_GROUP_TITLES[group]} — Per Dataset", fontsize=11)
+        plt.tight_layout()
+        path = output_dir / f"clustering_per_dataset_{group}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
 
 
 def plot_per_dataset(results: dict, output_dir: Path) -> None:
@@ -406,11 +467,30 @@ def main(args: argparse.Namespace) -> None:
         fdr = np.mean([m.get("fisher_dr", 0) for m in ms])
         print(f"  {_display(b):<43} {nmi:>6.3f} {ari:>6.3f} {sil:>6.3f} {icd:>6.3f} {fdr:>8.3f}")
 
+    backbones = sorted(results)
+    colors    = {b: _COLORS[i % len(_COLORS)] for i, b in enumerate(backbones)}
+
     print("\n=== Generating plots ===")
     plot_overall(results, output_dir)
     plot_per_task(results, ds_to_task, output_dir)
+    plot_per_dataset_bars(results, output_dir)
     plot_per_dataset(results, output_dir)
     plot_metric_scatter(results, output_dir)
+
+    for group, metrics in _METRIC_GROUPS.items():
+        group_title = _GROUP_TITLES[group]
+        for chart_type, suffix in [("strip", "strip"), ("errorbar", "errorbar")]:
+            plot_clustering_overall_distribution(
+                results, backbones, metrics, _METRIC_LABELS, colors, _display,
+                f"Clustering — {group_title}",
+                output_dir / f"clustering_overall_{group}_{suffix}.png",
+                chart_type=chart_type)
+            plot_clustering_per_task_distribution(
+                results, ds_to_task, backbones, metrics, _METRIC_LABELS, colors, _display,
+                f"Clustering — {group_title} — By Task Type",
+                output_dir / f"clustering_per_task_{group}_{suffix}.png",
+                chart_type=chart_type)
+
     print("\nDone.")
 
 
