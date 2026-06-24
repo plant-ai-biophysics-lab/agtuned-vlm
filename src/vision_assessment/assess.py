@@ -526,6 +526,53 @@ def plot_cls_summary_per_dataset(
     print(f"  Saved: {path}")
 
 
+def plot_desc_sem_sim_per_dataset(
+    all_desc_results: dict[str, dict[str, dict]],
+    output_dir: Path,
+    multimodal_models: set[str] | None = None,
+    naive_desc_metrics: dict | None = None,
+) -> None:
+    multimodal_models = multimodal_models or set()
+    all_datasets: list[str] = []
+    for model_results in all_desc_results.values():
+        for ds in model_results:
+            if ds not in all_datasets:
+                all_datasets.append(ds)
+    if not all_datasets:
+        return
+
+    models = list(all_desc_results.keys())
+    color_map = model_color_map(models)
+    x = np.arange(len(all_datasets))
+    width = 0.8 / len(models)
+
+    fig, ax = plt.subplots(figsize=(max(10, len(all_datasets) * len(models) * 0.5), 5))
+    for i, model_key in enumerate(models):
+        per_ds = all_desc_results[model_key]
+        vals = [per_ds.get(ds, {}).get("sem_sim", 0.0) for ds in all_datasets]
+        offset = (i - (len(models) - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=model_key.split("/")[-1],
+               color=color_map[model_key], alpha=0.85,
+               hatch=_hatch(model_key, multimodal_models), edgecolor="black", linewidth=0.5)
+    _draw_naive_line(ax, naive_desc_metrics, "sem_sim", label=True)
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
+        rotation=45, ha="right", fontsize=7,
+    )
+    ax.set_ylim(0, 1.15)
+    ax.set_title("Sem Sim")
+    ax.set_ylabel("Score")
+    ax.legend(fontsize=7)
+
+    fig.suptitle("Vision Assessment — Description Sem Sim Per Dataset", fontsize=11)
+    plt.tight_layout()
+    path = output_dir / "desc_sem_sim_per_dataset.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 def plot_cls_summary_per_task(
     all_cls_by_task: dict[str, dict[str, dict]],
     output_dir: Path,
@@ -1151,6 +1198,7 @@ def main(args: argparse.Namespace) -> None:
     plot_cls_summary_per_task(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall, judge_by_task)
     plot_desc_summary_per_task({mid: m.get("description_per_task", {}) for mid, m in summary_metrics.items()}, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
+    plot_desc_sem_sim_per_dataset(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_cls_summary(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
     plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
 
