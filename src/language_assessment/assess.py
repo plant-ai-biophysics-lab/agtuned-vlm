@@ -604,8 +604,8 @@ def plot_overall_desc_summary(
     if not models:
         return
 
-    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss"]
-    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS"}
+    metrics = ["rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"]
+    metric_labels = {"rouge1": "ROUGE-1", "rouge2": "ROUGE-2", "rougeL": "ROUGE-L", "rouge_ss": "ROUGE-SS", "sem_sim": "Sem Sim"}
     color_map = model_color_map(models)
     x = np.arange(len(models))
     bar_w = 0.7
@@ -941,16 +941,18 @@ def main(args: argparse.Namespace) -> None:
     tee = Tee(output_dir / "summary.txt")
 
     tee.print("\n=== Language Assessment — Description ROUGE ===")
-    tee.print(f"  {'Model':<45} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'R-SS':>6}")
-    tee.print(f"  {'-'*66}")
+    tee.print(f"  {'Model':<45} {'R-1':>6} {'R-2':>6} {'R-L':>6} {'R-SS':>6} {'SemSim':>8}")
+    tee.print(f"  {'-'*76}")
     tee.print(f"  {'naive':<45} "
               f"{naive_ov_desc.get('rouge1', 0):>6.3f} {naive_ov_desc.get('rouge2', 0):>6.3f} "
-              f"{naive_ov_desc.get('rougeL', 0):>6.3f} {naive_ov_desc.get('rouge_ss', 0):>6.3f}")
+              f"{naive_ov_desc.get('rougeL', 0):>6.3f} {naive_ov_desc.get('rouge_ss', 0):>6.3f} "
+              f"{naive_ov_desc.get('sem_sim', 0):>8.3f}")
     for model_id, m in summary_metrics.items():
         ov = m["description_overall"]
         tee.print(f"  {model_id:<45} "
                   f"{ov.get('rouge1', 0):>6.3f} {ov.get('rouge2', 0):>6.3f} "
-                  f"{ov.get('rougeL', 0):>6.3f} {ov.get('rouge_ss', 0):>6.3f}")
+                  f"{ov.get('rougeL', 0):>6.3f} {ov.get('rouge_ss', 0):>6.3f} "
+                  f"{ov.get('sem_sim', 0):>8.3f}")
 
     tee.print("\n=== Language Assessment — Classification ===")
     tee.print(f"  {'Model':<45} {'Acc':>6} {'Cont':>6} {'F1-mac':>8} {'Res/Tot':>9}")
