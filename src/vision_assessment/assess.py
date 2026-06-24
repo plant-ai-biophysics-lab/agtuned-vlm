@@ -31,12 +31,12 @@ from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
 from src.common.distribution_plots import (
     gather_cls_per_class_by_dataset,
     gather_cls_values_by_dataset,
-    gather_cls_values_by_task,
+    gather_cls_values_by_task_from_per_class,
     gather_desc_per_sample_by_dataset,
     gather_desc_values_by_dataset,
     gather_desc_values_by_task,
+    gather_judge_per_class_by_dataset,
     gather_judge_values_by_dataset,
-    gather_judge_values_by_task,
     plot_overall_distribution,
     plot_per_dataset_distribution,
     plot_per_task_distribution,
@@ -557,6 +557,7 @@ def plot_desc_sem_sim_per_dataset(
     output_dir: Path,
     multimodal_models: set[str] | None = None,
     naive_desc_metrics: dict | None = None,
+    ds_to_task: dict[str, str] | None = None,
 ) -> None:
     multimodal_models = multimodal_models or set()
     all_datasets: list[str] = []
@@ -572,6 +573,11 @@ def plot_desc_sem_sim_per_dataset(
     x = np.arange(len(all_datasets))
     width = 0.8 / len(models)
 
+    all_tasks = sorted(set(ds_to_task.get(ds, "") for ds in all_datasets) - {""}) \
+        if ds_to_task else []
+    from src.common.distribution_plots import _task_color_map
+    task_cmap = _task_color_map(all_tasks) if all_tasks else {}
+
     fig, ax = plt.subplots(figsize=(max(10, len(all_datasets) * len(models) * 0.5), 5))
     for i, model_key in enumerate(models):
         per_ds = all_desc_results[model_key]
@@ -586,10 +592,22 @@ def plot_desc_sem_sim_per_dataset(
         [d.replace("_classification", "").replace("_", " ") for d in all_datasets],
         rotation=45, ha="right", fontsize=7,
     )
+    if task_cmap:
+        for tick, ds in zip(ax.get_xticklabels(), all_datasets):
+            task = ds_to_task.get(ds, "")
+            tick.set_color(task_cmap.get(task, "black"))
     ax.set_ylim(0, 1.15)
     ax.set_title("Sem Sim")
     ax.set_ylabel("Score")
-    ax.legend(fontsize=7)
+    ax.legend(fontsize=7, loc="upper right")
+
+    if task_cmap:
+        import matplotlib.patches as mpatches
+        task_handles = [mpatches.Patch(color=c, label=t.replace("_", " "))
+                        for t, c in task_cmap.items()]
+        fig.legend(handles=task_handles, loc="lower center",
+                   ncol=len(task_cmap), fontsize=8,
+                   bbox_to_anchor=(0.5, -0.02), frameon=True)
 
     fig.suptitle("Vision Assessment — Description Sem Sim Per Dataset", fontsize=11)
     plt.tight_layout()
@@ -1316,7 +1334,7 @@ def main(args: argparse.Namespace) -> None:
     plot_cls_summary_per_task(all_model_cls_metrics, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall, judge_by_task)
     plot_desc_summary_per_task({mid: m.get("description_per_task", {}) for mid, m in summary_metrics.items()}, output_dir, multimodal_set, naive_ov_desc)
     plot_overall_desc_summary(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
-    plot_desc_sem_sim_per_dataset(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc)
+    plot_desc_sem_sim_per_dataset(all_model_desc_metrics, output_dir, multimodal_set, naive_ov_desc, ds_to_task)
     plot_overall_cls_summary(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
     plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
     plot_difficulty_correlation(all_model_cls_per_ds, all_model_desc_metrics,
@@ -1329,13 +1347,15 @@ def main(args: argparse.Namespace) -> None:
     task_types    = sorted(set(ds_to_task.get(ds, "") for ds in all_datasets) - {""})
 
     cls_by_ds    = gather_cls_values_by_dataset(all_model_cls_per_ds)
-    cls_by_task  = gather_cls_values_by_task(all_model_cls_per_ds, ds_to_task)
-    cls_by_cls   = gather_cls_per_class_by_dataset(all_model_cls_rows, "class_label", "resolved_class")
+    cls_by_cls        = gather_cls_per_class_by_dataset(all_model_cls_rows, "class_label", "resolved_class", ds_to_task)
+    judge_by_cls      = gather_judge_per_class_by_dataset(all_model_cls_rows, "class_label", ds_to_task)
+    cls_by_task  = gather_cls_values_by_task_from_per_class(cls_by_cls)
+    cls_dataset_tasks = sorted(set(k for m in cls_by_cls.values() for k in m))
     desc_by_ds   = gather_desc_values_by_dataset(all_model_desc_metrics)
     desc_by_task = gather_desc_values_by_task(all_model_desc_metrics, ds_to_task)
     desc_by_smp  = gather_desc_per_sample_by_dataset(all_model_desc_rows)
     judge_by_ds_dist   = gather_judge_values_by_dataset(judge_by_dataset)
-    judge_by_task_dist = gather_judge_values_by_task(judge_by_dataset, ds_to_task)
+    judge_by_task_dist = gather_cls_values_by_task_from_per_class(judge_by_cls)
 
     uniform_f1   = uniform_cls_overall.get("f1_macro") if uniform_cls_overall else None
     naive_sem_sim = naive_ov_desc.get("sem_sim") if naive_ov_desc else None
@@ -1352,10 +1372,10 @@ def main(args: argparse.Namespace) -> None:
             output_dir / f"cls_per_task_{suffix}.png", chart_type=chart_type, naive_line=uniform_f1,
             judge_values_by_model_by_task=judge_by_task_dist)
         plot_per_dataset_distribution(
-            cls_by_cls, all_datasets, models, color_map, multimodal_set,
+            cls_by_cls, cls_dataset_tasks, models, color_map, multimodal_set,
             "F1 per Class", "Vision Assessment — Classification Per Dataset (per-class spread)",
             output_dir / f"cls_per_dataset_{suffix}.png", chart_type=chart_type,
-            naive_line=uniform_f1, ds_to_task=ds_to_task)
+            naive_line=uniform_f1, judge_values_by_model_by_dataset=judge_by_cls)
         plot_overall_distribution(
             desc_by_ds, models, color_map, multimodal_set, "Sem Sim",
             "Vision Assessment — Description Overall", output_dir / f"desc_overall_{suffix}.png",

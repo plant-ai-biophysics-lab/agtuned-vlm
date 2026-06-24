@@ -183,29 +183,59 @@ def gather_cls_values_by_task(
     return out
 
 
+def gather_cls_values_by_task_from_per_class(
+    cls_by_cls: dict[str, dict[tuple | str, list[float]]],
+) -> dict[str, dict[str, list[float]]]:
+    """Returns {model: {task: [macro F1 per (dataset, task) group]}}.
+
+    Derives per-task values from gather_cls_per_class_by_dataset output so that
+    class_override datasets (e.g. hispa inside rice_leaf_disease) contribute to
+    their actual task rather than the parent dataset's primary task_type.
+    """
+    out: dict[str, dict[str, list[float]]] = {}
+    for model, per_dt in cls_by_cls.items():
+        by_task: dict[str, list[float]] = {}
+        for key, per_class_f1s in per_dt.items():
+            task = key[1] if isinstance(key, tuple) else ""
+            if not task or not per_class_f1s:
+                continue
+            by_task.setdefault(task, []).append(float(np.mean(per_class_f1s)))
+        out[model] = by_task
+    return out
+
+
 def gather_cls_per_class_by_dataset(
     all_cls_rows: dict[str, list[dict]],
     ref_key: str = "class_label",
     pred_key: str = "resolved_class",
-) -> dict[str, dict[str, list[float]]]:
-    """Returns {model: {dataset: [per-class F1 values]}}."""
-    out: dict[str, dict[str, list[float]]] = {}
+    ds_to_task: dict[str, str] | None = None,
+) -> dict[str, dict[tuple | str, list[float]]]:
+    """Returns {model: {(dataset, task): [per-class F1 values]}}.
+
+    Groups by (dataset, task_type) so datasets whose classes span multiple
+    tasks appear as separate entries.  Falls back to ds_to_task when the row
+    has no task_type field.  Key is a (ds, task) tuple; task is "" when unknown.
+    """
+    from collections import defaultdict
+    out: dict[str, dict] = {}
     for model, rows in all_cls_rows.items():
-        by_ds: dict[str, list[dict]] = {}
+        by_dt: dict[tuple, list[dict]] = defaultdict(list)
         for r in rows:
-            by_ds.setdefault(r.get("agml_dataset", ""), []).append(r)
-        per_ds: dict[str, list[float]] = {}
-        for ds, ds_rows in by_ds.items():
+            ds = r.get("agml_dataset", "")
             if not ds:
                 continue
-            refs  = [r[ref_key]  for r in ds_rows if ref_key  in r and pred_key in r]
-            preds = [r[pred_key] for r in ds_rows if ref_key  in r and pred_key in r]
+            task = r.get("task_type") or (ds_to_task.get(ds, "") if ds_to_task else "")
+            by_dt[(ds, task)].append(r)
+        per_dt: dict[tuple, list[float]] = {}
+        for (ds, task), dt_rows in by_dt.items():
+            refs  = [r[ref_key]  for r in dt_rows if ref_key  in r and pred_key in r]
+            preds = [r[pred_key] for r in dt_rows if ref_key  in r and pred_key in r]
             if not refs:
                 continue
-            labels = sorted(set(refs))
-            scores = _sk_f1(refs, preds, average=None, labels=labels, zero_division=0)
-            per_ds[ds] = [float(s) for s in scores]
-        out[model] = per_ds
+            lbls   = sorted(set(refs))
+            scores = _sk_f1(refs, preds, average=None, labels=lbls, zero_division=0)
+            per_dt[(ds, task)] = [float(s) for s in scores]
+        out[model] = per_dt
     return out
 
 
@@ -279,6 +309,47 @@ def gather_judge_values_by_task(
             if task and metric in m:
                 by_task.setdefault(task, []).append(m[metric])
         out[model] = by_task
+    return out
+
+
+def gather_judge_per_class_by_dataset(
+    all_cls_rows: dict[str, list[dict]],
+    ref_key: str = "class_label",
+    ds_to_task: dict[str, str] | None = None,
+) -> dict[str, dict[tuple | str, list[float]]]:
+    """Returns {model: {(dataset, task): [per-class judge F1 values]}}.
+
+    Uses judged_correct (0/1) to derive judge-adjusted predictions:
+    judged_correct=1 → judge_pred = ground_truth; =0 → judge_pred = resolved_class.
+    Only rows with judged_correct set are included.
+    """
+    from collections import defaultdict
+    out: dict[str, dict] = {}
+    for model, rows in all_cls_rows.items():
+        by_dt: dict[tuple, list[dict]] = defaultdict(list)
+        for r in rows:
+            ds = r.get("agml_dataset", "")
+            if not ds or r.get("judged_correct", "") == "":
+                continue
+            task = r.get("task_type") or (ds_to_task.get(ds, "") if ds_to_task else "")
+            by_dt[(ds, task)].append(r)
+        per_dt: dict[tuple, list[float]] = {}
+        for (ds, task), dt_rows in by_dt.items():
+            refs, preds = [], []
+            for r in dt_rows:
+                ref = r.get(ref_key)
+                if ref is None:
+                    continue
+                jc = int(r["judged_correct"])
+                judge_pred = ref if jc else (r.get("resolved_class") or "__unresolved__")
+                refs.append(ref)
+                preds.append(judge_pred)
+            if not refs:
+                continue
+            lbls   = sorted(set(refs))
+            scores = _sk_f1(refs, preds, average=None, labels=lbls, zero_division=0)
+            per_dt[(ds, task)] = [float(s) for s in scores]
+        out[model] = per_dt
     return out
 
 
@@ -476,6 +547,7 @@ def plot_per_dataset_distribution(
     chart_type: str = "strip",
     naive_line: float | None = None,
     ds_to_task: dict[str, str] | None = None,
+    judge_values_by_model_by_dataset: dict[str, dict[str, list[float]]] | None = None,
 ) -> None:
     """Strip or errorbar: x = datasets, distribution = per-class/per-sample values."""
     x = np.arange(len(datasets))
@@ -485,49 +557,127 @@ def plot_per_dataset_distribution(
     labels  = [m.split("/")[-1] for m in models]
     hatches = ["///" if m in multimodal_models else "" for m in models]
 
+    has_judge = bool(judge_values_by_model_by_dataset)
+
     if chart_type == "strip":
         for xi, ds in enumerate(datasets):
-            vals_list = [values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models]
-            _render_violin(ax, np.array([xi]), vals_list, colors,
-                          [l if xi == 0 else "_nolegend_" for l in labels],
-                          width_per_group=0.7, hatches=hatches)
+            vals_list  = [values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models]
+            jvals_list = [judge_values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models] \
+                if has_judge else [[] for _ in models]
+            n_models = len(models)
+            slot = 0.7 / max(n_models, 1)
+            for i, (vals, jvals, color, label, hatch) in enumerate(
+                zip(vals_list, jvals_list, colors, labels, hatches)
+            ):
+                offset = (i - (n_models - 1) / 2) * slot
+                center = float(xi) + offset
+                vw = slot * 0.85
+                leg_label  = label if xi == 0 else "_nolegend_"
+                jleg_label = f"{label} (judged)" if xi == 0 else "_nolegend_"
+                if has_judge:
+                    _draw_split_violin(ax, center, vals, jvals, color, vw, hatch,
+                                       leg_label, jleg_label)
+                else:
+                    if len(vals) >= 3:
+                        p = ax.violinplot(vals, positions=[center], widths=vw,
+                                          showmeans=True, showmedians=False, showextrema=False)
+                        body = p["bodies"][0]
+                        body.set_facecolor(color); body.set_edgecolor("black")
+                        body.set_alpha(0.72); body.set_linewidth(0.5)
+                        if hatch: body.set_hatch(hatch)
+                        body.set_label(leg_label)
+                    elif vals:
+                        ax.scatter([center], [float(np.mean(vals))], color=color, s=50,
+                                   marker="D", edgecolors="black", linewidths=0.5,
+                                   label=leg_label)
     else:
+        n_models = len(models)
+        bar_width = 0.8
+        slot_w = bar_width / max(n_models, 1)
+        sub_w  = slot_w * 0.46
         for xi, ds in enumerate(datasets):
-            vals_list = [values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models]
-            _render_errorbar(ax, np.array([xi]), vals_list, colors,
-                             [l if xi == 0 else "_nolegend_" for l in labels],
-                             bar_width=0.8, hatches=hatches)
+            vals_list  = [values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models]
+            jvals_list = [judge_values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models] \
+                if has_judge else [[] for _ in models]
+            for i, (vals, jvals, color, label, hatch) in enumerate(
+                zip(vals_list, jvals_list, colors, labels, hatches)
+            ):
+                offset = (i - (n_models - 1) / 2) * slot_w
+                leg_label  = label if xi == 0 else "_nolegend_"
+                jleg_label = f"{label} (judged)" if xi == 0 else "_nolegend_"
+                if has_judge:
+                    # model sub-bar (left) and judge sub-bar (right) at equal widths
+                    if vals:
+                        mean_m = float(np.mean(vals)); std_m = float(np.std(vals))
+                        ax.bar(xi + offset - sub_w / 2, mean_m, sub_w, color=color,
+                               alpha=0.85, edgecolor="black", linewidth=0.5,
+                               label=leg_label, hatch=hatch)
+                        ax.errorbar(xi + offset - sub_w / 2, mean_m, yerr=std_m,
+                                    fmt="none", color="black", capsize=3, linewidth=1.2,
+                                    zorder=4)
+                    if jvals:
+                        mean_j = float(np.mean(jvals)); std_j = float(np.std(jvals))
+                        ax.bar(xi + offset + sub_w / 2, mean_j, sub_w, color=color,
+                               alpha=0.38, edgecolor="black", linewidth=0.5,
+                               label=jleg_label, hatch=hatch)
+                        ax.errorbar(xi + offset + sub_w / 2, mean_j, yerr=std_j,
+                                    fmt="none", color="black", capsize=3, linewidth=1.2,
+                                    zorder=4)
+                else:
+                    if vals:
+                        mean_v = float(np.mean(vals)); std_v = float(np.std(vals))
+                        ax.bar(xi + offset, mean_v, slot_w, color=color,
+                               alpha=0.85, edgecolor="black", linewidth=0.5,
+                               label=leg_label, hatch=hatch)
+                        ax.errorbar(xi + offset, mean_v, yerr=std_v,
+                                    fmt="none", color="black", capsize=3, linewidth=1.2,
+                                    zorder=4)
 
     if naive_line is not None:
         ax.axhline(naive_line, color="red", linestyle="--", linewidth=1.2,
                    label="naive (1/k classes)")
 
+    # Derive per-tick task (keys may be (ds, task) tuples or plain strings)
+    def _key_ds(k):
+        return k[0] if isinstance(k, tuple) else k
+
+    def _key_task(k):
+        if isinstance(k, tuple):
+            return k[1]
+        return ds_to_task.get(k, "") if ds_to_task else ""
+
+    tick_labels = [_key_ds(k).replace("_classification", "").replace("_", " ")
+                   for k in datasets]
+    all_tasks = sorted(set(_key_task(k) for k in datasets if _key_task(k)))
+    task_cmap  = _task_color_map(all_tasks) if all_tasks else {}
+
     ax.set_xticks(x)
-    ax.set_xticklabels(
-        [d.replace("_classification", "").replace("_", " ") for d in datasets],
-        rotation=45, ha="right", fontsize=7,
-    )
-    if ds_to_task:
-        task_cmap = _task_color_map(sorted(set(ds_to_task.values())))
-        for tick, ds in zip(ax.get_xticklabels(), datasets):
-            task = ds_to_task.get(ds, "")
-            tick.set_color(task_cmap.get(task, "black"))
+    ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=7)
+    for tick, k in zip(ax.get_xticklabels(), datasets):
+        task = _key_task(k)
+        tick.set_color(task_cmap.get(task, "black"))
 
     ax.set_ylim(0, 1.15)
     ax.set_ylabel(metric_label)
     ax.set_title(title, fontsize=11)
+
+    # Model/metric legend stays inside the axes
     handles, lbls = ax.get_legend_handles_labels()
     seen, h2, l2 = set(), [], []
     for h, l in zip(handles, lbls):
         if l not in seen:
             seen.add(l); h2.append(h); l2.append(l)
-    if ds_to_task:
+    ax.legend(h2, l2, fontsize=7, loc="upper right")
+
+    # Task color legend at bottom of figure, outside axes
+    if task_cmap:
         import matplotlib.patches as mpatches
-        task_cmap = _task_color_map(sorted(set(ds_to_task.values())))
-        task_handles = [mpatches.Patch(color=c, label=t) for t, c in task_cmap.items()]
-        h2 = task_handles + h2
-        l2 = [t for t in task_cmap] + l2
-    ax.legend(h2, l2, fontsize=7)
+        task_handles = [mpatches.Patch(color=c, label=t.replace("_", " "))
+                        for t, c in task_cmap.items()]
+        fig.legend(handles=task_handles, loc="lower center",
+                   ncol=len(task_cmap), fontsize=8,
+                   bbox_to_anchor=(0.5, -0.02), frameon=True)
+
     plt.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
