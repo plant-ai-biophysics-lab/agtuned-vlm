@@ -24,7 +24,7 @@ def _jitter(n: int, width: float = 0.12, seed: int = 42) -> np.ndarray:
     return np.random.default_rng(seed).uniform(-width, width, n)
 
 
-def _render_strip(
+def _render_violin(
     ax,
     x_positions: np.ndarray,
     values_list: list[list[float]],
@@ -33,16 +33,37 @@ def _render_strip(
     width_per_group: float,
     hatches: list[str],
 ) -> None:
-    """One jittered scatter per group (x position) per model."""
+    """Violin per model per x position; falls back to a single diamond for n<3."""
     n_models = len(values_list)
+    grouped = len(x_positions) == 1  # multiple models sharing one x tick
     slot = width_per_group / max(n_models, 1)
+    vw = slot * 0.85 if grouped else width_per_group * 0.7
+
     for i, (vals, color, label, hatch) in enumerate(zip(values_list, colors, labels, hatches)):
         if not vals:
             continue
         offset = (i - (n_models - 1) / 2) * slot
-        xs = x_positions + offset + _jitter(len(vals), width=slot * 0.3)
-        ax.scatter(xs, vals, color=color, alpha=0.7, s=22,
-                   edgecolors="black", linewidths=0.3, label=label, zorder=3)
+        center = float(x_positions[0]) + offset if grouped else float(x_positions[i])
+
+        if len(vals) < 3:
+            ax.scatter([center], [float(np.mean(vals))], color=color, s=50, zorder=4,
+                       marker="D", edgecolors="black", linewidths=0.5, label=label)
+            continue
+
+        parts = ax.violinplot(vals, positions=[center], widths=vw,
+                              showmeans=True, showmedians=False, showextrema=True)
+        body = parts["bodies"][0]
+        body.set_facecolor(color)
+        body.set_edgecolor("black")
+        body.set_alpha(0.72)
+        body.set_linewidth(0.5)
+        if hatch:
+            body.set_hatch(hatch)
+        body.set_label(label)
+        for part in ("cbars", "cmins", "cmaxes", "cmeans"):
+            if part in parts:
+                parts[part].set_color(color)
+                parts[part].set_linewidth(1.2)
 
 
 def _render_errorbar(
@@ -222,37 +243,46 @@ def plot_overall_distribution(
     colors      = [color_map[m] for m in models]
     hatches     = ["///" if m in multimodal_models else "" for m in models]
 
+    judge_list = [list(judge_values_by_model.get(m, {}).values()) for m in models] \
+        if judge_values_by_model else []
+
     if chart_type == "strip":
-        _render_strip(ax, x, values_list, colors, labels, width_per_group=0.6, hatches=hatches)
-        if judge_values_by_model:
-            judge_list = [list(judge_values_by_model.get(m, {}).values()) for m in models]
-            judge_labels = ["judge" if i == 0 else "_nolegend_" for i in range(len(models))]
-            for xi, (jvals, color) in enumerate(zip(judge_list, colors)):
-                if jvals:
-                    jxs = np.full(len(jvals), xi) + _jitter(len(jvals), width=0.08)
-                    ax.scatter(jxs, jvals, color=color, alpha=0.35, s=22, marker="x",
-                               linewidths=1.2, zorder=3,
-                               label=judge_labels[xi])
-    else:
-        _render_errorbar(ax, x, values_list, colors, labels, bar_width=0.7, hatches=hatches)
-        if judge_values_by_model:
-            judge_list = [list(judge_values_by_model.get(m, {}).values()) for m in models]
-            judge_drawn = False
-            sub_w = 0.7 * 0.46 / len(models)
-            for xi, (jvals, color) in enumerate(zip(judge_list, colors)):
-                if not jvals:
-                    continue
-                mean = float(np.mean(jvals))
-                std  = float(np.std(jvals))
-                ax.bar(xi + sub_w, mean, sub_w, color=color, alpha=0.4,
-                       edgecolor="black", linewidth=0.5,
-                       label="judge" if not judge_drawn else "_nolegend_")
-                ax.errorbar(xi + sub_w, mean, yerr=std, fmt="none",
-                            color="black", capsize=3, linewidth=1.2, zorder=4)
+        _render_violin(ax, x, values_list, colors, labels, width_per_group=0.6, hatches=hatches)
+        judge_drawn = False
+        for xi, (jvals, color) in enumerate(zip(judge_list, colors)):
+            if jvals:
+                jxs = np.full(len(jvals), xi) + _jitter(len(jvals), width=0.08)
+                ax.scatter(jxs, jvals, color=color, alpha=0.35, s=22, marker="x",
+                           linewidths=1.2, zorder=3,
+                           label="judge" if not judge_drawn else "_nolegend_")
                 judge_drawn = True
+    else:
+        if judge_list:
+            slot_w = 0.7 / max(len(models), 1)
+            sub_w  = slot_w * 0.46
+            judge_drawn = False
+            for i, (vals, jvals, color, label, hatch) in enumerate(
+                    zip(values_list, judge_list, colors, labels, hatches)):
+                offset = (i - (len(models) - 1) / 2) * slot_w
+                if vals:
+                    mean, std = float(np.mean(vals)), float(np.std(vals))
+                    ax.bar(x + offset - sub_w / 2, mean, sub_w, color=color, alpha=0.85,
+                           edgecolor="black", linewidth=0.5, label=label, hatch=hatch)
+                    ax.errorbar(x + offset - sub_w / 2, mean, yerr=std, fmt="none",
+                                color="black", capsize=3, linewidth=1.2, zorder=4)
+                if jvals:
+                    jmean, jstd = float(np.mean(jvals)), float(np.std(jvals))
+                    ax.bar(x + offset + sub_w / 2, jmean, sub_w, color=color, alpha=0.4,
+                           edgecolor="black", linewidth=0.5,
+                           label="judge" if not judge_drawn else "_nolegend_")
+                    ax.errorbar(x + offset + sub_w / 2, jmean, yerr=jstd, fmt="none",
+                                color="black", capsize=3, linewidth=1.2, zorder=4)
+                    judge_drawn = True
+        else:
+            _render_errorbar(ax, x, values_list, colors, labels, bar_width=0.7, hatches=hatches)
 
     if naive_line is not None:
-        ax.axhline(naive_line, color="steelblue", linestyle="--", linewidth=1.2,
+        ax.axhline(naive_line, color="red", linestyle="--", linewidth=1.2,
                    label="naive (1/k classes)")
 
     ax.set_xticks(x)
@@ -299,7 +329,7 @@ def plot_per_task_distribution(
     if chart_type == "strip":
         for xi, task in enumerate(task_types):
             vals_list = [values_by_model_by_task.get(m, {}).get(task, []) for m in models]
-            _render_strip(ax, np.array([xi]), vals_list, colors,
+            _render_violin(ax, np.array([xi]), vals_list, colors,
                           [l if xi == 0 else "_nolegend_" for l in labels],
                           width_per_group=0.7, hatches=hatches)
             if judge_values_by_model_by_task:
@@ -335,7 +365,7 @@ def plot_per_task_distribution(
                     judge_drawn = True
 
     if naive_line is not None:
-        ax.axhline(naive_line, color="steelblue", linestyle="--", linewidth=1.2,
+        ax.axhline(naive_line, color="red", linestyle="--", linewidth=1.2,
                    label="naive (1/k classes)")
 
     ax.set_xticks(x)
@@ -365,6 +395,7 @@ def plot_per_dataset_distribution(
     title: str,
     output_path: Path,
     chart_type: str = "strip",
+    naive_line: float | None = None,
 ) -> None:
     """Strip or errorbar: x = datasets, distribution = per-class/per-sample values."""
     x = np.arange(len(datasets))
@@ -377,7 +408,7 @@ def plot_per_dataset_distribution(
     if chart_type == "strip":
         for xi, ds in enumerate(datasets):
             vals_list = [values_by_model_by_dataset.get(m, {}).get(ds, []) for m in models]
-            _render_strip(ax, np.array([xi]), vals_list, colors,
+            _render_violin(ax, np.array([xi]), vals_list, colors,
                           [l if xi == 0 else "_nolegend_" for l in labels],
                           width_per_group=0.7, hatches=hatches)
     else:
@@ -386,6 +417,10 @@ def plot_per_dataset_distribution(
             _render_errorbar(ax, np.array([xi]), vals_list, colors,
                              [l if xi == 0 else "_nolegend_" for l in labels],
                              bar_width=0.8, hatches=hatches)
+
+    if naive_line is not None:
+        ax.axhline(naive_line, color="red", linestyle="--", linewidth=1.2,
+                   label="naive (1/k classes)")
 
     ax.set_xticks(x)
     ax.set_xticklabels(
@@ -422,20 +457,23 @@ def plot_clustering_overall_distribution(
     x = np.arange(len(metrics))
     fig, ax = plt.subplots(figsize=(max(6, len(metrics) * len(backbones) * 0.9), 5))
 
-    for bi, b in enumerate(backbones):
-        ds_metrics = results.get(b, {})
-        for mi, metric in enumerate(metrics):
-            vals = [m[metric] for m in ds_metrics.values() if metric in m]
-            if not vals:
-                continue
-            xi = np.array([mi])
-            label = display_fn(b) if mi == 0 else "_nolegend_"
-            if chart_type == "strip":
-                _render_strip(ax, xi, [vals], [colors[b]], [label],
-                              width_per_group=0.7, hatches=[""])
-            else:
-                _render_errorbar(ax, xi, [vals], [colors[b]], [label],
-                                 bar_width=0.8, hatches=[""])
+    b_colors = [colors[b] for b in backbones]
+    b_labels = [display_fn(b) for b in backbones]
+    hatches  = [""] * len(backbones)
+
+    for mi, metric in enumerate(metrics):
+        xi = np.array([mi])
+        vals_list = [
+            [m[metric] for m in results.get(b, {}).values() if metric in m]
+            for b in backbones
+        ]
+        labels_i = [l if mi == 0 else "_nolegend_" for l in b_labels]
+        if chart_type == "strip":
+            _render_violin(ax, xi, vals_list, b_colors, labels_i,
+                          width_per_group=0.7, hatches=hatches)
+        else:
+            _render_errorbar(ax, xi, vals_list, b_colors, labels_i,
+                             bar_width=0.8, hatches=hatches)
 
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.4)
     ax.set_xticks(x)
@@ -480,23 +518,30 @@ def plot_clustering_per_task_distribution(
     if len(metrics) == 1:
         axes = [axes]
 
+    b_colors = [colors[b] for b in backbones]
+    b_labels = [display_fn(b) for b in backbones]
+    hatches  = [""] * len(backbones)
+
     for mi, metric in enumerate(metrics):
         ax = axes[mi]
-        for bi, b in enumerate(backbones):
+        by_task_per_backbone: list[dict[str, list[float]]] = []
+        for b in backbones:
             by_task: dict[str, list[float]] = defaultdict(list)
             for ds, m in results.get(b, {}).items():
                 tt = ds_to_task.get(ds)
                 if tt and metric in m:
                     by_task[tt].append(m[metric])
-            for xi, task in enumerate(task_types):
-                vals = by_task.get(task, [])
-                label = display_fn(b) if xi == 0 else "_nolegend_"
-                if chart_type == "strip":
-                    _render_strip(ax, np.array([xi]), [vals], [colors[b]], [label],
-                                  width_per_group=0.7, hatches=[""])
-                else:
-                    _render_errorbar(ax, np.array([xi]), [vals], [colors[b]], [label],
-                                     bar_width=0.8, hatches=[""])
+            by_task_per_backbone.append(by_task)
+
+        for xi, task in enumerate(task_types):
+            vals_list = [bt.get(task, []) for bt in by_task_per_backbone]
+            labels_i  = [l if xi == 0 else "_nolegend_" for l in b_labels]
+            if chart_type == "strip":
+                _render_violin(ax, np.array([xi]), vals_list, b_colors, labels_i,
+                              width_per_group=0.7, hatches=hatches)
+            else:
+                _render_errorbar(ax, np.array([xi]), vals_list, b_colors, labels_i,
+                                 bar_width=0.8, hatches=hatches)
         ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.4)
         ax.set_xticks(x)
         ax.set_xticklabels([t.replace("_", " ").title() for t in task_types],

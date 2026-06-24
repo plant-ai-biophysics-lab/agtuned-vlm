@@ -470,7 +470,7 @@ def _draw_naive_line(
     if uniform_overall:
         value = uniform_overall.get(metric)
         if value is not None:
-            ax.axhline(value, color="steelblue", linestyle="--", linewidth=1.2,
+            ax.axhline(value, color="red", linestyle="-.", linewidth=1.2,
                        label="naive (1/k classes)" if label else "_nolegend_")
 
 
@@ -1337,7 +1337,8 @@ def main(args: argparse.Namespace) -> None:
     judge_by_ds_dist   = gather_judge_values_by_dataset(judge_by_dataset)
     judge_by_task_dist = gather_judge_values_by_task(judge_by_dataset, ds_to_task)
 
-    uniform_f1 = uniform_cls_overall.get("f1_macro") if uniform_cls_overall else None
+    uniform_f1   = uniform_cls_overall.get("f1_macro") if uniform_cls_overall else None
+    naive_sem_sim = naive_ov_desc.get("sem_sim") if naive_ov_desc else None
 
     for chart_type, suffix in [("strip", "strip"), ("errorbar", "errorbar")]:
         plot_overall_distribution(
@@ -1353,19 +1354,22 @@ def main(args: argparse.Namespace) -> None:
         plot_per_dataset_distribution(
             cls_by_cls, all_datasets, models, color_map, multimodal_set,
             "F1 per Class", "Vision Assessment — Classification Per Dataset (per-class spread)",
-            output_dir / f"cls_per_dataset_{suffix}.png", chart_type=chart_type)
+            output_dir / f"cls_per_dataset_{suffix}.png", chart_type=chart_type,
+            naive_line=uniform_f1)
         plot_overall_distribution(
             desc_by_ds, models, color_map, multimodal_set, "Sem Sim",
             "Vision Assessment — Description Overall", output_dir / f"desc_overall_{suffix}.png",
-            chart_type=chart_type)
+            chart_type=chart_type, naive_line=naive_sem_sim)
         plot_per_task_distribution(
             desc_by_task, task_types, models, color_map, multimodal_set, _task_label,
             "Sem Sim", "Vision Assessment — Description Per Task",
-            output_dir / f"desc_per_task_{suffix}.png", chart_type=chart_type)
+            output_dir / f"desc_per_task_{suffix}.png", chart_type=chart_type,
+            naive_line=naive_sem_sim)
         plot_per_dataset_distribution(
             desc_by_smp, all_datasets, models, color_map, multimodal_set,
             "Sem Sim per Sample", "Vision Assessment — Description Per Dataset (per-sample spread)",
-            output_dir / f"desc_per_dataset_{suffix}.png", chart_type=chart_type)
+            output_dir / f"desc_per_dataset_{suffix}.png", chart_type=chart_type,
+            naive_line=naive_sem_sim)
 
     # Update pipeline results CSV
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
