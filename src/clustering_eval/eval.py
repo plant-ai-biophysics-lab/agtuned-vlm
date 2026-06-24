@@ -100,13 +100,15 @@ def _pca_reduce(X: np.ndarray, n_components: int) -> np.ndarray:
 
 
 def _inter_centroid_dist(X: np.ndarray, y: np.ndarray, k: int) -> float:
-    """Mean pairwise cosine distance between per-class centroids."""
+    """Mean pairwise cosine distance between per-class centroids, normalised to [0, 1].
+    Cosine distance ∈ [0, 2], so divide by 2 to keep the same scale as silhouette."""
     centroids = np.array([X[y == i].mean(axis=0) for i in range(k)])
     norms = np.linalg.norm(centroids, axis=1, keepdims=True)
     centroids_n = centroids / (norms + 1e-10)
     cos_sim = centroids_n @ centroids_n.T
     triu = np.triu_indices(k, k=1)
-    return float(np.mean(1.0 - cos_sim[triu])) if len(triu[0]) > 0 else 0.0
+    raw = float(np.mean(1.0 - cos_sim[triu])) if len(triu[0]) > 0 else 0.0
+    return raw / 2.0
 
 
 def _fisher_dr(X: np.ndarray, y: np.ndarray, k: int, n: int) -> float:
@@ -179,7 +181,7 @@ def cluster_dataset(embeddings: np.ndarray, labels: list[str]) -> dict:
 _METRICS = ["nmi", "ari", "silhouette", "inter_centroid_dist", "fisher_dr"]
 _METRIC_LABELS = {
     "nmi": "NMI", "ari": "ARI", "silhouette": "Silhouette",
-    "inter_centroid_dist": "Inter-Centroid Dist", "fisher_dr": "Fisher DR",
+    "inter_centroid_dist": "Inter-Centroid Dist (norm)", "fisher_dr": "Fisher DR",
 }
 _COLORS = plt.cm.tab10.colors
 
