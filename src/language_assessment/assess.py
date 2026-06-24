@@ -404,12 +404,6 @@ def _draw_naive_line(
     label: bool = False,
     uniform_overall: dict | None = None,
 ) -> None:
-    """Draw naive baseline lines: red dashed (shuffled) and blue dashed (1/k per dataset)."""
-    if naive_overall:
-        value = naive_overall.get(metric)
-        if value is not None:
-            ax.axhline(value, color="red", linestyle="--", linewidth=1.2,
-                       label="naive (shuffled)" if label else "_nolegend_")
     if uniform_overall:
         value = uniform_overall.get(metric)
         if value is not None:
