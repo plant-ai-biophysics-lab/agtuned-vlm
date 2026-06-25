@@ -767,7 +767,7 @@ def plot_clustering_overall_distribution(
 
 def plot_clustering_per_task_distribution(
     results: dict[str, dict[str, dict]],
-    ds_to_task: dict[str, str],
+    ds_to_tasks: dict[str, list[str]],
     backbones: list[str],
     metrics: list[str],
     metric_labels: dict[str, str],
@@ -779,7 +779,7 @@ def plot_clustering_per_task_distribution(
 ) -> None:
     """Strip or errorbar for clustering per-task: one panel per metric, x = task types."""
     from collections import defaultdict
-    task_types = sorted(set(ds_to_task.values()))
+    task_types = sorted(set(t for tasks in ds_to_tasks.values() for t in tasks))
     if not task_types:
         return
 
@@ -800,9 +800,9 @@ def plot_clustering_per_task_distribution(
         for b in backbones:
             by_task: dict[str, list[float]] = defaultdict(list)
             for ds, m in results.get(b, {}).items():
-                tt = ds_to_task.get(ds)
-                if tt and metric in m:
-                    by_task[tt].append(m[metric])
+                for tt in ds_to_tasks.get(ds, []):
+                    if metric in m:
+                        by_task[tt].append(m[metric])
             by_task_per_backbone.append(by_task)
 
         for xi, task in enumerate(task_types):

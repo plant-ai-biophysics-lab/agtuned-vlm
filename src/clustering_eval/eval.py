@@ -327,10 +327,10 @@ def plot_overall(results: dict, output_dir: Path) -> None:
                             output_dir / f"clustering_overall_{group}.png")
 
 
-def _plot_per_task_group(results: dict, ds_to_task: dict[str, str],
+def _plot_per_task_group(results: dict, ds_to_tasks: dict[str, list[str]],
                          metrics: list[str], title: str, path: Path) -> None:
     backbones = sorted(results)
-    task_types = sorted(set(ds_to_task.values()))
+    task_types = sorted(set(t for tasks in ds_to_tasks.values() for t in tasks))
     if not task_types:
         return
     colors = _backbone_color(backbones)
@@ -347,9 +347,9 @@ def _plot_per_task_group(results: dict, ds_to_task: dict[str, str],
         for i, b in enumerate(backbones):
             by_task: dict[str, list[float]] = defaultdict(list)
             for ds, m in results[b].items():
-                tt = ds_to_task.get(ds)
-                if tt and metric in m:
-                    by_task[tt].append(m[metric])
+                for tt in ds_to_tasks.get(ds, []):
+                    if metric in m:
+                        by_task[tt].append(m[metric])
             vals = [float(np.mean(by_task[tt])) if by_task[tt] else 0.0 for tt in task_types]
             offset = (i - (len(backbones) - 1) / 2) * width
             bars = ax.bar(x + offset, vals, width, label=_display(b),
@@ -372,9 +372,9 @@ def _plot_per_task_group(results: dict, ds_to_task: dict[str, str],
     print(f"  Saved: {path}")
 
 
-def plot_per_task(results: dict, ds_to_task: dict[str, str], output_dir: Path) -> None:
+def plot_per_task(results: dict, ds_to_tasks: dict[str, list[str]], output_dir: Path) -> None:
     for group, metrics in _METRIC_GROUPS.items():
-        _plot_per_task_group(results, ds_to_task, metrics, _GROUP_TITLES[group],
+        _plot_per_task_group(results, ds_to_tasks, metrics, _GROUP_TITLES[group],
                              output_dir / f"clustering_per_task_{group}.png")
 
 
@@ -499,6 +499,14 @@ def main(args: argparse.Namespace) -> None:
 
     datasets_cfg = datasets_by_name(Path(args.config))
     ds_to_task   = {k: v.task_type for k, v in datasets_cfg.items()}
+    # For per-task grouping: include override task types so disease datasets
+    # with pest_damage class_overrides also appear in the pest/damage bucket.
+    ds_to_tasks: dict[str, list[str]] = {}
+    for k, v in datasets_cfg.items():
+        tasks = {v.task_type}
+        if v.class_overrides:
+            tasks.update(v.class_overrides.values())
+        ds_to_tasks[k] = sorted(tasks)
 
     cache_index = discover_cache(cache_dir)
     if not cache_index:
@@ -557,7 +565,7 @@ def main(args: argparse.Namespace) -> None:
 
     print("\n=== Generating plots ===")
     plot_overall(results, output_dir)
-    plot_per_task(results, ds_to_task, output_dir)
+    plot_per_task(results, ds_to_tasks, output_dir)
     plot_per_dataset_bars(results, output_dir)
     plot_per_dataset(results, output_dir)
     plot_metric_scatter(results, output_dir)
@@ -577,7 +585,7 @@ def main(args: argparse.Namespace) -> None:
                 output_dir / f"clustering_overall_{group}_{suffix}.png",
                 chart_type=chart_type)
             plot_clustering_per_task_distribution(
-                results, ds_to_task, backbones, metrics, _METRIC_LABELS, colors, _display,
+                results, ds_to_tasks, backbones, metrics, _METRIC_LABELS, colors, _display,
                 f"Clustering — {group_title} — By Task Type",
                 output_dir / f"clustering_per_task_{group}_{suffix}.png",
                 chart_type=chart_type)
