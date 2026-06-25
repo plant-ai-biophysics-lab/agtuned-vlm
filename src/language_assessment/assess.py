@@ -914,12 +914,23 @@ def plot_metric_correlation(
                     continue
                 r = float(np.corrcoef(xs, ys)[0, 1]) if len(xs) > 1 else 0.0
                 ax.scatter(xs, ys, alpha=0.6, s=20)
-                m, b = np.polyfit(xs, ys, 1)
                 x_line = np.linspace(min(xs), max(xs), 100)
-                ax.plot(x_line, m * x_line + b, color="red", linewidth=1.2)
+                m, b = np.polyfit(xs, ys, 1)
+                ax.plot(x_line, m * x_line + b, color="red", linewidth=1.2,
+                        label=f"all (r={r:.2f})")
+                # Second fit: F1 > 0 only
+                nz = [(x, y) for x, y in zip(xs, ys) if y > 0]
+                if len(nz) >= 2:
+                    nzx, nzy = zip(*nz)
+                    r_nz = float(np.corrcoef(nzx, nzy)[0, 1])
+                    m2, b2 = np.polyfit(nzx, nzy, 1)
+                    x2 = np.linspace(min(nzx), max(nzx), 100)
+                    ax.plot(x2, m2 * x2 + b2, color="orange", linewidth=1.2,
+                            linestyle="--", label=f"F1>0 (r={r_nz:.2f})")
+                ax.legend(fontsize=7)
                 ax.set_xlabel(f"Mean {dl} (description)")
                 ax.set_ylabel(row_label)
-                ax.set_title(f"{dl} vs {row_label}\nr = {r:.3f}")
+                ax.set_title(f"{dl} vs {row_label}")
 
         fig.suptitle(f"Per-Class Desc Quality vs Classification F1 — {model_id.split('/')[-1]}", fontsize=10)
         plt.tight_layout()
