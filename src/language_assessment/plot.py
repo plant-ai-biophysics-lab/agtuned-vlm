@@ -215,7 +215,8 @@ def main() -> None:
     plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
     plot_difficulty_correlation(
         all_model_cls_metrics, all_model_desc_metrics,
-        Path(args.clustering_metrics), output_dir)
+        Path(args.clustering_metrics), output_dir,
+        all_judge_by_dataset=all_judge_by_dataset)
 
     # ── Distribution charts: strip + errorbar (CSV-based) ─────────────────────
     models    = list(all_model_cls_metrics.keys())

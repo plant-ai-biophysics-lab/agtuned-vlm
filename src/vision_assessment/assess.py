@@ -981,6 +981,7 @@ def plot_difficulty_correlation(
     all_desc_results: dict[str, dict[str, dict]],
     clustering_metrics_path: Path,
     output_dir: Path,
+    all_judge_by_dataset: dict[str, dict[str, dict]] | None = None,
 ) -> None:
     """Scatter: per-dataset class separability (difficulty) vs assessment F1/sem_sim."""
     if not clustering_metrics_path.exists():
@@ -994,13 +995,14 @@ def plot_difficulty_correlation(
     diff_dir.mkdir(parents=True, exist_ok=True)
 
     diff_metrics = [
-        ("silhouette",        "Silhouette"),
+        ("silhouette",          "Silhouette"),
         ("inter_centroid_dist", "Inter-Centroid Dist"),
-        ("fisher_dr",         "Fisher DR"),
+        ("fisher_dr",           "Fisher DR"),
     ]
     perf_metrics = [("f1_macro", "F1 Macro"), ("sem_sim", "Sem Sim")]
+    if all_judge_by_dataset:
+        perf_metrics.append(("judge_f1_macro", "Judge F1"))
 
-    # mean performance across all models per dataset
     all_datasets = sorted(set(
         ds for m in list(all_cls_results.values()) + list(all_desc_results.values())
         for ds in m
@@ -1018,7 +1020,12 @@ def plot_difficulty_correlation(
                                  figsize=(4 * n_diff, 4 * n_perf), squeeze=False)
 
         for pi, (pm, pl) in enumerate(perf_metrics):
-            results_src = all_cls_results if pm == "f1_macro" else all_desc_results
+            if pm == "judge_f1_macro":
+                results_src = all_judge_by_dataset or {}
+            elif pm == "f1_macro":
+                results_src = all_cls_results
+            else:
+                results_src = all_desc_results
             for di, (dm, dl) in enumerate(diff_metrics):
                 ax = axes[pi][di]
                 xs, ys, ds_names = [], [], []
@@ -1376,7 +1383,8 @@ def main(args: argparse.Namespace) -> None:
     plot_overall_cls_summary(all_model_cls_per_ds, output_dir, multimodal_set, naive_cls_overall, judge_metrics, uniform_cls_overall)
     plot_metric_correlation(all_model_desc_rows, all_model_cls_rows, output_dir)
     plot_difficulty_correlation(all_model_cls_per_ds, all_model_desc_metrics,
-                                Path(args.clustering_metrics), output_dir)
+                                Path(args.clustering_metrics), output_dir,
+                                all_judge_by_dataset=judge_by_dataset)
 
     # ── Distribution charts (strip + errorbar) ──────────────────────────────
     models        = list(all_model_cls_per_ds.keys())
