@@ -1044,11 +1044,22 @@ def plot_difficulty_correlation(
                 for x, y, name in zip(xs, ys, ds_names):
                     ax.annotate(name, (x, y), fontsize=5, alpha=0.7,
                                 xytext=(3, 3), textcoords="offset points")
-                m_, b_ = np.polyfit(xs, ys, 1)
                 x_line = np.linspace(min(xs), max(xs), 100)
-                ax.plot(x_line, m_ * x_line + b_, color="red", linewidth=1.2)
+                m_, b_ = np.polyfit(xs, ys, 1)
+                ax.plot(x_line, m_ * x_line + b_, color="red", linewidth=1.2,
+                        label=f"all (r={r:.2f})")
+                if "f1" in pm:
+                    nz = [(x, y) for x, y in zip(xs, ys) if y > 0]
+                    if len(nz) >= 2:
+                        nzx, nzy = zip(*nz)
+                        r_nz = float(np.corrcoef(nzx, nzy)[0, 1])
+                        m2, b2 = np.polyfit(nzx, nzy, 1)
+                        x2 = np.linspace(min(nzx), max(nzx), 100)
+                        ax.plot(x2, m2 * x2 + b2, color="orange", linewidth=1.2,
+                                linestyle="--", label=f"F1>0 (r={r_nz:.2f})")
+                ax.legend(fontsize=6)
                 ax.set_xlabel(f"{dl} (↑ easier)"); ax.set_ylabel(pl)
-                ax.set_title(f"{dl} vs {pl}\nr = {r:.3f}", fontsize=9)
+                ax.set_title(f"{dl} vs {pl}", fontsize=9)
 
         fig.suptitle(f"Dataset Difficulty vs Performance — {short}", fontsize=11)
         plt.tight_layout()
