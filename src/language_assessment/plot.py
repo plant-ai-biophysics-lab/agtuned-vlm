@@ -40,11 +40,11 @@ from src.common.distribution_plots import (
     gather_desc_values_by_task_from_per_sample,
     gather_judge_per_class_by_dataset,
     gather_judge_values_by_dataset,
-    model_color_map,
     plot_overall_distribution,
     plot_per_dataset_distribution,
     plot_per_task_distribution,
 )
+from src.common.metrics import model_color_map
 from src.common.io import read_csv
 
 
