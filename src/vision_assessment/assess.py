@@ -1306,6 +1306,13 @@ def main(args: argparse.Namespace) -> None:
         del judge_llm, judge_tok
         gc.collect()
 
+    # Compute naive_ov_desc early so it can be saved in the metrics JSON
+    naive_ov_desc = {
+        metric: float(np.mean([v[metric] for v in naive_desc_metrics.values() if metric in v]))
+        for metric in ["rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"]
+        if any(metric in v for v in naive_desc_metrics.values())
+    } if naive_desc_metrics else {}
+
     # Save metrics JSON
     full_results = {
         "naive": {
@@ -1369,11 +1376,6 @@ def main(args: argparse.Namespace) -> None:
     # Plots
     multimodal_set = set(args.multimodal_models or [])
     all_model_cls_per_ds = {mid: m["classification_per_dataset"] for mid, m in summary_metrics.items()}
-    naive_ov_desc = {
-        metric: float(np.mean([v[metric] for v in naive_desc_metrics.values() if metric in v]))
-        for metric in ["rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"]
-        if any(metric in v for v in naive_desc_metrics.values())
-    } if naive_desc_metrics else {}
     naive_cls_all_refs = [r.get("metadata", {}).get("class_label", "") for r in records]
     naive_cls_overall = naive_classification_baseline(naive_cls_all_refs)
     uniform_cls_overall = naive_uniform_baseline_per_dataset([
