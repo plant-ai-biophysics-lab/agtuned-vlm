@@ -29,7 +29,11 @@ import argparse
 import csv
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -246,6 +250,125 @@ def write_latex(rows: list[dict], path: Path) -> None:
     print(f"  Saved: {path}")
 
 
+# ── Cross-assessment correlation ──────────────────────────────────────────────
+
+def _read_csv_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _per_class_scores(cls_rows: list[dict], desc_rows: list[dict]) -> dict[tuple, dict]:
+    """Return {(dataset, class): {judge_f1, sem_sim, task_type}} from CSV rows."""
+    cls_by_dc: dict[tuple, list[dict]] = defaultdict(list)
+    for r in cls_rows:
+        ds, cls = r.get("agml_dataset", ""), r.get("class_label", "")
+        if ds and cls:
+            cls_by_dc[(ds, cls)].append(r)
+
+    desc_by_dc: dict[tuple, list[dict]] = defaultdict(list)
+    for r in desc_rows:
+        ds, cls = r.get("agml_dataset", ""), r.get("class_label", "")
+        if ds and cls:
+            desc_by_dc[(ds, cls)].append(r)
+
+    result: dict[tuple, dict] = {}
+    for key in set(cls_by_dc) | set(desc_by_dc):
+        scores: dict = {}
+        if key in cls_by_dc:
+            rows = cls_by_dc[key]
+            scores["task_type"] = rows[0].get("task_type", "unknown")
+            judged = [r for r in rows if r.get("judged_correct", "") != ""]
+            if judged:
+                scores["judge_f1"] = float(np.mean([int(r["judged_correct"]) for r in judged]))
+        if key in desc_by_dc:
+            ss_vals = [float(r["sem_sim"]) for r in desc_by_dc[key]
+                       if r.get("sem_sim") not in ("", None)]
+            if ss_vals:
+                scores["sem_sim"] = float(np.mean(ss_vals))
+        if scores:
+            result[key] = scores
+    return result
+
+
+def plot_cross_assessment_correlation(
+    lang_cls_rows: list[dict],
+    lang_desc_rows: list[dict],
+    vis_cls_rows: list[dict],
+    vis_desc_rows: list[dict],
+    output_path: Path,
+    model_id: str,
+) -> None:
+    lang_scores = _per_class_scores(lang_cls_rows, lang_desc_rows)
+    vis_scores  = _per_class_scores(vis_cls_rows,  vis_desc_rows)
+
+    common_keys = set(lang_scores) & set(vis_scores)
+    if len(common_keys) < 5:
+        print(f"  [skip] cross-assessment correlation: only {len(common_keys)} common classes")
+        return
+
+    task_types = sorted(set(
+        lang_scores[k].get("task_type", "unknown") for k in common_keys
+    ))
+    _PALETTE = ["#e41a1c", "#377eb8", "#4daf4a", "#ff7f00", "#984ea3", "#a65628", "#f781bf"]
+    task_color = {t: _PALETTE[i % len(_PALETTE)] for i, t in enumerate(task_types)}
+
+    PAIRS = [
+        ("judge_f1", "judge_f1", "Lang Judge F1",  "Vis Judge F1"),
+        ("judge_f1", "sem_sim",  "Lang Judge F1",  "Vis Sem Sim"),
+        ("sem_sim",  "judge_f1", "Lang Sem Sim",   "Vis Judge F1"),
+        ("sem_sim",  "sem_sim",  "Lang Sem Sim",   "Vis Sem Sim"),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9))
+    axes = axes.flatten()
+
+    for ax, (lm, vm, lx, vy) in zip(axes, PAIRS):
+        points = [
+            (lang_scores[k][lm], vis_scores[k][vm],
+             lang_scores[k].get("task_type", "unknown"))
+            for k in common_keys
+            if lm in lang_scores[k] and vm in vis_scores[k]
+        ]
+        if len(points) < 5:
+            ax.set_visible(False)
+            continue
+
+        xs = np.array([p[0] for p in points])
+        ys = np.array([p[1] for p in points])
+        colors = [task_color[p[2]] for p in points]
+
+        ax.scatter(xs, ys, c=colors, alpha=0.75, s=55,
+                   edgecolors="black", linewidths=0.4)
+
+        r = float(np.corrcoef(xs, ys)[0, 1])
+        z = np.polyfit(xs, ys, 1)
+        xl = np.linspace(xs.min(), xs.max(), 100)
+        ax.plot(xl, np.poly1d(z)(xl), color="crimson", linewidth=1.2,
+                linestyle="--", label=f"r = {r:.3f}")
+
+        ax.set_xlabel(lx, fontsize=9)
+        ax.set_ylabel(vy, fontsize=9)
+        ax.set_title(f"{lx} vs {vy}  (n={len(points)})", fontsize=9)
+        ax.set_xlim(-0.05, 1.05)
+        ax.set_ylim(-0.05, 1.05)
+        ax.legend(fontsize=8)
+
+    for tt in task_types:
+        axes[0].scatter([], [], c=task_color[tt],
+                        label=tt.replace("_", " "), s=35)
+    axes[0].legend(fontsize=7, loc="upper left")
+
+    short = model_id.split("/")[-1]
+    fig.suptitle(f"Language vs Vision Assessment — Per-Class Correlation\n{short}",
+                 fontsize=11)
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -289,6 +412,27 @@ def main() -> None:
 
     write_csv(rows, output_dir / "results_table.csv")
     write_latex(rows, output_dir / "results_table.tex")
+
+    # Cross-assessment per-class correlation plots
+    lang_data = _load_json(Path(args.language_dir) / "language_assessment_metrics.json")
+    vis_data  = _load_json(Path(args.vision_dir)   / "vision_assessment_metrics.json")
+    if lang_data and vis_data:
+        common_models = set(lang_data.get("models", {})) & set(vis_data.get("models", {}))
+        for model_id in sorted(common_models):
+            safe = model_id.replace("/", "_").replace(" ", "_")
+            lang_cls_rows  = _read_csv_rows(Path(args.language_dir) / f"cls_{safe}.csv")
+            lang_desc_rows = _read_csv_rows(Path(args.language_dir) / f"desc_{safe}.csv")
+            vis_cls_rows   = _read_csv_rows(Path(args.vision_dir)   / f"cls_{safe}.csv")
+            vis_desc_rows  = _read_csv_rows(Path(args.vision_dir)   / f"desc_{safe}.csv")
+            if not (lang_cls_rows and vis_cls_rows):
+                print(f"  [skip] {model_id}: missing cls CSVs for correlation plot")
+                continue
+            plot_cross_assessment_correlation(
+                lang_cls_rows, lang_desc_rows,
+                vis_cls_rows,  vis_desc_rows,
+                output_dir / f"cross_correlation_{safe}.png",
+                model_id,
+            )
 
     print()
     print(f"  {'Type':<14} {'Model':<40} {'Params':>9} {'LP F1':>6} {'L F1':>6} {'L RSS':>6} {'V F1':>6} {'V RSS':>6}")
