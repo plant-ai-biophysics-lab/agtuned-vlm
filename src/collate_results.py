@@ -157,6 +157,167 @@ def collate(lp_dir: Path, lang_dir: Path, vis_dir: Path) -> list[dict]:
     return rows
 
 
+# ── Analysis tables (perception → reasoning collapse) ───────────────────────────
+
+def _f1(val) -> str:
+    return "  --  " if val is None else f"{val:6.3f}"
+
+
+def _class_to_dataset(vis_cls_rows: list[dict]) -> dict[str, set[str]]:
+    m: dict[str, set[str]] = defaultdict(set)
+    for r in vis_cls_rows:
+        cls, ds = r.get("class_label", ""), r.get("agml_dataset", "")
+        if cls and ds:
+            m[cls].add(ds)
+    return m
+
+
+def _lp_per_dataset(report: dict, cls_to_ds: dict[str, set[str]]) -> dict[str, float]:
+    """Support-weighted mean of per-class linear-probe F1, aggregated to dataset.
+
+    Approximate for the few classes shared across datasets (the class is
+    counted toward each dataset it appears in).
+    """
+    acc: dict[str, list[tuple[float, float]]] = defaultdict(list)  # ds -> [(f1, support)]
+    for cls, stats in report.items():
+        if cls in ("accuracy", "macro avg", "weighted avg"):
+            continue
+        f1  = stats.get("f1-score")
+        sup = stats.get("support", 0.0)
+        if f1 is None:
+            continue
+        for ds in cls_to_ds.get(cls, ()):
+            acc[ds].append((float(f1), float(sup)))
+    out: dict[str, float] = {}
+    for ds, pairs in acc.items():
+        tot = sum(s for _, s in pairs)
+        out[ds] = sum(f * s for f, s in pairs) / tot if tot else float(np.mean([f for f, _ in pairs]))
+    return out
+
+
+def build_analysis(
+    lp_data: dict | None,
+    lang_data: dict | None,
+    vis_data: dict | None,
+    aug_data: dict | None,
+    vis_cls_rows: list[dict],
+    model_id: str,
+) -> dict:
+    """Assemble the three analysis tables into a structured dict."""
+    short = _basename(model_id)
+    A: dict = {"model": short, "chain": {}, "by_task": [], "by_dataset": []}
+
+    # ── Table 1: evidence chain (overall) ──────────────────────────────────────
+    def _lp_overall(node_key: str, bb_match) -> float | None:
+        for bb, m in (lp_data or {}).get(node_key, {}).items():
+            if bb_match(bb) and isinstance(m, dict):
+                return m.get("f1_macro")
+        return None
+
+    A["chain"]["lp_pre"]   = _lp_overall("fc_combined",        lambda b: b == short)
+    A["chain"]["lp_post"]  = _lp_overall("postproj_fc_combined", lambda b: b.startswith(short))
+    A["chain"]["lp_dino"]  = _lp_overall("fc_combined",        lambda b: "dinov3" in b)
+    A["chain"]["lp_yolo"]  = _lp_overall("fc_combined",        lambda b: "yolo" in b)
+
+    vm = (vis_data or {}).get("models", {}).get(model_id, {})
+    lm = (lang_data or {}).get("models", {}).get(model_id, {})
+    A["chain"]["vis_zs"]   = vm.get("judge", {}).get("judge_f1_macro")
+    A["chain"]["lang_zs"]  = lm.get("judge", {}).get("judge_f1_macro")
+    am = (aug_data or {}).get("models", {}).get(model_id, {})
+    A["chain"]["aug_raw"]   = am.get("augmented_overall", {}).get("f1_macro")
+    A["chain"]["aug_judge"] = am.get("judge", {}).get("judge_f1_macro")
+
+    # ── Table 2: per-task dissociation (LP perception vs VLM output) ────────────
+    lp_task     = (lp_data or {}).get("by_task_fc_combined", {})
+    vis_jtask   = vm.get("judge_by_task", {})
+    tasks = sorted(set(lp_task) | set(vis_jtask))
+    for t in tasks:
+        lp_f1  = lp_task.get(t, {}).get(short)
+        vis_f1 = vis_jtask.get(t, {}).get("judge_f1_macro")
+        gap = (lp_f1 - vis_f1) if (lp_f1 is not None and vis_f1 is not None) else None
+        A["by_task"].append({"task": t, "lp": lp_f1, "vis": vis_f1, "gap": gap})
+
+    # ── Table 3: per-dataset difficulty ────────────────────────────────────────
+    cls_to_ds = _class_to_dataset(vis_cls_rows)
+    lp_rep = (lp_data or {}).get("fc_combined", {}).get(short, {}).get("per_class_report_dict", {})
+    lp_ds  = _lp_per_dataset(lp_rep, cls_to_ds) if lp_rep else {}
+
+    vis_jds  = vm.get("judge_by_dataset", {})
+    vis_dpd  = vm.get("description_per_dataset", {})
+    aug_pd   = am.get("augmented_per_dataset", {})
+
+    all_ds = sorted(set(vis_jds) | set(lp_ds))
+    for ds in all_ds:
+        lp_f1   = lp_ds.get(ds)
+        vis_f1  = vis_jds.get(ds, {}).get("judge_f1_macro")
+        sem     = vis_dpd.get(ds, {}).get("sem_sim")
+        aug_f1  = aug_pd.get(ds, {}).get("f1_macro")
+        gap = (lp_f1 - vis_f1) if (lp_f1 is not None and vis_f1 is not None) else None
+        A["by_dataset"].append({
+            "dataset": ds, "lp": lp_f1, "vis": vis_f1,
+            "sem_sim": sem, "aug": aug_f1, "gap": gap,
+        })
+    # sort hardest (lowest vis judged F1) first
+    A["by_dataset"].sort(key=lambda r: (r["vis"] if r["vis"] is not None else 1.0))
+    return A
+
+
+def render_analysis(A: dict) -> str:
+    short = A["model"]
+    L: list[str] = []
+    c = A["chain"]
+
+    L.append(f"# Perception → Reasoning Analysis — {short}\n")
+    L.append("## Table 1 — Evidence Chain (overall macro F1)\n")
+    L.append("| Stage | What it measures | F1 |")
+    L.append("|---|---|---|")
+    L.append(f"| Linear probe, pre-projector | Features decodable in vision tower | {_f1(c['lp_pre']).strip()} |")
+    L.append(f"| Linear probe, post-projector | Survive vision→text projection | {_f1(c['lp_post']).strip()} |")
+    L.append(f"| DINOv3 reference | Ceiling for good perception | {_f1(c['lp_dino']).strip()} |")
+    L.append(f"| YOLO reference | Weak-backbone floor | {_f1(c['lp_yolo']).strip()} |")
+    L.append(f"| **Vision zero-shot** (judged) | Full VLM outputs the class | **{_f1(c['vis_zs']).strip()}** |")
+    L.append(f"| Language text-only (judged) | Does it know the words | {_f1(c['lang_zs']).strip()} |")
+    L.append(f"| Vision + description (judged) | Hand it the bridge | **{_f1(c['aug_judge']).strip()}** |")
+    if c["lp_post"] is not None and c["vis_zs"] is not None:
+        L.append(f"\n**Collapse:** post-projector {c['lp_post']:.3f} → zero-shot {c['vis_zs']:.3f} "
+                 f"(−{c['lp_post']-c['vis_zs']:.3f}). "
+                 + (f"Recovers to {c['aug_judge']:.3f} with description.\n" if c["aug_judge"] else "\n"))
+
+    L.append("## Table 2 — Per-Task Dissociation (perception vs output)\n")
+    L.append("| Task | Linear probe F1 | VLM zero-shot judged F1 | Gap |")
+    L.append("|---|---|---|---|")
+    for r in A["by_task"]:
+        gap = f"{r['gap']:+.3f}" if r["gap"] is not None else "--"
+        L.append(f"| {r['task'].replace('_',' ')} | {_f1(r['lp']).strip()} | {_f1(r['vis']).strip()} | {gap} |")
+
+    L.append("\n## Table 3 — Per-Dataset Difficulty (hardest → easiest by VLM judged F1)\n")
+    L.append("| Dataset | LP F1 | Vis judged F1 | Desc SemSim | Aug F1 | LP−Vis gap |")
+    L.append("|---|---|---|---|---|---|")
+    for r in A["by_dataset"]:
+        gap = f"{r['gap']:+.3f}" if r["gap"] is not None else "--"
+        name = r["dataset"].replace("_classification", "").replace("_", " ")
+        L.append(f"| {name} | {_f1(r['lp']).strip()} | {_f1(r['vis']).strip()} | "
+                 f"{_f1(r['sem_sim']).strip()} | {_f1(r['aug']).strip()} | {gap} |")
+
+    # easiest/hardest callouts
+    ranked = [r for r in A["by_dataset"] if r["vis"] is not None]
+    if ranked:
+        hardest = ranked[:3]
+        easiest = ranked[-3:][::-1]
+        L.append("\n**Hardest (lowest VLM judged F1):** "
+                 + ", ".join(f"{r['dataset'].replace('_classification','')} ({r['vis']:.3f})" for r in hardest))
+        L.append("\n**Easiest (highest VLM judged F1):** "
+                 + ", ".join(f"{r['dataset'].replace('_classification','')} ({r['vis']:.3f})" for r in easiest))
+        # biggest perception-output dissociation
+        gapped = [r for r in ranked if r["gap"] is not None]
+        if gapped:
+            gapped.sort(key=lambda r: -r["gap"])
+            L.append("\n**Biggest perception→output gap (features clean, model fails):** "
+                     + ", ".join(f"{r['dataset'].replace('_classification','')} "
+                                 f"(LP {r['lp']:.2f} → Vis {r['vis']:.2f})" for r in gapped[:3]))
+    return "\n".join(L) + "\n"
+
+
 # ── CSV ────────────────────────────────────────────────────────────────────────
 
 FIELDS  = ["type", "model", "params", "lp_f1", "lang_cls_f1", "lang_desc_rss", "vis_cls_f1", "vis_desc_rss"]
@@ -443,6 +604,10 @@ def main() -> None:
         help="Directory containing vision_assessment_metrics.json",
     )
     parser.add_argument(
+        "--aug_dir", default="outputs/desc_augmented_vision/",
+        help="Directory containing desc_augmented_metrics_all.json",
+    )
+    parser.add_argument(
         "--output_dir", default="outputs/",
         help="Directory to write results_table.csv and results_table.tex",
     )
@@ -488,6 +653,23 @@ def main() -> None:
                 output_dir,
                 model_id,
             )
+
+    # Perception → reasoning analysis tables (markdown)
+    lp_data  = _load_json(Path(args.linear_probe_dir) / "linear_probe_results.json")
+    aug_data = (_load_json(Path(args.aug_dir) / "desc_augmented_metrics_all.json")
+                or _load_json(Path(args.aug_dir) / "desc_augmented_metrics_filtered.json"))
+    if vis_data:
+        analysis_sections: list[str] = []
+        for model_id in sorted(vis_data.get("models", {})):
+            safe = model_id.replace("/", "_").replace(" ", "_")
+            vis_cls_rows = _read_csv_rows(Path(args.vision_dir) / f"cls_{safe}.csv")
+            A = build_analysis(lp_data, lang_data, vis_data, aug_data, vis_cls_rows, model_id)
+            section = render_analysis(A)
+            analysis_sections.append(section)
+            print("\n" + section)
+        analysis_path = output_dir / "analysis_summary.md"
+        analysis_path.write_text("\n\n".join(analysis_sections), encoding="utf-8")
+        print(f"  Saved: {analysis_path}")
 
     print()
     print(f"  {'Type':<14} {'Model':<40} {'Params':>9} {'LP F1':>6} {'L F1':>6} {'L RSS':>6} {'V F1':>6} {'V RSS':>6}")
