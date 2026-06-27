@@ -902,6 +902,7 @@ def main(args: argparse.Namespace) -> None:
     plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
+    plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task)
 
     # ── Sub-step: vision-generated descriptions ────────────────────────────────
     if args.use_vision_descriptions:
@@ -944,6 +945,80 @@ def main(args: argparse.Namespace) -> None:
             plot_desc_quality_correlation(vis_aug_rows, output_dir, suffix=f"vis_desc_{safe}")
 
     print("\nDone.")
+
+
+def plot_aug_distribution(
+    models: list[str],
+    summary: dict,
+    output_dir: Path,
+    filter_label: str,
+    ds_to_task: dict[str, str],
+) -> None:
+    """Strip + errorbar distribution charts for baseline vs augmented classification."""
+    from src.common.distribution_plots import (
+        gather_cls_per_class_by_dataset,
+        gather_cls_values_by_dataset,
+        gather_cls_values_by_task_from_per_class,
+        gather_judge_per_class_by_dataset,
+        plot_overall_distribution,
+        plot_per_dataset_distribution,
+        plot_per_task_distribution,
+    )
+    from src.common.metrics import model_color_map
+
+    dist_rows:    dict[str, list[dict]] = {}
+    dist_metrics: dict[str, dict[str, dict]] = {}
+    for model_id in models:
+        if model_id not in summary:
+            continue
+        safe  = _safe_name(model_id)
+        short = model_id.split("/")[-1]
+        b_rows = _read_csv(output_dir / f"baseline_cls_{filter_label}_{safe}.csv")
+        a_rows = _read_csv(output_dir / f"aug_cls_{filter_label}_{safe}.csv")
+        dist_rows[f"{short} (baseline)"]    = b_rows
+        dist_rows[f"{short} (aug)"]         = a_rows
+        dist_metrics[f"{short} (baseline)"] = compute_cls_metrics_per_dataset(b_rows)
+        dist_metrics[f"{short} (aug)"]      = compute_cls_metrics_per_dataset(a_rows)
+
+    if not dist_metrics:
+        return
+
+    dist_models = list(dist_metrics.keys())
+    color_map   = model_color_map(dist_models)
+    mm_set: set[str] = set()
+
+    all_ds      = sorted(set(ds for m in dist_metrics.values() for ds in m))
+    task_types  = sorted(set(ds_to_task.get(ds, "") for ds in all_ds) - {""})
+
+    cls_by_ds   = gather_cls_values_by_dataset(dist_metrics)
+    cls_by_cls  = gather_cls_per_class_by_dataset(dist_rows, "class_label", "resolved_class", ds_to_task)
+    judge_by_cls = gather_judge_per_class_by_dataset(dist_rows, "class_label", ds_to_task)
+    cls_by_task = gather_cls_values_by_task_from_per_class(cls_by_cls)
+    _dtk        = lambda k: (k[1], k[0]) if isinstance(k, tuple) else ("", k)
+    cls_ds_tasks = sorted(set(k for m in cls_by_cls.values() for k in m), key=_dtk)
+    judge_by_task = gather_cls_values_by_task_from_per_class(judge_by_cls)
+
+    for chart_type, sfx in [("strip", "strip"), ("errorbar", "errorbar")]:
+        plot_overall_distribution(
+            cls_by_ds, dist_models, color_map, mm_set, "F1 Macro",
+            f"Aug Vision — Classification Overall ({filter_label})",
+            output_dir / f"cls_overall_{filter_label}_{sfx}.png",
+            chart_type=chart_type,
+        )
+        plot_per_task_distribution(
+            cls_by_task, task_types, dist_models, color_map, mm_set, _task_label,
+            "F1 Macro", f"Aug Vision — Classification Per Task ({filter_label})",
+            output_dir / f"cls_per_task_{filter_label}_{sfx}.png",
+            chart_type=chart_type,
+            judge_values_by_model_by_task=judge_by_task,
+        )
+        plot_per_dataset_distribution(
+            cls_by_cls, cls_ds_tasks, dist_models, color_map, mm_set,
+            "F1 per Class", f"Aug Vision — Classification Per Dataset ({filter_label})",
+            output_dir / f"cls_per_dataset_{filter_label}_{sfx}.png",
+            chart_type=chart_type,
+            judge_values_by_model_by_dataset=judge_by_cls,
+        )
 
 
 def plot_desc_quality_correlation(

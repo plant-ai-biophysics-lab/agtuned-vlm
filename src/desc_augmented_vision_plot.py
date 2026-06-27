@@ -2,10 +2,17 @@
 Regenerate all desc_augmented_vision plots without re-running inference.
 
 Usage:
-    uv run python src/desc_augmented_vision_plot.py \\
+    python main.py aug-vision-plot \\
       --models     google/gemma-4-26B-A4B-it \\
       --vis_dir    outputs/vision_assessment/ \\
       --output_dir outputs/desc_augmented_vision/
+
+    # For the --all_classes run:
+    python main.py aug-vision-plot \\
+      --models     google/gemma-4-26B-A4B-it \\
+      --vis_dir    outputs/vision_assessment/ \\
+      --output_dir outputs/desc_augmented_vision/ \\
+      --all_classes
 """
 
 from __future__ import annotations
@@ -21,9 +28,10 @@ from src.desc_augmented_vision import (
     _read_csv,
     _safe_name,
     compute_cls_metrics_per_dataset,
+    plot_aug_distribution,
     plot_comparison,
-    plot_task_comparison,
     plot_overall_comparison,
+    plot_task_comparison,
     plot_transitions,
 )
 
@@ -31,11 +39,12 @@ from src.desc_augmented_vision import (
 def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     vis_dir    = Path(args.vis_dir)
+    filter_label = "all" if args.all_classes else "filtered"
 
-    metrics_path = output_dir / "desc_augmented_metrics.json"
+    metrics_path = output_dir / f"desc_augmented_metrics_{filter_label}.json"
     if not metrics_path.exists():
         print(f"ERROR: metrics file not found: {metrics_path}")
-        print("Run desc_augmented_vision.py first.")
+        print("Run aug-vision first.")
         raise SystemExit(1)
 
     datasets_cfg = datasets_by_name(Path(args.config))
@@ -43,11 +52,12 @@ def main(args: argparse.Namespace) -> None:
 
     baseline_per_model:  dict[str, dict[str, dict]] = {}
     augmented_per_model: dict[str, dict[str, dict]] = {}
+    summary: dict[str, dict] = {}
 
     for model_id in args.models:
         safe         = _safe_name(model_id)
-        aug_csv      = output_dir / f"aug_cls_{safe}.csv"
-        baseline_csv = output_dir / f"baseline_cls_{safe}.csv"
+        aug_csv      = output_dir / f"aug_cls_{filter_label}_{safe}.csv"
+        baseline_csv = output_dir / f"baseline_cls_{filter_label}_{safe}.csv"
 
         if not aug_csv.exists():
             print(f"  [skip] {aug_csv.name} not found")
@@ -58,16 +68,20 @@ def main(args: argparse.Namespace) -> None:
 
         augmented_per_model[model_id] = compute_cls_metrics_per_dataset(aug_rows)
         baseline_per_model[model_id]  = compute_cls_metrics_per_dataset(baseline_rows)
+        summary[model_id] = {}  # presence flag for plot_aug_distribution
+        print(f"  Loaded {aug_csv.name} ({len(aug_rows)} rows)")
 
     if not augmented_per_model:
         print("No augmented CSVs found. Nothing to plot.")
         raise SystemExit(1)
 
     print("\n=== Generating plots ===")
-    plot_comparison(baseline_per_model, augmented_per_model, output_dir)
-    plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir)
-    plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir)
-    plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models)
+    plot_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
+    plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir, suffix=filter_label)
+    plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
+    plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
+                     filter_label=filter_label)
+    plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task)
     print("\nDone.")
 
 
@@ -77,5 +91,7 @@ if __name__ == "__main__":
     parser.add_argument("--vis_dir",     default="outputs/vision_assessment/")
     parser.add_argument("--output_dir",  default="outputs/desc_augmented_vision/")
     parser.add_argument("--config",      default="src/config/datasets.yaml")
+    parser.add_argument("--all_classes", action="store_true",
+                        help="Use all-classes run (looks for aug_cls_all_*.csv)")
     args = parser.parse_args()
     main(args)
