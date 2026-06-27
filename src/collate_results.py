@@ -292,33 +292,62 @@ def _per_class_scores(cls_rows: list[dict], desc_rows: list[dict]) -> dict[tuple
     return result
 
 
-def plot_cross_assessment_correlation(
-    lang_cls_rows: list[dict],
-    lang_desc_rows: list[dict],
-    vis_cls_rows: list[dict],
-    vis_desc_rows: list[dict],
-    output_path: Path,
-    model_id: str,
-) -> None:
-    lang_scores = _per_class_scores(lang_cls_rows, lang_desc_rows)
-    vis_scores  = _per_class_scores(vis_cls_rows,  vis_desc_rows)
+def _per_dataset_scores(cls_rows: list[dict], desc_rows: list[dict]) -> dict[str, dict]:
+    """Return {dataset: {judge_f1, sem_sim, task_type}} aggregated across all classes."""
+    from sklearn.metrics import f1_score as _sk_f1
 
-    common_keys = set(lang_scores) & set(vis_scores)
-    if len(common_keys) < 5:
-        print(f"  [skip] cross-assessment correlation: only {len(common_keys)} common classes")
+    cls_by_ds: dict[str, list[dict]] = defaultdict(list)
+    for r in cls_rows:
+        ds = r.get("agml_dataset", "")
+        if ds:
+            cls_by_ds[ds].append(r)
+
+    desc_by_ds: dict[str, list[dict]] = defaultdict(list)
+    for r in desc_rows:
+        ds = r.get("agml_dataset", "")
+        if ds:
+            desc_by_ds[ds].append(r)
+
+    result: dict[str, dict] = {}
+    for ds in set(cls_by_ds) | set(desc_by_ds):
+        scores: dict = {}
+        if ds in cls_by_ds:
+            rows = cls_by_ds[ds]
+            scores["task_type"] = rows[0].get("task_type", "unknown")
+            judged = [r for r in rows if r.get("judged_correct", "") != ""]
+            if judged:
+                refs  = [r.get("class_label", "") for r in judged]
+                preds = [r.get("class_label", "") if int(r["judged_correct"])
+                         else (r.get("resolved_class") or "__") for r in judged]
+                lbls  = sorted(set(refs))
+                scores["judge_f1"] = float(_sk_f1(refs, preds, average="macro",
+                                                   labels=lbls, zero_division=0))
+        if ds in desc_by_ds:
+            ss = [float(r["sem_sim"]) for r in desc_by_ds[ds]
+                  if r.get("sem_sim") not in ("", None)]
+            if ss:
+                scores["sem_sim"] = float(np.mean(ss))
+        if scores:
+            result[ds] = scores
+    return result
+
+
+def _scatter_2x2(lang_scores, vis_scores, key_fn, output_path, title, min_pts=5):
+    """Shared 2×2 scatter grid for per-class or per-dataset correlation."""
+    common = set(lang_scores) & set(vis_scores)
+    if len(common) < min_pts:
+        print(f"  [skip] {output_path.name}: only {len(common)} common entries")
         return
 
-    task_types = sorted(set(
-        lang_scores[k].get("task_type", "unknown") for k in common_keys
-    ))
+    task_types = sorted(set(lang_scores[k].get("task_type", "unknown") for k in common))
     _PALETTE = ["#e41a1c", "#377eb8", "#4daf4a", "#ff7f00", "#984ea3", "#a65628", "#f781bf"]
     task_color = {t: _PALETTE[i % len(_PALETTE)] for i, t in enumerate(task_types)}
 
     PAIRS = [
-        ("judge_f1", "judge_f1", "Lang Judge F1",  "Vis Judge F1"),
-        ("judge_f1", "sem_sim",  "Lang Judge F1",  "Vis Sem Sim"),
-        ("sem_sim",  "judge_f1", "Lang Sem Sim",   "Vis Judge F1"),
-        ("sem_sim",  "sem_sim",  "Lang Sem Sim",   "Vis Sem Sim"),
+        ("judge_f1", "judge_f1", "Lang Judge F1", "Vis Judge F1"),
+        ("judge_f1", "sem_sim",  "Lang Judge F1", "Vis Sem Sim"),
+        ("sem_sim",  "judge_f1", "Lang Sem Sim",  "Vis Judge F1"),
+        ("sem_sim",  "sem_sim",  "Lang Sem Sim",  "Vis Sem Sim"),
     ]
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 9))
@@ -326,12 +355,11 @@ def plot_cross_assessment_correlation(
 
     for ax, (lm, vm, lx, vy) in zip(axes, PAIRS):
         points = [
-            (lang_scores[k][lm], vis_scores[k][vm],
-             lang_scores[k].get("task_type", "unknown"))
-            for k in common_keys
+            (lang_scores[k][lm], vis_scores[k][vm], lang_scores[k].get("task_type", "unknown"))
+            for k in common
             if lm in lang_scores[k] and vm in vis_scores[k]
         ]
-        if len(points) < 5:
+        if len(points) < min_pts:
             ax.set_visible(False)
             continue
 
@@ -356,17 +384,44 @@ def plot_cross_assessment_correlation(
         ax.legend(fontsize=8)
 
     for tt in task_types:
-        axes[0].scatter([], [], c=task_color[tt],
-                        label=tt.replace("_", " "), s=35)
+        axes[0].scatter([], [], c=task_color[tt], label=tt.replace("_", " "), s=35)
     axes[0].legend(fontsize=7, loc="upper left")
 
-    short = model_id.split("/")[-1]
-    fig.suptitle(f"Language vs Vision Assessment — Per-Class Correlation\n{short}",
-                 fontsize=11)
+    fig.suptitle(title, fontsize=11)
     plt.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {output_path}")
+
+
+def plot_cross_assessment_correlation(
+    lang_cls_rows: list[dict],
+    lang_desc_rows: list[dict],
+    vis_cls_rows: list[dict],
+    vis_desc_rows: list[dict],
+    output_dir: Path,
+    model_id: str,
+) -> None:
+    short = model_id.split("/")[-1]
+    safe  = model_id.replace("/", "_").replace(" ", "_")
+
+    lang_cls  = _per_class_scores(lang_cls_rows, lang_desc_rows)
+    vis_cls   = _per_class_scores(vis_cls_rows,  vis_desc_rows)
+    lang_ds   = _per_dataset_scores(lang_cls_rows, lang_desc_rows)
+    vis_ds    = _per_dataset_scores(vis_cls_rows,  vis_desc_rows)
+
+    _scatter_2x2(
+        lang_cls, vis_cls,
+        key_fn=lambda k: k,
+        output_path=output_dir / f"cross_correlation_per_class_{safe}.png",
+        title=f"Language vs Vision — Per-Class Correlation\n{short}",
+    )
+    _scatter_2x2(
+        lang_ds, vis_ds,
+        key_fn=lambda k: k,
+        output_path=output_dir / f"cross_correlation_per_dataset_{safe}.png",
+        title=f"Language vs Vision — Per-Dataset Correlation\n{short}",
+    )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -430,7 +485,7 @@ def main() -> None:
             plot_cross_assessment_correlation(
                 lang_cls_rows, lang_desc_rows,
                 vis_cls_rows,  vis_desc_rows,
-                output_dir / f"cross_correlation_{safe}.png",
+                output_dir,
                 model_id,
             )
 
