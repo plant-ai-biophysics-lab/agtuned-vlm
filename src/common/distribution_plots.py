@@ -78,15 +78,20 @@ def _render_errorbar(
     """Bar = mean, error = ±1 std."""
     n_models = len(values_list)
     w = bar_width / max(n_models, 1)
+    x_arr = np.atleast_1d(x_positions)
+    per_model = len(x_arr) == n_models  # one x position per model (no offset needed)
     for i, (vals, color, label, hatch) in enumerate(zip(values_list, colors, labels, hatches)):
         if not vals:
             continue
-        offset = (i - (n_models - 1) / 2) * w
+        if per_model:
+            pos = float(x_arr[i])
+        else:
+            pos = float(x_arr[0]) + (i - (n_models - 1) / 2) * w
         mean = float(np.mean(vals))
         std  = float(np.std(vals))
-        ax.bar(x_positions + offset, mean, w, color=color, alpha=0.85,
+        ax.bar(pos, mean, w, color=color, alpha=0.85,
                edgecolor="black", linewidth=0.5, label=label, hatch=hatch)
-        ax.errorbar(x_positions + offset, mean, yerr=std,
+        ax.errorbar(pos, mean, yerr=std,
                     fmt="none", color="black", capsize=3, linewidth=1.2, zorder=4)
 
 
