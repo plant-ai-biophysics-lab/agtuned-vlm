@@ -149,17 +149,26 @@ def load_dataset_classes(ds_name: str, n_samples: int) -> dict[str, list[Path]]:
 
 # ── Prompt building ────────────────────────────────────────────────────────────
 
-_SYS = "You are an expert agricultural scientist."
+_PROMPTS_YAML = Path(__file__).parent.parent.parent / "src" / "config" / "prompts.yaml"
+
+def _load_prompts() -> dict:
+    import yaml
+    with open(_PROMPTS_YAML) as f:
+        return yaml.safe_load(f)
+
+_PROMPTS = _load_prompts()
 
 
 def build_inputs(image: Image.Image, class_names: list[str],
-                 processor, device: str) -> dict:
-    question = (
-        f"Identify the plant condition shown. "
-        f"Choose exactly one from: {', '.join(class_names)}."
-    )
-    messages = [
-        {"role": "system", "content": _SYS},
+                 processor, device: str, crop: str = "plant") -> dict:
+    inner_q = _PROMPTS["visual_classification_disease"].format(crop=crop)
+    inner_q += f" Choose exactly one from: {', '.join(class_names)}."
+    question = _PROMPTS["assessment_classification"].format(question=inner_q)
+
+    sys_msg = _PROMPTS.get("assessment_system", "")
+    messages = (
+        [{"role": "system", "content": sys_msg}] if sys_msg else []
+    ) + [
         {"role": "user", "content": [
             {"type": "image", "image": image},
             {"type": "text",  "text": question},
