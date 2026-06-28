@@ -131,7 +131,6 @@ def load_dataset_classes(ds_name: str, n_samples: int) -> dict[str, list[Path]]:
 # ── Prompt building ────────────────────────────────────────────────────────────
 
 _SYS = "You are an expert agricultural scientist."
-_SUFFIX = "\nClass:"  # makes first generated token = start of class name
 
 
 def build_inputs(image: Image.Image, class_names: list[str],
@@ -139,7 +138,6 @@ def build_inputs(image: Image.Image, class_names: list[str],
     question = (
         f"Identify the plant condition shown. "
         f"Choose exactly one from: {', '.join(class_names)}."
-        + _SUFFIX
     )
     messages = [
         {"role": "system", "content": _SYS},
@@ -148,21 +146,20 @@ def build_inputs(image: Image.Image, class_names: list[str],
             {"type": "text",  "text": question},
         ]},
     ]
-    try:
-        inputs = processor.apply_chat_template(
-            messages, add_generation_prompt=False,
-            tokenize=True, return_dict=True, return_tensors="pt",
-        )
-    except Exception:
-        inputs = processor.apply_chat_template(
-            messages, add_generation_prompt=True,
-            tokenize=True, return_dict=True, return_tensors="pt",
-        )
+    # add_generation_prompt=True appends <start_of_turn>model\n so the last
+    # input position is the prediction point for the assistant's first token
+    inputs = processor.apply_chat_template(
+        messages, add_generation_prompt=True,
+        tokenize=True, return_dict=True, return_tensors="pt",
+    )
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in inputs.items()}
 
 
 # ── Logit lens forward pass ────────────────────────────────────────────────────
+
+_debug_printed = False  # print token diagnostics once per run
+
 
 @torch.no_grad()
 def logit_lens_pass(
@@ -177,36 +174,39 @@ def logit_lens_pass(
     Single forward pass. Returns per-layer probability of the first token of
     the correct class name, plus the top predicted token at each layer.
     """
+    global _debug_printed
+
     inputs = build_inputs(image, class_names, processor, device)
     seq_len = inputs["input_ids"].shape[1]
 
     outputs = model(**inputs, output_hidden_states=True, return_dict=True)
 
-    # hidden_states: tuple of (n_layers+1) tensors, each (1, seq_len, hidden)
-    # [0] = embedding output, [1..] = layer outputs
-    hidden_states = outputs.hidden_states  # from the LM component
+    # For multimodal ForConditionalGeneration models, hidden_states may live
+    # under language_model_outputs. Try that first, fall back to top-level.
+    lm_out = getattr(outputs, "language_model_outputs", None)
+    if lm_out is not None and hasattr(lm_out, "hidden_states") and lm_out.hidden_states:
+        hidden_states = lm_out.hidden_states
+    else:
+        hidden_states = outputs.hidden_states  # (n_layers+1,) of (1, seq, hidden)
 
-    # First token of correct class (strip leading space variants)
-    correct_ids = processor.tokenizer.encode(
-        correct_class, add_special_tokens=False
-    )
-    correct_ids_space = processor.tokenizer.encode(
-        " " + correct_class, add_special_tokens=False
-    )
-    target_id = correct_ids[0] if correct_ids else None
+    # First token of correct class (with and without leading space)
+    correct_ids       = processor.tokenizer.encode(correct_class, add_special_tokens=False)
+    correct_ids_space = processor.tokenizer.encode(" " + correct_class, add_special_tokens=False)
+    target_id       = correct_ids[0]       if correct_ids       else None
     target_id_space = correct_ids_space[0] if correct_ids_space else None
 
     last_pos = seq_len - 1
     per_layer: list[dict] = []
 
     for layer_idx, h in enumerate(hidden_states):
-        h_last = h[0, last_pos, :].unsqueeze(0)  # (1, hidden)
-        try:
-            h_normed = final_norm(h_last)
-        except Exception:
-            h_normed = h_last
-        logits = lm_head(h_normed).squeeze(0).float()  # (vocab)
-        probs  = torch.softmax(logits, dim=-1)
+        # h shape: (1, seq_len, hidden_dim)
+        # Move to cpu for norm/head if device_map split the layers
+        h_last = h[0, last_pos, :].unsqueeze(0).to(
+            next(final_norm.parameters()).device
+        )
+        h_normed = final_norm(h_last)
+        logits   = lm_head(h_normed).squeeze(0).float()  # (vocab,)
+        probs    = torch.softmax(logits, dim=-1)
 
         prob_correct = 0.0
         if target_id is not None:
@@ -214,8 +214,22 @@ def logit_lens_pass(
         if target_id_space is not None:
             prob_correct = max(prob_correct, float(probs[target_id_space]))
 
-        top_id  = int(torch.argmax(probs))
-        top_tok = processor.tokenizer.decode([top_id])
+        top5_ids  = torch.topk(probs, 5).indices.tolist()
+        top5_toks = [processor.tokenizer.decode([i]) for i in top5_ids]
+        top_id    = top5_ids[0]
+        top_tok   = top5_toks[0]
+
+        # Debug: print diagnostics once at the last layer
+        if not _debug_printed and layer_idx == len(hidden_states) - 1:
+            _debug_printed = True
+            print(f"\n[debug] seq_len={seq_len}  n_hidden_states={len(hidden_states)}")
+            print(f"[debug] h shape={tuple(h.shape)}  device={h.device}")
+            print(f"[debug] correct_class='{correct_class}'  "
+                  f"target_id={target_id} ('{processor.tokenizer.decode([target_id]) if target_id else '?'}')  "
+                  f"target_id_space={target_id_space}")
+            print(f"[debug] final_layer top-5: {list(zip(top5_toks, [float(probs[i]) for i in top5_ids]))}")
+            print(f"[debug] prob_correct at final layer = {prob_correct:.6f}\n")
+
         per_layer.append({
             "prob_correct": prob_correct,
             "top_token": top_tok,
@@ -343,7 +357,13 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model, processor = load_model(args.model, args.use_4bit)
-    device = next(model.parameters()).device
+    # With device_map="auto" the model may span multiple GPUs; inputs go to
+    # the first device (where the embedding layer lives).
+    _p = next(model.parameters())
+    device = _p.device if str(_p.device) != "meta" else (
+        torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    )
+    print(f"[logit_lens] input device: {device}")
     final_norm, lm_head, _ = discover_lm_components(model)
 
     hard_results, easy_results = [], []
