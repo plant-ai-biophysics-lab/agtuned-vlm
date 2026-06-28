@@ -156,19 +156,21 @@ def build_inputs(image: Image.Image, class_names: list[str],
                  processor, device: str) -> dict:
     question = (
         f"Identify the plant condition shown. "
-        f"Choose exactly one from: {', '.join(class_names)}."
+        f"Choose exactly one from: {', '.join(class_names)}. "
+        f"Answer with just the class name."
     )
+    # Partial assistant turn ending in "Class:" forces the model's next-token
+    # prediction (at the last input position) to be the class name itself.
     messages = [
         {"role": "system", "content": _SYS},
         {"role": "user", "content": [
             {"type": "image", "image": image},
             {"type": "text",  "text": question},
         ]},
+        {"role": "assistant", "content": "Class:"},
     ]
-    # add_generation_prompt=True appends <start_of_turn>model\n so the last
-    # input position is the prediction point for the assistant's first token
     inputs = processor.apply_chat_template(
-        messages, add_generation_prompt=True,
+        messages, add_generation_prompt=False,
         tokenize=True, return_dict=True, return_tensors="pt",
     )
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v
