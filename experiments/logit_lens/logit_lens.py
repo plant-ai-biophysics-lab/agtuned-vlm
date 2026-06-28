@@ -103,9 +103,26 @@ def discover_lm_components(model):
 
     layers = getattr(inner, "layers", None)
     n_layers = len(layers) if layers is not None else "?"
+
+    # Logit softcapping (Gemma-4 uses final_logit_softcapping=30.0)
+    softcap = None
+    for cfg_src in (getattr(lm, "config", None), getattr(model, "config", None)):
+        if cfg_src is None:
+            continue
+        for attr in ("final_logit_softcapping",):
+            v = getattr(cfg_src, attr, None) or getattr(
+                getattr(cfg_src, "text_config", None) or {}, attr, None
+            )
+            if v:
+                softcap = float(v)
+                break
+        if softcap:
+            break
+
     print(f"[logit_lens] n_lm_layers={n_layers}  "
-          f"final_norm={type(final_norm).__name__}  lm_head={type(lm_head).__name__}")
-    return final_norm, lm_head, n_layers
+          f"final_norm={type(final_norm).__name__}  lm_head={type(lm_head).__name__}  "
+          f"softcap={softcap}")
+    return final_norm, lm_head, n_layers, softcap
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
@@ -207,7 +224,7 @@ def _rank_of(probs: torch.Tensor, token_id: int | None) -> int:
 @torch.no_grad()
 def logit_lens_pass(
     model, processor,
-    final_norm, lm_head,
+    final_norm, lm_head, softcap,
     image: Image.Image,
     class_names: list[str],
     correct_class: str,
@@ -246,6 +263,8 @@ def logit_lens_pass(
         h_tok    = h[0, -1, :].unsqueeze(0).to(norm_device)
         h_normed = final_norm(h_tok)
         logits   = lm_head(h_normed).squeeze(0).float()
+        if softcap:
+            logits = torch.tanh(logits / softcap) * softcap
         probs    = torch.softmax(logits, dim=-1)
 
         if _VOCAB_SIZE is None:
@@ -307,7 +326,7 @@ def logit_lens_pass(
 def run_dataset(
     ds_name: str,
     model, processor,
-    final_norm, lm_head,
+    final_norm, lm_head, softcap,
     n_samples: int,
     device: str,
 ) -> dict | None:
@@ -332,7 +351,7 @@ def run_dataset(
             except Exception:
                 continue
             result = logit_lens_pass(
-                model, processor, final_norm, lm_head,
+                model, processor, final_norm, lm_head, softcap,
                 image, class_names, cls, device,
             )
             curve      = [l["prob_correct"] for l in result["per_layer"]]
@@ -436,20 +455,20 @@ def main() -> None:
         torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     )
     print(f"[logit_lens] input device: {device}")
-    final_norm, lm_head, _ = discover_lm_components(model)
+    final_norm, lm_head, _, softcap = discover_lm_components(model)
 
     hard_results, easy_results = [], []
 
     print("\n=== Hard datasets ===")
     for ds in args.hard_datasets:
-        res = run_dataset(ds, model, processor, final_norm, lm_head,
+        res = run_dataset(ds, model, processor, final_norm, lm_head, softcap,
                           args.n_samples, device)
         if res:
             hard_results.append(res)
 
     print("\n=== Easy datasets ===")
     for ds in args.easy_datasets:
-        res = run_dataset(ds, model, processor, final_norm, lm_head,
+        res = run_dataset(ds, model, processor, final_norm, lm_head, softcap,
                           args.n_samples, device)
         if res:
             easy_results.append(res)
