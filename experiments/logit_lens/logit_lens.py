@@ -156,22 +156,19 @@ def build_inputs(image: Image.Image, class_names: list[str],
                  processor, device: str) -> dict:
     question = (
         f"Identify the plant condition shown. "
-        f"Choose exactly one from: {', '.join(class_names)}. "
-        f"Answer with just the class name."
+        f"Choose exactly one from: {', '.join(class_names)}."
     )
-    # Partial assistant turn ending in "Class:" forces the model's next-token
-    # prediction (at the last input position) to be the class name itself.
     messages = [
         {"role": "system", "content": _SYS},
         {"role": "user", "content": [
             {"type": "image", "image": image},
             {"type": "text",  "text": question},
         ]},
-        {"role": "assistant", "content": "Class:"},
     ]
     inputs = processor.apply_chat_template(
-        messages, add_generation_prompt=False,
+        messages, add_generation_prompt=True,
         tokenize=True, return_dict=True, return_tensors="pt",
+        enable_thinking=False,
     )
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in inputs.items()}
@@ -180,6 +177,22 @@ def build_inputs(image: Image.Image, class_names: list[str],
 # ── Logit lens forward pass ────────────────────────────────────────────────────
 
 _debug_printed = False  # print token diagnostics once per run
+
+_VOCAB_SIZE = None  # filled on first pass
+
+
+def _get_target_ids(processor, correct_class: str) -> tuple[int | None, int | None]:
+    ids       = processor.tokenizer.encode(correct_class,       add_special_tokens=False)
+    ids_space = processor.tokenizer.encode(" " + correct_class, add_special_tokens=False)
+    return (ids[0] if ids else None), (ids_space[0] if ids_space else None)
+
+
+def _rank_of(probs: torch.Tensor, token_id: int | None) -> int:
+    """1-indexed rank of token_id in descending probability order."""
+    if token_id is None:
+        return int(probs.numel())
+    # argsort descending: position 0 = highest prob
+    return int((torch.argsort(probs, descending=True) == token_id).nonzero(as_tuple=False)[0, 0].item()) + 1
 
 
 @torch.no_grad()
@@ -192,76 +205,79 @@ def logit_lens_pass(
     device: str,
 ) -> dict:
     """
-    Single forward pass. Returns per-layer probability of the first token of
-    the correct class name, plus the top predicted token at each layer.
+    Generates exactly 1 token with output_hidden_states=True.
+    At each layer, projects the hidden state at the generated position through
+    final_norm + lm_head and records the rank of the correct class token.
+    Rank is more robust than raw probability under 4-bit quantization.
     """
-    global _debug_printed
+    global _debug_printed, _VOCAB_SIZE
 
     inputs = build_inputs(image, class_names, processor, device)
-    seq_len = inputs["input_ids"].shape[1]
 
-    outputs = model(**inputs, output_hidden_states=True, return_dict=True)
+    gen_out = model.generate(
+        **inputs,
+        max_new_tokens=1,
+        do_sample=False,
+        output_hidden_states=True,
+        return_dict_in_generate=True,
+    )
 
-    # For multimodal ForConditionalGeneration models, hidden_states may live
-    # under language_model_outputs. Try that first, fall back to top-level.
-    lm_out = getattr(outputs, "language_model_outputs", None)
-    if lm_out is not None and hasattr(lm_out, "hidden_states") and lm_out.hidden_states:
-        hidden_states = lm_out.hidden_states
-    else:
-        hidden_states = outputs.hidden_states  # (n_layers+1,) of (1, seq, hidden)
+    # hidden_states[0] = per-layer hidden states for the first generated token
+    # Each element: (batch, 1, hidden_dim) — just the new token position
+    gen_hs = gen_out.hidden_states[0]   # tuple of n_layers+1 tensors
 
-    # First token of correct class (with and without leading space)
-    correct_ids       = processor.tokenizer.encode(correct_class, add_special_tokens=False)
-    correct_ids_space = processor.tokenizer.encode(" " + correct_class, add_special_tokens=False)
-    target_id       = correct_ids[0]       if correct_ids       else None
-    target_id_space = correct_ids_space[0] if correct_ids_space else None
+    generated_id  = int(gen_out.sequences[0, -1])
+    generated_tok = processor.tokenizer.decode([generated_id])
 
-    last_pos = seq_len - 1
+    target_id, target_id_space = _get_target_ids(processor, correct_class)
+    norm_device = next(final_norm.parameters()).device
+
     per_layer: list[dict] = []
-
-    for layer_idx, h in enumerate(hidden_states):
-        # h shape: (1, seq_len, hidden_dim)
-        # Move to cpu for norm/head if device_map split the layers
-        h_last = h[0, last_pos, :].unsqueeze(0).to(
-            next(final_norm.parameters()).device
-        )
-        h_normed = final_norm(h_last)
-        logits   = lm_head(h_normed).squeeze(0).float()  # (vocab,)
+    for layer_idx, h in enumerate(gen_hs):
+        h_tok    = h[0, -1, :].unsqueeze(0).to(norm_device)
+        h_normed = final_norm(h_tok)
+        logits   = lm_head(h_normed).squeeze(0).float()
         probs    = torch.softmax(logits, dim=-1)
+
+        if _VOCAB_SIZE is None:
+            _VOCAB_SIZE = int(probs.numel())
+
+        rank = _rank_of(probs, target_id)
+        if target_id_space is not None:
+            rank = min(rank, _rank_of(probs, target_id_space))
 
         prob_correct = 0.0
         if target_id is not None:
-            prob_correct = float(probs[target_id])
+            prob_correct = max(prob_correct, float(probs[target_id]))
         if target_id_space is not None:
             prob_correct = max(prob_correct, float(probs[target_id_space]))
 
         top5_ids  = torch.topk(probs, 5).indices.tolist()
         top5_toks = [processor.tokenizer.decode([i]) for i in top5_ids]
-        top_id    = top5_ids[0]
-        top_tok   = top5_toks[0]
 
-        # Debug: print diagnostics once at the last layer
-        if not _debug_printed and layer_idx == len(hidden_states) - 1:
+        if not _debug_printed and layer_idx == len(gen_hs) - 1:
             _debug_printed = True
-            print(f"\n[debug] seq_len={seq_len}  n_hidden_states={len(hidden_states)}")
-            print(f"[debug] h shape={tuple(h.shape)}  device={h.device}")
-            print(f"[debug] correct_class='{correct_class}'  "
-                  f"target_id={target_id} ('{processor.tokenizer.decode([target_id]) if target_id else '?'}')  "
-                  f"target_id_space={target_id_space}")
-            print(f"[debug] final_layer top-5: {list(zip(top5_toks, [float(probs[i]) for i in top5_ids]))}")
-            print(f"[debug] prob_correct at final layer = {prob_correct:.6f}\n")
+            print(f"\n[debug] generated='{generated_tok}' (id={generated_id})")
+            print(f"[debug] correct='{correct_class}'  target_id={target_id}  "
+                  f"('{processor.tokenizer.decode([target_id]) if target_id else '?'}')")
+            print(f"[debug] final_layer top-5: "
+                  f"{list(zip(top5_toks, [float(probs[i]) for i in top5_ids]))}")
+            print(f"[debug] prob_correct={prob_correct:.6f}  rank={rank}  "
+                  f"vocab_size={_VOCAB_SIZE}\n")
 
         per_layer.append({
             "prob_correct": prob_correct,
-            "top_token": top_tok,
-            "top_prob": float(probs[top_id]),
+            "rank":         rank,
+            "top_token":    top5_toks[0],
+            "top_prob":     float(probs[top5_ids[0]]),
         })
 
     return {
-        "class":      correct_class,
-        "n_layers":   len(per_layer),
-        "per_layer":  per_layer,
-        "target_tok": processor.tokenizer.decode([target_id]) if target_id else "?",
+        "class":         correct_class,
+        "n_layers":      len(per_layer),
+        "per_layer":     per_layer,
+        "target_tok":    processor.tokenizer.decode([target_id]) if target_id else "?",
+        "generated_tok": generated_tok,
     }
 
 
@@ -310,12 +326,27 @@ def run_dataset(
     if not all_curves:
         return None
 
+    rank_curves: list[list[int]] = [
+        [l["rank"] for l in r["per_layer"]] for r in records
+    ]
     max_layers = max(len(c) for c in all_curves)
-    mean_curve = [
+    mean_prob_curve = [
         float(np.mean([c[i] for c in all_curves if i < len(c)]))
         for i in range(max_layers)
     ]
-    return {"dataset": ds_name, "mean_curve": mean_curve, "records": records}
+    # Normalised rank score: 1 - rank/vocab_size  (1.0 = top-1, 0.0 = last)
+    vs = _VOCAB_SIZE or 262144
+    mean_rank_score = [
+        float(np.mean([1.0 - rank_curves[j][i] / vs
+                        for j in range(len(rank_curves)) if i < len(rank_curves[j])]))
+        for i in range(max_layers)
+    ]
+    return {
+        "dataset":         ds_name,
+        "mean_curve":      mean_prob_curve,   # kept for raw json
+        "mean_rank_score": mean_rank_score,   # primary plot metric
+        "records":         records,
+    }
 
 
 # ── Plotting ───────────────────────────────────────────────────────────────────
@@ -332,26 +363,24 @@ def plot_logit_lens(
 
     def _plot_panel(ax, results, colors, title):
         for res, color in zip(results, colors):
-            curve = res["mean_curve"]
+            curve  = res.get("mean_rank_score", res["mean_curve"])
             layers = list(range(len(curve)))
-            ax.plot(layers, curve, color=color, linewidth=2,
-                    label=res["dataset"].replace("_classification", "").replace("_", " "))
+            label  = res["dataset"].replace("_classification", "").replace("_", " ")
+            ax.plot(layers, curve, color=color, linewidth=2, label=label)
             ax.fill_between(layers, curve, alpha=0.08, color=color)
 
-        # random baseline (1 / mean vocab size is too small; use 1/n_classes proxy)
-        ax.axhline(0.0, color="gray", linewidth=0.8, linestyle=":", alpha=0.5)
         ax.set_xlabel("Transformer Layer", fontsize=10)
-        ax.set_ylabel("P(correct class first token)", fontsize=10)
+        ax.set_ylabel("Normalised rank score  (↑ = closer to top-1)", fontsize=9)
         ax.set_title(title, fontsize=11)
         ax.legend(fontsize=8)
-        ax.set_ylim(bottom=0)
+        ax.set_ylim(bottom=0, top=1)
 
     _plot_panel(ax_hard, hard_results, hard_colors, "Hard Datasets (low VLM F1)")
     _plot_panel(ax_easy, easy_results, easy_colors, "Easy Datasets (high VLM F1)")
 
     fig.suptitle(
-        "Logit Lens: Correct Class Token Probability Across LLM Depth\n"
-        "(post-projector hidden states → lm_head, last input position)",
+        "Logit Lens: Correct Class Token Rank Across LLM Depth\n"
+        "(generated-position hidden states → lm_head  |  1.0 = rank-1 in vocab)",
         fontsize=12,
     )
     plt.tight_layout()
