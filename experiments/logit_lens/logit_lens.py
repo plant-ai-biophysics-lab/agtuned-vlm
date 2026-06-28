@@ -264,15 +264,27 @@ def logit_lens_pass(
         top5_ids  = torch.topk(probs, 5).indices.tolist()
         top5_toks = [processor.tokenizer.decode([i]) for i in top5_ids]
 
-        if not _debug_printed and layer_idx == len(gen_hs) - 1:
-            _debug_printed = True
-            print(f"\n[debug] generated='{generated_tok}' (id={generated_id})")
-            print(f"[debug] correct='{correct_class}'  target_id={target_id}  "
-                  f"('{processor.tokenizer.decode([target_id]) if target_id else '?'}')")
-            print(f"[debug] final_layer top-5: "
-                  f"{list(zip(top5_toks, [float(probs[i]) for i in top5_ids]))}")
-            print(f"[debug] prob_correct={prob_correct:.6f}  rank={rank}  "
-                  f"vocab_size={_VOCAB_SIZE}\n")
+        if not _debug_printed:
+            # Print header once at layer 0
+            if layer_idx == 0:
+                print(f"\n[debug] generated='{generated_tok}' (id={generated_id})")
+                print(f"[debug] correct='{correct_class}'  "
+                      f"target_id={target_id} "
+                      f"('{processor.tokenizer.decode([target_id]) if target_id else '?'}')")
+                print(f"[debug] vocab_size={_VOCAB_SIZE}")
+                print(f"[debug] {'Layer':>5}  {'Rank':>8}  {'Score':>6}  Top-3 tokens")
+                print(f"[debug] {'-----':>5}  {'----':>8}  {'-----':>6}  ----------")
+            # Print every 5 layers + final
+            if layer_idx % 5 == 0 or layer_idx == len(gen_hs) - 1:
+                top3 = [(processor.tokenizer.decode([i]), f"{float(probs[i]):.3f}")
+                        for i in top5_ids[:3]]
+                vs = _VOCAB_SIZE or 262144
+                score = 1.0 - rank / vs
+                print(f"[debug] {layer_idx:>5}  {rank:>8}  {score:>6.4f}  "
+                      f"{' | '.join(f'{t!r}({p})' for t, p in top3)}")
+            if layer_idx == len(gen_hs) - 1:
+                _debug_printed = True
+                print()
 
         per_layer.append({
             "prob_correct": prob_correct,
