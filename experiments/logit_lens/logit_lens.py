@@ -111,15 +111,34 @@ def discover_lm_components(model):
 # ── Data loading ───────────────────────────────────────────────────────────────
 
 def load_dataset_classes(ds_name: str, n_samples: int) -> dict[str, list[Path]]:
-    """Return {class_label: [image_path, ...]} for a dataset via agml."""
+    """Return {class_name: [image_path, ...]} for a dataset via agml."""
     import agml
     loader = agml.data.AgMLDataLoader(ds_name)
+
+    # Resolve integer labels → human-readable class name strings
+    class_name_map: list[str] | None = None
+    for src in (loader, getattr(loader, "dataset_info", None)):
+        if src is None:
+            continue
+        for attr in ("class_names", "class_labels", "classes"):
+            val = getattr(src, attr, None)
+            if val is not None:
+                class_name_map = list(val)
+                break
+        if class_name_map is not None:
+            break
+
+    print(f"  [agml] class_name_map: {class_name_map}")
+
     contents = loader.export_contents()
     by_class: dict[str, list[Path]] = {}
     for path, label in contents.items():
-        lbl = str(label) if not isinstance(label, str) else label
+        if class_name_map is not None and isinstance(label, int):
+            lbl = class_name_map[label] if label < len(class_name_map) else str(label)
+        else:
+            lbl = str(label) if not isinstance(label, str) else label
         by_class.setdefault(lbl, []).append(Path(str(path)))
-    # sample
+
     rng = np.random.default_rng(42)
     return {
         cls: [paths[i] for i in rng.choice(len(paths),
