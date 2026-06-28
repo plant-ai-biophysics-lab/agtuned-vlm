@@ -270,46 +270,41 @@ def logit_lens_pass(
         if _VOCAB_SIZE is None:
             _VOCAB_SIZE = int(probs.numel())
 
-        rank = _rank_of(probs, target_id)
-        if target_id_space is not None:
-            rank = min(rank, _rank_of(probs, target_id_space))
+        top1_id  = int(torch.argmax(probs))
+        top1_tok = processor.tokenizer.decode([top1_id])
 
-        prob_correct = 0.0
-        if target_id is not None:
-            prob_correct = max(prob_correct, float(probs[target_id]))
-        if target_id_space is not None:
-            prob_correct = max(prob_correct, float(probs[target_id_space]))
+        # Layer-wise top-1 accuracy (Wendler et al. 2024; LLM Microscope 2024):
+        # correct if top-1 token matches the first token of the correct class
+        # (with or without leading space prefix)
+        top1_correct = int(
+            top1_id == target_id or
+            (target_id_space is not None and top1_id == target_id_space)
+        )
 
         top5_ids  = torch.topk(probs, 5).indices.tolist()
         top5_toks = [processor.tokenizer.decode([i]) for i in top5_ids]
 
         if not _debug_printed:
-            # Print header once at layer 0
             if layer_idx == 0:
                 print(f"\n[debug] generated='{generated_tok}' (id={generated_id})")
                 print(f"[debug] correct='{correct_class}'  "
                       f"target_id={target_id} "
                       f"('{processor.tokenizer.decode([target_id]) if target_id else '?'}')")
                 print(f"[debug] vocab_size={_VOCAB_SIZE}")
-                print(f"[debug] {'Layer':>5}  {'Rank':>8}  {'Score':>6}  Top-3 tokens")
-                print(f"[debug] {'-----':>5}  {'----':>8}  {'-----':>6}  ----------")
-            # Print every 5 layers + final
+                print(f"[debug] {'Layer':>5}  {'Top1':>8}  {'Match':>5}  Top-3 tokens")
+                print(f"[debug] {'-----':>5}  {'----':>8}  {'-----':>5}  ----------")
             if layer_idx % 5 == 0 or layer_idx == len(gen_hs) - 1:
                 top3 = [(processor.tokenizer.decode([i]), f"{float(probs[i]):.3f}")
                         for i in top5_ids[:3]]
-                vs = _VOCAB_SIZE or 262144
-                score = 1.0 - rank / vs
-                print(f"[debug] {layer_idx:>5}  {rank:>8}  {score:>6.4f}  "
+                print(f"[debug] {layer_idx:>5}  {top1_tok!r:>8}  {'✓' if top1_correct else '✗':>5}  "
                       f"{' | '.join(f'{t!r}({p})' for t, p in top3)}")
             if layer_idx == len(gen_hs) - 1:
                 _debug_printed = True
                 print()
 
         per_layer.append({
-            "prob_correct": prob_correct,
-            "rank":         rank,
-            "top_token":    top5_toks[0],
-            "top_prob":     float(probs[top5_ids[0]]),
+            "top1_correct": top1_correct,
+            "top1_tok":     top1_tok,
         })
 
     return {
@@ -354,39 +349,30 @@ def run_dataset(
                 model, processor, final_norm, lm_head, softcap,
                 image, class_names, cls, device,
             )
-            curve      = [l["prob_correct"] for l in result["per_layer"]]
-            rank_curve = [l["rank"]         for l in result["per_layer"]]
-            all_curves.append(curve)
+            acc_curve = [l["top1_correct"] for l in result["per_layer"]]
+            all_curves.append(acc_curve)
             records.append({
-                "dataset":    ds_name, "class": cls,
-                "image":      str(path.name),
-                "target_tok": result["target_tok"],
+                "dataset":       ds_name, "class": cls,
+                "image":         str(path.name),
+                "target_tok":    result["target_tok"],
                 "generated_tok": result.get("generated_tok", "?"),
-                "curve":      curve,
-                "rank_curve": rank_curve,
+                "acc_curve":     acc_curve,
             })
 
     if not all_curves:
         return None
 
-    rank_curves: list[list[int]] = [r["rank_curve"] for r in records]
     max_layers = max(len(c) for c in all_curves)
-    mean_prob_curve = [
+    # Layer-wise top-1 accuracy averaged over all images (nostalgebraist 2020;
+    # Wendler et al. 2024; LLM Microscope 2024)
+    mean_accuracy = [
         float(np.mean([c[i] for c in all_curves if i < len(c)]))
         for i in range(max_layers)
     ]
-    # Normalised rank score: 1 - rank/vocab_size  (1.0 = top-1, 0.0 = last)
-    vs = _VOCAB_SIZE or 262144
-    mean_rank_score = [
-        float(np.mean([1.0 - rank_curves[j][i] / vs
-                        for j in range(len(rank_curves)) if i < len(rank_curves[j])]))
-        for i in range(max_layers)
-    ]
     return {
-        "dataset":         ds_name,
-        "mean_curve":      mean_prob_curve,   # kept for raw json
-        "mean_rank_score": mean_rank_score,   # primary plot metric
-        "records":         records,
+        "dataset":       ds_name,
+        "mean_accuracy": mean_accuracy,
+        "records":       records,
     }
 
 
@@ -404,14 +390,14 @@ def plot_logit_lens(
 
     def _plot_panel(ax, results, colors, title):
         for res, color in zip(results, colors):
-            curve  = res.get("mean_rank_score", res["mean_curve"])
+            curve  = res["mean_accuracy"]
             layers = list(range(len(curve)))
             label  = res["dataset"].replace("_classification", "").replace("_", " ")
             ax.plot(layers, curve, color=color, linewidth=2, label=label)
             ax.fill_between(layers, curve, alpha=0.08, color=color)
 
         ax.set_xlabel("Transformer Layer", fontsize=10)
-        ax.set_ylabel("Normalised rank score  (↑ = closer to top-1)", fontsize=9)
+        ax.set_ylabel("Top-1 accuracy  (correct class first token)", fontsize=9)
         ax.set_title(title, fontsize=11)
         ax.legend(fontsize=8)
         ax.set_ylim(bottom=0, top=1)
@@ -420,8 +406,8 @@ def plot_logit_lens(
     _plot_panel(ax_easy, easy_results, easy_colors, "Easy Datasets (high VLM F1)")
 
     fig.suptitle(
-        "Logit Lens: Correct Class Token Rank Across LLM Depth\n"
-        "(generated-position hidden states → lm_head  |  1.0 = rank-1 in vocab)",
+        "Logit Lens: Layer-wise Top-1 Accuracy Across LLM Depth\n"
+        "(generated-position hidden states → final_norm → lm_head  |  softcap=30)",
         fontsize=12,
     )
     plt.tight_layout()
