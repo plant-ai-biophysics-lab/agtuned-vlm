@@ -314,21 +314,22 @@ def run_dataset(
                 model, processor, final_norm, lm_head,
                 image, class_names, cls, device,
             )
-            curve = [l["prob_correct"] for l in result["per_layer"]]
+            curve      = [l["prob_correct"] for l in result["per_layer"]]
+            rank_curve = [l["rank"]         for l in result["per_layer"]]
             all_curves.append(curve)
             records.append({
-                "dataset": ds_name, "class": cls,
-                "image": str(path.name),
+                "dataset":    ds_name, "class": cls,
+                "image":      str(path.name),
                 "target_tok": result["target_tok"],
-                "curve": curve,
+                "generated_tok": result.get("generated_tok", "?"),
+                "curve":      curve,
+                "rank_curve": rank_curve,
             })
 
     if not all_curves:
         return None
 
-    rank_curves: list[list[int]] = [
-        [l["rank"] for l in r["per_layer"]] for r in records
-    ]
+    rank_curves: list[list[int]] = [r["rank_curve"] for r in records]
     max_layers = max(len(c) for c in all_curves)
     mean_prob_curve = [
         float(np.mean([c[i] for c in all_curves if i < len(c)]))
