@@ -315,9 +315,15 @@ def logit_lens_pass(
 
     per_layer: list[dict] = []
     for layer_idx, h in enumerate(gen_hs):
-        h_tok    = h[0, -1, :].unsqueeze(0).to(norm_device)
-        h_normed = final_norm(h_tok)
-        logits   = lm_head(h_normed).squeeze(0).float()
+        h_tok = h[0, -1, :].unsqueeze(0).to(norm_device)
+        # gen_hs[-1] is already post-final-norm (it IS last_hidden_state from
+        # Gemma4TextModel which applies self.norm before returning, line 1615).
+        # Layers 0..n-2 are pre-norm → apply final_norm. Last layer: skip it.
+        if layer_idx < len(gen_hs) - 1:
+            h_normed = final_norm(h_tok)
+        else:
+            h_normed = h_tok
+        logits = lm_head(h_normed).squeeze(0).float()
         if softcap:
             logits = torch.tanh(logits / softcap) * softcap
         probs    = torch.softmax(logits, dim=-1)
