@@ -202,6 +202,7 @@ def build_analysis(
     aug_data: dict | None,
     vis_cls_rows: list[dict],
     model_id: str,
+    cot_data: dict | None = None,
 ) -> dict:
     """Assemble the three analysis tables into a structured dict."""
     short = _basename(model_id)
@@ -226,6 +227,12 @@ def build_analysis(
     am = (aug_data or {}).get("models", {}).get(model_id, {})
     A["chain"]["aug_raw"]   = am.get("augmented_overall", {}).get("f1_macro")
     A["chain"]["aug_judge"] = am.get("judge", {}).get("judge_f1_macro")
+
+    # CoT conditions (from cot_vision.py output)
+    cm = (cot_data or {}).get("conditions", {})
+    A["chain"]["cot_self"]  = cm.get("self_cot",   {}).get("f1_macro")
+    A["chain"]["cot_yaml"]  = cm.get("cot_yaml",   {}).get("f1_macro")
+    A["chain"]["cot_aug"]   = cm.get("aug_vision",  {}).get("f1_macro")
 
     # ── Table 2: per-task dissociation (LP perception vs VLM output) ────────────
     lp_task     = (lp_data or {}).get("by_task_fc_combined", {})
@@ -282,6 +289,24 @@ def render_analysis(A: dict) -> str:
         L.append(f"\n**Collapse:** post-projector {c['lp_post']:.3f} → zero-shot {c['vis_zs']:.3f} "
                  f"(−{c['lp_post']-c['vis_zs']:.3f}). "
                  + (f"Recovers to {c['aug_judge']:.3f} with description.\n" if c["aug_judge"] else "\n"))
+
+    # CoT comparison (only if any CoT data available)
+    has_cot = any(c.get(k) is not None for k in ("cot_self", "cot_yaml", "cot_aug"))
+    if has_cot:
+        vis_zs_f1 = c.get("vis_zs")
+        L.append("\n## Table 1b — CoT Prompting Comparison (4 conditions)\n")
+        L.append("| Condition | F1 Macro | Δ vs Zero-shot |")
+        L.append("|---|---|---|")
+
+        def _delta(val):
+            if val is None or vis_zs_f1 is None:
+                return "--"
+            return f"{val - vis_zs_f1:+.3f}"
+
+        L.append(f"| Vision zero-shot (baseline) | {_f1(vis_zs_f1).strip()} | -- |")
+        L.append(f"| Self-description CoT | {_f1(c.get('cot_self')).strip()} | {_delta(c.get('cot_self'))} |")
+        L.append(f"| Structured CoT (cot_prompts.yaml) | {_f1(c.get('cot_yaml')).strip()} | {_delta(c.get('cot_yaml'))} |")
+        L.append(f"| Aug Vision (pre-written desc, upper bound) | {_f1(c.get('cot_aug') or c.get('aug_judge')).strip()} | {_delta(c.get('cot_aug') or c.get('aug_judge'))} |")
 
     L.append("## Table 2 — Per-Task Dissociation (perception vs output)\n")
     L.append("| Task | Linear probe F1 | VLM zero-shot judged F1 | Gap |")
@@ -608,6 +633,10 @@ def main() -> None:
         help="Directory containing desc_augmented_metrics_all.json",
     )
     parser.add_argument(
+        "--cot_dir", default="outputs/cot_vision/",
+        help="Directory containing cot_vision_metrics.json",
+    )
+    parser.add_argument(
         "--output_dir", default="outputs/",
         help="Directory to write results_table.csv and results_table.tex",
     )
@@ -658,12 +687,14 @@ def main() -> None:
     lp_data  = _load_json(Path(args.linear_probe_dir) / "linear_probe_results.json")
     aug_data = (_load_json(Path(args.aug_dir) / "desc_augmented_metrics_all.json")
                 or _load_json(Path(args.aug_dir) / "desc_augmented_metrics_filtered.json"))
+    cot_data = _load_json(Path(args.cot_dir) / "cot_vision_metrics.json")
     if vis_data:
         analysis_sections: list[str] = []
         for model_id in sorted(vis_data.get("models", {})):
             safe = model_id.replace("/", "_").replace(" ", "_")
             vis_cls_rows = _read_csv_rows(Path(args.vision_dir) / f"cls_{safe}.csv")
-            A = build_analysis(lp_data, lang_data, vis_data, aug_data, vis_cls_rows, model_id)
+            A = build_analysis(lp_data, lang_data, vis_data, aug_data, vis_cls_rows, model_id,
+                               cot_data=cot_data)
             section = render_analysis(A)
             analysis_sections.append(section)
             print("\n" + section)

@@ -22,11 +22,12 @@ thinking_prompts:
 
   disease_pest:
     steps:
-      - "What specific plant or crop species is this?"
+      - "What specific plant or crop species is this (Scientific Name and Common Name)?"
       - "Which specific parts of the plant are showing symptoms (e.g., upper leaves, lower leaves, stems, veins, flowers, fruit)?"
       - "Describe the exact nature of the damage — color (e.g., yellow, brown, black), shape (e.g., circular spots, irregular blotches, necrotic margins), and texture (e.g., powdery, water-soaked, fuzzy) of the affected areas."
       - "Are there any visible signs of insects or mites, such as webbing, tiny eggs, frass, or actual bodies?"
       - "Is the damage uniform across the whole plant (suggesting environmental or nutrient stress), or isolated and random (suggesting a pest or pathogen)?"
+      - "Based on the visual markers so far, what are the top 2-3 most likely disease, pest, or stress/damage? State your confidence for each."
 
   weed_identification:
     steps:
@@ -34,7 +35,6 @@ thinking_prompts:
       - "Is the plant erect, prostrate/creeping, or a climbing vine? Are there visible hairs, thorns, or distinct colors on the stem?"
       - "If visible, describe any flowers, seed pods, cones, or buds — noting color, petal count, and arrangement."
       - "Based on the visual markers so far, what are the top 2-3 most likely botanical matches (Scientific Name and Common Name)? State your confidence for each."
-      - "Is this plant commonly classified as a weed or invasive species? If so, specify its agricultural or ecological impact."
 
 # ── Task type routing ─────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ task_type_to_base_prompt:
 # ── Classification suffixes ───────────────────────────────────────────────────
 
 # Appended to the base prompt for the base and thinking conditions
-base_classification_suffix: " Answer with the specific disease, pest, or stress name only (if any - healthy otherwise). Do not describe — just name it."
+base_classification_suffix: " Answer with the specific disease, pest, or stress/damage name only (if any - healthy otherwise). Do not describe — just name it."
 
 # Appended to the base prompt for the CoT classify pass (Pass 3 and 5).
 # Bridges from the structured analysis to a specific name.

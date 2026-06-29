@@ -13,7 +13,9 @@ Evaluation framework for vision-language models on agricultural image understand
 | vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts without re-running inference |
 | 4 — Aug Vision | `src/desc_augmented_vision.py` | Test whether language descriptions of judged-correct classes improve vision classification |
 | aug-vision-plot | `src/desc_augmented_vision_plot.py` | Regenerate aug-vision charts from saved CSVs |
+| 4b — CoT Vision | `src/cot_vision.py` | Compare two CoT prompting strategies (self-description and structured CoT) against baseline and aug-vision upper bound |
 | 5 — Collate | `src/collate_results.py` | Merge all stage metrics into `results_table.csv` + `results_table.tex` |
+| Logit Lens | `experiments/logit_lens/logit_lens.py` | Layer-wise top-1 accuracy across LLM depth for all 4 conditions |
 
 All stages share a single metrics module (`src/common/metrics.py`): same `resolve_class`, `compute_classification_metrics`, `apply_judge`, and image sampling (`sample_class_images`, seed 42) across every experiment.
 
@@ -331,15 +333,120 @@ outputs/desc_augmented_vision/
 
 ---
 
+### Stage 4b — CoT Vision Assessment
+
+Tests two chain-of-thought prompting strategies on the same agricultural image classification task, comparing them against the standard zero-shot prompt and the aug-vision upper bound.
+
+| Condition | Description |
+|-----------|-------------|
+| `self_cot` | Model generates its own visual description first (turn 1), then classifies using that description as context (turn 2) |
+| `cot_yaml` | Structured multi-step CoT from `cot_prompts.yaml` — each step is a separate conversation turn (6 steps for disease/pest, 4 for weed), final turn classifies bridging from the analysis |
+| `aug_vision` | Pre-written language assessment description injected as context (upper bound; requires `--lang_dir`) |
+
+Uses HuggingFace transformers for inference (not vLLM) because CoT requires sequential multi-turn generation per sample.
+
+Task-type routing is automatic: disease and pest_damage datasets use the `disease_pest` CoT steps; weed datasets use `weed_identification` steps.
+
+```bash
+uv run python src/cot_vision.py \
+    --model      google/gemma-4-26B-A4B-it \
+    --output_dir outputs/cot_vision/ \
+    --n_samples  4 \
+    --use_4bit
+
+# With aug_vision upper bound (requires completed language assessment):
+uv run python src/cot_vision.py \
+    --model      google/gemma-4-26B-A4B-it \
+    --output_dir outputs/cot_vision/ \
+    --n_samples  4 \
+    --use_4bit \
+    --lang_dir   outputs/language_assessment/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `google/gemma-4-26B-A4B-it` | HuggingFace model ID |
+| `--output_dir` | `outputs/cot_vision/` | Where to write CSVs, metrics, and chart |
+| `--n_samples` | 4 | Images per class (seed 42) |
+| `--datasets` | all 6 logit-lens datasets | Override which AgML datasets to evaluate |
+| `--use_4bit` | off | Load in 4-bit NF4 (saves ~60% VRAM) |
+| `--lang_dir` | none | Language assessment output dir — enables `aug_vision` condition |
+
+**Output structure:**
+
+```
+outputs/cot_vision/
+├── cot_cls_<model>.csv        ← one row per (image, condition)
+├── cot_vision_metrics.json    ← F1 per condition × dataset
+└── cot_comparison.png         ← bar chart comparing conditions
+```
+
+---
+
+### Logit Lens
+
+Projects each transformer layer's hidden state through `final_norm → lm_head → softmax` to track at which depth the model commits to the correct class token. Compares hard vs easy datasets across up to four conditions.
+
+| Condition | Flag required | Description |
+|-----------|--------------|-------------|
+| Normal | always | Standard vision assessment prompt |
+| Self-CoT | `--run_cot` | Self-description generated first, then classify with history |
+| CoT YAML | `--run_cot` | Structured multi-step CoT from `cot_prompts.yaml` + history |
+| Aug Vision | `--lang_dir` | Pre-written description injected (upper bound) |
+
+The chart auto-sizes to show only conditions that have data (1×2 up to 4×2 grid).
+
+```bash
+# Normal only (fast)
+uv run python experiments/logit_lens/logit_lens.py \
+    --model      google/gemma-4-26B-A4B-it \
+    --output_dir outputs/logit_lens/ \
+    --n_samples  8 \
+    --use_4bit
+
+# All 4 conditions
+uv run python experiments/logit_lens/logit_lens.py \
+    --model      google/gemma-4-26B-A4B-it \
+    --output_dir outputs/logit_lens/ \
+    --n_samples  4 \
+    --use_4bit \
+    --run_cot \
+    --lang_dir   outputs/language_assessment/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `google/gemma-4-26B-A4B-it` | HuggingFace model ID |
+| `--n_samples` | 8 | Images per class |
+| `--use_4bit` | off | 4-bit NF4 loading |
+| `--run_cot` | off | Enable self-CoT and cot-yaml conditions (much slower — N+2 generate calls per image) |
+| `--lang_dir` | none | Enables aug-vision condition |
+| `--hard_datasets` | 3 hard datasets | Override hard dataset list |
+| `--easy_datasets` | 3 easy datasets | Override easy dataset list |
+
+**Output structure:**
+
+```
+outputs/logit_lens/
+├── logit_lens_raw.json    ← per-layer accuracy curves for every image
+└── logit_lens.png         ← layer-wise top-1 accuracy chart (up to 4×2 grid)
+```
+
+See `experiments/logit_lens/REFERENCES.md` for citations on the metric and Gemma-4 implementation details (softcapping, double-norm fix).
+
+---
+
 ### Stage 5 — Collate results
 
-Merges outputs from all stages into `results_table.csv` and `results_table.tex`.
+Merges outputs from all stages into `results_table.csv` and `results_table.tex`. When `--cot_dir` points to completed CoT Vision output, the analysis summary gains **Table 1b** — a 4-condition CoT comparison (zero-shot / self-CoT / structured CoT / aug-vision) with Δ vs baseline.
 
 ```bash
 python main.py collate \
   --linear_probe_dir outputs/linear_probe/ \
   --language_dir     outputs/language_assessment/ \
   --vision_dir       outputs/vision_assessment/ \
+  --aug_dir          outputs/desc_augmented_vision/ \
+  --cot_dir          outputs/cot_vision/ \
   --output_dir       outputs/
 ```
 
