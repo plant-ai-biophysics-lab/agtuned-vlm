@@ -282,25 +282,24 @@ def load_dataset_classes(ds_name: str, n_samples: int) -> dict[str, list[Path]]:
     }
 
 
-def load_lang_descriptions(lang_dir: Path, model_id: str) -> dict[tuple[str, str], str]:
-    safe     = model_id.replace("/", "_")
-    csv_path = lang_dir / f"desc_{safe}.csv"
-    if not csv_path.exists():
-        name = model_id.split("/")[-1]
-        csv_path = next(lang_dir.glob(f"desc_*{name}*.csv"), None)
-    if not csv_path or not csv_path.exists():
-        print(f"  [warn] No lang desc CSV in {lang_dir} for {model_id} — skipping aug_vision")
-        return {}
+def load_synthesized_descriptions(jsonl_path: Path) -> dict[tuple[str, str], str]:
+    """Load {(dataset, class_label): synthesized_description} from agml_descriptions.jsonl.
 
+    Uses the same synthesized_description that language assessment classification uses,
+    ensuring aug_vision sees no class name leakage.
+    """
+    import json
     desc_map: dict[tuple[str, str], str] = {}
-    with open(csv_path, newline="") as f:
-        for row in csv.DictReader(f):
-            ds  = row.get("agml_dataset", "").strip()
-            cls = row.get("class_label",  "").strip()
-            pred = row.get("prediction",  "").strip()
-            if ds and cls and pred:
-                desc_map[(ds, cls)] = pred
-    print(f"  Loaded {len(desc_map)} descriptions from {csv_path.name}")
+    with open(jsonl_path) as f:
+        for line in f:
+            rec  = json.loads(line)
+            meta = rec.get("metadata", {})
+            ds   = meta.get("agml_dataset", "").strip()
+            cls  = meta.get("class_label",  "").strip()
+            desc = meta.get("synthesized_description", "").strip()
+            if ds and cls and desc:
+                desc_map[(ds, cls)] = desc
+    print(f"  Loaded {len(desc_map)} synthesized descriptions from {jsonl_path.name}")
     return desc_map
 
 
@@ -487,9 +486,12 @@ def main() -> None:
                         help="Images per class")
     parser.add_argument("--datasets",    nargs="+", default=DEFAULT_DATASETS,
                         help="AgML dataset names to evaluate")
-    parser.add_argument("--use_4bit",    action="store_true")
-    parser.add_argument("--lang_dir",    default=None,
-                        help="Language assessment output dir for aug_vision upper bound")
+    parser.add_argument("--use_4bit",          action="store_true")
+    parser.add_argument("--descriptions_jsonl", default="dataset/agml_descriptions.jsonl",
+                        help="Path to agml_descriptions.jsonl — same synthesized descriptions "
+                             "used by language assessment cls. Enables aug_vision condition.")
+    parser.add_argument("--no_aug",            action="store_true",
+                        help="Skip aug_vision condition even if descriptions_jsonl exists")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -497,8 +499,11 @@ def main() -> None:
     safe_model = args.model.replace("/", "_")
 
     desc_map = {}
-    if args.lang_dir:
-        desc_map = load_lang_descriptions(Path(args.lang_dir), args.model)
+    jsonl_path = Path(args.descriptions_jsonl)
+    if not args.no_aug and jsonl_path.exists():
+        desc_map = load_synthesized_descriptions(jsonl_path)
+    elif not args.no_aug:
+        print(f"  [warn] {jsonl_path} not found — skipping aug_vision condition")
     run_aug = bool(desc_map)
 
     model, processor = load_model(args.model, args.use_4bit)

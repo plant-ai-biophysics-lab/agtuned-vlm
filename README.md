@@ -353,15 +353,9 @@ uv run python src/cot_vision.py \
     --output_dir outputs/cot_vision/ \
     --n_samples  4 \
     --use_4bit
-
-# With aug_vision upper bound (requires completed language assessment):
-uv run python src/cot_vision.py \
-    --model      google/gemma-4-26B-A4B-it \
-    --output_dir outputs/cot_vision/ \
-    --n_samples  4 \
-    --use_4bit \
-    --lang_dir   outputs/language_assessment/
 ```
+
+Aug vision runs automatically if `dataset/agml_descriptions.jsonl` exists (it's committed to the repo). Pass `--no_aug` to skip it.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -370,7 +364,8 @@ uv run python src/cot_vision.py \
 | `--n_samples` | 4 | Images per class (seed 42) |
 | `--datasets` | all 6 logit-lens datasets | Override which AgML datasets to evaluate |
 | `--use_4bit` | off | Load in 4-bit NF4 (saves ~60% VRAM) |
-| `--lang_dir` | none | Language assessment output dir — enables `aug_vision` condition |
+| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Synthesized reference descriptions for aug_vision (same source as language assessment cls) |
+| `--no_aug` | off | Skip aug_vision condition |
 
 **Output structure:**
 
@@ -410,9 +405,10 @@ uv run python experiments/logit_lens/logit_lens.py \
     --output_dir outputs/logit_lens/ \
     --n_samples  4 \
     --use_4bit \
-    --run_cot \
-    --lang_dir   outputs/language_assessment/
+    --run_cot
 ```
+
+Aug vision runs automatically from `dataset/agml_descriptions.jsonl`. Pass `--no_aug` to skip it.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -420,7 +416,8 @@ uv run python experiments/logit_lens/logit_lens.py \
 | `--n_samples` | 8 | Images per class |
 | `--use_4bit` | off | 4-bit NF4 loading |
 | `--run_cot` | off | Enable self-CoT and cot-yaml conditions (much slower — N+2 generate calls per image) |
-| `--lang_dir` | none | Enables aug-vision condition |
+| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Synthesized reference descriptions for aug_vision |
+| `--no_aug` | off | Skip aug_vision condition |
 | `--hard_datasets` | 3 hard datasets | Override hard dataset list |
 | `--easy_datasets` | 3 easy datasets | Override easy dataset list |
 

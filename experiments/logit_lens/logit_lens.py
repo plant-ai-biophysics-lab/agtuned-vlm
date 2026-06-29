@@ -352,26 +352,24 @@ def build_cot_yaml_inputs(
     return _tokenize(messages, processor, device)
 
 
-def load_lang_descriptions(lang_dir: Path, model_id: str) -> dict[tuple[str, str], str]:
-    """Load {(dataset, class_label): description} from language assessment desc CSV."""
-    import csv
-    safe = model_id.replace("/", "_")
-    csv_path = lang_dir / f"desc_{safe}.csv"
-    if not csv_path.exists():
-        name = model_id.split("/")[-1]
-        csv_path = next(lang_dir.glob(f"desc_*{name}*.csv"), None)
-    if not csv_path or not csv_path.exists():
-        raise FileNotFoundError(f"No lang desc CSV found in {lang_dir} for {model_id}")
+def load_synthesized_descriptions(jsonl_path: Path) -> dict[tuple[str, str], str]:
+    """Load {(dataset, class_label): synthesized_description} from agml_descriptions.jsonl.
 
+    Uses the same synthesized_description that language assessment classification uses,
+    so aug_vision sees no class-name leakage.
+    """
+    import json
     desc_map: dict[tuple[str, str], str] = {}
-    with open(csv_path, newline="") as f:
-        for row in csv.DictReader(f):
-            ds   = row.get("agml_dataset", "").strip()
-            cls  = row.get("class_label",  "").strip()
-            pred = row.get("prediction",   "").strip()
-            if ds and cls and pred:
-                desc_map[(ds, cls)] = pred
-    print(f"[logit_lens] Loaded {len(desc_map)} descriptions from {csv_path.name}")
+    with open(jsonl_path) as f:
+        for line in f:
+            rec  = json.loads(line)
+            meta = rec.get("metadata", {})
+            ds   = meta.get("agml_dataset", "").strip()
+            cls  = meta.get("class_label",  "").strip()
+            desc = meta.get("synthesized_description", "").strip()
+            if ds and cls and desc:
+                desc_map[(ds, cls)] = desc
+    print(f"[logit_lens] Loaded {len(desc_map)} synthesized descriptions from {jsonl_path.name}")
     return desc_map
 
 
@@ -708,17 +706,22 @@ def main() -> None:
     parser.add_argument("--use_4bit",        action="store_true")
     parser.add_argument("--run_cot",         action="store_true",
                         help="Also run self-description CoT and cot_prompts.yaml CoT conditions")
-    parser.add_argument("--lang_dir",        default=None,
-                        help="Path to language assessment outputs dir. When provided, "
-                             "runs aug-vision logit lens condition.")
+    parser.add_argument("--descriptions_jsonl", default="dataset/agml_descriptions.jsonl",
+                        help="Path to agml_descriptions.jsonl — same synthesized descriptions "
+                             "used by language assessment cls. Enables aug_vision condition.")
+    parser.add_argument("--no_aug",            action="store_true",
+                        help="Skip aug_vision condition.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     desc_map = None
-    if args.lang_dir:
-        desc_map = load_lang_descriptions(Path(args.lang_dir), args.model)
+    jsonl_path = Path(args.descriptions_jsonl)
+    if not args.no_aug and jsonl_path.exists():
+        desc_map = load_synthesized_descriptions(jsonl_path)
+    elif not args.no_aug:
+        print(f"[logit_lens] {jsonl_path} not found — skipping aug_vision condition")
 
     model, processor = load_model(args.model, args.use_4bit)
     _p     = next(model.parameters())

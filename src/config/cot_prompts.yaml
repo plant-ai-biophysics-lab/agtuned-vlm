@@ -27,14 +27,14 @@ thinking_prompts:
       - "Describe the exact nature of the damage — color (e.g., yellow, brown, black), shape (e.g., circular spots, irregular blotches, necrotic margins), and texture (e.g., powdery, water-soaked, fuzzy) of the affected areas."
       - "Are there any visible signs of insects or mites, such as webbing, tiny eggs, frass, or actual bodies?"
       - "Is the damage uniform across the whole plant (suggesting environmental or nutrient stress), or isolated and random (suggesting a pest or pathogen)?"
-      - "Based on the visual markers so far, what are the top 2-3 most likely disease, pest, or stress/damage? State your confidence for each."
+      - "Based on the visual markers so far, what is the most likely disease, pest, or stress/damage? State your confidence for each."
 
   weed_identification:
     steps:
       - "Describe the leaf arrangement (opposite, alternate, whorled), shape (lanceolate, ovate, lobed), margins (smooth, serrated, toothed), and venation pattern (parallel, palmate, pinnate)."
       - "Is the plant erect, prostrate/creeping, or a climbing vine? Are there visible hairs, thorns, or distinct colors on the stem?"
       - "If visible, describe any flowers, seed pods, cones, or buds — noting color, petal count, and arrangement."
-      - "Based on the visual markers so far, what are the top 2-3 most likely botanical matches (Scientific Name and Common Name)? State your confidence for each."
+      - "Based on the visual markers so far, what is the most likely botanical matches (Scientific Name and Common Name)? State your confidence for each."
 
 # ── Task type routing ─────────────────────────────────────────────────────────
 
