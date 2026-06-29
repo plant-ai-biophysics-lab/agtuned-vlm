@@ -176,21 +176,23 @@ def _load_prompts() -> dict:
 _PROMPTS = _load_prompts()
 
 
+def _build_messages(image: Image.Image, question: str) -> list[dict]:
+    sys_msg = _PROMPTS.get("assessment_system", "")
+    return (
+        [{"role": "system", "content": sys_msg}] if sys_msg else []
+    ) + [{"role": "user", "content": [
+        {"type": "image", "image": image},
+        {"type": "text",  "text": question},
+    ]}]
+
+
 def build_inputs(image: Image.Image, class_names: list[str],
                  processor, device: str, crop: str = "plant") -> dict:
+    """Normal vision assessment prompt — mirrors assessment_classification."""
     inner_q = _PROMPTS["visual_classification_disease"].format(crop=crop)
     inner_q += f" Choose exactly one from: {', '.join(class_names)}."
     question = _PROMPTS["assessment_classification"].format(question=inner_q)
-
-    sys_msg = _PROMPTS.get("assessment_system", "")
-    messages = (
-        [{"role": "system", "content": sys_msg}] if sys_msg else []
-    ) + [
-        {"role": "user", "content": [
-            {"type": "image", "image": image},
-            {"type": "text",  "text": question},
-        ]},
-    ]
+    messages = _build_messages(image, question)
     inputs = processor.apply_chat_template(
         messages, add_generation_prompt=True,
         tokenize=True, return_dict=True, return_tensors="pt",
@@ -198,6 +200,57 @@ def build_inputs(image: Image.Image, class_names: list[str],
     )
     return {k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in inputs.items()}
+
+
+def build_aug_inputs(image: Image.Image, class_names: list[str], description: str,
+                     processor, device: str, crop: str = "plant") -> dict:
+    """Augmented vision prompt — mirrors desc_augmented_classification."""
+    inner_q = _PROMPTS["visual_classification_disease"].format(crop=crop)
+    inner_q += f" Choose exactly one from: {', '.join(class_names)}."
+    question = _PROMPTS["desc_augmented_classification"].format(
+        description=description, question=inner_q,
+    )
+    messages = _build_messages(image, question)
+    inputs = processor.apply_chat_template(
+        messages, add_generation_prompt=True,
+        tokenize=True, return_dict=True, return_tensors="pt",
+        enable_thinking=False,
+    )
+    return {k: v.to(device) if isinstance(v, torch.Tensor) else v
+            for k, v in inputs.items()}
+
+
+def load_lang_descriptions(lang_dir: Path, model_id: str) -> dict[tuple[str, str], str]:
+    """Load {(dataset, class_label): description} from language assessment desc CSV."""
+    import csv
+    safe = model_id.replace("/", "_")
+    csv_path = lang_dir / f"desc_{safe}.csv"
+    if not csv_path.exists():
+        # try without org prefix
+        name = model_id.split("/")[-1]
+        csv_path = next(lang_dir.glob(f"desc_*{name}*.csv"), None)
+    if not csv_path or not csv_path.exists():
+        raise FileNotFoundError(f"No lang desc CSV found in {lang_dir} for {model_id}")
+
+    desc_map: dict[tuple[str, str], str] = {}
+    with open(csv_path, newline="") as f:
+        for row in csv.DictReader(f):
+            ds  = row.get("agml_dataset", "").strip()
+            cls = row.get("class_label",  "").strip()
+            pred = row.get("prediction",  "").strip()
+            if ds and cls and pred:
+                desc_map[(ds, cls)] = pred
+    print(f"[logit_lens] Loaded {len(desc_map)} descriptions from {csv_path.name}")
+    return desc_map
+
+
+def _lookup_description(desc_map: dict, ds_name: str, cls: str) -> str | None:
+    """Fuzzy lookup: try exact, then underscore↔space normalisation."""
+    for key_cls in (cls, cls.replace("_", " "), cls.replace(" ", "_")):
+        v = desc_map.get((ds_name, key_cls))
+        if v:
+            return v
+    return None
 
 
 # ── Logit lens forward pass ────────────────────────────────────────────────────
@@ -229,6 +282,7 @@ def logit_lens_pass(
     class_names: list[str],
     correct_class: str,
     device: str,
+    prebuilt_inputs: dict | None = None,
 ) -> dict:
     """
     Generates exactly 1 token with output_hidden_states=True.
@@ -238,7 +292,8 @@ def logit_lens_pass(
     """
     global _debug_printed, _VOCAB_SIZE
 
-    inputs = build_inputs(image, class_names, processor, device)
+    inputs = prebuilt_inputs if prebuilt_inputs is not None else \
+             build_inputs(image, class_names, processor, device)
 
     gen_out = model.generate(
         **inputs,
@@ -324,6 +379,7 @@ def run_dataset(
     final_norm, lm_head, softcap,
     n_samples: int,
     device: str,
+    desc_map: dict | None = None,
 ) -> dict | None:
     print(f"\n  Loading {ds_name}...")
     try:
@@ -335,44 +391,65 @@ def run_dataset(
     class_names = sorted(by_class.keys())
     print(f"  {len(class_names)} classes, up to {n_samples} images each")
 
-    all_curves: list[list[float]] = []  # one list per image
+    normal_curves: list[list[int]] = []
+    aug_curves:    list[list[int]] = []
     records: list[dict] = []
 
     for cls, paths in by_class.items():
+        description = _lookup_description(desc_map, ds_name, cls) if desc_map else None
         pbar = tqdm(paths, desc=f"    {cls[:30]}", leave=False)
         for path in pbar:
             try:
                 image = Image.open(path).convert("RGB")
             except Exception:
                 continue
-            result = logit_lens_pass(
+
+            # Normal pass
+            res_normal = logit_lens_pass(
                 model, processor, final_norm, lm_head, softcap,
                 image, class_names, cls, device,
             )
-            acc_curve = [l["top1_correct"] for l in result["per_layer"]]
-            all_curves.append(acc_curve)
+            acc_normal = [l["top1_correct"] for l in res_normal["per_layer"]]
+            normal_curves.append(acc_normal)
+
+            # Augmented pass (only if a description exists for this class)
+            acc_aug = None
+            if description:
+                inputs_aug = build_aug_inputs(image, class_names, description,
+                                              processor, device)
+                res_aug = logit_lens_pass(
+                    model, processor, final_norm, lm_head, softcap,
+                    image, class_names, cls, device,
+                    prebuilt_inputs=inputs_aug,
+                )
+                acc_aug = [l["top1_correct"] for l in res_aug["per_layer"]]
+                aug_curves.append(acc_aug)
+
             records.append({
                 "dataset":       ds_name, "class": cls,
                 "image":         str(path.name),
-                "target_tok":    result["target_tok"],
-                "generated_tok": result.get("generated_tok", "?"),
-                "acc_curve":     acc_curve,
+                "target_tok":    res_normal["target_tok"],
+                "generated_tok": res_normal.get("generated_tok", "?"),
+                "acc_curve":     acc_normal,
+                "acc_curve_aug": acc_aug,
             })
 
-    if not all_curves:
+    if not normal_curves:
         return None
 
-    max_layers = max(len(c) for c in all_curves)
-    # Layer-wise top-1 accuracy averaged over all images (nostalgebraist 2020;
-    # Wendler et al. 2024; LLM Microscope 2024)
-    mean_accuracy = [
-        float(np.mean([c[i] for c in all_curves if i < len(c)]))
-        for i in range(max_layers)
-    ]
+    max_layers = max(len(c) for c in normal_curves)
+
+    def _mean_acc(curves):
+        return [
+            float(np.mean([c[i] for c in curves if i < len(c)]))
+            for i in range(max_layers)
+        ]
+
     return {
-        "dataset":       ds_name,
-        "mean_accuracy": mean_accuracy,
-        "records":       records,
+        "dataset":           ds_name,
+        "mean_accuracy":     _mean_acc(normal_curves),
+        "mean_accuracy_aug": _mean_acc(aug_curves) if aug_curves else None,
+        "records":           records,
     }
 
 
@@ -382,28 +459,43 @@ def plot_logit_lens(
     hard_results: list[dict],
     easy_results: list[dict],
     output_path: Path,
+    with_aug: bool = False,
 ) -> None:
-    fig, (ax_hard, ax_easy) = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-
     hard_colors = ["#d62728", "#e6550d", "#e7969c"]
     easy_colors = ["#2ca02c", "#1f77b4", "#9467bd"]
 
-    def _plot_panel(ax, results, colors, title):
+    n_rows = 2 if with_aug else 1
+    fig, axes = plt.subplots(n_rows, 2, figsize=(14, 5 * n_rows), sharey=True)
+    if n_rows == 1:
+        axes = [axes]  # make indexing uniform
+
+    def _plot_panel(ax, results, colors, title, curve_key="mean_accuracy"):
         for res, color in zip(results, colors):
-            curve  = res["mean_accuracy"]
+            curve = res.get(curve_key)
+            if not curve:
+                continue
             layers = list(range(len(curve)))
             label  = res["dataset"].replace("_classification", "").replace("_", " ")
             ax.plot(layers, curve, color=color, linewidth=2, label=label)
             ax.fill_between(layers, curve, alpha=0.08, color=color)
-
         ax.set_xlabel("Transformer Layer", fontsize=10)
         ax.set_ylabel("Top-1 accuracy  (correct class first token)", fontsize=9)
         ax.set_title(title, fontsize=11)
         ax.legend(fontsize=8)
         ax.set_ylim(bottom=0, top=1)
 
-    _plot_panel(ax_hard, hard_results, hard_colors, "Hard Datasets (low VLM F1)")
-    _plot_panel(ax_easy, easy_results, easy_colors, "Easy Datasets (high VLM F1)")
+    # Row 0: normal prompt
+    _plot_panel(axes[0][0], hard_results, hard_colors,
+                "Hard Datasets — Normal Prompt")
+    _plot_panel(axes[0][1], easy_results, easy_colors,
+                "Easy Datasets — Normal Prompt")
+
+    # Row 1: augmented prompt (if available)
+    if with_aug:
+        _plot_panel(axes[1][0], hard_results, hard_colors,
+                    "Hard Datasets — Aug Vision Prompt", "mean_accuracy_aug")
+        _plot_panel(axes[1][1], easy_results, easy_colors,
+                    "Easy Datasets — Aug Vision Prompt", "mean_accuracy_aug")
 
     fig.suptitle(
         "Logit Lens: Layer-wise Top-1 Accuracy Across LLM Depth\n"
@@ -428,14 +520,22 @@ def main() -> None:
     parser.add_argument("--easy_datasets", nargs="+", default=EASY_DATASETS)
     parser.add_argument("--use_4bit",    action="store_true",
                         help="Load in 4-bit NF4 (saves ~60%% VRAM)")
+    parser.add_argument("--lang_dir",   default=None,
+                        help="Path to language assessment outputs dir "
+                             "(e.g. outputs/language_assessment/). "
+                             "When provided, also runs augmented-vision logit lens "
+                             "and adds a second row to the chart.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load language descriptions if aug mode requested
+    desc_map = None
+    if args.lang_dir:
+        desc_map = load_lang_descriptions(Path(args.lang_dir), args.model)
+
     model, processor = load_model(args.model, args.use_4bit)
-    # With device_map="auto" the model may span multiple GPUs; inputs go to
-    # the first device (where the embedding layer lives).
     _p = next(model.parameters())
     device = _p.device if str(_p.device) != "meta" else (
         torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -448,14 +548,14 @@ def main() -> None:
     print("\n=== Hard datasets ===")
     for ds in args.hard_datasets:
         res = run_dataset(ds, model, processor, final_norm, lm_head, softcap,
-                          args.n_samples, device)
+                          args.n_samples, device, desc_map=desc_map)
         if res:
             hard_results.append(res)
 
     print("\n=== Easy datasets ===")
     for ds in args.easy_datasets:
         res = run_dataset(ds, model, processor, final_norm, lm_head, softcap,
-                          args.n_samples, device)
+                          args.n_samples, device, desc_map=desc_map)
         if res:
             easy_results.append(res)
 
@@ -469,10 +569,14 @@ def main() -> None:
                    "records": all_records}, f, indent=1)
     print(f"  Saved: {raw_path}")
 
+    with_aug = desc_map is not None and any(
+        r.get("mean_accuracy_aug") for r in hard_results + easy_results
+    )
     if hard_results or easy_results:
         plot_logit_lens(
             hard_results, easy_results,
             output_dir / "logit_lens.png",
+            with_aug=with_aug,
         )
 
     print("\nDone.")
