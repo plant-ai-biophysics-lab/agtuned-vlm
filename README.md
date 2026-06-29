@@ -257,7 +257,7 @@ Tests whether prepending a language description of a class helps the model class
 - **Filtered** (default): only classes where the language assessment produced a judged-correct answer
 - **Unfiltered** (`--all_classes`): all classes that have a description response
 
-Flow: language cls/desc CSVs → select classes → load description responses → re-run vision inference with description prepended → compare baseline vs augmented accuracy.
+**Description source:** uses the model's own language-assessment description predictions (`lang_dir/desc_*.csv`) — these were generated from the prompt `"Can you describe visually the {cls} of a {crop}?"` so they naturally reference the class name. This is intentional: the experiment tests whether the model's own textual knowledge of the class bridges the vision gap. For a class-name-free comparison see Stage 4b (CoT Vision), which uses `synthesized_description` from `dataset/agml_descriptions.jsonl`.
 
 All output files include `filtered` or `all` in their name so both runs coexist in the same `--output_dir`.
 
@@ -341,21 +341,22 @@ Tests two chain-of-thought prompting strategies on the same agricultural image c
 |-----------|-------------|
 | `self_cot` | Model generates its own visual description first (turn 1), then classifies using that description as context (turn 2) |
 | `cot_yaml` | Structured multi-step CoT from `cot_prompts.yaml` — each step is a separate conversation turn (6 steps for disease/pest, 4 for weed), final turn classifies bridging from the analysis |
-| `aug_vision` | Pre-written language assessment description injected as context (upper bound; requires `--lang_dir`) |
+| `aug_vision` | Synthesized reference description injected as context — same source as language assessment cls, no class-name leakage (upper bound) |
 
 Uses HuggingFace transformers for inference (not vLLM) because CoT requires sequential multi-turn generation per sample.
 
 Task-type routing is automatic: disease and pest_damage datasets use the `disease_pest` CoT steps; weed datasets use `weed_identification` steps.
 
+**Description source for aug_vision:** `synthesized_description` field from `dataset/agml_descriptions.jsonl` — generated from raw image captions without the class name in the prompt. Healthy classes use the canonical `"This leaf/plant is healthy."` override, consistent with language and vision assessment.
+
 ```bash
 uv run python src/cot_vision.py \
     --model      google/gemma-4-26B-A4B-it \
     --output_dir outputs/cot_vision/ \
-    --n_samples  4 \
-    --use_4bit
+    --n_samples  4
 ```
 
-Aug vision runs automatically if `dataset/agml_descriptions.jsonl` exists (it's committed to the repo). Pass `--no_aug` to skip it.
+Aug vision runs automatically from `dataset/agml_descriptions.jsonl` (committed to repo). Pass `--no_aug` to skip it.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -363,8 +364,7 @@ Aug vision runs automatically if `dataset/agml_descriptions.jsonl` exists (it's 
 | `--output_dir` | `outputs/cot_vision/` | Where to write CSVs, metrics, and chart |
 | `--n_samples` | 4 | Images per class (seed 42) |
 | `--datasets` | all 6 logit-lens datasets | Override which AgML datasets to evaluate |
-| `--use_4bit` | off | Load in 4-bit NF4 (saves ~60% VRAM) |
-| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Synthesized reference descriptions for aug_vision (same source as language assessment cls) |
+| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Synthesized reference descriptions for aug_vision |
 | `--no_aug` | off | Skip aug_vision condition |
 
 **Output structure:**
@@ -387,34 +387,31 @@ Projects each transformer layer's hidden state through `final_norm → lm_head �
 | Normal | always | Standard vision assessment prompt |
 | Self-CoT | `--run_cot` | Self-description generated first, then classify with history |
 | CoT YAML | `--run_cot` | Structured multi-step CoT from `cot_prompts.yaml` + history |
-| Aug Vision | `--lang_dir` | Pre-written description injected (upper bound) |
+| Aug Vision | auto | Synthesized reference description injected — same source as language assessment cls |
 
 The chart auto-sizes to show only conditions that have data (1×2 up to 4×2 grid).
+
+Aug vision runs automatically from `dataset/agml_descriptions.jsonl` (committed to repo). Pass `--no_aug` to skip it.
 
 ```bash
 # Normal only (fast)
 uv run python experiments/logit_lens/logit_lens.py \
     --model      google/gemma-4-26B-A4B-it \
     --output_dir outputs/logit_lens/ \
-    --n_samples  8 \
-    --use_4bit
+    --n_samples  8
 
 # All 4 conditions
 uv run python experiments/logit_lens/logit_lens.py \
     --model      google/gemma-4-26B-A4B-it \
     --output_dir outputs/logit_lens/ \
     --n_samples  4 \
-    --use_4bit \
     --run_cot
 ```
-
-Aug vision runs automatically from `dataset/agml_descriptions.jsonl`. Pass `--no_aug` to skip it.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--model` | `google/gemma-4-26B-A4B-it` | HuggingFace model ID |
 | `--n_samples` | 8 | Images per class |
-| `--use_4bit` | off | 4-bit NF4 loading |
 | `--run_cot` | off | Enable self-CoT and cot-yaml conditions (much slower — N+2 generate calls per image) |
 | `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Synthesized reference descriptions for aug_vision |
 | `--no_aug` | off | Skip aug_vision condition |
