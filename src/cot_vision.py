@@ -453,6 +453,124 @@ def write_cls_csv(rows: list[dict], path: Path) -> None:
 
 # ── Chart ──────────────────────────────────────────────────────────────────────
 
+def load_vis_per_dataset(vis_dir: Path, model_id: str) -> dict[str, float]:
+    """Load per-dataset judged F1 from vision assessment cls CSV as difficulty proxy."""
+    import csv as _csv
+    from collections import defaultdict
+    safe = model_id.replace("/", "_")
+    cls_file = vis_dir / f"cls_{safe}.csv"
+    if not cls_file.exists():
+        print(f"  [warn] vis cls CSV not found: {cls_file}")
+        return {}
+    with open(cls_file, newline="", encoding="utf-8") as f:
+        rows = list(_csv.DictReader(f))
+    by_ds: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_ds[r.get("agml_dataset", "")].append(r)
+    result: dict[str, float] = {}
+    for ds, ds_rows in by_ds.items():
+        judged = [r for r in ds_rows if r.get("judged_correct", "") != ""]
+        if judged:
+            refs  = [r["class_label"] for r in judged]
+            preds = [r["class_label"] if int(r["judged_correct"]) else "" for r in judged]
+            result[ds] = compute_classification_metrics(refs, preds).get("f1_macro", 0.0)
+    return result
+
+
+def plot_difficulty_correlation(
+    cot_metrics: dict,
+    vis_per_ds: dict[str, float],
+    output_dir: Path,
+) -> None:
+    """Scatter: vision baseline judged F1 (x=difficulty proxy) vs CoT judged F1 per dataset."""
+    import matplotlib.pyplot as plt
+
+    conditions = [c for c in ("self_cot", "cot_yaml") if c in cot_metrics]
+    if not conditions or not vis_per_ds:
+        return
+
+    colors = {"self_cot": "#1f77b4", "cot_yaml": "#ff7f0e"}
+    labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for cond in conditions:
+        per_ds = cot_metrics[cond].get("per_dataset", {})
+        xs, ys, names = [], [], []
+        for ds, dm in per_ds.items():
+            if ds not in vis_per_ds:
+                continue
+            xs.append(vis_per_ds[ds])
+            ys.append(dm.get("judge_f1_macro") or dm.get("f1_macro", 0.0))
+            names.append(ds.replace("_classification", "").replace("_", " "))
+        ax.scatter(xs, ys, label=labels[cond], color=colors[cond], alpha=0.8, s=60)
+        for x, y, name in zip(xs, ys, names):
+            ax.annotate(name, (x, y), fontsize=5.5, alpha=0.7,
+                        xytext=(3, 3), textcoords="offset points")
+
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=1, label="no change")
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_xlabel("Vision Baseline Judged F1  (← harder)")
+    ax.set_ylabel("CoT Judged F1")
+    ax.set_title("Difficulty vs CoT Performance (per dataset)")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.2)
+    plt.tight_layout()
+    path = output_dir / "cot_difficulty_correlation.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_difficulty_bins(
+    cot_metrics: dict,
+    vis_per_ds: dict[str, float],
+    output_dir: Path,
+) -> None:
+    """Bar chart: mean judged F1 per difficulty tercile (hard / medium / easy)."""
+    import matplotlib.pyplot as plt
+
+    conditions = [c for c in ("self_cot", "cot_yaml") if c in cot_metrics]
+    if not conditions or not vis_per_ds:
+        return
+
+    all_ds = sorted(vis_per_ds, key=vis_per_ds.get)  # hardest first
+    n = len(all_ds)
+    bins = {"Hard": all_ds[:n//3], "Medium": all_ds[n//3:2*n//3], "Easy": all_ds[2*n//3:]}
+
+    colors = {"vision": "#e67e22", "self_cot": "#1f77b4", "cot_yaml": "#ff7f0e"}
+    labels = {"vision": "Vision Baseline", "self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
+    all_conds = ["vision"] + conditions
+    x = np.arange(len(bins))
+    width = 0.8 / len(all_conds)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for i, cond in enumerate(all_conds):
+        means = []
+        for bin_ds in bins.values():
+            if cond == "vision":
+                vals = [vis_per_ds[d] for d in bin_ds if d in vis_per_ds]
+            else:
+                per_ds = cot_metrics[cond].get("per_dataset", {})
+                vals = [per_ds[d].get("judge_f1_macro") or per_ds[d].get("f1_macro", 0.0)
+                        for d in bin_ds if d in per_ds]
+            means.append(float(np.mean(vals)) if vals else 0.0)
+        offset = (i - len(all_conds) / 2 + 0.5) * width
+        bars = ax.bar(x + offset, means, width, label=labels[cond],
+                      color=colors[cond], alpha=0.85, edgecolor="black", linewidth=0.5)
+        for bar, v in zip(bars, means):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                    f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x); ax.set_xticklabels(list(bins))
+    ax.set_ylabel("Mean Judged F1"); ax.set_ylim(0, 1.15)
+    ax.set_title("CoT Performance by Difficulty Bin")
+    ax.legend(fontsize=8); ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = output_dir / "cot_difficulty_bins.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
     """Bar chart: F1 per condition per dataset."""
     import matplotlib.pyplot as plt
@@ -513,6 +631,10 @@ def main() -> None:
                         help="Path to test_split.json from linear probe — restricts each class "
                              "to the same images used in vision assessment")
     parser.add_argument("--use_4bit", action="store_true")
+    parser.add_argument("--vis_dir",    default="outputs/vision_assessment/",
+                        help="Vision assessment output dir — used to load baseline judged F1 for difficulty plots")
+    parser.add_argument("--plot_only", action="store_true",
+                        help="Skip inference; regenerate plots from existing cot_vision_metrics.json + CSV")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -528,37 +650,47 @@ def main() -> None:
     else:
         print(f"[cot_vision] test_split not found at {split_path} — using all available images")
 
-    model, processor = load_model(args.model, args.use_4bit)
-    _p     = next(model.parameters())
-    device = _p.device if str(_p.device) != "meta" else (
-        torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    )
-    print(f"[cot_vision] input device: {device}")
-
-    all_rows: list[dict] = []
-    t0 = time.perf_counter()
-
-    print("\n=== Running CoT conditions ===")
-    for ds in args.datasets:
-        rows = run_dataset(ds, model, processor, device, args.n_samples, test_split)
-        all_rows.extend(rows)
-
-    elapsed = time.perf_counter() - t0
-    print(f"\nInference done in {elapsed:.1f}s  ({len(all_rows)} rows)")
-
-    all_rows = judge_rows(all_rows, model, processor, device)
-
-    # Save CSV
-    cls_csv = output_dir / f"cot_cls_{safe_model}.csv"
-    write_cls_csv(all_rows, cls_csv)
-
-    # Compute + save metrics
-    metrics = compute_metrics(all_rows)
     metrics_path = output_dir / "cot_vision_metrics.json"
-    with open(metrics_path, "w") as f:
-        json.dump({"model": args.model, "n_samples": args.n_samples,
-                   "conditions": metrics}, f, indent=2)
-    print(f"  Saved: {metrics_path}")
+    cls_csv      = output_dir / f"cot_cls_{safe_model}.csv"
+
+    if args.plot_only:
+        if not metrics_path.exists():
+            print(f"[error] --plot_only requires {metrics_path} — run inference first")
+            return
+        with open(metrics_path) as f:
+            saved = json.load(f)
+        metrics = saved.get("conditions", saved)
+        print(f"[cot_vision] plot_only: loaded metrics from {metrics_path}")
+    else:
+        model, processor = load_model(args.model, args.use_4bit)
+        _p     = next(model.parameters())
+        device = _p.device if str(_p.device) != "meta" else (
+            torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        )
+        print(f"[cot_vision] input device: {device}")
+
+        all_rows: list[dict] = []
+        t0 = time.perf_counter()
+
+        print("\n=== Running CoT conditions ===")
+        for ds in args.datasets:
+            rows = run_dataset(ds, model, processor, device, args.n_samples, test_split)
+            all_rows.extend(rows)
+
+        elapsed = time.perf_counter() - t0
+        print(f"\nInference done in {elapsed:.1f}s  ({len(all_rows)} rows)")
+
+        all_rows = judge_rows(all_rows, model, processor, device)
+
+        write_cls_csv(all_rows, cls_csv)
+
+        metrics = compute_metrics(all_rows)
+        with open(metrics_path, "w") as f:
+            json.dump({"model": args.model, "n_samples": args.n_samples,
+                       "conditions": metrics}, f, indent=2)
+        print(f"  Saved: {metrics_path}")
+
+        unload_model(model)
 
     # Print summary
     print("\n── CoT Vision Assessment Summary ─────────────────")
@@ -571,10 +703,17 @@ def main() -> None:
             short = ds.replace("_classification", "").replace("_", " ")
             print(f"    {short:<45}  F1={dm['f1_macro']:.3f}")
 
-    # Chart
-    plot_condition_comparison(metrics, output_dir / "cot_comparison.png")
+    # Load vision baseline for difficulty plots
+    vis_per_ds = load_vis_per_dataset(Path(args.vis_dir), args.model)
+    if not vis_per_ds:
+        print("  [warn] No vision baseline found — skipping difficulty plots")
 
-    unload_model(model)
+    print("\n=== Generating plots ===")
+    plot_condition_comparison(metrics, output_dir / "cot_comparison.png")
+    if vis_per_ds:
+        plot_difficulty_correlation(metrics, vis_per_ds, output_dir)
+        plot_difficulty_bins(metrics, vis_per_ds, output_dir)
+
     print("\nDone.")
 
 

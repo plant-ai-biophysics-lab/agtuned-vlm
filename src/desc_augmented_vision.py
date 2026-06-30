@@ -935,6 +935,16 @@ def main(args: argparse.Namespace) -> None:
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
     plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task)
+    for model_id in args.models:
+        if model_id in baseline_per_model and model_id in augmented_per_model:
+            plot_difficulty_correlation(
+                baseline_per_model[model_id], augmented_per_model[model_id],
+                output_dir, suffix=filter_label,
+            )
+            plot_difficulty_bins(
+                baseline_per_model[model_id], augmented_per_model[model_id],
+                output_dir, suffix=filter_label,
+            )
 
     # ── Sub-step: vision-generated descriptions ────────────────────────────────
     if args.use_vision_descriptions:
@@ -1126,6 +1136,80 @@ def plot_desc_quality_correlation(
     fig.suptitle("Description Quality vs Classification F1\n(vision-generated descriptions)", fontsize=11)
     plt.tight_layout()
     path = output_dir / f"desc_quality_correlation_{suffix}.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_difficulty_correlation(
+    baseline_per_ds: dict[str, dict],
+    augmented_per_ds: dict[str, dict],
+    output_dir: Path,
+    suffix: str = "filtered",
+) -> None:
+    """Scatter: baseline F1 (difficulty proxy) vs augmented F1 per dataset."""
+    common = sorted(set(baseline_per_ds) & set(augmented_per_ds))
+    if not common:
+        return
+    xs = [baseline_per_ds[ds].get("f1_macro", 0.0) for ds in common]
+    ys = [augmented_per_ds[ds].get("f1_macro", 0.0) for ds in common]
+    names = [ds.replace("_classification", "").replace("_", " ") for ds in common]
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.scatter(xs, ys, color="#2ca02c", alpha=0.8, s=60)
+    for x, y, name in zip(xs, ys, names):
+        ax.annotate(name, (x, y), fontsize=5.5, alpha=0.7,
+                    xytext=(3, 3), textcoords="offset points")
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=1, label="no change")
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_xlabel("Vision Baseline F1  (← harder)")
+    ax.set_ylabel("Desc-Aug F1")
+    ax.set_title(f"Difficulty vs Desc-Aug Performance ({suffix})")
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.2)
+    plt.tight_layout()
+    path = output_dir / f"aug_difficulty_correlation_{suffix}.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_difficulty_bins(
+    baseline_per_ds: dict[str, dict],
+    augmented_per_ds: dict[str, dict],
+    output_dir: Path,
+    suffix: str = "filtered",
+) -> None:
+    """Bar chart: mean F1 per difficulty tercile (hard / medium / easy)."""
+    common = sorted(set(baseline_per_ds) & set(augmented_per_ds),
+                    key=lambda d: baseline_per_ds[d].get("f1_macro", 0.0))
+    if not common:
+        return
+    n = len(common)
+    bins = {"Hard": common[:n//3], "Medium": common[n//3:2*n//3], "Easy": common[2*n//3:]}
+
+    x = np.arange(len(bins))
+    width = 0.35
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    for i, (label, color, src) in enumerate([
+        ("Vision Baseline", "#e67e22", baseline_per_ds),
+        ("Desc-Aug",        "#2ca02c", augmented_per_ds),
+    ]):
+        means = [float(np.mean([src[d].get("f1_macro", 0.0) for d in bin_ds]))
+                 if bin_ds else 0.0 for bin_ds in bins.values()]
+        offset = (i - 0.5) * width
+        bars = ax.bar(x + offset, means, width, label=label, color=color,
+                      alpha=0.85, edgecolor="black", linewidth=0.5)
+        for bar, v in zip(bars, means):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                    f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x); ax.set_xticklabels(list(bins))
+    ax.set_ylabel("Mean F1"); ax.set_ylim(0, 1.15)
+    ax.set_title(f"Desc-Aug Performance by Difficulty Bin ({suffix})")
+    ax.legend(fontsize=8); ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = output_dir / f"aug_difficulty_bins_{suffix}.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")

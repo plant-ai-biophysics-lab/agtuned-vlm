@@ -470,6 +470,51 @@ def plot_four_condition_per_task(
     print(f"  Saved: {output_path}")
 
 
+def plot_difficulty_bins_four_condition(
+    vis_judge_ds: dict, cot_conditions: dict, aug_per_ds: dict,
+    output_path: Path,
+) -> None:
+    """Bar chart: mean judged F1 per difficulty tercile across all 4 conditions.
+
+    Difficulty is defined by vision baseline judged F1 (lower = harder).
+    """
+    from collections import defaultdict
+
+    all_ds = sorted(set(vis_judge_ds) | set(aug_per_ds) |
+                    set(cot_conditions.get("self_cot", {}).get("per_dataset", {})) |
+                    set(cot_conditions.get("cot_yaml",  {}).get("per_dataset", {})))
+    # Only include datasets with a vis baseline score (needed to define difficulty)
+    ranked = sorted([ds for ds in all_ds if ds in vis_judge_ds],
+                    key=lambda d: vis_judge_ds[d].get("judge_f1_macro") or
+                                  vis_judge_ds[d].get("f1_macro", 0.0))
+    if not ranked:
+        return
+
+    n = len(ranked)
+    bins: dict[str, list[str]] = {
+        "Hard":   ranked[:n//3],
+        "Medium": ranked[n//3:2*n//3],
+        "Easy":   ranked[2*n//3:],
+    }
+
+    data: dict[str, list[float]] = {k: [] for k, _, _ in _FOUR_CONDITIONS}
+    for bin_ds in bins.values():
+        for key, _, _ in _FOUR_CONDITIONS:
+            vals = [v for ds in bin_ds
+                    if (v := _four_cond_get(ds, key, vis_judge_ds,
+                                            cot_conditions, aug_per_ds)) is not None]
+            data[key].append(float(np.mean(vals)) if vals else 0.0)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    _four_cond_bars(ax, list(bins.keys()), data)
+    ax.set_title("4-Condition Comparison — By Difficulty Bin\n"
+                 "(Baseline / CoT = judged; Desc-Aug = direct)")
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
 def render_analysis(A: dict) -> str:
     short = A["model"]
     L: list[str] = []
@@ -921,6 +966,10 @@ def main() -> None:
             plot_four_condition_overall(
                 vis_jds, cot_conds, aug_pd,
                 output_dir / "four_condition_overall.png",
+            )
+            plot_difficulty_bins_four_condition(
+                vis_jds, cot_conds, aug_pd,
+                output_dir / "four_condition_difficulty_bins.png",
             )
             break  # one model only
 
