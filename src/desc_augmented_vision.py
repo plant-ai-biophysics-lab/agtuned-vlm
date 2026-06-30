@@ -1,25 +1,37 @@
 """
 Description-Augmented Vision Assessment
 
-Tests whether language assessment descriptions that produce a correctly-judged
-classification answer can improve vision classification when prepended as
-context to the image prompt.
+Tests whether clean class descriptions can improve vision classification when
+prepended as context to the image prompt.
 
 Flow:
-  1. Load lang cls CSV → find (dataset, class) pairs where judged_correct == 1
-  2. Load lang desc CSV → get the description *response* for each winning pair
-  3. Load existing vis cls CSV → filter to same pairs → recompute baseline metrics
-  4. Run vision inference with augmented prompt:
+  1. Load descriptions from dataset/agml_descriptions.jsonl (synthesized_description field)
+     For filtered run: restrict to judged-correct classes from lang cls CSV.
+     For unfiltered (--all_classes): use all classes in JSONL.
+  2. Load existing vis cls CSV → filter to same pairs → recompute baseline metrics
+  3. Run vision inference with augmented prompt:
        "Reference description: {desc}\n\nQuestion: {cls_q}\n\nAnswer with only the class name:"
-  5. Compare baseline (filtered) vs augmented metrics
-  6. Save CSVs + metrics JSON + plots to output_dir
+  4. Compare baseline (filtered) vs augmented metrics
+  5. Save CSVs + metrics JSON + plots to output_dir
 
-Usage:
+Descriptions always come from --descriptions_jsonl (clean, no class names in prompt).
+--lang_dir is only needed for filtered run (to find judged-correct classes from cls CSV).
+
+Usage (unfiltered — all classes from JSONL):
+    uv run python src/desc_augmented_vision.py \\
+      --models      google/gemma-4-26B-A4B-it \\
+      --vis_dir     outputs/vision_assessment/ \\
+      --output_dir  outputs/desc_augmented_vision/ \\
+      --descriptions_jsonl dataset/agml_descriptions.jsonl \\
+      --all_classes
+
+Usage (filtered — judged-correct classes only):
     uv run python src/desc_augmented_vision.py \\
       --models      google/gemma-4-26B-A4B-it \\
       --lang_dir    outputs/language_assessment/ \\
       --vis_dir     outputs/vision_assessment/ \\
-      --output_dir  outputs/desc_augmented_vision/
+      --output_dir  outputs/desc_augmented_vision/ \\
+      --descriptions_jsonl dataset/agml_descriptions.jsonl
 """
 
 from __future__ import annotations
@@ -138,42 +150,52 @@ def _to_bool(val) -> bool | None:
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
+def load_jsonl_desc_map(jsonl_path: Path) -> dict[tuple[str, str], str]:
+    """Load {(dataset, class): synthesized_description} from agml_descriptions.jsonl."""
+    from src.common.io import load_jsonl
+    desc_map: dict[tuple[str, str], str] = {}
+    for record in load_jsonl(jsonl_path):
+        meta = record.get("metadata", {})
+        ds   = meta.get("agml_dataset", "")
+        cls  = meta.get("class_label", "")
+        desc = meta.get("synthesized_description", "")
+        if ds and cls and desc:
+            desc_map[(ds, cls)] = desc
+    return desc_map
+
+
 def load_winning_classes(
-    lang_dir: Path, model_id: str, all_classes: bool = False,
+    lang_dir: Path | None,
+    model_id: str,
+    jsonl_desc_map: dict[tuple[str, str], str],
+    all_classes: bool = False,
 ) -> dict[tuple[str, str], str]:
-    """Return {(dataset, class): description_response}.
+    """Return {(dataset, class): description} using clean JSONL synthesized descriptions.
 
-    all_classes=False (default): only judged-correct classes.
-    all_classes=True: all classes that have a description response.
+    all_classes=True : all classes present in JSONL.
+    all_classes=False: only judged-correct classes from lang cls CSV (requires --lang_dir).
+    Descriptions always come from JSONL — never from lang desc_*.csv.
     """
-    cls_file  = lang_dir / f"cls_{_safe_name(model_id)}.csv"
-    desc_file = lang_dir / f"desc_{_safe_name(model_id)}.csv"
+    if all_classes:
+        return dict(jsonl_desc_map)
 
-    if not desc_file.exists():
-        print(f"  [warn] lang desc CSV not found: {desc_file}")
+    if lang_dir is None:
+        print("  [warn] --lang_dir required for filtered run (judged-correct cls CSV lookup)")
+        return {}
+    cls_file = lang_dir / f"cls_{_safe_name(model_id)}.csv"
+    if not cls_file.exists():
+        print(f"  [warn] lang cls CSV not found: {cls_file}")
         return {}
 
-    if not all_classes:
-        if not cls_file.exists():
-            print(f"  [warn] lang cls CSV not found: {cls_file}")
-            return {}
-        winning: set[tuple[str, str]] = set()
-        for row in _read_csv(cls_file):
-            if _to_bool(row.get("judged_correct")) is True:
-                winning.add((row["agml_dataset"], row["class_label"]))
-        if not winning:
-            print("  [warn] No judged-correct classes found in language assessment.")
-            return {}
-    else:
-        winning = None  # type: ignore[assignment]
+    winning: set[tuple[str, str]] = set()
+    for row in _read_csv(cls_file):
+        if _to_bool(row.get("judged_correct")) is True:
+            winning.add((row["agml_dataset"], row["class_label"]))
+    if not winning:
+        print("  [warn] No judged-correct classes found in language assessment.")
+        return {}
 
-    desc_map: dict[tuple[str, str], str] = {}
-    for row in _read_csv(desc_file):
-        key = (row.get("agml_dataset", ""), row.get("class_label", ""))
-        if winning is None or key in winning:
-            desc_map[key] = row.get("prediction", "")
-
-    return desc_map
+    return {key: desc for key, desc in jsonl_desc_map.items() if key in winning}
 
 
 def load_baseline_cls_rows(
@@ -742,7 +764,7 @@ def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    lang_dir = Path(args.lang_dir)
+    lang_dir = Path(args.lang_dir) if args.lang_dir else None
     vis_dir  = Path(args.vis_dir)
 
     prompts = load_prompts(Path(args.prompts))
@@ -763,6 +785,9 @@ def main(args: argparse.Namespace) -> None:
     prefetch_agml_datasets(list(active_cfg.values()))
 
     descriptions_jsonl = Path(args.descriptions_jsonl)
+    print(f"Loading JSONL descriptions from {descriptions_jsonl}...")
+    jsonl_desc_map = load_jsonl_desc_map(descriptions_jsonl)
+    print(f"  Loaded {len(jsonl_desc_map)} class descriptions from JSONL")
 
     n_models = len(args.models)
     baseline_per_model:  dict[str, dict[str, dict]] = {}
@@ -780,7 +805,7 @@ def main(args: argparse.Namespace) -> None:
             print("\nStep 1/3: Loading all classes with descriptions...")
         else:
             print("\nStep 1/3: Loading judged-correct classes from language assessment...")
-        desc_map = load_winning_classes(lang_dir, model_id, all_classes=args.all_classes)
+        desc_map = load_winning_classes(lang_dir, model_id, jsonl_desc_map, all_classes=args.all_classes)
         if not desc_map:
             print(f"  [skip] No classes found for {model_id}")
             continue
@@ -1212,7 +1237,8 @@ def _read_baseline_rows_cached(output_dir: Path, model_id: str) -> list[dict]:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Description-Augmented Vision Assessment")
     parser.add_argument("--models", nargs="+", required=True)
-    parser.add_argument("--lang_dir",    default="outputs/language_assessment/")
+    parser.add_argument("--lang_dir",    default=None,
+                        help="language assessment output dir; only needed for filtered run (judged-correct classes)")
     parser.add_argument("--vis_dir",     default="outputs/vision_assessment/")
     parser.add_argument("--output_dir",  default="outputs/desc_augmented_vision/")
     parser.add_argument("--config",      default="src/config/datasets.yaml")

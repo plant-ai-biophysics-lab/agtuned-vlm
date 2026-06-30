@@ -257,35 +257,38 @@ Tests whether prepending a language description of a class helps the model class
 - **Filtered** (default): only classes where the language assessment produced a judged-correct answer
 - **Unfiltered** (`--all_classes`): all classes that have a description response
 
-**Description source:** uses the model's own language-assessment description predictions (`lang_dir/desc_*.csv`) — these were generated from the prompt `"Can you describe visually the {cls} of a {crop}?"` so they naturally reference the class name. This is intentional: the experiment tests whether the model's own textual knowledge of the class bridges the vision gap. Stage 4b (CoT Vision) is a complementary experiment where the model reasons from the image alone with no external descriptions.
+**Description source:** all descriptions come from `dataset/agml_descriptions.jsonl` (`synthesized_description` field) — clean visual descriptions generated without class names in the prompt. These are the same descriptions used by the logit lens `aug_vision` condition, ensuring a fair cross-stage comparison.
+
+- **Filtered** (default): only classes where the language assessment produced a judged-correct answer (`--lang_dir` required for the cls CSV lookup).
+- **Unfiltered** (`--all_classes`): all classes that have an entry in `agml_descriptions.jsonl` (no `--lang_dir` needed).
 
 All output files include `filtered` or `all` in their name so both runs coexist in the same `--output_dir`.
 
 ```bash
-# Filtered run (judged-correct classes only)
-python main.py aug-vision \
+# Unfiltered run (all classes from JSONL)
+uv run python src/desc_augmented_vision.py \
+  --models      google/gemma-4-26B-A4B-it \
+  --vis_dir     outputs/vision_assessment/ \
+  --output_dir  outputs/desc_augmented_vision/ \
+  --descriptions_jsonl dataset/agml_descriptions.jsonl \
+  --all_classes
+
+# Filtered run (judged-correct classes only — needs lang_dir for cls CSV)
+uv run python src/desc_augmented_vision.py \
   --models     google/gemma-4-26B-A4B-it \
   --lang_dir   outputs/language_assessment/ \
   --vis_dir    outputs/vision_assessment/ \
-  --output_dir outputs/desc_augmented_vision/
-
-# Unfiltered run (all classes with descriptions)
-python main.py aug-vision \
-  --models      google/gemma-4-26B-A4B-it \
-  --lang_dir    outputs/language_assessment/ \
-  --vis_dir     outputs/vision_assessment/ \
-  --output_dir  outputs/desc_augmented_vision/ \
-  --all_classes
+  --output_dir outputs/desc_augmented_vision/ \
+  --descriptions_jsonl dataset/agml_descriptions.jsonl
 
 # Sub-step: use vision-generated descriptions (per-image alignment) + correlation plot
-# Run AFTER the filtered/all aug-vision runs above are complete.
+# Run AFTER the aug-vision run above is complete.
 # --resume skips re-running the ground-truth aug-vision inference (loads existing CSV).
-# Only the vision-description sub-step runs fresh and outputs the correlation plot.
-python main.py aug-vision \
+uv run python src/desc_augmented_vision.py \
   --models                  google/gemma-4-26B-A4B-it \
-  --lang_dir                outputs/language_assessment/ \
   --vis_dir                 outputs/vision_assessment/ \
   --output_dir              outputs/desc_augmented_vision/ \
+  --descriptions_jsonl      dataset/agml_descriptions.jsonl \
   --use_vision_descriptions \
   --resume
 ```
@@ -293,11 +296,12 @@ python main.py aug-vision \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--models` | required | Space-separated list of multimodal model IDs |
-| `--lang_dir` | `outputs/language_assessment/` | Language assessment output directory |
+| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Clean JSONL descriptions (synthesized_description field) |
+| `--lang_dir` | `None` | Language assessment output directory; only needed for filtered run (cls CSV lookup) |
 | `--vis_dir` | `outputs/vision_assessment/` | Vision assessment output directory (for baseline rows) |
 | `--test_split` | `outputs/linear_probe/test_split.json` | Same test split used in probe and vision assessment |
-| `--all_classes` | off | Use all classes with descriptions instead of only judged-correct ones |
-| `--use_vision_descriptions` | off | Sub-step: inject per-image vision-generated descriptions (from Stage 3 desc CSV) instead of reference descriptions; produces `vis_desc_aug_cls_<model>.csv` and a correlation scatter plot (F1 vs rouge_ss / sem_sim) |
+| `--all_classes` | off | Use all classes from JSONL instead of only judged-correct ones |
+| `--use_vision_descriptions` | off | Sub-step: inject per-image vision-generated descriptions (from Stage 3 desc CSV); produces `vis_desc_aug_cls_<model>.csv` and a correlation scatter plot (F1 vs rouge_ss / sem_sim) |
 | `--judge_model` | first model in `--models` | LLM-as-a-judge for augmented predictions |
 | `--resume` | off | Skip inference/judging if output CSVs already exist |
 | `--enforce_eager` | off | Disable CUDA graph capture |
