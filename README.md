@@ -13,9 +13,9 @@ Evaluation framework for vision-language models on agricultural image understand
 | vision-plot | `src/vision_assessment/plot.py` | Regenerate vision assessment charts without re-running inference |
 | 4 — Aug Vision | `src/desc_augmented_vision.py` | Test whether language descriptions of judged-correct classes improve vision classification |
 | aug-vision-plot | `src/desc_augmented_vision_plot.py` | Regenerate aug-vision charts from saved CSVs |
-| 4b — CoT Vision | `src/cot_vision.py` | Compare two CoT prompting strategies (self-description and structured CoT) against baseline and aug-vision upper bound |
-| 5 — Collate | `src/collate_results.py` | Merge all stage metrics into `results_table.csv` + `results_table.tex` |
-| Logit Lens | `experiments/logit_lens/logit_lens.py` | Layer-wise top-1 accuracy across LLM depth for all 4 conditions |
+| 4b — CoT Vision | `src/cot_vision.py` | Two CoT strategies (self-description, structured YAML) on all 26 datasets — same images as vision assessment, judged F1 |
+| 5 — Collate | `src/collate_results.py` | Merge all stage metrics into `results_table.csv` + analysis + 4-condition comparison charts |
+| Logit Lens | `experiments/logit_lens/logit_lens.py` | Layer-wise top-1 accuracy across LLM depth (normal + aug_vision) on 6 hard/easy datasets |
 
 All stages share a single metrics module (`src/common/metrics.py`): same `resolve_class`, `compute_classification_metrics`, `apply_judge`, and image sampling (`sample_class_images`, seed 42) across every experiment.
 
@@ -62,7 +62,7 @@ Add `--force` to regenerate all classes from scratch. Progress is checkpointed s
 
 ### Stage 1 — Linear Probe
 
-Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially. Writes `test_split.json` immediately after dataset loading — this file is used by Stages 3 and 4 to evaluate the exact same images.
+Evaluates frozen-embedding separability across one or more backbones. Models are loaded and unloaded sequentially. Writes `test_split.json` immediately after dataset loading — this file is used by Stages 3, 4, and 4b to evaluate the exact same images.
 
 **Default mode** runs FC combined only (GPU-accelerated, 10 train images per class). Add flags to enable additional experiments.
 
@@ -257,7 +257,7 @@ Tests whether prepending a language description of a class helps the model class
 - **Filtered** (default): only classes where the language assessment produced a judged-correct answer
 - **Unfiltered** (`--all_classes`): all classes that have a description response
 
-**Description source:** uses the model's own language-assessment description predictions (`lang_dir/desc_*.csv`) — these were generated from the prompt `"Can you describe visually the {cls} of a {crop}?"` so they naturally reference the class name. This is intentional: the experiment tests whether the model's own textual knowledge of the class bridges the vision gap. For a class-name-free comparison see Stage 4b (CoT Vision), which uses `synthesized_description` from `dataset/agml_descriptions.jsonl`.
+**Description source:** uses the model's own language-assessment description predictions (`lang_dir/desc_*.csv`) — these were generated from the prompt `"Can you describe visually the {cls} of a {crop}?"` so they naturally reference the class name. This is intentional: the experiment tests whether the model's own textual knowledge of the class bridges the vision gap. Stage 4b (CoT Vision) is a complementary experiment where the model reasons from the image alone with no external descriptions.
 
 All output files include `filtered` or `all` in their name so both runs coexist in the same `--output_dir`.
 
@@ -335,45 +335,40 @@ outputs/desc_augmented_vision/
 
 ### Stage 4b — CoT Vision Assessment
 
-Tests two chain-of-thought prompting strategies on the same agricultural image classification task, comparing them against the standard zero-shot prompt and the aug-vision upper bound.
+Tests two chain-of-thought prompting strategies on the same 26 datasets and exact same images as the vision assessment. Neither condition uses any external descriptions — the model reasons purely from the image. Results are directly comparable to Stage 3 because the setup is identical except for the prompt.
 
 | Condition | Description |
 |-----------|-------------|
 | `self_cot` | Model generates its own visual description first (turn 1), then classifies using that description as context (turn 2) |
 | `cot_yaml` | Structured multi-step CoT from `cot_prompts.yaml` — each step is a separate conversation turn (6 steps for disease/pest, 4 for weed), final turn classifies bridging from the analysis |
-| `aug_vision` | Synthesized reference description injected as context — same source as language assessment cls, no class-name leakage (upper bound) |
 
-Uses HuggingFace transformers for inference (not vLLM) because CoT requires sequential multi-turn generation per sample.
+Uses HuggingFace transformers (not vLLM) because CoT requires sequential multi-turn generation per sample. A judge pass runs after inference using the same loaded model, producing judged F1 consistent with Stages 3 and 4.
 
 Task-type routing is automatic: disease and pest_damage datasets use the `disease_pest` CoT steps; weed datasets use `weed_identification` steps.
-
-**Description source for aug_vision:** `synthesized_description` field from `dataset/agml_descriptions.jsonl` — generated from raw image captions without the class name in the prompt. Healthy classes use the canonical `"This leaf/plant is healthy."` override, consistent with language and vision assessment.
 
 ```bash
 uv run python src/cot_vision.py \
     --model      google/gemma-4-26B-A4B-it \
     --output_dir outputs/cot_vision/ \
-    --n_samples  4
+    --test_split outputs/linear_probe/test_split.json
 ```
-
-Aug vision runs automatically from `dataset/agml_descriptions.jsonl` (committed to repo). Pass `--no_aug` to skip it.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--model` | `google/gemma-4-26B-A4B-it` | HuggingFace model ID |
 | `--output_dir` | `outputs/cot_vision/` | Where to write CSVs, metrics, and chart |
-| `--n_samples` | 4 | Images per class (seed 42) |
-| `--datasets` | all 6 logit-lens datasets | Override which AgML datasets to evaluate |
-| `--descriptions_jsonl` | `dataset/agml_descriptions.jsonl` | Synthesized reference descriptions for aug_vision |
-| `--no_aug` | off | Skip aug_vision condition |
+| `--test_split` | `outputs/linear_probe/test_split.json` | Same test images as vision assessment — ensures direct comparability |
+| `--n_samples` | all | Max images per class (only used if test_split is absent) |
+| `--datasets` | all 26 datasets | Override which AgML datasets to evaluate |
+| `--use_4bit` | off | Load model in 4-bit (BitsAndBytes) to reduce GPU memory |
 
 **Output structure:**
 
 ```
 outputs/cot_vision/
-├── cot_cls_<model>.csv        ← one row per (image, condition)
-├── cot_vision_metrics.json    ← F1 per condition × dataset
-└── cot_comparison.png         ← bar chart comparing conditions
+├── cot_cls_<model>.csv        ← one row per (image, condition) with judged_correct
+├── cot_vision_metrics.json    ← direct + judged F1 per condition × dataset
+└── cot_comparison.png         ← bar chart: self_cot vs cot_yaml per dataset
 ```
 
 ---
@@ -391,21 +386,13 @@ Projects each transformer layer's hidden state through `final_norm → lm_head �
 
 The chart auto-sizes to show only conditions that have data (1×2 up to 4×2 grid).
 
-Aug vision runs automatically from `dataset/agml_descriptions.jsonl` (committed to repo). Pass `--no_aug` to skip it.
+Aug vision runs automatically from `dataset/agml_descriptions.jsonl` (no class-name leakage). Pass `--no_aug` to skip it. Avoid `--run_cot` — CoT conditions require multiple sequential generate() calls per image and can cause memory deadlocks on large models; use `src/cot_vision.py` for CoT evaluation instead.
 
 ```bash
-# Normal only (fast)
 uv run python experiments/logit_lens/logit_lens.py \
     --model      google/gemma-4-26B-A4B-it \
     --output_dir outputs/logit_lens/ \
     --n_samples  8
-
-# All 4 conditions
-uv run python experiments/logit_lens/logit_lens.py \
-    --model      google/gemma-4-26B-A4B-it \
-    --output_dir outputs/logit_lens/ \
-    --n_samples  4 \
-    --run_cot
 ```
 
 | Flag | Default | Description |
@@ -432,7 +419,7 @@ See `experiments/logit_lens/REFERENCES.md` for citations on the metric and Gemma
 
 ### Stage 5 — Collate results
 
-Merges outputs from all stages into `results_table.csv` and `results_table.tex`. When `--cot_dir` points to completed CoT Vision output, the analysis summary gains **Table 1b** — a 4-condition CoT comparison (zero-shot / self-CoT / structured CoT / aug-vision) with Δ vs baseline.
+Merges outputs from all stages into `results_table.csv` and `results_table.tex`. Also produces an analysis summary and three 4-condition comparison charts (baseline / self-CoT / structured CoT / desc-aug) using the same images across all conditions.
 
 ```bash
 python main.py collate \
@@ -443,6 +430,16 @@ python main.py collate \
   --cot_dir          outputs/cot_vision/ \
   --output_dir       outputs/
 ```
+
+**4-condition charts** (produced when all of `--vision_dir`, `--aug_dir`, and `--cot_dir` are present):
+
+| Chart | Shows |
+|-------|-------|
+| `four_condition_per_dataset.png` | F1 per dataset across all 26 datasets |
+| `four_condition_per_task.png` | Mean F1 grouped by task type (disease / pest_damage / weed_identification) |
+| `four_condition_overall.png` | Single grouped bar — mean F1 across all datasets per condition |
+
+Baseline and CoT use judged F1; Desc-Aug uses direct F1 (no per-dataset judged breakdown available).
 
 ---
 

@@ -9,26 +9,22 @@ Evaluates two CoT prompting strategies on agricultural image classification:
   cot_yaml   — structured multi-step CoT from cot_prompts.yaml; each step is its
                own conversation turn, then final classification bridges from analysis.
 
-Compared against:
-  baseline   — standard vision assessment prompt (loaded from existing CSV or re-run)
-  aug_vision — pre-written language-assessment description injected (upper bound)
+Neither condition uses any external descriptions — the model reasons from the image.
+Aug-vision (pre-written descriptions injected) is evaluated separately via
+desc_augmented_vision.py.
 
 Uses HuggingFace transformers for inference (not vLLM) because CoT requires
 sequential multi-turn generation per sample that cannot be trivially batched.
 
 Outputs per model:
-  cot_cls_{model}.csv   — one row per (image, condition)
-  cot_vision_metrics.json — F1 / accuracy per condition × dataset
+  cot_cls_{model}.csv      — one row per (image, condition)
+  cot_vision_metrics.json  — F1 / accuracy per condition × dataset
 
 Usage:
     uv run python src/cot_vision.py \\
-        --model  google/gemma-4-26B-A4B-it \\
+        --model      google/gemma-4-26B-A4B-it \\
         --output_dir outputs/cot_vision/ \\
-        --n_samples  4 \\
-        --use_4bit
-
-    # With aug_vision upper bound:
-    uv run python src/cot_vision.py ... --lang_dir outputs/language_assessment/
+        --test_split outputs/linear_probe/test_split.json
 """
 
 from __future__ import annotations
@@ -49,18 +45,37 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.common.dataset_config import datasets_by_name
-from src.common.metrics import compute_classification_metrics, contains_match, resolve_class
+from src.common.metrics import compute_classification_metrics, contains_match, resolve_class, sample_class_images
 
-# ── Dataset routing (same 6 as logit lens) ────────────────────────────────────
+# ── Dataset routing (26 datasets from test_split.json) ────────────────────────
 # Maps agml dataset name → (task_type, crop)
 DATASET_TASK_TYPES: dict[str, tuple[str, str | None]] = {
-    "guava_disease_pakistan":                      ("disease",              "guava"),
-    "sugarcane_damage_usa":                        ("pest_damage",          "sugarcane"),
-    "plant_seedlings_aarhus":                      ("weed_identification",  None),
-    "bean_disease_uganda":                         ("disease",              "bean"),
-    "blackgram_plant_leaf_disease_classification": ("disease",              "blackgram"),
-    "corn_maize_leaf_disease":                     ("disease",              "corn"),
+    "arabica_coffee_leaf_disease_classification": ("disease",            "arabica_coffee"),
+    "banana_leaf_disease_classification":         ("disease",            "banana"),
+    "bean_disease_uganda":                        ("disease",            "bean"),
+    "betel_leaf_disease_classification":          ("disease",            "betel_leaf"),
+    "blackgram_plant_leaf_disease_classification":("disease",            "blackgram"),
+    "chilli_leaf_classification":                 ("disease",            "chilli"),
+    "coconut_tree_disease_classification":        ("disease",            "coconut"),
+    "corn_maize_leaf_disease":                    ("disease",            "corn"),
+    "crop_weeds_greece":                          ("weed_identification", None),
+    "cucumber_disease_classification":            ("disease",            "cucumber"),
+    "guava_disease_pakistan":                     ("disease",            "guava"),
+    "java_plum_leaf_disease_classification":      ("disease",            "java_plum"),
+    "onion_leaf_classification":                  ("disease",            "onion"),
+    "orange_leaf_disease_classification":         ("disease",            "orange"),
+    "paddy_disease_classification":               ("disease",            "paddy"),
+    "papaya_leaf_disease_classification":         ("disease",            "papaya"),
+    "plant_seedlings_aarhus":                     ("weed_identification", None),
+    "rangeland_weeds_australia":                  ("weed_identification", None),
+    "rice_leaf_disease_classification":           ("disease",            "rice"),
+    "soybean_insect_classification":              ("pest_damage",        "soybean"),
+    "soybean_weed_uav_brazil":                    ("weed_identification", None),
+    "sugarcane_damage_usa":                       ("pest_damage",        "sugarcane"),
+    "sunflower_disease_classification":           ("disease",            "sunflower"),
+    "tea_leaf_disease_classification":            ("disease",            "tea"),
+    "tomato_leaf_disease":                        ("disease",            "tomato"),
+    "vine_virus_photo_dataset":                   ("disease",            "grape"),
 }
 
 DEFAULT_DATASETS = list(DATASET_TASK_TYPES.keys())
@@ -224,32 +239,62 @@ def infer_cot_yaml(
 
 
 @torch.no_grad()
-def infer_aug_vision(
-    image: PILImage.Image, class_names: list[str], description: str,
-    task_type: str, crop: str | None,
-    model, processor, device: str,
-) -> str:
-    """Aug vision: inject pre-written description as context."""
-    if task_type == "weed_identification":
-        inner = _PROMPTS["visual_classification_weed"]
-    else:
-        inner = _PROMPTS["visual_classification_disease"].format(crop=crop or "plant")
-    inner += f" Choose exactly one from: {', '.join(class_names)}."
-    question = _PROMPTS["desc_augmented_classification"].format(
-        description=description, question=inner,
+def _judge_one(gt: str, pred: str, model, processor, device: str) -> tuple[int, str]:
+    system = _PROMPTS.get("judge_system_vision", "")
+    template = _PROMPTS["judge_classification_template"]
+    prompt = template.format(gt=str(gt)[:400], pred=str(pred)[:400])
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    inputs = processor.apply_chat_template(
+        messages, add_generation_prompt=True,
+        tokenize=True, return_dict=True, return_tensors="pt",
+        enable_thinking=False,
     )
-    messages = _sys_msg() + [{"role": "user", "content": [
-        {"type": "image", "image": image},
-        {"type": "text",  "text": question},
-    ]}]
-    inputs = _tokenize(messages, processor, device)
-    return _generate(model, processor, inputs, max_new_tokens=64)
+    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+    out = model.generate(**inputs, max_new_tokens=128, do_sample=False)
+    new_tokens = out[0, inputs["input_ids"].shape[1]:]
+    raw = processor.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    raw = _THINK_RE.sub("", raw).strip()
+    is_match = _parse_judge_response(raw)
+    return is_match, raw[:300]
+
+
+_JUDGE_JSON_RE = re.compile(r'\{.*?\}', re.DOTALL)
+
+
+def _parse_judge_response(raw: str) -> int:
+    m = _JUDGE_JSON_RE.search(raw)
+    if not m:
+        return 0
+    try:
+        d = json.loads(m.group())
+        return int(bool(d.get("is_match", False)))
+    except Exception:
+        return 0
+
+
+def judge_rows(rows: list[dict], model, processor, device: str) -> list[dict]:
+    """Run LLM-as-judge on all rows using the already-loaded model."""
+    print(f"\n[cot_vision] Judging {len(rows)} predictions...")
+    judged = []
+    for row in tqdm(rows, desc="  judging", ncols=70):
+        is_match, reasoning = _judge_one(
+            row["ground_truth"], row["prediction"], model, processor, device
+        )
+        judged.append({**row, "judged_correct": is_match, "judge_reasoning": reasoning})
+    return judged
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
 
-def load_dataset_classes(ds_name: str, n_samples: int) -> dict[str, list[Path]]:
-    """Return {class_name: [image_path, ...]}."""
+def load_dataset_classes(
+    ds_name: str,
+    n_samples: int | None,
+    test_split: dict | None = None,
+) -> dict[str, list[Path]]:
+    """Return {class_name: [image_path, ...]} restricted to test_split when provided."""
     import agml
     loader = agml.data.AgMLDataLoader(ds_name)
 
@@ -274,59 +319,34 @@ def load_dataset_classes(ds_name: str, n_samples: int) -> dict[str, list[Path]]:
             lbl = str(label) if not isinstance(label, str) else label
         by_class.setdefault(lbl, []).append(Path(str(path)))
 
-    rng = np.random.default_rng(42)
-    return {
-        cls: [paths[i] for i in rng.choice(len(paths),
-              min(n_samples, len(paths)), replace=False)]
-        for cls, paths in by_class.items()
-    }
-
-
-def load_synthesized_descriptions(jsonl_path: Path) -> dict[tuple[str, str], str]:
-    """Load {(dataset, class_label): synthesized_description} from agml_descriptions.jsonl.
-
-    Uses the same synthesized_description that language assessment classification uses,
-    ensuring aug_vision sees no class name leakage.
-    """
-    import json
-    desc_map: dict[tuple[str, str], str] = {}
-    with open(jsonl_path) as f:
-        for line in f:
-            rec  = json.loads(line)
-            meta = rec.get("metadata", {})
-            ds   = meta.get("agml_dataset", "").strip()
-            cls  = meta.get("class_label",  "").strip()
-            desc = meta.get("synthesized_description", "").strip()
-            if ds and cls and desc:
-                desc_map[(ds, cls)] = desc
-    print(f"  Loaded {len(desc_map)} synthesized descriptions from {jsonl_path.name}")
-    return desc_map
-
-
-def _lookup_desc(desc_map: dict, ds_name: str, cls: str) -> str | None:
-    for key_cls in (cls, cls.replace("_", " "), cls.replace(" ", "_")):
-        v = desc_map.get((ds_name, key_cls))
-        if v:
-            return v
-    return None
+    result: dict[str, list[Path]] = {}
+    split_cls = (test_split or {}).get(ds_name, {})
+    for cls, paths in by_class.items():
+        if split_cls and cls in split_cls:
+            # Restrict to the exact images used in the vision assessment test split
+            allowed = set(split_cls[cls])
+            paths = [p for p in paths if p.name in allowed]
+        names = sample_class_images([p.name for p in paths], n_samples)
+        name_set = set(names)
+        result[cls] = [p for p in paths if p.name in name_set]
+    return result
 
 
 # ── Per-dataset run ────────────────────────────────────────────────────────────
 
-CONDITIONS = ("self_cot", "cot_yaml", "aug_vision")
+CONDITIONS = ("self_cot", "cot_yaml")
 
 
 def run_dataset(
     ds_name: str,
     model, processor,
     device: str,
-    n_samples: int,
-    desc_map: dict,
-    run_aug: bool,
+    n_samples: int | None,
+    test_split: dict | None = None,
 ) -> list[dict]:
     print(f"\n  {ds_name}")
     try:
-        by_class = load_dataset_classes(ds_name, n_samples)
+        by_class = load_dataset_classes(ds_name, n_samples, test_split)
     except Exception as e:
         print(f"  [skip] {e}")
         return []
@@ -337,7 +357,6 @@ def run_dataset(
 
     rows: list[dict] = []
     for cls, paths in by_class.items():
-        description = _lookup_desc(desc_map, ds_name, cls) if run_aug else None
         pbar = tqdm(paths, desc=f"    {cls[:30]}", leave=False)
         for path in pbar:
             try:
@@ -347,25 +366,15 @@ def run_dataset(
 
             img_name = path.name
 
-            # Self-CoT
             pred_self = infer_self_cot(image, class_names, task_type, crop,
                                        model, processor, device)
-            # CoT YAML
             pred_cot  = infer_cot_yaml(image, class_names, task_type, crop,
                                        model, processor, device)
-            # Aug vision (only if description available)
-            pred_aug  = None
-            if run_aug and description:
-                pred_aug = infer_aug_vision(image, class_names, description,
-                                            task_type, crop, model, processor, device)
 
             for condition, pred in [
-                ("self_cot",   pred_self),
-                ("cot_yaml",   pred_cot),
-                ("aug_vision", pred_aug),
+                ("self_cot", pred_self),
+                ("cot_yaml", pred_cot),
             ]:
-                if pred is None:
-                    continue
                 resolved = resolve_class(pred, class_names)
                 correct  = (resolved or "").lower() == cls.lower()
                 c_match  = contains_match(resolved or pred, cls)
@@ -389,7 +398,7 @@ def run_dataset(
 # ── Metrics ────────────────────────────────────────────────────────────────────
 
 def compute_metrics(rows: list[dict]) -> dict:
-    """Compute F1 per (condition, dataset) and overall per condition."""
+    """Compute direct and judged F1 per (condition, dataset) and overall per condition."""
     from collections import defaultdict
     by_cond_ds: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in rows:
@@ -400,13 +409,27 @@ def compute_metrics(rows: list[dict]) -> dict:
         refs  = [r["ground_truth"]   for r in ds_rows]
         preds = [r["resolved_class"] if r["correct"] else "__" for r in ds_rows]
         m     = compute_classification_metrics(refs, preds)
+
+        judged = [r for r in ds_rows if r.get("judged_correct", "") != ""]
+        if judged:
+            j_refs  = [r["ground_truth"] for r in judged]
+            j_preds = [r["resolved_class"] if int(r["judged_correct"]) else "__"
+                       for r in judged]
+            jm = compute_classification_metrics(j_refs, j_preds)
+            m["judge_f1_macro"] = jm["f1_macro"]
+            m["judge_accuracy"] = jm["accuracy"]
+
         per_condition.setdefault(cond, {})[ds] = m
 
     overall: dict[str, dict] = {}
     for cond, per_ds in per_condition.items():
-        f1s = [v["f1_macro"] for v in per_ds.values()]
-        overall[cond] = {"f1_macro": float(np.mean(f1s)) if f1s else 0.0,
-                         "per_dataset": per_ds}
+        f1s  = [v["f1_macro"]       for v in per_ds.values()]
+        jf1s = [v["judge_f1_macro"] for v in per_ds.values() if "judge_f1_macro" in v]
+        overall[cond] = {
+            "f1_macro":       float(np.mean(f1s))  if f1s  else 0.0,
+            "judge_f1_macro": float(np.mean(jf1s)) if jf1s else None,
+            "per_dataset":    per_ds,
+        }
 
     return overall
 
@@ -416,7 +439,7 @@ def compute_metrics(rows: list[dict]) -> dict:
 _CLS_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
     "condition", "prediction", "resolved_class", "ground_truth",
-    "correct", "contains_match",
+    "correct", "contains_match", "judged_correct", "judge_reasoning",
 ]
 
 
@@ -434,7 +457,7 @@ def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
     """Bar chart: F1 per condition per dataset."""
     import matplotlib.pyplot as plt
 
-    conditions = [c for c in ("self_cot", "cot_yaml", "aug_vision") if c in metrics]
+    conditions = [c for c in ("self_cot", "cot_yaml") if c in metrics]
     if not conditions:
         return
 
@@ -446,8 +469,8 @@ def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
     width = 0.8 / len(conditions)
     fig, ax = plt.subplots(figsize=(max(10, len(all_ds) * 1.4), 5))
 
-    colors = {"self_cot": "#1f77b4", "cot_yaml": "#ff7f0e", "aug_vision": "#2ca02c"}
-    labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML", "aug_vision": "Aug Vision (UB)"}
+    colors = {"self_cot": "#1f77b4", "cot_yaml": "#ff7f0e"}
+    labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
 
     for i, cond in enumerate(conditions):
         f1s = [metrics[cond]["per_dataset"].get(ds, {}).get("f1_macro", 0.0) for ds in all_ds]
@@ -482,29 +505,28 @@ def main() -> None:
     )
     parser.add_argument("--model",       default="google/gemma-4-26B-A4B-it")
     parser.add_argument("--output_dir",  default="outputs/cot_vision/")
-    parser.add_argument("--n_samples",   type=int, default=4,
-                        help="Images per class")
+    parser.add_argument("--n_samples",   type=int, default=None,
+                        help="Max images per class (default: all — uses test_split when available)")
     parser.add_argument("--datasets",    nargs="+", default=DEFAULT_DATASETS,
                         help="AgML dataset names to evaluate")
-    parser.add_argument("--use_4bit",          action="store_true")
-    parser.add_argument("--descriptions_jsonl", default="dataset/agml_descriptions.jsonl",
-                        help="Path to agml_descriptions.jsonl — same synthesized descriptions "
-                             "used by language assessment cls. Enables aug_vision condition.")
-    parser.add_argument("--no_aug",            action="store_true",
-                        help="Skip aug_vision condition even if descriptions_jsonl exists")
+    parser.add_argument("--test_split",  default="outputs/linear_probe/test_split.json",
+                        help="Path to test_split.json from linear probe — restricts each class "
+                             "to the same images used in vision assessment")
+    parser.add_argument("--use_4bit", action="store_true")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_model = args.model.replace("/", "_")
 
-    desc_map = {}
-    jsonl_path = Path(args.descriptions_jsonl)
-    if not args.no_aug and jsonl_path.exists():
-        desc_map = load_synthesized_descriptions(jsonl_path)
-    elif not args.no_aug:
-        print(f"  [warn] {jsonl_path} not found — skipping aug_vision condition")
-    run_aug = bool(desc_map)
+    test_split: dict | None = None
+    split_path = Path(args.test_split)
+    if split_path.exists():
+        import json as _json
+        test_split = _json.loads(split_path.read_text())
+        print(f"[cot_vision] test_split loaded from {split_path}")
+    else:
+        print(f"[cot_vision] test_split not found at {split_path} — using all available images")
 
     model, processor = load_model(args.model, args.use_4bit)
     _p     = next(model.parameters())
@@ -518,12 +540,13 @@ def main() -> None:
 
     print("\n=== Running CoT conditions ===")
     for ds in args.datasets:
-        rows = run_dataset(ds, model, processor, device,
-                           args.n_samples, desc_map, run_aug)
+        rows = run_dataset(ds, model, processor, device, args.n_samples, test_split)
         all_rows.extend(rows)
 
     elapsed = time.perf_counter() - t0
     print(f"\nInference done in {elapsed:.1f}s  ({len(all_rows)} rows)")
+
+    all_rows = judge_rows(all_rows, model, processor, device)
 
     # Save CSV
     cls_csv = output_dir / f"cot_cls_{safe_model}.csv"
@@ -539,9 +562,11 @@ def main() -> None:
 
     # Print summary
     print("\n── CoT Vision Assessment Summary ─────────────────")
-    cond_labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML", "aug_vision": "Aug Vision"}
+    cond_labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
     for cond, m in metrics.items():
-        print(f"  {cond_labels.get(cond, cond):<20}  overall F1={m['f1_macro']:.3f}")
+        jf1 = m.get('judge_f1_macro')
+        jf1_str = f"  judge_F1={jf1:.3f}" if jf1 is not None else ""
+        print(f"  {cond_labels.get(cond, cond):<20}  F1={m['f1_macro']:.3f}{jf1_str}")
         for ds, dm in sorted(m["per_dataset"].items()):
             short = ds.replace("_classification", "").replace("_", " ")
             print(f"    {short:<45}  F1={dm['f1_macro']:.3f}")

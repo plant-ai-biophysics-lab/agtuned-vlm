@@ -228,11 +228,10 @@ def build_analysis(
     A["chain"]["aug_raw"]   = am.get("augmented_overall", {}).get("f1_macro")
     A["chain"]["aug_judge"] = am.get("judge", {}).get("judge_f1_macro")
 
-    # CoT conditions (from cot_vision.py output)
+    # CoT conditions (from cot_vision.py output — self_cot and cot_yaml only)
     cm = (cot_data or {}).get("conditions", {})
-    A["chain"]["cot_self"]  = cm.get("self_cot",   {}).get("f1_macro")
-    A["chain"]["cot_yaml"]  = cm.get("cot_yaml",   {}).get("f1_macro")
-    A["chain"]["cot_aug"]   = cm.get("aug_vision",  {}).get("f1_macro")
+    A["chain"]["cot_self"] = cm.get("self_cot", {}).get("f1_macro")
+    A["chain"]["cot_yaml"] = cm.get("cot_yaml", {}).get("f1_macro")
 
     # ── Table 2: per-task dissociation (LP perception vs VLM output) ────────────
     lp_task     = (lp_data or {}).get("by_task_fc_combined", {})
@@ -269,6 +268,208 @@ def build_analysis(
     return A
 
 
+def plot_four_condition_comparison(
+    vis_judge_ds: dict,
+    cot_conditions: dict,
+    aug_per_ds: dict,
+    output_path: Path,
+) -> None:
+    """Bar chart: 4-condition judged F1 per dataset.
+
+    vis_judge_ds  — {ds: {"judge_f1_macro": float}}  from vision assessment
+    cot_conditions — {"self_cot": {"per_dataset": {ds: {"judge_f1_macro": float}}}, ...}
+    aug_per_ds    — {ds: {"f1_macro": float}}  from desc_augmented (non-judged)
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    all_ds = sorted(set(vis_judge_ds) | set(aug_per_ds) |
+                    set(cot_conditions.get("self_cot", {}).get("per_dataset", {})) |
+                    set(cot_conditions.get("cot_yaml",  {}).get("per_dataset", {})))
+    if not all_ds:
+        return
+
+    conditions = [
+        ("baseline",  "Vision Zero-shot",       "#1f77b4"),
+        ("self_cot",  "Self-CoT",               "#ff7f0e"),
+        ("cot_yaml",  "Structured CoT",         "#2ca02c"),
+        ("desc_aug",  "Desc-Aug (non-judged)",  "#9467bd"),
+    ]
+
+    def _get(ds, cond_key):
+        if cond_key == "baseline":
+            return (vis_judge_ds.get(ds) or {}).get("judge_f1_macro")
+        if cond_key == "desc_aug":
+            return (aug_per_ds.get(ds) or {}).get("f1_macro")
+        return (cot_conditions.get(cond_key, {})
+                .get("per_dataset", {}).get(ds, {}).get("judge_f1_macro"))
+
+    x = np.arange(len(all_ds))
+    width = 0.8 / len(conditions)
+    fig, ax = plt.subplots(figsize=(max(12, len(all_ds) * 1.8), 5))
+
+    for i, (key, label, color) in enumerate(conditions):
+        f1s = [_get(ds, key) or 0.0 for ds in all_ds]
+        offset = (i - len(conditions) / 2 + 0.5) * width
+        bars = ax.bar(x + offset, f1s, width, label=label, color=color, alpha=0.85)
+        for bar, v in zip(bars, f1s):
+            if v > 0.02:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=6, rotation=90)
+
+    clean_ds = [d.replace("_classification", "").replace("_", " ") for d in all_ds]
+    ax.set_xticks(x)
+    ax.set_xticklabels(clean_ds, rotation=40, ha="right", fontsize=8)
+    ax.set_ylabel("F1 Macro (judged where available)")
+    ax.set_ylim(0, 1.15)
+    ax.set_title("4-Condition Comparison — Same Images, Different Prompts\n"
+                 "(Baseline / CoT = judged F1; Desc-Aug = direct F1)")
+    ax.legend(loc="upper right")
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
+# Dataset → task_type mapping (matches cot_vision.py DATASET_TASK_TYPES)
+_DS_TASK: dict[str, str] = {
+    "arabica_coffee_leaf_disease_classification": "disease",
+    "banana_leaf_disease_classification":         "disease",
+    "bean_disease_uganda":                        "disease",
+    "betel_leaf_disease_classification":          "disease",
+    "blackgram_plant_leaf_disease_classification":"disease",
+    "chilli_leaf_classification":                 "disease",
+    "coconut_tree_disease_classification":        "disease",
+    "corn_maize_leaf_disease":                    "disease",
+    "crop_weeds_greece":                          "weed_identification",
+    "cucumber_disease_classification":            "disease",
+    "guava_disease_pakistan":                     "disease",
+    "java_plum_leaf_disease_classification":      "disease",
+    "onion_leaf_classification":                  "disease",
+    "orange_leaf_disease_classification":         "disease",
+    "paddy_disease_classification":               "disease",
+    "papaya_leaf_disease_classification":         "disease",
+    "plant_seedlings_aarhus":                     "weed_identification",
+    "rangeland_weeds_australia":                  "weed_identification",
+    "rice_leaf_disease_classification":           "disease",
+    "soybean_insect_classification":              "pest_damage",
+    "soybean_weed_uav_brazil":                    "weed_identification",
+    "sugarcane_damage_usa":                       "pest_damage",
+    "sunflower_disease_classification":           "disease",
+    "tea_leaf_disease_classification":            "disease",
+    "tomato_leaf_disease":                        "disease",
+    "vine_virus_photo_dataset":                   "disease",
+}
+
+_FOUR_CONDITIONS = [
+    ("baseline", "Vision Zero-shot",      "#1f77b4"),
+    ("self_cot", "Self-CoT",              "#ff7f0e"),
+    ("cot_yaml", "Structured CoT",        "#2ca02c"),
+    ("desc_aug", "Desc-Aug (non-judged)", "#9467bd"),
+]
+
+
+def _four_cond_get(ds: str, cond_key: str, vis_judge_ds: dict,
+                   cot_conditions: dict, aug_per_ds: dict) -> float | None:
+    if cond_key == "baseline":
+        return (vis_judge_ds.get(ds) or {}).get("judge_f1_macro")
+    if cond_key == "desc_aug":
+        return (aug_per_ds.get(ds) or {}).get("f1_macro")
+    return (cot_conditions.get(cond_key, {})
+            .get("per_dataset", {}).get(ds, {}).get("judge_f1_macro"))
+
+
+def _four_cond_bars(ax, labels: list[str], data: dict[str, list[float]]) -> None:
+    x = np.arange(len(labels))
+    width = 0.8 / len(_FOUR_CONDITIONS)
+    for i, (key, label, color) in enumerate(_FOUR_CONDITIONS):
+        vals = data[key]
+        offset = (i - len(_FOUR_CONDITIONS) / 2 + 0.5) * width
+        bars = ax.bar(x + offset, vals, width, label=label, color=color, alpha=0.85)
+        for bar, v in zip(bars, vals):
+            if v > 0.02:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    ax.set_ylabel("F1 Macro (judged where available)")
+    ax.set_ylim(0, 1.1)
+    ax.legend(loc="upper right", fontsize=8)
+    ax.yaxis.grid(True, alpha=0.3)
+
+
+def plot_four_condition_overall(
+    vis_judge_ds: dict, cot_conditions: dict, aug_per_ds: dict, output_path: Path,
+) -> None:
+    """Single grouped bar: mean F1 per condition across all datasets."""
+    all_ds = sorted(set(vis_judge_ds) | set(aug_per_ds) |
+                    set(cot_conditions.get("self_cot", {}).get("per_dataset", {})) |
+                    set(cot_conditions.get("cot_yaml",  {}).get("per_dataset", {})))
+    if not all_ds:
+        return
+
+    data: dict[str, list[float]] = {}
+    for key, _, _ in _FOUR_CONDITIONS:
+        vals = [v for ds in all_ds
+                if (v := _four_cond_get(ds, key, vis_judge_ds, cot_conditions, aug_per_ds)) is not None]
+        data[key] = [float(np.mean(vals)) if vals else 0.0]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    _four_cond_bars(ax, ["Overall"], data)
+    ax.set_title("4-Condition Comparison — Overall Mean F1\n"
+                 "(Baseline / CoT = judged; Desc-Aug = direct)")
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
+def plot_four_condition_per_task(
+    vis_judge_ds: dict, cot_conditions: dict, aug_per_ds: dict,
+    vis_judge_task: dict, output_path: Path,
+) -> None:
+    """Grouped bar per task type (disease / pest_damage / weed_identification)."""
+    from collections import defaultdict
+
+    # Group datasets by task
+    by_task: dict[str, list[str]] = defaultdict(list)
+    all_ds = sorted(set(vis_judge_ds) | set(aug_per_ds) |
+                    set(cot_conditions.get("self_cot", {}).get("per_dataset", {})) |
+                    set(cot_conditions.get("cot_yaml",  {}).get("per_dataset", {})))
+    for ds in all_ds:
+        task = _DS_TASK.get(ds, "disease")
+        by_task[task].append(ds)
+
+    tasks = sorted(by_task)
+    if not tasks:
+        return
+
+    data: dict[str, list[float]] = {k: [] for k, _, _ in _FOUR_CONDITIONS}
+    for task in tasks:
+        ds_list = by_task[task]
+        for key, _, _ in _FOUR_CONDITIONS:
+            if key == "baseline" and task in vis_judge_task:
+                # Vision assessment has per-task judged F1 directly
+                val = vis_judge_task[task].get("judge_f1_macro")
+            else:
+                vals = [v for ds in ds_list
+                        if (v := _four_cond_get(ds, key, vis_judge_ds,
+                                                cot_conditions, aug_per_ds)) is not None]
+                val = float(np.mean(vals)) if vals else 0.0
+            data[key].append(val if val is not None else 0.0)
+
+    task_labels = [t.replace("_", " ").title() for t in tasks]
+    fig, ax = plt.subplots(figsize=(max(7, len(tasks) * 2.5), 5))
+    _four_cond_bars(ax, task_labels, data)
+    ax.set_title("4-Condition Comparison — Per Task Type\n"
+                 "(Baseline / CoT = judged; Desc-Aug = direct)")
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
 def render_analysis(A: dict) -> str:
     short = A["model"]
     L: list[str] = []
@@ -291,10 +492,10 @@ def render_analysis(A: dict) -> str:
                  + (f"Recovers to {c['aug_judge']:.3f} with description.\n" if c["aug_judge"] else "\n"))
 
     # CoT comparison (only if any CoT data available)
-    has_cot = any(c.get(k) is not None for k in ("cot_self", "cot_yaml", "cot_aug"))
+    has_cot = any(c.get(k) is not None for k in ("cot_self", "cot_yaml"))
     if has_cot:
         vis_zs_f1 = c.get("vis_zs")
-        L.append("\n## Table 1b — CoT Prompting Comparison (4 conditions)\n")
+        L.append("\n## Table 1b — CoT Prompting Comparison\n")
         L.append("| Condition | F1 Macro | Δ vs Zero-shot |")
         L.append("|---|---|---|")
 
@@ -306,7 +507,6 @@ def render_analysis(A: dict) -> str:
         L.append(f"| Vision zero-shot (baseline) | {_f1(vis_zs_f1).strip()} | -- |")
         L.append(f"| Self-description CoT | {_f1(c.get('cot_self')).strip()} | {_delta(c.get('cot_self'))} |")
         L.append(f"| Structured CoT (cot_prompts.yaml) | {_f1(c.get('cot_yaml')).strip()} | {_delta(c.get('cot_yaml'))} |")
-        L.append(f"| Aug Vision (pre-written desc, upper bound) | {_f1(c.get('cot_aug') or c.get('aug_judge')).strip()} | {_delta(c.get('cot_aug') or c.get('aug_judge'))} |")
 
     L.append("## Table 2 — Per-Task Dissociation (perception vs output)\n")
     L.append("| Task | Linear probe F1 | VLM zero-shot judged F1 | Gap |")
@@ -701,6 +901,28 @@ def main() -> None:
         analysis_path = output_dir / "analysis_summary.md"
         analysis_path.write_text("\n\n".join(analysis_sections), encoding="utf-8")
         print(f"  Saved: {analysis_path}")
+
+        # 4-condition comparison charts (per-dataset, per-task, overall)
+        for model_id in sorted(vis_data.get("models", {})):
+            vm = (vis_data or {}).get("models", {}).get(model_id, {})
+            am = (aug_data or {}).get("models", {}).get(model_id, {})
+            vis_jds      = vm.get("judge_by_dataset", {})
+            vis_jtask    = vm.get("judge_by_task",    {})
+            aug_pd       = am.get("augmented_per_dataset", {})
+            cot_conds    = (cot_data or {}).get("conditions", {})
+            plot_four_condition_comparison(
+                vis_jds, cot_conds, aug_pd,
+                output_dir / "four_condition_per_dataset.png",
+            )
+            plot_four_condition_per_task(
+                vis_jds, cot_conds, aug_pd, vis_jtask,
+                output_dir / "four_condition_per_task.png",
+            )
+            plot_four_condition_overall(
+                vis_jds, cot_conds, aug_pd,
+                output_dir / "four_condition_overall.png",
+            )
+            break  # one model only
 
     print()
     print(f"  {'Type':<14} {'Model':<40} {'Params':>9} {'LP F1':>6} {'L F1':>6} {'L RSS':>6} {'V F1':>6} {'V RSS':>6}")

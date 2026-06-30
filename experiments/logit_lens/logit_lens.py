@@ -8,27 +8,19 @@ and LM head (no training, no vLLM — HuggingFace forward pass only).
 Compares 3 hard datasets (near-zero VLM judged F1) against 3 easy datasets
 to show where in the LLM the visual concept fails to become the answer token.
 
-Four conditions compared:
-  1. normal    — standard vision assessment prompt
-  2. self_cot  — model generates its own description first (2-turn history)
-  3. cot_yaml  — structured multi-step CoT from cot_prompts.yaml
-  4. aug_vision — pre-written description injected (upper bound, requires --lang_dir)
+Two default conditions (normal + aug_vision):
+  1. normal     — standard vision assessment prompt
+  2. aug_vision — synthesized description injected (from agml_descriptions.jsonl, no class-name leakage)
+
+Optional CoT conditions (slow — requires --run_cot):
+  3. self_cot  — model generates its own description first (2-turn history)
+  4. cot_yaml  — structured multi-step CoT from cot_prompts.yaml
 
 Usage:
     python experiments/logit_lens/logit_lens.py \\
         --model  google/gemma-4-26B-A4B-it \\
         --output_dir outputs/logit_lens/ \\
-        --n_samples 8 \\
-        --use_4bit
-
-    # With all 4 conditions:
-    python experiments/logit_lens/logit_lens.py \\
-        --model  google/gemma-4-26B-A4B-it \\
-        --output_dir outputs/logit_lens/ \\
-        --n_samples 4 \\
-        --use_4bit \\
-        --run_cot \\
-        --lang_dir outputs/language_assessment/
+        --n_samples 8
 """
 
 from __future__ import annotations
@@ -570,7 +562,7 @@ def run_dataset(
                 acc_cot_yaml = [l["top1_correct"] for l in res_cot_yaml["per_layer"]]
                 cot_yaml_curves.append(acc_cot_yaml)
 
-            # 4. Aug vision (requires lang_dir)
+            # 4. Aug vision (synthesized description from agml_descriptions.jsonl)
             if description:
                 inputs_aug = build_aug_inputs(
                     image, class_names, description, task_type, crop, processor, device,
