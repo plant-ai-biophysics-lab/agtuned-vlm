@@ -788,6 +788,9 @@ def main(args: argparse.Namespace) -> None:
     print(f"Loading JSONL descriptions from {descriptions_jsonl}...")
     jsonl_desc_map = load_jsonl_desc_map(descriptions_jsonl)
     print(f"  Loaded {len(jsonl_desc_map)} class descriptions from JSONL")
+    if test_split:
+        jsonl_desc_map = {k: v for k, v in jsonl_desc_map.items() if k[0] in test_split}
+        print(f"  Filtered to {len(jsonl_desc_map)} entries matching test_split datasets")
 
     n_models = len(args.models)
     baseline_per_model:  dict[str, dict[str, dict]] = {}
@@ -856,6 +859,10 @@ def main(args: argparse.Namespace) -> None:
             )
             write_csv(aug_csv_path, aug_rows)
             write_csv(baseline_csv_path, baseline_rows)
+
+        if test_split:
+            aug_rows      = [r for r in aug_rows      if r.get("agml_dataset") in test_split]
+            baseline_rows = [r for r in baseline_rows if r.get("agml_dataset") in test_split]
 
         aug_per_ds = compute_cls_metrics_per_dataset(aug_rows)
         aug_overall = compute_classification_metrics(

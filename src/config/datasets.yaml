@@ -410,7 +410,7 @@ datasets:
     n_images: 55448
     classes: []
     location: [worldwide, worldwide]
-    skip: false
+    skip: true
     skip_description: true
     notes: "39 classes across 14 crops; description ground truth is too heterogeneous for meaningful Q3/Q4 evaluation"
 
@@ -420,6 +420,6 @@ datasets:
     n_images: 2598
     classes: []
     location: [worldwide, worldwide]
-    skip: false
+    skip: true
     skip_description: true
     notes: "28 classes across multiple crops; description ground truth is too heterogeneous for meaningful Q3/Q4 evaluation"
