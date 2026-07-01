@@ -254,16 +254,16 @@ def collect_work_items(
 ) -> list[dict]:
     """Collect (dataset, class, image_path) tuples upfront. PIL images are loaded lazily."""
     items: list[dict] = []
-    for ds in datasets:
-        print(f"  Loading {ds}...")
+    for ds in tqdm(datasets, desc="Datasets", unit="ds", dynamic_ncols=True):
         try:
             by_class = load_dataset_classes(ds, n_samples, test_split)
         except Exception as e:
-            print(f"    [skip] {e}")
+            tqdm.write(f"  [skip] {ds}: {e}")
             continue
         task_type, crop = DATASET_TASK_TYPES.get(ds, ("disease", "plant"))
         class_names = sorted(by_class.keys())
         for cls, paths in by_class.items():
+            tqdm.write(f"  {ds} / {cls}  ({len(paths)} images)")
             for path in paths:
                 items.append({
                     "ds":          ds,
@@ -309,19 +309,20 @@ def run_self_cot(items: list[dict], llm, tokenizer) -> list[dict]:
     # Stage 1 — describe all images
     print(f"\n[self_cot] Stage 1/2: describing ({len(items)} images)...")
     stage1_prompts = []
-    for item in items:
+    for item in tqdm(items, desc="  Building prompts (stage 1)", unit="img", dynamic_ncols=True):
         desc_q = _desc_question(item["task_type"], item["crop"])
         msgs = _sys_msg() + [{"role": "user", "content": [
             {"type": "image"}, {"type": "text", "text": desc_q},
         ]}]
         stage1_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+    print(f"  Generating...")
     descriptions = [_clean(o.outputs[0].text) for o in llm.generate(stage1_prompts, _COT_PARAMS)]
     del stage1_prompts
 
     # Stage 2 — classify all images using their stage-1 descriptions
-    print(f"[self_cot] Stage 2/2: classifying...")
+    print(f"[self_cot] Stage 2/2: classifying ({len(items)} images)...")
     stage2_prompts = []
-    for item, desc in zip(items, descriptions):
+    for item, desc in tqdm(zip(items, descriptions), desc="  Building prompts (stage 2)", unit="img", total=len(items), dynamic_ncols=True):
         desc_q = _desc_question(item["task_type"], item["crop"])
         cls_q  = _cls_question(item["class_names"], item["task_type"], item["crop"])
         msgs = _sys_msg() + [
@@ -330,6 +331,7 @@ def run_self_cot(items: list[dict], llm, tokenizer) -> list[dict]:
             {"role": "user",      "content": cls_q},
         ]
         stage2_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+    print(f"  Generating...")
     predictions = [_clean(o.outputs[0].text) for o in llm.generate(stage2_prompts, _CLS_PARAMS)]
     del stage2_prompts
 
@@ -365,9 +367,10 @@ def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
         ]
 
         for step_idx in range(len(steps)):
-            print(f"  Step {step_idx + 1}/{len(steps)}...")
+            print(f"  Step {step_idx + 1}/{len(steps)}: building prompts...")
             prompts = [_build_prompt(h, tokenizer, _load_image(item))
-                       for h, item in zip(histories, group_items)]
+                       for h, item in tqdm(zip(histories, group_items), desc=f"    Prompts step {step_idx+1}", unit="img", total=len(group_items), dynamic_ncols=True)]
+            print(f"    Generating...")
             responses = [_clean(o.outputs[0].text) for o in llm.generate(prompts, _COT_PARAMS)]
             del prompts
             for i, resp in enumerate(responses):
@@ -375,12 +378,13 @@ def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
                 if step_idx < len(steps) - 1:
                     histories[i].append({"role": "user", "content": steps[step_idx + 1]})
 
-        print(f"  Classification turn...")
+        print(f"  Classification turn: building prompts...")
         for i, item in enumerate(group_items):
             cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
             histories[i].append({"role": "user", "content": cls_q + " " + cot_sfx})
         cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
-                       for h, item in zip(histories, group_items)]
+                       for h, item in tqdm(zip(histories, group_items), desc="    Prompts cls", unit="img", total=len(group_items), dynamic_ncols=True)]
+        print(f"    Generating...")
         predictions = [_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, _CLS_PARAMS)]
         del cls_prompts
 
