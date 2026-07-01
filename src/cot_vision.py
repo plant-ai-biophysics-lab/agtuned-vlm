@@ -514,14 +514,58 @@ def load_aug_per_dataset(aug_dir: Path, model_id: str) -> dict[str, float]:
     return {}
 
 
+def _f1_from_csv_subset(
+    csv_path: Path,
+    allowed: dict[str, set[str]],  # {ds: {image_name, ...}}
+    judged: bool = True,
+) -> dict[str, float]:
+    """Recompute per-dataset macro F1 from a raw cls CSV, restricted to allowed image names."""
+    import csv as _csv
+    from collections import defaultdict
+    from sklearn.metrics import f1_score
+
+    if not csv_path.exists():
+        return {}
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(_csv.DictReader(f))
+
+    by_ds: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        ds = r.get("agml_dataset", "")
+        if ds in allowed and r.get("image_name", "") in allowed[ds]:
+            by_ds[ds].append(r)
+
+    result: dict[str, float] = {}
+    for ds, ds_rows in by_ds.items():
+        if judged:
+            ds_rows = [r for r in ds_rows if r.get("judged_correct", "") != ""]
+            if not ds_rows:
+                continue
+            refs  = [r["class_label"] for r in ds_rows]
+            preds = [r["class_label"] if int(r["judged_correct"]) else "" for r in ds_rows]
+        else:
+            refs  = [r.get("ground_truth", r.get("class_label", "")) for r in ds_rows]
+            preds = [r.get("resolved_class", r.get("prediction", "")) for r in ds_rows]
+        result[ds] = f1_score(refs, preds, average="macro", zero_division=0)
+    return result
+
+
 def plot_hard_four_condition(
     active_datasets: list[str],
     vis_per_ds: dict[str, float],
     aug_per_ds: dict[str, float],
     cot_metrics: dict,
     output_dir: Path,
+    vis_dir: Path | None = None,
+    aug_dir: Path | None = None,
+    model_id: str = "",
+    n_samples: int | None = None,
 ) -> None:
-    """Grouped bar chart comparing all 4 conditions on the hard-subset datasets only."""
+    """Grouped bar chart comparing all 4 conditions on the hard-subset datasets only.
+
+    When n_samples is set, baseline and desc_aug scores are recomputed on the exact
+    same images used by cot_vision (fair subsample comparison).
+    """
     import matplotlib.pyplot as plt
     from collections import defaultdict
 
@@ -530,6 +574,32 @@ def plot_hard_four_condition(
     if not datasets:
         print("  [warn] No common datasets for hard 4-condition chart")
         return
+
+    # When subsampling, recompute baseline + desc_aug on the cot-evaluated images
+    _vis_per_ds  = vis_per_ds
+    _aug_per_ds  = aug_per_ds
+    if n_samples is not None:
+        cot_csv = output_dir / f"cot_cls_{model_id.replace('/', '_')}.csv"
+        if cot_csv.exists():
+            import csv as _csv
+            allowed: dict[str, set[str]] = defaultdict(set)
+            with open(cot_csv, newline="", encoding="utf-8") as f:
+                for r in _csv.DictReader(f):
+                    allowed[r["agml_dataset"]].add(r["image_name"])
+            if vis_dir and model_id:
+                safe = model_id.replace("/", "_")
+                recomputed = _f1_from_csv_subset(
+                    vis_dir / f"cls_{safe}.csv", allowed, judged=True)
+                if recomputed:
+                    _vis_per_ds = recomputed
+                    print(f"  [subsample] Recomputed baseline F1 on {sum(len(v) for v in allowed.values())} cot images")
+            if aug_dir and model_id:
+                safe = model_id.replace("/", "_")
+                aug_csv = aug_dir / f"aug_cls_all_{safe}.csv"
+                recomputed = _f1_from_csv_subset(aug_csv, allowed, judged=True)
+                if recomputed:
+                    _aug_per_ds = recomputed
+                    print(f"  [subsample] Recomputed desc_aug F1 on subsample")
 
     CONDITIONS = [
         ("baseline",  "Vision Baseline",  "#1f77b4"),
@@ -540,9 +610,9 @@ def plot_hard_four_condition(
 
     def _get(ds: str, key: str) -> float:
         if key == "baseline":
-            return vis_per_ds.get(ds, 0.0)
+            return _vis_per_ds.get(ds, 0.0)
         if key == "desc_aug":
-            return aug_per_ds.get(ds, 0.0)
+            return _aug_per_ds.get(ds, 0.0)
         per_ds = cot_metrics.get(key, {}).get("per_dataset", {})
         dm = per_ds.get(ds, {})
         return dm.get("judge_f1_macro") or dm.get("f1_macro", 0.0)
@@ -885,7 +955,11 @@ def main() -> None:
         aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)
         if not aug_per_ds:
             print("  [warn] No desc-aug metrics found — desc_aug bar will be zero")
-        plot_hard_four_condition(active_datasets, vis_per_ds, aug_per_ds, metrics, output_dir)
+        plot_hard_four_condition(
+            active_datasets, vis_per_ds, aug_per_ds, metrics, output_dir,
+            vis_dir=Path(args.vis_dir), aug_dir=Path(args.aug_dir),
+            model_id=args.model, n_samples=args.n_samples,
+        )
 
     print("\nDone.")
 
