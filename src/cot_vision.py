@@ -573,7 +573,7 @@ def plot_hard_four_condition(
     ax.legend(fontsize=8)
     ax.yaxis.grid(True, alpha=0.3)
     plt.tight_layout()
-    path = output_dir / "hard_four_condition.png"
+    path = output_dir / "hard_four_condition_subsample.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
