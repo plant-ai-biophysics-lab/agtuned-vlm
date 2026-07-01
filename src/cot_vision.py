@@ -682,7 +682,7 @@ def plot_difficulty_correlation(
     if not conditions or not vis_per_ds:
         return
 
-    colors = {"self_cot": "#1f77b4", "cot_yaml": "#ff7f0e"}
+    colors = {"self_cot": "#1f77b4", "cot_yaml": "#2ca02c"}
     labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
 
     fig, ax = plt.subplots(figsize=(7, 6))
@@ -729,7 +729,7 @@ def plot_difficulty_bins(
     n = len(all_ds)
     bins = {"Hard": all_ds[:n//3], "Medium": all_ds[n//3:2*n//3], "Easy": all_ds[2*n//3:]}
 
-    colors = {"vision": "#e67e22", "self_cot": "#1f77b4", "cot_yaml": "#ff7f0e"}
+    colors = {"vision": "#e67e22", "self_cot": "#1f77b4", "cot_yaml": "#2ca02c"}
     labels = {"vision": "Vision Baseline", "self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
     all_conds = ["vision"] + conditions
     x = np.arange(len(bins))
@@ -780,7 +780,7 @@ def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
     width = 0.8 / len(conditions)
     fig, ax = plt.subplots(figsize=(max(10, len(all_ds) * 1.4), 5))
 
-    colors = {"self_cot": "#1f77b4", "cot_yaml": "#ff7f0e"}
+    colors = {"self_cot": "#1f77b4", "cot_yaml": "#2ca02c"}
     labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
 
     for i, cond in enumerate(conditions):
