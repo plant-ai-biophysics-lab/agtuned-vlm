@@ -301,56 +301,94 @@ def _make_row(item: dict, condition: str, pred: str) -> dict:
 
 
 def run_self_cot(items: list[dict], llm, tokenizer) -> list[dict]:
-    """Sequential self_cot: describe then classify, one image at a time."""
-    rows: list[dict] = []
-    for i, item in enumerate(items):
-        print(f"  [self_cot] {i+1}/{len(items)}  {item['ds']} / {item['class_label']}")
-        image = _load_image(item)
+    """
+    Staged batching: all images processed together per stage.
+    Stage 1 (describe) runs across all images, then Stage 2 (classify) runs across all.
+    PIL images are loaded lazily per stage — not held in memory between stages.
+    """
+    # Stage 1 — describe all images
+    print(f"\n[self_cot] Stage 1/2: describing ({len(items)} images)...")
+    stage1_prompts = []
+    for item in items:
         desc_q = _desc_question(item["task_type"], item["crop"])
-        cls_q  = _cls_question(item["class_names"], item["task_type"], item["crop"])
-
-        # Stage 1 — describe
-        msgs1 = _sys_msg() + [{"role": "user", "content": [
+        msgs = _sys_msg() + [{"role": "user", "content": [
             {"type": "image"}, {"type": "text", "text": desc_q},
         ]}]
-        desc = _clean(llm.generate([_build_prompt(msgs1, tokenizer, image)], _COT_PARAMS)[0].outputs[0].text)
+        stage1_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+    descriptions = [_clean(o.outputs[0].text) for o in llm.generate(stage1_prompts, _COT_PARAMS)]
+    del stage1_prompts
 
-        # Stage 2 — classify with description in history
-        msgs2 = _sys_msg() + [
+    # Stage 2 — classify all images using their stage-1 descriptions
+    print(f"[self_cot] Stage 2/2: classifying...")
+    stage2_prompts = []
+    for item, desc in zip(items, descriptions):
+        desc_q = _desc_question(item["task_type"], item["crop"])
+        cls_q  = _cls_question(item["class_names"], item["task_type"], item["crop"])
+        msgs = _sys_msg() + [
             {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
             {"role": "assistant", "content": desc},
             {"role": "user",      "content": cls_q},
         ]
-        pred = _clean(llm.generate([_build_prompt(msgs2, tokenizer, image)], _CLS_PARAMS)[0].outputs[0].text)
-        rows.append(_make_row(item, "self_cot", pred))
-    return rows
+        stage2_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+    predictions = [_clean(o.outputs[0].text) for o in llm.generate(stage2_prompts, _CLS_PARAMS)]
+    del stage2_prompts
+
+    return [_make_row(item, "self_cot", pred) for item, pred in zip(items, predictions)]
 
 
 def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
-    """Sequential cot_yaml: run all CoT steps then classify, one image at a time."""
+    """
+    Staged batching split by CoT path (disease_pest vs weed_identification).
+    Within each group, all images run each CoT step together as a batch.
+    PIL images are loaded lazily per stage.
+    """
     cot_sfx = _COT_PROMPTS["cot_classification_suffix"].strip()
-    rows: list[dict] = []
-    for i, item in enumerate(items):
-        print(f"  [cot_yaml] {i+1}/{len(items)}  {item['ds']} / {item['class_label']}")
-        image   = _load_image(item)
+
+    groups: dict[str, list[tuple[int, dict]]] = {}
+    for idx, item in enumerate(items):
         cot_key = _COT_PROMPTS["task_type_to_cot"].get(item["task_type"], "disease_pest")
-        steps   = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
+        groups.setdefault(cot_key, []).append((idx, item))
 
-        history = _sys_msg() + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": steps[0]},
-        ]}]
+    all_rows: list[tuple[int, dict]] = []
 
-        for step_idx, _ in enumerate(steps):
-            resp = _clean(llm.generate([_build_prompt(history, tokenizer, image)], _COT_PARAMS)[0].outputs[0].text)
-            history.append({"role": "assistant", "content": resp})
-            if step_idx < len(steps) - 1:
-                history.append({"role": "user", "content": steps[step_idx + 1]})
+    for cot_key, indexed_items in groups.items():
+        steps       = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
+        orig_idxs   = [idx for idx, _ in indexed_items]
+        group_items = [item for _, item in indexed_items]
+        print(f"\n[cot_yaml] {cot_key}: {len(group_items)} images × {len(steps)} steps")
 
-        cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
-        history.append({"role": "user", "content": cls_q + " " + cot_sfx})
-        pred = _clean(llm.generate([_build_prompt(history, tokenizer, image)], _CLS_PARAMS)[0].outputs[0].text)
-        rows.append(_make_row(item, "cot_yaml", pred))
-    return rows
+        histories: list[list[dict]] = [
+            _sys_msg() + [{"role": "user", "content": [
+                {"type": "image"}, {"type": "text", "text": steps[0]},
+            ]}]
+            for item in group_items
+        ]
+
+        for step_idx in range(len(steps)):
+            print(f"  Step {step_idx + 1}/{len(steps)}...")
+            prompts = [_build_prompt(h, tokenizer, _load_image(item))
+                       for h, item in zip(histories, group_items)]
+            responses = [_clean(o.outputs[0].text) for o in llm.generate(prompts, _COT_PARAMS)]
+            del prompts
+            for i, resp in enumerate(responses):
+                histories[i].append({"role": "assistant", "content": resp})
+                if step_idx < len(steps) - 1:
+                    histories[i].append({"role": "user", "content": steps[step_idx + 1]})
+
+        print(f"  Classification turn...")
+        for i, item in enumerate(group_items):
+            cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
+            histories[i].append({"role": "user", "content": cls_q + " " + cot_sfx})
+        cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
+                       for h, item in zip(histories, group_items)]
+        predictions = [_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, _CLS_PARAMS)]
+        del cls_prompts
+
+        for orig_idx, item, pred in zip(orig_idxs, group_items, predictions):
+            all_rows.append((orig_idx, _make_row(item, "cot_yaml", pred)))
+
+    all_rows.sort(key=lambda x: x[0])
+    return [row for _, row in all_rows]
 
 
 
