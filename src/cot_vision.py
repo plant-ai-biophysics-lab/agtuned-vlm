@@ -300,110 +300,56 @@ def _make_row(item: dict, condition: str, pred: str) -> dict:
     }
 
 
-def _run_self_cot_chunk(chunk: list[dict], llm, tokenizer) -> list[dict]:
-    """Run self_cot (2 stages) on a single chunk of items."""
-    # Stage 1 — describe
-    stage1_prompts = []
-    for item in chunk:
-        desc_q = _desc_question(item["task_type"], item["crop"])
-        msgs = _sys_msg() + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": desc_q},
-        ]}]
-        stage1_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
-    outputs1 = llm.generate(stage1_prompts, _COT_PARAMS)
-    descriptions = [_clean(o.outputs[0].text) for o in outputs1]
-
-    # Stage 2 — classify with description in history
-    stage2_prompts = []
-    for item, desc in zip(chunk, descriptions):
+def run_self_cot(items: list[dict], llm, tokenizer) -> list[dict]:
+    """Sequential self_cot: describe then classify, one image at a time."""
+    rows: list[dict] = []
+    for i, item in enumerate(items):
+        print(f"  [self_cot] {i+1}/{len(items)}  {item['ds']} / {item['class_label']}")
+        image = _load_image(item)
         desc_q = _desc_question(item["task_type"], item["crop"])
         cls_q  = _cls_question(item["class_names"], item["task_type"], item["crop"])
-        msgs = _sys_msg() + [
+
+        # Stage 1 — describe
+        msgs1 = _sys_msg() + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": desc_q},
+        ]}]
+        desc = _clean(llm.generate([_build_prompt(msgs1, tokenizer, image)], _COT_PARAMS)[0].outputs[0].text)
+
+        # Stage 2 — classify with description in history
+        msgs2 = _sys_msg() + [
             {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
             {"role": "assistant", "content": desc},
             {"role": "user",      "content": cls_q},
         ]
-        stage2_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
-    outputs2 = llm.generate(stage2_prompts, _CLS_PARAMS)
-    predictions = [_clean(o.outputs[0].text) for o in outputs2]
-
-    return [_make_row(item, "self_cot", pred)
-            for item, pred in zip(chunk, predictions)]
-
-
-def run_self_cot_batched(items: list[dict], llm, tokenizer, batch_size: int = 16) -> list[dict]:
-    """Run self_cot in mini-batches to bound memory usage."""
-    rows: list[dict] = []
-    n_chunks = (len(items) + batch_size - 1) // batch_size
-    for i in range(0, len(items), batch_size):
-        chunk = items[i: i + batch_size]
-        chunk_idx = i // batch_size + 1
-        print(f"\n[self_cot] chunk {chunk_idx}/{n_chunks} ({len(chunk)} images)...")
-        rows.extend(_run_self_cot_chunk(chunk, llm, tokenizer))
+        pred = _clean(llm.generate([_build_prompt(msgs2, tokenizer, image)], _CLS_PARAMS)[0].outputs[0].text)
+        rows.append(_make_row(item, "self_cot", pred))
     return rows
 
 
-def _run_cot_yaml_chunk(chunk: list[dict], llm, tokenizer) -> list[dict]:
-    """Run cot_yaml (N CoT stages + classify) on a single chunk of items."""
+def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
+    """Sequential cot_yaml: run all CoT steps then classify, one image at a time."""
     cot_sfx = _COT_PROMPTS["cot_classification_suffix"].strip()
-
-    # Split chunk by CoT path
-    groups: dict[str, list[tuple[int, dict]]] = {}
-    for idx, item in enumerate(chunk):
-        cot_key = _COT_PROMPTS["task_type_to_cot"].get(item["task_type"], "disease_pest")
-        groups.setdefault(cot_key, []).append((idx, item))
-
-    all_rows: list[tuple[int, dict]] = []
-
-    for cot_key, indexed_items in groups.items():
-        steps = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
-        n_steps = len(steps)
-        orig_idxs   = [idx for idx, _ in indexed_items]
-        group_items = [item for _, item in indexed_items]
-
-        # Initialize per-image conversation history
-        histories: list[list[dict]] = []
-        for item in group_items:
-            histories.append(_sys_msg() + [{"role": "user", "content": [
-                {"type": "image"}, {"type": "text", "text": steps[0]},
-            ]}])
-
-        # Run each CoT step as a batch
-        for step_idx in range(n_steps):
-            prompts = [_build_prompt(h, tokenizer, _load_image(item))
-                       for h, item in zip(histories, group_items)]
-            outputs = llm.generate(prompts, _COT_PARAMS)
-            responses = [_clean(o.outputs[0].text) for o in outputs]
-            for i, resp in enumerate(responses):
-                histories[i].append({"role": "assistant", "content": resp})
-                if step_idx < n_steps - 1:
-                    histories[i].append({"role": "user", "content": steps[step_idx + 1]})
-
-        # Final classification turn
-        for i, item in enumerate(group_items):
-            cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
-            histories[i].append({"role": "user", "content": cls_q + " " + cot_sfx})
-        cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
-                       for h, item in zip(histories, group_items)]
-        cls_outputs = llm.generate(cls_prompts, _CLS_PARAMS)
-        predictions = [_clean(o.outputs[0].text) for o in cls_outputs]
-
-        for orig_idx, item, pred in zip(orig_idxs, group_items, predictions):
-            all_rows.append((orig_idx, _make_row(item, "cot_yaml", pred)))
-
-    all_rows.sort(key=lambda x: x[0])
-    return [row for _, row in all_rows]
-
-
-def run_cot_yaml_batched(items: list[dict], llm, tokenizer, batch_size: int = 16) -> list[dict]:
-    """Run cot_yaml in mini-batches to bound memory usage."""
     rows: list[dict] = []
-    n_chunks = (len(items) + batch_size - 1) // batch_size
-    for i in range(0, len(items), batch_size):
-        chunk = items[i: i + batch_size]
-        chunk_idx = i // batch_size + 1
-        print(f"\n[cot_yaml] chunk {chunk_idx}/{n_chunks} ({len(chunk)} images)...")
-        rows.extend(_run_cot_yaml_chunk(chunk, llm, tokenizer))
+    for i, item in enumerate(items):
+        print(f"  [cot_yaml] {i+1}/{len(items)}  {item['ds']} / {item['class_label']}")
+        image   = _load_image(item)
+        cot_key = _COT_PROMPTS["task_type_to_cot"].get(item["task_type"], "disease_pest")
+        steps   = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
+
+        history = _sys_msg() + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": steps[0]},
+        ]}]
+
+        for step_idx, _ in enumerate(steps):
+            resp = _clean(llm.generate([_build_prompt(history, tokenizer, image)], _COT_PARAMS)[0].outputs[0].text)
+            history.append({"role": "assistant", "content": resp})
+            if step_idx < len(steps) - 1:
+                history.append({"role": "user", "content": steps[step_idx + 1]})
+
+        cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
+        history.append({"role": "user", "content": cls_q + " " + cot_sfx})
+        pred = _clean(llm.generate([_build_prompt(history, tokenizer, image)], _CLS_PARAMS)[0].outputs[0].text)
+        rows.append(_make_row(item, "cot_yaml", pred))
     return rows
 
 
@@ -774,8 +720,6 @@ def main() -> None:
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument("--max_num_seqs",  type=int, default=32)
-    parser.add_argument("--batch_size",    type=int, default=16,
-                        help="Images per mini-batch per stage (lower = less RAM)")
     parser.add_argument("--vis_dir",    default="outputs/vision_assessment/",
                         help="Vision assessment output dir — used to load baseline judged F1 for difficulty plots")
     parser.add_argument("--aug_dir",    default="outputs/desc_augmented_vision/",
@@ -839,11 +783,11 @@ def main() -> None:
 
         # Phase 1: self_cot (2 stages)
         print("\n=== Phase 1: self_cot ===")
-        self_cot_rows = run_self_cot_batched(items, llm, tokenizer, args.batch_size)
+        self_cot_rows = run_self_cot(items, llm, tokenizer)
 
         # Phase 2: cot_yaml (N stages per CoT path)
         print("\n=== Phase 2: cot_yaml ===")
-        cot_yaml_rows = run_cot_yaml_batched(items, llm, tokenizer, args.batch_size)
+        cot_yaml_rows = run_cot_yaml(items, llm, tokenizer)
 
         all_rows = self_cot_rows + cot_yaml_rows
 
