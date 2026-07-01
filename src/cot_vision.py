@@ -252,7 +252,7 @@ def collect_work_items(
     n_samples: int | None,
     test_split: dict | None,
 ) -> list[dict]:
-    """Load all (dataset, class, image) tuples upfront for batched inference."""
+    """Collect (dataset, class, image_path) tuples upfront. PIL images are loaded lazily."""
     items: list[dict] = []
     for ds in datasets:
         print(f"  Loading {ds}...")
@@ -265,10 +265,6 @@ def collect_work_items(
         class_names = sorted(by_class.keys())
         for cls, paths in by_class.items():
             for path in paths:
-                try:
-                    image = PILImage.open(path).convert("RGB")
-                except Exception:
-                    continue
                 items.append({
                     "ds":          ds,
                     "class_label": cls,
@@ -276,10 +272,14 @@ def collect_work_items(
                     "crop":        crop,
                     "class_names": class_names,
                     "image_name":  path.name,
-                    "image":       image,
+                    "image_path":  path,
                 })
     print(f"  Collected {len(items)} work items across {len(datasets)} datasets")
     return items
+
+
+def _load_image(item: dict) -> PILImage.Image:
+    return PILImage.open(item["image_path"]).convert("RGB")
 
 
 def _make_row(item: dict, condition: str, pred: str) -> dict:
@@ -313,7 +313,7 @@ def run_self_cot_batched(items: list[dict], llm, tokenizer) -> list[dict]:
         msgs = _sys_msg() + [{"role": "user", "content": [
             {"type": "image"}, {"type": "text", "text": desc_q},
         ]}]
-        stage1_prompts.append(_build_prompt(msgs, tokenizer, item["image"]))
+        stage1_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
     outputs1 = llm.generate(stage1_prompts, _COT_PARAMS)
     descriptions = [_clean(o.outputs[0].text) for o in outputs1]
 
@@ -328,7 +328,7 @@ def run_self_cot_batched(items: list[dict], llm, tokenizer) -> list[dict]:
             {"role": "assistant", "content": desc},
             {"role": "user",      "content": cls_q},
         ]
-        stage2_prompts.append(_build_prompt(msgs, tokenizer, item["image"]))
+        stage2_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
     outputs2 = llm.generate(stage2_prompts, _CLS_PARAMS)
     predictions = [_clean(o.outputs[0].text) for o in outputs2]
 
@@ -369,7 +369,7 @@ def run_cot_yaml_batched(items: list[dict], llm, tokenizer) -> list[dict]:
         # Run each CoT step as a batch
         for step_idx in range(n_steps):
             print(f"  Step {step_idx + 1}/{n_steps}...")
-            prompts = [_build_prompt(h, tokenizer, item["image"])
+            prompts = [_build_prompt(h, tokenizer, _load_image(item))
                        for h, item in zip(histories, group_items)]
             outputs = llm.generate(prompts, _COT_PARAMS)
             responses = [_clean(o.outputs[0].text) for o in outputs]
@@ -385,7 +385,7 @@ def run_cot_yaml_batched(items: list[dict], llm, tokenizer) -> list[dict]:
             cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
             histories[i].append({"role": "user", "content": cls_q + " " + cot_sfx})
 
-        cls_prompts = [_build_prompt(h, tokenizer, item["image"])
+        cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
                        for h, item in zip(histories, group_items)]
         cls_outputs = llm.generate(cls_prompts, _CLS_PARAMS)
         predictions = [_clean(o.outputs[0].text) for o in cls_outputs]
