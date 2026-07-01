@@ -1,70 +1,20 @@
-# Data generation prompts
+# Visual description questions — asked before classification (no class names in prompt)
 visual_description_disease: "Can you describe visually the disease, pest, damage type, or other stress, if any, that is exhibited in this image of {crop}?"
-text_description_disease: "Can you describe visually the {cls} of a {crop}?"
-visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
-text_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this description of a {crop}?\n\nDescription: {description}"
 visual_description_weed: "Can you describe visually the plant or weed exhibited in this image?"
-text_description_weed: "Can you describe visually the {species}?"
+
+# Visual classification questions — OEQ, no class list
+visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 visual_classification_weed: "What plant or weed is exhibited in this image?"
-text_classification_weed: "What plant or weed is exhibited in this description?\n\nDescription: {description}"
-no_label_suffix: " Focus only on visual characteristics you can observe (color, texture, shape, pattern, size, location on plant). Do not name or repeat the disease, pest, species, or class label in your response."
-synthesis: "You are given {n} visual descriptions of {context}, each written from a separate photograph. Synthesize these into one clear, representative 2-3 sentence description that captures the consensus visual features (color, texture, shape, pattern, size, location on plant). Ignore noise or one-off observations. Do not name or repeat the disease, pest, species, or class label — describe only what can be visually observed.\n\nDescriptions:\n{numbered_list}"
-compression: "Compress the following visual description into exactly one concise sentence. Preserve the most distinctive visual features. Do not name or repeat any disease, pest, species, or class label.\n\nDescription: {description}"
 
-# Reference DB verification prompt
-verify_rewrite: |
-  You are a plant pathology expert writing visual descriptions for a machine learning image dataset.
+# Description-augmented classification — prepends a reference description to the image question
+desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: {question}\n\nAnswer in one to two sentences. Clearly state the class name in your response."
 
-  Your task: rewrite the description below as a single sentence that is grounded in the reference text.
-
-  Rules:
-  - Adapt terminology and phrasing directly from the reference text where possible — prefer its language over the original description
-  - If the reference text does not describe the same condition as the current description, ignore the reference and return the current description unchanged
-  - Focus ONLY on observable visual symptoms: colors, textures, shapes, patterns, lesions, spots, discoloration, size, location on plant
-  - Do NOT mention the disease name, pest name, pathogen name, or any direct class identifier
-  - Do NOT mention the crop, plant species, or genus name
-  - Be specific enough to distinguish this condition from other diseases visually
-  - Output only the single sentence — no preamble, no commentary about the reference text, no explanation
-
-  Reference text:
-  {reference_text}
-
-  Current description:
-  {compressed_description}
-
-  Improved visual description:
-
-# Label sanitization prompt (second pass in verify.py)
-verify_sanitize: |
-  You are editing a visual description for a machine learning image dataset.
-
-  The description below may contain the disease name, pest name, crop name, pathogen name,
-  or other direct hints to the class label. Remove all such references while keeping the
-  visual content intact.
-
-  Rules:
-  - Remove or replace any word that directly names or strongly implies the condition or crop
-  - Keep all purely visual language: colors, textures, shapes, patterns, lesions, spots, sizes, locations
-  - The result must still be a complete, natural sentence
-  - Output only the rewritten sentence, nothing else
-
-  Label to remove: {class_label}
-  Crop to remove: {crop}
-  Description: {description}
-
-  Sanitized description:
-
-# Description-augmented vision classification prompt
-# {description} = language assessment description response for this class
-# {question}    = standard visual classification question
-desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: {question}\n\nAnswer with only the class name:"
-
-# Assessment prompts
+# Assessment wrappers — applied to all classification and description questions
+classification_suffix: " Answer in one to two sentences. Clearly state the class name in your response."
 assessment_descriptive: "Answer the following question in exactly one to two concise sentences describing only the visual appearance. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the sentences.\n\nQuestion: {question}\n\nAnswer:"
-assessment_classification: "Answer the following question in one to two concise sentences with exactly one answer. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the class name.\n\nQuestion: {question}\n\nAnswer:"
-classification_suffix: " Respond with only the class name, nothing else."
+assessment_classification: "Answer the following question in one to two sentences. Clearly state the class name in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
 
-# System prompt applied to all evaluated models during assessment
+# System prompt applied to all models during assessment
 assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."
 
 # LLM judge prompts

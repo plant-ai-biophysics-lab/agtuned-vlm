@@ -55,8 +55,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.common.metrics import (
     apply_judge, compute_classification_metrics, contains_match,
-    resolve_class, sample_class_images,
+    judged_summary, resolve_class, sample_class_images,
 )
+from src.common.dataset_config import datasets_by_name, clean_class_list
 
 try:
     from vllm import LLM, SamplingParams
@@ -125,12 +126,11 @@ def _sys_msg() -> list[dict]:
     return [{"role": "system", "content": s}] if s else []
 
 
-def _cls_question(class_names: list[str], task_type: str, crop: str | None) -> str:
+def _cls_question(task_type: str, crop: str | None) -> str:
     if task_type == "weed_identification":
         inner = _PROMPTS["visual_classification_weed"]
     else:
         inner = _PROMPTS["visual_classification_disease"].format(crop=crop or "plant")
-    inner += f" Choose exactly one from: {', '.join(class_names)}."
     return _PROMPTS["assessment_classification"].format(question=inner)
 
 
@@ -236,9 +236,12 @@ def load_dataset_classes(
     split_cls = (test_split or {}).get(ds_name, {})
     for cls, paths in by_class.items():
         if split_cls and cls in split_cls:
-            # Restrict to the exact images used in the vision assessment test split
-            allowed = set(split_cls[cls])
-            paths = [p for p in paths if p.name in allowed]
+            # Use test_split JSON order (same as vision_assessment) for deterministic sampling
+            allowed_ordered = split_cls[cls]
+            path_by_name = {p.name: p for p in paths}
+            paths = [path_by_name[n] for n in allowed_ordered if n in path_by_name]
+        else:
+            paths = sorted(paths, key=lambda p: p.name)
         names = sample_class_images([p.name for p in paths], n_samples)
         name_set = set(names)
         result[cls] = [p for p in paths if p.name in name_set]
@@ -253,6 +256,7 @@ def collect_work_items(
     test_split: dict | None,
 ) -> list[dict]:
     """Collect (dataset, class, image_path) tuples upfront. PIL images are loaded lazily."""
+    ds_cfg_map = datasets_by_name(Path(__file__).parent / "config" / "datasets.yaml")
     items: list[dict] = []
     for ds in tqdm(datasets, desc="Datasets", unit="ds", dynamic_ncols=True):
         try:
@@ -261,18 +265,20 @@ def collect_work_items(
             tqdm.write(f"  [skip] {ds}: {e}")
             continue
         task_type, crop = DATASET_TASK_TYPES.get(ds, ("disease", "plant"))
-        class_names = sorted(by_class.keys())
+        # Use DatasetConfig.clean_classes for resolve_class — same source as vision_assessment
+        cfg = ds_cfg_map.get(ds)
+        clean_classes = cfg.clean_classes if cfg else sorted(by_class.keys())
         for cls, paths in by_class.items():
             tqdm.write(f"  {ds} / {cls}  ({len(paths)} images)")
             for path in paths:
                 items.append({
-                    "ds":          ds,
-                    "class_label": cls,
-                    "task_type":   task_type,
-                    "crop":        crop,
-                    "class_names": class_names,
-                    "image_name":  path.name,
-                    "image_path":  path,
+                    "ds":           ds,
+                    "class_label":  cls,
+                    "task_type":    task_type,
+                    "crop":         crop,
+                    "clean_classes": clean_classes,
+                    "image_name":   path.name,
+                    "image_path":   path,
                 })
     print(f"  Collected {len(items)} work items across {len(datasets)} datasets")
     return items
@@ -283,7 +289,7 @@ def _load_image(item: dict) -> PILImage.Image:
 
 
 def _make_row(item: dict, condition: str, pred: str) -> dict:
-    resolved = resolve_class(pred, item["class_names"])
+    resolved = resolve_class(pred, item["clean_classes"])
     correct  = (resolved or "").lower() == item["class_label"].lower()
     return {
         "agml_dataset":   item["ds"],
@@ -324,7 +330,7 @@ def run_self_cot(items: list[dict], llm, tokenizer) -> list[dict]:
     stage2_prompts = []
     for item, desc in tqdm(zip(items, descriptions), desc="  Building prompts (stage 2)", unit="img", total=len(items), dynamic_ncols=True):
         desc_q = _desc_question(item["task_type"], item["crop"])
-        cls_q  = _cls_question(item["class_names"], item["task_type"], item["crop"])
+        cls_q  = _cls_question(item["task_type"], item["crop"])
         msgs = _sys_msg() + [
             {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
             {"role": "assistant", "content": desc},
@@ -344,7 +350,7 @@ def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
     Within each group, all images run each CoT step together as a batch.
     PIL images are loaded lazily per stage.
     """
-    cot_sfx = _COT_PROMPTS["cot_classification_suffix"].strip()
+
 
     groups: dict[str, list[tuple[int, dict]]] = {}
     for idx, item in enumerate(items):
@@ -380,8 +386,8 @@ def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
 
         print(f"  Classification turn: building prompts...")
         for i, item in enumerate(group_items):
-            cls_q = _cls_question(item["class_names"], item["task_type"], item["crop"])
-            histories[i].append({"role": "user", "content": cls_q + " " + cot_sfx})
+            cls_q = _cls_question(item["task_type"], item["crop"])
+            histories[i].append({"role": "user", "content": cls_q})
         cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
                        for h, item in tqdm(zip(histories, group_items), desc="    Prompts cls", unit="img", total=len(group_items), dynamic_ncols=True)]
         print(f"    Generating...")
@@ -400,7 +406,9 @@ def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
 # ── Metrics ────────────────────────────────────────────────────────────────────
 
 def compute_metrics(rows: list[dict]) -> dict:
-    """Compute direct and judged F1 per (condition, dataset) and overall per condition."""
+    """Compute direct and judged F1 per (condition, dataset) and overall per condition.
+    Matches assess.py: resolved_class as prediction (not sentinel), judged_summary for judged F1.
+    """
     from collections import defaultdict
     by_cond_ds: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in rows:
@@ -408,19 +416,10 @@ def compute_metrics(rows: list[dict]) -> dict:
 
     per_condition: dict[str, dict] = {}
     for (cond, ds), ds_rows in sorted(by_cond_ds.items()):
-        refs  = [r["ground_truth"]   for r in ds_rows]
-        preds = [r["resolved_class"] if r["correct"] else "__" for r in ds_rows]
+        refs  = [r["class_label"]    for r in ds_rows]
+        preds = [r["resolved_class"] for r in ds_rows]
         m     = compute_classification_metrics(refs, preds)
-
-        judged = [r for r in ds_rows if r.get("judged_correct", "") != ""]
-        if judged:
-            j_refs  = [r["ground_truth"] for r in judged]
-            j_preds = [r["resolved_class"] if int(r["judged_correct"]) else "__"
-                       for r in judged]
-            jm = compute_classification_metrics(j_refs, j_preds)
-            m["judge_f1_macro"] = jm["f1_macro"]
-            m["judge_accuracy"] = jm["accuracy"]
-
+        m.update(judged_summary(ds_rows))
         per_condition.setdefault(cond, {})[ds] = m
 
     overall: dict[str, dict] = {}

@@ -1,22 +1,13 @@
-# Chain-of-thought visual analysis priors for agricultural classification.
+# Chain-of-thought visual analysis prompts for agricultural classification.
 #
-# Hypothesis: asking the model to reason through structured visual observations
-# before the classification question improves F1 by anchoring attention to
-# task-relevant features (symptoms, morphology) prior to diagnosis.
+# Pipeline per image:
+#   Stage 1..N : [image] + step[i] → structured observation (one turn per step)
+#   Final turn : [image] + full history + classification_question → class label
 #
-# Two-pass pipeline per image:
-#   Pass 1: [image] + thinking_prompt          → structured observations
-#   Pass 2: [image + thinking_prompt] + [observations] + classification_question → class label
-#
-# Task type → thinking prompt key is in task_type_to_cot below.
-# Base classification prompts are loaded from src/config/prompts.yaml.
+# The final classification question comes from prompts.yaml (same as vision baseline).
+# Task type → CoT path routing is in task_type_to_cot below.
 
-# ── CoT thinking prompts (keyed by task group) ────────────────────────────────
-
-# Each thinking_prompt is a list of steps. Each step becomes its own conversation turn,
-# building a growing multi-turn dialogue before the final classification question.
-# For CoT+thinking, the model reasons (enable_thinking=True) before each step answer,
-# but only the extracted final answer is added to the conversation history.
+# ── CoT step prompts (keyed by task group) ────────────────────────────────────
 
 thinking_prompts:
 
@@ -39,41 +30,7 @@ thinking_prompts:
 # ── Task type routing ─────────────────────────────────────────────────────────
 
 # Maps dataset task_type → thinking_prompt key above
-# Only task types actually used in datasets.yaml are listed here.
 task_type_to_cot:
   disease:             disease_pest
   pest_damage:         disease_pest
   weed_identification: weed_identification
-
-# Maps dataset task_type → key in src/config/prompts.yaml for the base question
-task_type_to_base_prompt:
-  disease:             visual_classification_disease
-  pest_damage:         visual_classification_disease
-  weed_identification: visual_classification_weed
-
-# ── Classification suffixes ───────────────────────────────────────────────────
-
-# Appended to the base prompt for the base and thinking conditions
-base_classification_suffix: " Answer with the specific disease, pest, or stress/damage name only (if any - healthy otherwise). Do not describe — just name it."
-
-# Appended to the base prompt for the CoT classify pass (Pass 3 and 5).
-# Bridges from the structured analysis to a specific name.
-cot_classification_suffix: " Based on your analysis above, what is the specific name of the condition shown (if any - healthy otherwise)? Answer with the specific name only."
-
-# ── LLM-as-judge ──────────────────────────────────────────────────────────────
-# Reuses judge_system_vision + judge_classification_template from prompts.yaml
-
-prompts_config: src/config/prompts.yaml
-
-# ── Evaluation settings ───────────────────────────────────────────────────────
-
-n_eval: 30
-classifier_temperature: 0.0
-max_tokens_step: 256        # per CoT step answer (no thinking) — one focused question
-max_tokens_response: 128    # final classification answer — just a class name
-max_tokens_thinking: 4096  # thinking budget per pass — <thought> block alone
-# For cot_thinking: each step budget = max_tokens_thinking + max_tokens_step (4352)
-# For cot_thinking final: budget = max_tokens_thinking + max_tokens_response (4224)
-# These are computed in code — do not set them here.
-gpu_memory_utilization: 0.85
-max_model_len: 12288       # must accommodate image + CoT context + thinking block + response
