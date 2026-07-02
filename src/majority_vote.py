@@ -59,8 +59,8 @@ from src.common.difficulty_plots import plot_difficulty_correlation_conditions
 # Re-use shared helpers from cot_vision
 from src.cot_vision import (
     DATASET_TASK_TYPES, DEFAULT_DATASETS,
-    _PROMPTS, _THINK_RE, _REPEAT_RE,
-    _sys_msg, _cls_question,
+    _PROMPTS, _COT_PROMPTS, _THINK_RE, _REPEAT_RE,
+    _sys_msg, _cls_question, _desc_question,
     _build_prompt, _load_image, _clean,
     collect_work_items,
     load_vis_per_dataset, select_hard_datasets,
@@ -122,34 +122,231 @@ def run_majority_vote(
     outputs = llm.generate(prompts, params)
     del prompts
 
+    condition = f"mv_{n_votes}"
     rows = []
     for item, out in zip(items, outputs):
-        raw_preds  = [_clean(c.text) for c in out.outputs]
-        resolved   = [resolve_class(p, item["clean_classes"]) for p in raw_preds]
-        winner, vote_frac = plurality_vote(resolved)
-
-        # Build row — prediction = winning class text (or best raw pred if unresolved)
-        pred_text  = winner if winner is not None else (raw_preds[0] if raw_preds else "")
-        correct    = (winner or "").lower() == item["class_label"].lower()
-        rows.append({
-            "agml_dataset":   item["ds"],
-            "class_label":    item["class_label"],
-            "task_type":      item["task_type"],
-            "crop":           item["crop"] or "",
-            "image_name":     item["image_name"],
-            "condition":      f"mv_{n_votes}",
-            "n_votes":        n_votes,
-            "temperature":    temperature,
-            "prediction":     pred_text,
-            "all_predictions": " | ".join(raw_preds),
-            "resolved_class": winner or "",
-            "ground_truth":   item["class_label"],
-            "correct":        int(correct),
-            "contains_match": int(contains_match(winner or pred_text, item["class_label"])),
-            "vote_fraction":  round(vote_frac, 3),
-            "n_resolved":     sum(1 for r in resolved if r is not None),
-        })
+        raw_preds = [_clean(c.text) for c in out.outputs]
+        resolved  = [resolve_class(p, item["clean_classes"]) for p in raw_preds]
+        rows.append(_make_mv_row(item, condition, n_votes, temperature, raw_preds, resolved))
     return rows
+
+
+def _make_mv_row(item: dict, condition: str, n_votes: int, temperature: float,
+                  raw_preds: list[str], resolved: list[str | None]) -> dict:
+    winner, vote_frac = plurality_vote(resolved)
+    pred_text = winner if winner is not None else (raw_preds[0] if raw_preds else "")
+    correct   = (winner or "").lower() == item["class_label"].lower()
+    return {
+        "agml_dataset":    item["ds"],
+        "class_label":     item["class_label"],
+        "task_type":       item["task_type"],
+        "crop":            item["crop"] or "",
+        "image_name":      item["image_name"],
+        "condition":       condition,
+        "n_votes":         n_votes,
+        "temperature":     temperature,
+        "prediction":      pred_text,
+        "all_predictions": " | ".join(raw_preds),
+        "resolved_class":  winner or "",
+        "ground_truth":    item["class_label"],
+        "correct":         int(correct),
+        "contains_match":  int(contains_match(winner or pred_text, item["class_label"])),
+        "vote_fraction":   round(vote_frac, 3),
+        "n_resolved":      sum(1 for r in resolved if r is not None),
+    }
+
+
+def run_self_cot_mv(
+    items: list[dict],
+    llm,
+    tokenizer,
+    n_votes: int,
+    temperature: float,
+) -> list[dict]:
+    """Majority vote over self-CoT paths.
+
+    Stage 1 (describe): n=n_votes at temperature T → N diverse descriptions per image.
+    Stage 2 (classify): n=1 at temperature 0 for each (image, description) pair.
+    Vote across N classifications per image.
+    """
+    desc_params = SamplingParams(n=n_votes, temperature=temperature,
+                                 max_tokens=256, repetition_penalty=1.1)
+    cls_params  = SamplingParams(n=1, temperature=0.0,
+                                 max_tokens=64,  repetition_penalty=1.1)
+
+    # Stage 1 — describe (n_votes branches per image)
+    print(f"\n[mv_self_cot] n={n_votes}  T={temperature}  Stage 1/2: describing ({len(items)} images)...")
+    stage1_prompts = []
+    for item in tqdm(items, desc="  Building prompts (stage 1)", unit="img", dynamic_ncols=True):
+        desc_q = _desc_question(item["task_type"], item["crop"])
+        msgs = _sys_msg() + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": desc_q},
+        ]}]
+        stage1_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+    print("  Generating...")
+    s1_outputs = llm.generate(stage1_prompts, desc_params)
+    del stage1_prompts
+
+    # Expand: one entry per (image, vote)
+    expanded_items: list[dict] = []
+    descriptions:   list[str]  = []
+    orig_idxs:      list[int]  = []
+    for i, (item, out) in enumerate(zip(items, s1_outputs)):
+        for completion in out.outputs:
+            expanded_items.append(item)
+            descriptions.append(_clean(completion.text))
+            orig_idxs.append(i)
+
+    # Stage 2 — classify each (image, description) pair
+    print(f"[mv_self_cot] Stage 2/2: classifying ({len(expanded_items)} prompts)...")
+    stage2_prompts = []
+    for item, desc in tqdm(zip(expanded_items, descriptions),
+                           desc="  Building prompts (stage 2)", unit="img",
+                           total=len(expanded_items), dynamic_ncols=True):
+        desc_q = _desc_question(item["task_type"], item["crop"])
+        cls_q  = _cls_question(item["task_type"], item["crop"])
+        msgs = _sys_msg() + [
+            {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
+            {"role": "assistant", "content": desc},
+            {"role": "user",      "content": cls_q},
+        ]
+        stage2_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+    print("  Generating...")
+    s2_outputs = llm.generate(stage2_prompts, cls_params)
+    del stage2_prompts
+
+    raw_preds_flat = [_clean(o.outputs[0].text) for o in s2_outputs]
+    resolved_flat  = [resolve_class(p, item["clean_classes"])
+                      for p, item in zip(raw_preds_flat, expanded_items)]
+
+    # Collect votes per original image
+    from collections import defaultdict
+    votes_raw: dict[int, list[str]]       = defaultdict(list)
+    votes_res: dict[int, list[str | None]] = defaultdict(list)
+    for idx, raw, res in zip(orig_idxs, raw_preds_flat, resolved_flat):
+        votes_raw[idx].append(raw)
+        votes_res[idx].append(res)
+
+    condition = f"mv_self_cot_{n_votes}"
+    return [
+        _make_mv_row(items[i], condition, n_votes, temperature,
+                     votes_raw[i], votes_res[i])
+        for i in range(len(items))
+    ]
+
+
+def run_cot_yaml_mv(
+    items: list[dict],
+    llm,
+    tokenizer,
+    n_votes: int,
+    temperature: float,
+) -> list[dict]:
+    """Majority vote over structured CoT (cot_yaml) paths.
+
+    Step 0: n=n_votes at temperature T → N diverse step-0 responses per image.
+    Steps 1+: n=1 at temperature 0 for each (image, vote) history.
+    Final classification: n=1 per branch; vote across N outputs.
+    """
+    step0_params = SamplingParams(n=n_votes, temperature=temperature,
+                                  max_tokens=256, repetition_penalty=1.1)
+    step_params  = SamplingParams(n=1, temperature=0.0,
+                                  max_tokens=256, repetition_penalty=1.1)
+    cls_params   = SamplingParams(n=1, temperature=0.0,
+                                  max_tokens=64,  repetition_penalty=1.1)
+
+    # Group by CoT path (same as run_cot_yaml)
+    groups: dict[str, list[tuple[int, dict]]] = {}
+    for idx, item in enumerate(items):
+        cot_key = _COT_PROMPTS["task_type_to_cot"].get(item["task_type"], "disease_pest")
+        groups.setdefault(cot_key, []).append((idx, item))
+
+    from collections import defaultdict
+    all_rows: list[tuple[int, dict]] = []
+
+    for cot_key, indexed_items in groups.items():
+        steps       = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
+        orig_idxs   = [idx for idx, _ in indexed_items]
+        group_items = [item for _, item in indexed_items]
+        n_imgs      = len(group_items)
+        print(f"\n[mv_cot_yaml] {cot_key}: {n_imgs} images × {len(steps)} steps × {n_votes} votes")
+
+        # Step 0: branch into n_votes per image
+        print(f"  Step 1/{len(steps)}: branching (n={n_votes}, T={temperature})...")
+        step0_prompts = []
+        for item in tqdm(group_items, desc="    Prompts step 0", unit="img", dynamic_ncols=True):
+            msgs = _sys_msg() + [{"role": "user", "content": [
+                {"type": "image"}, {"type": "text", "text": steps[0]},
+            ]}]
+            step0_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+        print("    Generating...")
+        s0_outputs = llm.generate(step0_prompts, step0_params)
+        del step0_prompts
+
+        # Expand: one history per (image, vote)
+        # histories[i*n_votes + v] = conversation history for image i, vote v
+        exp_items:   list[dict]       = []
+        exp_orig:    list[int]        = []  # original group index
+        histories:   list[list[dict]] = []
+        for i, (item, out) in enumerate(zip(group_items, s0_outputs)):
+            for completion in out.outputs:
+                resp = _clean(completion.text)
+                h = _sys_msg() + [
+                    {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": steps[0]}]},
+                    {"role": "assistant", "content": resp},
+                ]
+                if len(steps) > 1:
+                    h.append({"role": "user", "content": steps[1]})
+                exp_items.append(item)
+                exp_orig.append(i)
+                histories.append(h)
+
+        # Steps 1..N-1 on expanded set
+        for step_idx in range(1, len(steps)):
+            print(f"  Step {step_idx+1}/{len(steps)}: {len(exp_items)} prompts...")
+            prompts = [_build_prompt(h, tokenizer, _load_image(item))
+                       for h, item in tqdm(zip(histories, exp_items),
+                                           desc=f"    Prompts step {step_idx+1}",
+                                           unit="img", total=len(exp_items), dynamic_ncols=True)]
+            print("    Generating...")
+            responses = [_clean(o.outputs[0].text) for o in llm.generate(prompts, step_params)]
+            del prompts
+            for j, resp in enumerate(responses):
+                histories[j].append({"role": "assistant", "content": resp})
+                if step_idx < len(steps) - 1:
+                    histories[j].append({"role": "user", "content": steps[step_idx + 1]})
+
+        # Classification turn
+        print(f"  Classification: {len(exp_items)} prompts...")
+        for j, item in enumerate(exp_items):
+            histories[j].append({"role": "user", "content": _cls_question(item["task_type"], item["crop"])})
+        cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
+                       for h, item in tqdm(zip(histories, exp_items),
+                                           desc="    Prompts cls",
+                                           unit="img", total=len(exp_items), dynamic_ncols=True)]
+        print("    Generating...")
+        cls_preds = [_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, cls_params)]
+        del cls_prompts
+
+        resolved_exp = [resolve_class(p, item["clean_classes"])
+                        for p, item in zip(cls_preds, exp_items)]
+
+        # Collect votes per original image index in group
+        votes_raw: dict[int, list[str]]        = defaultdict(list)
+        votes_res: dict[int, list[str | None]]  = defaultdict(list)
+        for gi, raw, res in zip(exp_orig, cls_preds, resolved_exp):
+            votes_raw[gi].append(raw)
+            votes_res[gi].append(res)
+
+        condition = f"mv_cot_yaml_{n_votes}"
+        for gi, (orig_idx, item) in enumerate(zip(orig_idxs, group_items)):
+            all_rows.append((orig_idx, _make_mv_row(
+                item, condition, n_votes, temperature,
+                votes_raw[gi], votes_res[gi],
+            )))
+
+    all_rows.sort(key=lambda x: x[0])
+    return [row for _, row in all_rows]
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -210,23 +407,38 @@ def plot_scaling_curve(
     """F1 (and judge F1) vs N — the main majority vote result."""
     import matplotlib.pyplot as plt
 
-    # Sort conditions by n_votes
-    mv_conds = sorted(
-        [(c, m) for c, m in metrics.items() if c.startswith("mv_")],
-        key=lambda x: int(x[0].split("_")[1]),
-    )
-    if not mv_conds:
+    def _n_from_cond(c: str) -> int:
+        return int(c.split("_")[-1])
+
+    def _series(prefix: str) -> list[tuple[str, dict]]:
+        return sorted(
+            [(c, m) for c, m in metrics.items() if c.startswith(prefix)],
+            key=lambda x: _n_from_cond(x[0]),
+        )
+
+    series_cfg = [
+        ("mv_self_cot_", "Self-CoT MV",  "#9467bd", "s"),
+        ("mv_cot_yaml_", "CoT YAML MV",  "#2ca02c", "^"),
+        ("mv_",          "Baseline MV",  "#1f77b4", "o"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plotted = False
+    for prefix, label, color, marker in series_cfg:
+        conds = _series(prefix)
+        # Avoid double-matching mv_ against mv_self_cot_ / mv_cot_yaml_
+        if prefix == "mv_":
+            conds = [(c, m) for c, m in conds
+                     if not c.startswith("mv_self_cot_") and not c.startswith("mv_cot_yaml_")]
+        if not conds:
+            continue
+        ns   = [_n_from_cond(c) for c, _ in conds]
+        jf1s = [m.get("judge_f1_macro") or m["f1_macro"] for _, m in conds]
+        ax.plot(ns, jf1s, f"{marker}-", color=color, label=label, linewidth=1.8)
+        plotted = True
+
+    if not plotted:
         return
-
-    ns    = [int(c.split("_")[1]) for c, _ in mv_conds]
-    f1s   = [m["f1_macro"]        for _, m in mv_conds]
-    jf1s  = [m.get("judge_f1_macro") for _, m in mv_conds]
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(ns, f1s,  "o-", color="#1f77b4", label="Direct F1",   linewidth=1.8)
-    if any(j is not None for j in jf1s):
-        ax.plot(ns, [j or 0 for j in jf1s], "s--", color="#ff7f0e",
-                label="Judged F1", linewidth=1.8)
 
     # Horizontal reference lines
     if vis_per_ds:
@@ -327,6 +539,8 @@ def main() -> None:
                         help="Vote counts to sweep (e.g. --n_votes 1 4 8 16)")
     parser.add_argument("--temperature", type=float, default=0.8,
                         help="Sampling temperature (>0 for diversity)")
+    parser.add_argument("--cot_run",     action="store_true",
+                        help="Run self_cot and cot_yaml MV variants instead of baseline prompt")
     parser.add_argument("--use_4bit",    action="store_true")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=8192)
@@ -411,9 +625,14 @@ def main() -> None:
 
         all_rows: list[dict] = []
         for n in sorted(args.n_votes):
-            print(f"\n=== Phase: n_votes={n} ===")
-            rows = run_majority_vote(items, llm, tokenizer, n, args.temperature)
-            all_rows.extend(rows)
+            if args.cot_run:
+                print(f"\n=== Phase: mv_self_cot n={n} ===")
+                all_rows.extend(run_self_cot_mv(items, llm, tokenizer, n, args.temperature))
+                print(f"\n=== Phase: mv_cot_yaml n={n} ===")
+                all_rows.extend(run_cot_yaml_mv(items, llm, tokenizer, n, args.temperature))
+            else:
+                print(f"\n=== Phase: mv_baseline n={n} ===")
+                all_rows.extend(run_majority_vote(items, llm, tokenizer, n, args.temperature))
 
         # Judge all rows together
         print(f"\n=== Judging ({len(all_rows)} rows) ===")

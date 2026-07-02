@@ -610,22 +610,30 @@ def plot_hard_four_condition(
         ("desc_aug",  "Desc-Aug",         "#9467bd"),
     ]
 
-    # Add one bar per majority-vote N, sorted ascending
+    # Add MV bars: baseline, self_cot, cot_yaml — each N sorted ascending
     _mv = mv_metrics or {}
-    mv_ns = sorted(
-        [int(k.split("_")[1]) for k in _mv if k.startswith("mv_")],
-    )
-    mv_colors = ["#d62728", "#e8846a", "#f5c5b0", "#fce8e0"]  # dark→light red
-    for n, color in zip(mv_ns, mv_colors):
-        CONDITIONS.append((f"mv_{n}", f"Maj-Vote N={n}", color))
+    _MV_SERIES = [
+        # (condition prefix, label prefix, color palette dark→light)
+        ("mv_cot_yaml_", "CoT-YAML MV N=", ["#1a7a1a", "#4db34d", "#99d699"]),
+        ("mv_self_cot_", "Self-CoT MV N=", ["#7a1a7a", "#b34db3", "#d699d6"]),
+        ("mv_",          "Baseline MV N=", ["#d62728", "#e8846a", "#f5c5b0"]),
+    ]
+    for prefix, label_prefix, palette in _MV_SERIES:
+        ns = sorted(
+            int(k.split("_")[-1]) for k in _mv
+            if k.startswith(prefix)
+            and (prefix == "mv_" and not k.startswith(("mv_self_cot_", "mv_cot_yaml_"))
+                 or prefix != "mv_")
+        )
+        for n, color in zip(ns, palette):
+            CONDITIONS.append((f"{prefix}{n}", f"{label_prefix}{n}", color))
 
     def _get(ds: str, key: str) -> float:
         if key == "baseline":
             return _vis_per_ds.get(ds, 0.0)
         if key == "desc_aug":
             return _aug_per_ds.get(ds, 0.0)
-        # CoT conditions
-        src = cot_metrics if not key.startswith("mv_") else _mv
+        src = _mv if key.startswith("mv_") else cot_metrics
         per_ds = src.get(key, {}).get("per_dataset", {})
         dm = per_ds.get(ds, {})
         return dm.get("judge_f1_macro") or dm.get("f1_macro", 0.0)
