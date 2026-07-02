@@ -66,6 +66,7 @@ from src.cot_vision import (
     load_vis_per_dataset, select_hard_datasets,
     load_clustering_per_dataset,
     load_aug_per_dataset,
+    plot_hard_four_condition,
 )
 
 try:
@@ -333,8 +334,10 @@ def main() -> None:
                         help="vLLM max concurrent sequences — keep low with large n_votes")
     parser.add_argument("--vis_dir",     default="outputs/vision_assessment/",
                         help="Vision assessment dir — for baseline reference in plots")
-    parser.add_argument("--cot_metrics", default="outputs/cot_vision/cot_vision_metrics.json",
-                        help="CoT metrics JSON — adds CoT YAML reference line to scaling curve")
+    parser.add_argument("--aug_dir",     default="outputs/desc_augmented_vision/",
+                        help="Desc-aug output dir — for desc_aug bar in combined chart")
+    parser.add_argument("--cot_dir",    default="outputs/cot_vision/",
+                        help="CoT vision output dir — loads CoT metrics for scaling curve + combined chart")
     parser.add_argument("--clustering_metrics",
                         default="outputs/clustering_eval/clustering_metrics.json")
     parser.add_argument("--clustering_backbone",
@@ -453,10 +456,12 @@ def main() -> None:
         print(f"  {cond:<12}  F1={m['f1_macro']:.3f}{jf1_str}")
 
     # ── Plots ──────────────────────────────────────────────────────────────────
+    cot_metrics_path = Path(args.cot_dir) / "cot_vision_metrics.json"
+
     print("\n=== Generating plots ===")
     plot_scaling_curve(
         metrics, vis_per_ds,
-        cot_metrics_path=Path(args.cot_metrics),
+        cot_metrics_path=cot_metrics_path,
         output_dir=output_dir,
     )
     if all_rows:
@@ -482,6 +487,34 @@ def main() -> None:
             backbone=args.clustering_backbone,
             filename="difficulty_vs_perf_majority_vote.png",
             title="Difficulty vs Judged F1 — Majority Vote (N sweep)",
+        )
+
+    # Combined hard-condition chart (MV + CoT + baseline + desc-aug)
+    if args.hard_only and vis_per_ds:
+        cot_metrics: dict | None = None
+        if cot_metrics_path.exists():
+            with open(cot_metrics_path) as f:
+                cot_saved = json.load(f)
+            cot_metrics = cot_saved.get("conditions", cot_saved)
+            print(f"  Loaded CoT metrics from {cot_metrics_path}")
+        else:
+            print(f"  [info] No CoT metrics at {cot_metrics_path} — CoT bars omitted")
+
+        aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)
+
+        mv_datasets = sorted({ds for cond in metrics.values()
+                               for ds in cond.get("per_dataset", {})})
+
+        plot_hard_four_condition(
+            mv_datasets, vis_per_ds,
+            aug_per_ds  = aug_per_ds,
+            cot_metrics = cot_metrics or {},
+            output_dir  = output_dir,
+            vis_dir     = Path(args.vis_dir),
+            aug_dir     = Path(args.aug_dir),
+            model_id    = args.model,
+            n_samples   = args.n_samples,
+            mv_metrics  = metrics,
         )
 
     print("\nDone.")

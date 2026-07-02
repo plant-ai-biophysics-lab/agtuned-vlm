@@ -560,16 +560,17 @@ def plot_hard_four_condition(
     aug_dir: Path | None = None,
     model_id: str = "",
     n_samples: int | None = None,
+    mv_metrics: dict | None = None,
 ) -> None:
-    """Grouped bar chart comparing all 4 conditions on the hard-subset datasets only.
+    """Grouped bar chart comparing conditions on the hard-subset datasets only.
 
     When n_samples is set, baseline and desc_aug scores are recomputed on the exact
     same images used by cot_vision (fair subsample comparison).
+    mv_metrics adds one bar per majority-vote N value.
     """
     import matplotlib.pyplot as plt
     from collections import defaultdict
 
-    # Only keep datasets present in all sources (or at least vis baseline)
     datasets = [ds for ds in active_datasets if ds in vis_per_ds]
     if not datasets:
         print("  [warn] No common datasets for hard 4-condition chart")
@@ -601,6 +602,7 @@ def plot_hard_four_condition(
                     _aug_per_ds = recomputed
                     print(f"  [subsample] Recomputed desc_aug F1 on subsample")
 
+    # Base conditions
     CONDITIONS = [
         ("baseline",  "Vision Baseline",  "#1f77b4"),
         ("self_cot",  "Self-CoT",         "#ff7f0e"),
@@ -608,18 +610,29 @@ def plot_hard_four_condition(
         ("desc_aug",  "Desc-Aug",         "#9467bd"),
     ]
 
+    # Add one bar per majority-vote N, sorted ascending
+    _mv = mv_metrics or {}
+    mv_ns = sorted(
+        [int(k.split("_")[1]) for k in _mv if k.startswith("mv_")],
+    )
+    mv_colors = ["#d62728", "#e8846a", "#f5c5b0", "#fce8e0"]  # dark→light red
+    for n, color in zip(mv_ns, mv_colors):
+        CONDITIONS.append((f"mv_{n}", f"Maj-Vote N={n}", color))
+
     def _get(ds: str, key: str) -> float:
         if key == "baseline":
             return _vis_per_ds.get(ds, 0.0)
         if key == "desc_aug":
             return _aug_per_ds.get(ds, 0.0)
-        per_ds = cot_metrics.get(key, {}).get("per_dataset", {})
+        # CoT conditions
+        src = cot_metrics if not key.startswith("mv_") else _mv
+        per_ds = src.get(key, {}).get("per_dataset", {})
         dm = per_ds.get(ds, {})
         return dm.get("judge_f1_macro") or dm.get("f1_macro", 0.0)
 
     x = np.arange(len(datasets))
     width = 0.8 / len(CONDITIONS)
-    fig, ax = plt.subplots(figsize=(max(10, len(datasets) * 1.8), 5))
+    fig, ax = plt.subplots(figsize=(max(10, len(datasets) * 1.8 + len(CONDITIONS) * 0.3), 5))
 
     for i, (key, label, color) in enumerate(CONDITIONS):
         vals = [_get(ds, key) for ds in datasets]
@@ -631,12 +644,13 @@ def plot_hard_four_condition(
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
                         f"{v:.2f}", ha="center", va="bottom", fontsize=7)
 
+    n_conds = len(CONDITIONS)
     clean = [d.replace("_classification", "").replace("_", " ") for d in datasets]
     ax.set_xticks(x)
     ax.set_xticklabels(clean, rotation=30, ha="right", fontsize=8)
     ax.set_ylabel("Judged F1  (Desc-Aug = direct F1)")
     ax.set_ylim(0, 1.15)
-    ax.set_title("4-Condition Comparison — Hard Datasets Only (3 worst per task)")
+    ax.set_title(f"{n_conds}-Condition Comparison — Hard Datasets Only (3 worst per task)")
     ax.legend(fontsize=8)
     ax.yaxis.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -915,6 +929,8 @@ def main() -> None:
                         help="Path to clustering_metrics.json — enables label-free difficulty binning")
     parser.add_argument("--clustering_backbone", default="dinov3-vitb16-pretrain-lvd1689m",
                         help="Backbone key in clustering_metrics.json to use for difficulty binning")
+    parser.add_argument("--mv_dir", default="outputs/majority_vote/",
+                        help="Majority vote output dir — adds MV bars to the hard-condition chart")
     parser.add_argument("--plot_only", action="store_true",
                         help="Skip inference; regenerate plots from existing cot_vision_metrics.json + CSV")
     args = parser.parse_args()
@@ -1062,10 +1078,20 @@ def main() -> None:
         aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)
         if not aug_per_ds:
             print("  [warn] No desc-aug metrics found — desc_aug bar will be zero")
+        mv_metrics: dict | None = None
+        mv_metrics_path = Path(args.mv_dir) / "majority_vote_metrics.json"
+        if mv_metrics_path.exists():
+            with open(mv_metrics_path) as f:
+                mv_saved = json.load(f)
+            mv_metrics = mv_saved.get("conditions", mv_saved)
+            print(f"  Loaded MV metrics from {mv_metrics_path} ({len(mv_metrics)} conditions)")
+        else:
+            print(f"  [info] No MV metrics at {mv_metrics_path} — MV bars omitted")
         plot_hard_four_condition(
             active_datasets, vis_per_ds, aug_per_ds, metrics, output_dir,
             vis_dir=Path(args.vis_dir), aug_dir=Path(args.aug_dir),
             model_id=args.model, n_samples=args.n_samples,
+            mv_metrics=mv_metrics,
         )
 
     print("\nDone.")
