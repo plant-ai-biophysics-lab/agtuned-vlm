@@ -28,8 +28,12 @@ from src.desc_augmented_vision import (
     _read_csv,
     _safe_name,
     compute_cls_metrics_per_dataset,
+    load_clustering_per_dataset,
     plot_aug_distribution,
     plot_comparison,
+    plot_difficulty_bins,
+    plot_difficulty_bins_clustering,
+    plot_difficulty_correlation,
     plot_overall_comparison,
     plot_task_comparison,
     plot_transitions,
@@ -94,6 +98,22 @@ def main(args: argparse.Namespace) -> None:
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
     plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task, vis_dir=vis_dir)
+
+    # Difficulty plots (per model — typically one model, but iterate for generality)
+    for model_id in args.models:
+        if model_id not in baseline_per_model or model_id not in augmented_per_model:
+            continue
+        bpd = baseline_per_model[model_id]
+        apd = augmented_per_model[model_id]
+        plot_difficulty_correlation(bpd, apd, output_dir, suffix=filter_label)
+        plot_difficulty_bins(bpd, apd, output_dir, suffix=filter_label)
+        clustering_per_ds = load_clustering_per_dataset(
+            Path(args.clustering_metrics), backbone=args.clustering_backbone)
+        if clustering_per_ds:
+            plot_difficulty_bins_clustering(
+                bpd, apd, clustering_per_ds, output_dir,
+                suffix=filter_label, backbone=args.clustering_backbone)
+
     print("\nDone.")
 
 
@@ -105,5 +125,9 @@ if __name__ == "__main__":
     parser.add_argument("--config",      default="src/config/datasets.yaml")
     parser.add_argument("--all_classes", action="store_true",
                         help="Use all-classes run (looks for aug_cls_all_*.csv)")
+    parser.add_argument("--clustering_metrics", default="outputs/clustering_eval/clustering_metrics.json",
+                        help="Path to clustering_metrics.json for label-free difficulty binning")
+    parser.add_argument("--clustering_backbone", default="dinov3-vitb16-pretrain-lvd1689m",
+                        help="Backbone key in clustering_metrics.json")
     args = parser.parse_args()
     main(args)

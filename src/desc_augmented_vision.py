@@ -334,11 +334,12 @@ def compute_cls_metrics_per_dataset(cls_rows: list[dict], use_judged: bool = Fal
     for ds, rows in by_ds.items():
         refs = [r["class_label"] for r in rows]
         if use_judged:
-            # treat judged_correct==1 as a correct prediction (class_label), else wrong
             preds = [r["class_label"] if int(r.get("judged_correct") or 0) else "" for r in rows]
         else:
             preds = [r.get("resolved_class", "") for r in rows]
-        result[ds] = compute_classification_metrics(refs, preds)
+        m = compute_classification_metrics(refs, preds)
+        m.update(judged_summary(rows))
+        result[ds] = m
     return result
 
 
@@ -1233,6 +1234,91 @@ def plot_difficulty_bins(
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def load_clustering_per_dataset(
+    path: Path,
+    backbone: str = "dinov3-vitb16-pretrain-lvd1689m",
+) -> dict[str, dict[str, float]]:
+    """Load clustering metrics per dataset for a given backbone (higher = more separable = easier)."""
+    if not path.exists():
+        print(f"  [warn] Clustering metrics not found: {path}")
+        return {}
+    with open(path) as f:
+        data = json.load(f)
+    backbone_data = data.get(backbone)
+    if backbone_data is None:
+        print(f"  [warn] Backbone '{backbone}' not in clustering metrics. Available: {list(data.keys())}")
+        return {}
+    return {ds: {k: v for k, v in m.items()
+                 if k in ("nmi", "ari", "silhouette", "inter_centroid_dist", "fisher_dr")}
+            for ds, m in backbone_data.items()}
+
+
+def plot_difficulty_bins_clustering(
+    baseline_per_ds: dict[str, dict],
+    augmented_per_ds: dict[str, dict],
+    clustering_per_ds: dict[str, dict[str, float]],
+    output_dir: Path,
+    suffix: str,
+    backbone: str,
+) -> None:
+    """One difficulty-bins chart per clustering metric (label-free difficulty proxy)."""
+    def _f1(d: dict) -> float:
+        return d.get("judge_f1_macro") or d.get("f1_macro", 0.0)
+
+    metric_labels = {
+        "nmi":                 "NMI",
+        "ari":                 "ARI",
+        "silhouette":          "Silhouette",
+        "inter_centroid_dist": "Inter-centroid Distance",
+        "fisher_dr":           "Fisher Discriminant Ratio",
+    }
+    backbone_short = backbone.split("/")[-1] if "/" in backbone else backbone
+
+    for metric, label in metric_labels.items():
+        diff = {ds: vals[metric] for ds, vals in clustering_per_ds.items() if metric in vals}
+        if not diff:
+            continue
+
+        # Restrict to datasets present in all three sources; sort ascending (low = hard)
+        common = sorted(
+            set(baseline_per_ds) & set(augmented_per_ds) & set(diff),
+            key=lambda d: diff[d],
+        )
+        if not common:
+            continue
+        n = len(common)
+        bins = {"Hard": common[:n//3], "Medium": common[n//3:2*n//3], "Easy": common[2*n//3:]}
+
+        x = np.arange(len(bins))
+        width = 0.35
+        fig, ax = plt.subplots(figsize=(7, 5))
+
+        for i, (bar_label, color, src) in enumerate([
+            ("Vision Baseline", "#e67e22", baseline_per_ds),
+            ("Desc-Aug",        "#2ca02c", augmented_per_ds),
+        ]):
+            means = [float(np.mean([_f1(src[d]) for d in bin_ds if d in src]))
+                     if any(d in src for d in bin_ds) else 0.0
+                     for bin_ds in bins.values()]
+            offset = (i - 0.5) * width
+            bars = ax.bar(x + offset, means, width, label=bar_label, color=color,
+                          alpha=0.85, edgecolor="black", linewidth=0.5)
+            for bar, v in zip(bars, means):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+
+        ax.set_xticks(x); ax.set_xticklabels(list(bins))
+        ax.set_xlabel(f"Difficulty bin (by {label}, {backbone_short})")
+        ax.set_ylabel("Mean Judged F1"); ax.set_ylim(0, 1.15)
+        ax.set_title(f"Desc-Aug by Difficulty Bin ({label}, {suffix})")
+        ax.legend(fontsize=8); ax.yaxis.grid(True, alpha=0.3)
+        plt.tight_layout()
+        path = output_dir / f"aug_difficulty_bins_{metric}_{suffix}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
 
 
 def plot_transitions(
