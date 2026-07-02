@@ -934,7 +934,7 @@ def main(args: argparse.Namespace) -> None:
     plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
-    plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task)
+    plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task, vis_dir=vis_dir)
     for model_id in args.models:
         if model_id in baseline_per_model and model_id in augmented_per_model:
             plot_difficulty_correlation(
@@ -995,6 +995,7 @@ def plot_aug_distribution(
     output_dir: Path,
     filter_label: str,
     ds_to_task: dict[str, str],
+    vis_dir: Path | None = None,
 ) -> None:
     """Strip + errorbar distribution charts for baseline vs augmented classification."""
     from src.common.distribution_plots import (
@@ -1017,6 +1018,19 @@ def plot_aug_distribution(
         short = model_id.split("/")[-1]
         b_rows = _read_csv(output_dir / f"baseline_cls_{filter_label}_{safe}.csv")
         a_rows = _read_csv(output_dir / f"aug_cls_{filter_label}_{safe}.csv")
+
+        # Merge judged_correct from vision assessment into baseline rows
+        if vis_dir is not None:
+            vis_csv = vis_dir / f"cls_{safe}.csv"
+            if vis_csv.exists() and b_rows:
+                vis_judged = {(r["agml_dataset"], r["image_name"]): r.get("judged_correct", "")
+                              for r in _read_csv(vis_csv)}
+                for r in b_rows:
+                    key = (r.get("agml_dataset", ""), r.get("image_name", ""))
+                    if key in vis_judged:
+                        r["judged_correct"] = vis_judged[key]
+                print(f"  Merged baseline judged_correct from {vis_csv.name}")
+
         dist_rows[f"{short} (baseline)"]    = b_rows
         dist_rows[f"{short} (aug)"]         = a_rows
         dist_metrics[f"{short} (baseline)"] = compute_cls_metrics_per_dataset(b_rows)
@@ -1151,8 +1165,11 @@ def plot_difficulty_correlation(
     common = sorted(set(baseline_per_ds) & set(augmented_per_ds))
     if not common:
         return
-    xs = [baseline_per_ds[ds].get("f1_macro", 0.0) for ds in common]
-    ys = [augmented_per_ds[ds].get("f1_macro", 0.0) for ds in common]
+    def _f1(d: dict) -> float:
+        return d.get("judge_f1_macro") or d.get("f1_macro", 0.0)
+
+    xs = [_f1(baseline_per_ds[ds]) for ds in common]
+    ys = [_f1(augmented_per_ds[ds]) for ds in common]
     names = [ds.replace("_classification", "").replace("_", " ") for ds in common]
 
     fig, ax = plt.subplots(figsize=(7, 6))
@@ -1162,8 +1179,8 @@ def plot_difficulty_correlation(
                     xytext=(3, 3), textcoords="offset points")
     ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=1, label="no change")
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-    ax.set_xlabel("Vision Baseline F1  (← harder)")
-    ax.set_ylabel("Desc-Aug F1")
+    ax.set_xlabel("Vision Baseline Judged F1")
+    ax.set_ylabel("Desc-Aug Judged F1")
     ax.set_title(f"Difficulty vs Desc-Aug Performance ({suffix})")
     ax.legend(fontsize=8); ax.grid(True, alpha=0.2)
     plt.tight_layout()
@@ -1179,9 +1196,12 @@ def plot_difficulty_bins(
     output_dir: Path,
     suffix: str = "filtered",
 ) -> None:
-    """Bar chart: mean F1 per difficulty tercile (hard / medium / easy)."""
+    """Bar chart: mean judged F1 per difficulty tercile (hard / medium / easy)."""
+    def _f1(d: dict) -> float:
+        return d.get("judge_f1_macro") or d.get("f1_macro", 0.0)
+
     common = sorted(set(baseline_per_ds) & set(augmented_per_ds),
-                    key=lambda d: baseline_per_ds[d].get("f1_macro", 0.0))
+                    key=lambda d: _f1(baseline_per_ds[d]))
     if not common:
         return
     n = len(common)
@@ -1195,7 +1215,7 @@ def plot_difficulty_bins(
         ("Vision Baseline", "#e67e22", baseline_per_ds),
         ("Desc-Aug",        "#2ca02c", augmented_per_ds),
     ]):
-        means = [float(np.mean([src[d].get("f1_macro", 0.0) for d in bin_ds]))
+        means = [float(np.mean([_f1(src[d]) for d in bin_ds]))
                  if bin_ds else 0.0 for bin_ds in bins.values()]
         offset = (i - 0.5) * width
         bars = ax.bar(x + offset, means, width, label=label, color=color,
@@ -1205,7 +1225,7 @@ def plot_difficulty_bins(
                     f"{v:.2f}", ha="center", va="bottom", fontsize=8)
 
     ax.set_xticks(x); ax.set_xticklabels(list(bins))
-    ax.set_ylabel("Mean F1"); ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Mean Judged F1"); ax.set_ylim(0, 1.15)
     ax.set_title(f"Desc-Aug Performance by Difficulty Bin ({suffix})")
     ax.legend(fontsize=8); ax.yaxis.grid(True, alpha=0.3)
     plt.tight_layout()

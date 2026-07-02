@@ -66,6 +66,18 @@ def main(args: argparse.Namespace) -> None:
         aug_rows      = _read_csv(aug_csv)
         baseline_rows = _read_csv(baseline_csv) if baseline_csv.exists() else []
 
+        # Merge judged_correct from vision assessment CSV into baseline rows
+        vis_cls_csv = vis_dir / f"cls_{safe}.csv"
+        if vis_cls_csv.exists() and baseline_rows:
+            vis_rows = _read_csv(vis_cls_csv)
+            vis_judged = {(r["agml_dataset"], r["image_name"]): r.get("judged_correct", "")
+                          for r in vis_rows}
+            for r in baseline_rows:
+                key = (r.get("agml_dataset", ""), r.get("image_name", ""))
+                if key in vis_judged:
+                    r["judged_correct"] = vis_judged[key]
+            print(f"  Merged judged_correct from {vis_cls_csv.name} into baseline rows")
+
         augmented_per_model[model_id] = compute_cls_metrics_per_dataset(aug_rows)
         baseline_per_model[model_id]  = compute_cls_metrics_per_dataset(baseline_rows)
         summary[model_id] = {}  # presence flag for plot_aug_distribution
@@ -81,7 +93,7 @@ def main(args: argparse.Namespace) -> None:
     plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
-    plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task)
+    plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task, vis_dir=vis_dir)
     print("\nDone.")
 
 

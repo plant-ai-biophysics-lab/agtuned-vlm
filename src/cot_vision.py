@@ -712,19 +712,24 @@ def plot_difficulty_correlation(
     print(f"  Saved: {path}")
 
 
-def plot_difficulty_bins(
+def _plot_difficulty_bins_impl(
     cot_metrics: dict,
     vis_per_ds: dict[str, float],
+    difficulty_per_ds: dict[str, float],
     output_dir: Path,
+    title: str,
+    filename: str,
+    difficulty_label: str,
 ) -> None:
-    """Bar chart: mean judged F1 per difficulty tercile (hard / medium / easy)."""
+    """Bar chart: mean judged F1 per difficulty tercile, binned by difficulty_per_ds."""
     import matplotlib.pyplot as plt
 
     conditions = [c for c in ("self_cot", "cot_yaml") if c in cot_metrics]
-    if not conditions or not vis_per_ds:
+    if not conditions or not difficulty_per_ds:
         return
 
-    all_ds = sorted(vis_per_ds, key=vis_per_ds.get)  # hardest first
+    # Restrict to datasets present in difficulty scores; sort ascending (low = hard)
+    all_ds = sorted(difficulty_per_ds, key=difficulty_per_ds.get)
     n = len(all_ds)
     bins = {"Hard": all_ds[:n//3], "Medium": all_ds[n//3:2*n//3], "Easy": all_ds[2*n//3:]}
 
@@ -754,13 +759,83 @@ def plot_difficulty_bins(
 
     ax.set_xticks(x); ax.set_xticklabels(list(bins))
     ax.set_ylabel("Mean Judged F1"); ax.set_ylim(0, 1.15)
-    ax.set_title("CoT Performance by Difficulty Bin")
+    ax.set_title(title)
     ax.legend(fontsize=8); ax.yaxis.grid(True, alpha=0.3)
+    # Annotate difficulty axis label
+    ax.set_xlabel(f"Difficulty bin (by {difficulty_label}, low → hard)")
     plt.tight_layout()
-    path = output_dir / "cot_difficulty_bins.png"
+    path = output_dir / filename
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_difficulty_bins(
+    cot_metrics: dict,
+    vis_per_ds: dict[str, float],
+    output_dir: Path,
+) -> None:
+    """Bar chart binned by vision baseline judged F1 (supervised difficulty proxy)."""
+    _plot_difficulty_bins_impl(
+        cot_metrics, vis_per_ds, vis_per_ds, output_dir,
+        title="CoT Performance by Difficulty Bin (Vision F1)",
+        filename="cot_difficulty_bins_f1.png",
+        difficulty_label="Vision Baseline Judged F1",
+    )
+
+
+def load_clustering_per_dataset(
+    path: Path,
+    backbone: str = "dinov3-vitb16-pretrain-lvd1689m",
+) -> dict[str, dict[str, float]]:
+    """Load clustering metrics per dataset for a given backbone.
+
+    Returns {dataset_name: {metric: value}} for metrics:
+    nmi, ari, silhouette, inter_centroid_dist, fisher_dr.
+    Higher values = more separable = easier.
+    """
+    import json as _json
+    if not path.exists():
+        print(f"  [warn] Clustering metrics not found: {path}")
+        return {}
+    with open(path) as f:
+        data = _json.load(f)
+    backbone_data = data.get(backbone)
+    if backbone_data is None:
+        available = list(data.keys())
+        print(f"  [warn] Backbone '{backbone}' not in clustering metrics. Available: {available}")
+        return {}
+    return {ds: {k: v for k, v in m.items()
+                 if k in ("nmi", "ari", "silhouette", "inter_centroid_dist", "fisher_dr")}
+            for ds, m in backbone_data.items()}
+
+
+def plot_difficulty_bins_clustering(
+    cot_metrics: dict,
+    vis_per_ds: dict[str, float],
+    clustering_per_ds: dict[str, dict[str, float]],
+    output_dir: Path,
+    backbone: str,
+) -> None:
+    """One difficulty-bins chart per clustering metric (label-free difficulty proxies)."""
+    metric_labels = {
+        "nmi":               "NMI",
+        "ari":               "ARI",
+        "silhouette":        "Silhouette",
+        "inter_centroid_dist": "Inter-centroid Distance",
+        "fisher_dr":         "Fisher Discriminant Ratio",
+    }
+    backbone_short = backbone.split("/")[-1] if "/" in backbone else backbone
+    for metric, label in metric_labels.items():
+        diff = {ds: vals[metric] for ds, vals in clustering_per_ds.items() if metric in vals}
+        if not diff:
+            continue
+        _plot_difficulty_bins_impl(
+            cot_metrics, vis_per_ds, diff, output_dir,
+            title=f"CoT Performance by Difficulty Bin ({label}, {backbone_short})",
+            filename=f"cot_difficulty_bins_{metric}.png",
+            difficulty_label=label,
+        )
 
 
 def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
@@ -835,6 +910,10 @@ def main() -> None:
                         help="Vision assessment output dir — used to load baseline judged F1 for difficulty plots")
     parser.add_argument("--aug_dir",    default="outputs/desc_augmented_vision/",
                         help="Desc-aug output dir — used to load augmented F1 for hard-subset 4-condition chart")
+    parser.add_argument("--clustering_metrics", default="outputs/clustering_eval/clustering_metrics.json",
+                        help="Path to clustering_metrics.json — enables label-free difficulty binning")
+    parser.add_argument("--clustering_backbone", default="dinov3-vitb16-pretrain-lvd1689m",
+                        help="Backbone key in clustering_metrics.json to use for difficulty binning")
     parser.add_argument("--plot_only", action="store_true",
                         help="Skip inference; regenerate plots from existing cot_vision_metrics.json + CSV")
     args = parser.parse_args()
@@ -949,6 +1028,12 @@ def main() -> None:
     if vis_per_ds:
         plot_difficulty_correlation(metrics, vis_per_ds, output_dir)
         plot_difficulty_bins(metrics, vis_per_ds, output_dir)
+        clustering_per_ds = load_clustering_per_dataset(
+            Path(args.clustering_metrics), backbone=args.clustering_backbone)
+        if clustering_per_ds:
+            plot_difficulty_bins_clustering(
+                metrics, vis_per_ds, clustering_per_ds, output_dir,
+                backbone=args.clustering_backbone)
 
     if args.hard_only and vis_per_ds:
         aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)
