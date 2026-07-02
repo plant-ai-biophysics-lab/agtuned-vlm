@@ -515,10 +515,10 @@ def load_aug_per_dataset(aug_dir: Path, model_id: str) -> dict[str, float]:
 
 def _f1_from_csv_subset(
     csv_path: Path,
-    allowed: dict[str, set[str]],  # {ds: {image_name, ...}}
+    allowed: dict[str, set[tuple[str, str]]],  # {ds: {(image_name, class_label), ...}}
     judged: bool = True,
 ) -> dict[str, float]:
-    """Recompute per-dataset macro F1 from a raw cls CSV, restricted to allowed image names."""
+    """Recompute per-dataset macro F1 from a raw cls CSV, restricted to allowed (image_name, class_label) pairs."""
     import csv as _csv
     from collections import defaultdict
     from sklearn.metrics import f1_score
@@ -531,7 +531,7 @@ def _f1_from_csv_subset(
     by_ds: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         ds = r.get("agml_dataset", "")
-        if ds in allowed and r.get("image_name", "") in allowed[ds]:
+        if ds in allowed and (r.get("image_name", ""), r.get("class_label", "")) in allowed[ds]:
             by_ds[ds].append(r)
 
     result: dict[str, float] = {}
@@ -581,10 +581,10 @@ def plot_hard_four_condition(
         cot_csv = output_dir / f"cot_cls_{model_id.replace('/', '_')}.csv"
         if cot_csv.exists():
             import csv as _csv
-            allowed: dict[str, set[str]] = defaultdict(set)
+            allowed: dict[str, set[tuple[str, str]]] = defaultdict(set)
             with open(cot_csv, newline="", encoding="utf-8") as f:
                 for r in _csv.DictReader(f):
-                    allowed[r["agml_dataset"]].add(r["image_name"])
+                    allowed[r["agml_dataset"]].add((r["image_name"], r["class_label"]))
             if vis_dir and model_id:
                 safe = model_id.replace("/", "_")
                 recomputed = _f1_from_csv_subset(

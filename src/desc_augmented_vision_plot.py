@@ -74,10 +74,10 @@ def main(args: argparse.Namespace) -> None:
         vis_cls_csv = vis_dir / f"cls_{safe}.csv"
         if vis_cls_csv.exists() and baseline_rows:
             vis_rows = _read_csv(vis_cls_csv)
-            vis_judged = {(r["agml_dataset"], r["image_name"]): r.get("judged_correct", "")
+            vis_judged = {(r["agml_dataset"], r["image_name"], r["class_label"]): r.get("judged_correct", "")
                           for r in vis_rows}
             for r in baseline_rows:
-                key = (r.get("agml_dataset", ""), r.get("image_name", ""))
+                key = (r.get("agml_dataset", ""), r.get("image_name", ""), r.get("class_label", ""))
                 if key in vis_judged:
                     r["judged_correct"] = vis_judged[key]
             print(f"  Merged judged_correct from {vis_cls_csv.name} into baseline rows")

@@ -1024,10 +1024,10 @@ def plot_aug_distribution(
         if vis_dir is not None:
             vis_csv = vis_dir / f"cls_{safe}.csv"
             if vis_csv.exists() and b_rows:
-                vis_judged = {(r["agml_dataset"], r["image_name"]): r.get("judged_correct", "")
+                vis_judged = {(r["agml_dataset"], r["image_name"], r["class_label"]): r.get("judged_correct", "")
                               for r in _read_csv(vis_csv)}
                 for r in b_rows:
-                    key = (r.get("agml_dataset", ""), r.get("image_name", ""))
+                    key = (r.get("agml_dataset", ""), r.get("image_name", ""), r.get("class_label", ""))
                     if key in vis_judged:
                         r["judged_correct"] = vis_judged[key]
                 print(f"  Merged baseline judged_correct from {vis_csv.name}")
