@@ -76,8 +76,21 @@ def _dataset_panel(
     n_per_class: int,
     label_color: str,
 ) -> None:
-    """Fill one row of axes with class label + sample images."""
-    col = 0
+    """Fill one row of axes: first cell is dataset label, rest are class images."""
+    # First cell: dataset name + scores as text
+    label_ax = ax_row[0]
+    short = ds_name.replace("_classification", "").replace("_", " ").replace("_", " ")
+    label_ax.set_facecolor("#f7f7f7")
+    label_ax.text(
+        0.5, 0.5,
+        f"{short}\n\nsil={score_sil:.3f}\nfdr={score_fdr:.3f}",
+        ha="center", va="center", fontsize=6, color=label_color,
+        fontweight="bold", wrap=True, transform=label_ax.transAxes,
+    )
+    label_ax.axis("off")
+
+    # Remaining cells: images (col 1 onward)
+    col = 1
     max_cols = len(ax_row)
     for cls in classes:
         imgs = images.get(cls, [])
@@ -89,22 +102,13 @@ def _dataset_panel(
                                   color="black", pad=2)
             ax_row[col].axis("off")
             col += 1
-        # blank if fewer images than n_per_class
-        while col < (classes.index(cls) + 1) * n_per_class and col < max_cols:
+        while col < (classes.index(cls) + 1) * n_per_class + 1 and col < max_cols:
             ax_row[col].axis("off")
             col += 1
 
-    # blank remaining columns
     while col < max_cols:
         ax_row[col].axis("off")
         col += 1
-
-    # Row label on left-most axis
-    short = ds_name.replace("_classification", "").replace("_", " ")
-    ax_row[0].set_ylabel(
-        f"{short}\nsil={score_sil:.3f}  fdr={score_fdr:.3f}",
-        fontsize=5.5, rotation=0, labelpad=60, va="center", color=label_color,
-    )
 
 
 def plot_difficulty_samples(
@@ -154,15 +158,19 @@ def plot_difficulty_samples(
         all_classes[ds] = cls_list
 
     max_cls = max((len(c) for c in all_classes.values()), default=1)
-    n_cols = max_cls * n_per_class
+    n_img_cols = max_cls * n_per_class
+    n_cols = 1 + n_img_cols  # first col = dataset label
     n_rows = len(rows)
 
+    # Make label column narrower than image columns
+    width_ratios = [1.8] + [1.0] * n_img_cols
     fig, axes = plt.subplots(
         n_rows, n_cols,
-        figsize=(n_cols * 1.4, n_rows * 1.6),
+        figsize=(n_cols * 1.3, n_rows * 1.6),
         squeeze=False,
+        gridspec_kw={"width_ratios": width_ratios},
     )
-    fig.subplots_adjust(hspace=0.6, wspace=0.05, left=0.18)
+    fig.subplots_adjust(hspace=0.6, wspace=0.05)
 
     # Section dividers: track task+difficulty changes
     prev_section = None
@@ -225,7 +233,7 @@ def main(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
     cfg = datasets_by_name(Path(args.config))
-    ds_to_task = {k: v.task_type for k, v in cfg.items()}
+    ds_to_task = {k: v.task_type for k, v in cfg.items() if not v.skip}
 
     print(f"Generating sample visualisations (n_top={args.n_top}, n_per_class={args.n_per_class})")
     for metric in ("silhouette", "fisher_dr"):
