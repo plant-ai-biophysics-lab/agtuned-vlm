@@ -6,6 +6,7 @@ import sys
 STAGES = {
     "probe":         "src.linear_probe.probe",
     "cluster":       "src.clustering_eval.eval",
+    "cluster-viz":   "src.clustering_eval.sample_viz",
     "language":      "src.language_assessment.assess",
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
@@ -24,6 +25,7 @@ Usage:
 Stages:
     probe           Stage 1 — linear probe: frozen-embedding separability across backbones
     cluster                 — unsupervised clustering eval of frozen embeddings (NMI, ARI, Silhouette)
+    cluster-viz             — visualise easiest/hardest datasets per task with sample class images
     language        Stage 2 — language assessment: text-only agricultural VQA (ROUGE-SS + F1)
     language-plot           — regenerate language assessment charts from saved metrics JSON
     vision          Stage 3 — vision assessment: multimodal VQA with image input (ROUGE-SS + F1)
