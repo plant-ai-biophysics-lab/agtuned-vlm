@@ -14,11 +14,16 @@ from sklearn.metrics import accuracy_score, f1_score
 
 _sem_sim_model = None
 
+_SEM_SIM_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+
 def _get_sem_sim_model():
     global _sem_sim_model
     if _sem_sim_model is None:
         from sentence_transformers import SentenceTransformer
-        _sem_sim_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        try:
+            _sem_sim_model = SentenceTransformer(_SEM_SIM_MODEL_ID, local_files_only=True)
+        except Exception:
+            _sem_sim_model = SentenceTransformer(_SEM_SIM_MODEL_ID)
     return _sem_sim_model
 
 
