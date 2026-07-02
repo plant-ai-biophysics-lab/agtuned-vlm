@@ -58,6 +58,7 @@ from src.common.metrics import (
     judged_summary, resolve_class, sample_class_images,
 )
 from src.common.dataset_config import datasets_by_name, clean_class_list
+from src.common.difficulty_plots import plot_difficulty_correlation_conditions
 
 try:
     from vllm import LLM, SamplingParams
@@ -1034,6 +1035,28 @@ def main() -> None:
             plot_difficulty_bins_clustering(
                 metrics, vis_per_ds, clustering_per_ds, output_dir,
                 backbone=args.clustering_backbone)
+
+        # Clustering difficulty vs judged F1 per CoT condition
+        def _judged_f1_per_ds(cond_key: str) -> dict[str, float]:
+            per_ds = metrics.get(cond_key, {}).get("per_dataset", {})
+            return {ds: m["judge_f1_macro"] for ds, m in per_ds.items()
+                    if "judge_f1_macro" in m}
+
+        cot_conditions = {
+            "Vision Baseline": vis_per_ds,  # already float per ds
+        }
+        for cond, label in [("self_cot", "Self-CoT"), ("cot_yaml", "CoT YAML")]:
+            if cond in metrics:
+                cot_conditions[label] = _judged_f1_per_ds(cond)
+
+        plot_difficulty_correlation_conditions(
+            cot_conditions,
+            clustering_metrics_path=Path(args.clustering_metrics),
+            output_dir=output_dir / "difficulty_correlation",
+            backbone=args.clustering_backbone,
+            filename="difficulty_vs_perf_cot_conditions.png",
+            title="Difficulty vs Judged F1 — CoT Conditions",
+        )
 
     if args.hard_only and vis_per_ds:
         aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)

@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import argparse
 
 from src.common.dataset_config import datasets_by_name
+from src.common.difficulty_plots import plot_difficulty_correlation_conditions
 from src.desc_augmented_vision import (
     _read_csv,
     _safe_name,
@@ -113,6 +114,24 @@ def main(args: argparse.Namespace) -> None:
             plot_difficulty_bins_clustering(
                 bpd, apd, clustering_per_ds, output_dir,
                 suffix=filter_label, backbone=args.clustering_backbone)
+
+        # Clustering difficulty vs judged F1 — one row per condition
+        def _judged_f1_per_ds(per_ds: dict[str, dict]) -> dict[str, float]:
+            return {ds: m["judge_f1_macro"] for ds, m in per_ds.items()
+                    if "judge_f1_macro" in m}
+
+        conditions_per_ds = {
+            "Vision Baseline": _judged_f1_per_ds(bpd),
+            "Desc-Aug":        _judged_f1_per_ds(apd),
+        }
+        plot_difficulty_correlation_conditions(
+            conditions_per_ds,
+            clustering_metrics_path=Path(args.clustering_metrics),
+            output_dir=output_dir / "difficulty_correlation",
+            backbone=args.clustering_backbone,
+            filename=f"difficulty_vs_perf_desc_aug_{filter_label}.png",
+            title=f"Difficulty vs Judged F1 — Desc-Aug ({filter_label})",
+        )
 
     print("\nDone.")
 
