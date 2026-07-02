@@ -1182,7 +1182,7 @@ def plot_difficulty_correlation(
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     ax.set_xlabel("Vision Baseline Judged F1")
     ax.set_ylabel("Desc-Aug Judged F1")
-    ax.set_title(f"Difficulty vs Desc-Aug Performance ({suffix})")
+    ax.set_title(f"Difficulty vs Desc-Aug Performance — Judged F1 ({suffix})")
     ax.legend(fontsize=8); ax.grid(True, alpha=0.2)
     plt.tight_layout()
     path = output_dir / f"aug_difficulty_correlation_{suffix}.png"
