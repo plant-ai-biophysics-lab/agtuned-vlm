@@ -8,6 +8,7 @@ STAGES = {
     "cluster":       "src.clustering_eval.eval",
     "cluster-viz":   "src.clustering_eval.sample_viz",
     "majority-vote": "src.majority_vote",
+    "cot":           "src.cot_vision",
     "language":      "src.language_assessment.assess",
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",

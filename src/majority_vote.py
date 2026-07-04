@@ -667,8 +667,13 @@ def main() -> None:
         print(f"  Saved: {metrics_path}")
 
     # ── Summary ────────────────────────────────────────────────────────────────
+    def _sort_cond(c: str) -> tuple:
+        parts = c.split("_")
+        n = int(parts[-1]) if parts[-1].isdigit() else 0
+        return (c.rsplit("_", 1)[0] if parts[-1].isdigit() else c, n)
+
     print("\n── Majority Vote Summary ─────────────────────────────")
-    for cond in sorted(metrics, key=lambda c: int(c.split("_")[1]) if "_" in c else 0):
+    for cond in sorted(metrics, key=_sort_cond):
         m   = metrics[cond]
         jf1 = m.get("judge_f1_macro")
         jf1_str = f"  judge_F1={jf1:.3f}" if jf1 is not None else ""
@@ -695,7 +700,7 @@ def main() -> None:
     conditions_per_ds: dict[str, dict[str, float]] = {}
     if vis_per_ds:
         conditions_per_ds["Vision Baseline"] = vis_per_ds
-    for cond in sorted(metrics, key=lambda c: int(c.split("_")[1]) if "_" in c else 0):
+    for cond in sorted(metrics, key=_sort_cond):
         conditions_per_ds[cond.replace("mv_", "N=")] = _judged_f1_per_ds(cond)
 
     if conditions_per_ds:
