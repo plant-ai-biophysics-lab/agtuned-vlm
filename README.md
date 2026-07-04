@@ -7,6 +7,8 @@ Evaluation framework for vision-language models on agricultural image understand
 | Stage | Script | What it does |
 |-------|--------|--------------|
 | 1 — Linear Probe | `src/linear_probe/probe.py` | Frozen-embedding separability across backbones (LR + optional FC, per-dataset + combined) |
+| 1b — Clustering | `src/clustering_eval/eval.py` | Label-free clustering eval of frozen embeddings (NMI, ARI, Silhouette, Fisher DR) |
+| cluster-viz | `src/clustering_eval/sample_viz.py` | Visualise easiest/hardest datasets per task with sample class images |
 | 2 — Language Assessment | `src/language_assessment/assess.py` | Text-only agricultural VQA (ROUGE-SS + F1-macro) — also accepts VLMs in text-only mode |
 | language-plot | `src/language_assessment/plot.py` | Regenerate language assessment charts without re-running inference |
 | 3 — Vision Assessment | `src/vision_assessment/assess.py` | Multimodal VQA with image input (ROUGE-SS + F1-macro) |
@@ -14,6 +16,8 @@ Evaluation framework for vision-language models on agricultural image understand
 | 4 — Aug Vision | `src/desc_augmented_vision.py` | Test whether language descriptions of judged-correct classes improve vision classification |
 | aug-vision-plot | `src/desc_augmented_vision_plot.py` | Regenerate aug-vision charts from saved CSVs |
 | 4b — CoT Vision | `src/cot_vision.py` | Two CoT strategies (self-description, structured YAML) on all 26 datasets — same images as vision assessment, judged F1 |
+| cot | `src/cot_vision.py` | Same as above — accessible via `main.py cot`; also supports `--plot_only` to regenerate charts |
+| 4c — Majority Vote | `src/majority_vote.py` | Test-time compute scaling via majority voting: sweeps N votes across baseline, Self-CoT, and CoT YAML prompts |
 | 5 — Collate | `src/collate_results.py` | Merge all stage metrics into `results_table.csv` + analysis + 4-condition comparison charts |
 | Logit Lens | `experiments/logit_lens/logit_lens.py` | Layer-wise top-1 accuracy across LLM depth (normal + aug_vision) on 6 hard/easy datasets |
 
@@ -364,15 +368,148 @@ uv run python src/cot_vision.py \
 | `--test_split` | `outputs/linear_probe/test_split.json` | Same test images as vision assessment — ensures direct comparability |
 | `--n_samples` | all | Max images per class (only used if test_split is absent) |
 | `--datasets` | all 26 datasets | Override which AgML datasets to evaluate |
+| `--hard_only` | off | Restrict to the 3 worst-performing datasets per task type (uses vision baseline F1) |
+| `--mv_dir` | `outputs/majority_vote/` | Majority vote output dir — MV bars are added to the combined chart when `majority_vote_metrics.json` exists there |
+| `--clustering_metrics` | `outputs/clustering_eval/clustering_metrics.json` | Clustering metrics for label-free difficulty binning charts |
 | `--use_4bit` | off | Load model in 4-bit (BitsAndBytes) to reduce GPU memory |
+| `--plot_only` | off | Skip inference; regenerate all charts from existing CSV + metrics JSON |
+
+#### Regenerate charts without re-running inference
+
+```bash
+python main.py cot \
+  --model      google/gemma-4-26B-A4B-it \
+  --output_dir outputs/cot_vision/ \
+  --vis_dir    outputs/vision_assessment/ \
+  --aug_dir    outputs/desc_augmented_vision/ \
+  --mv_dir     outputs/majority_vote/ \
+  --hard_only \
+  --n_samples  30 \
+  --clustering_metrics outputs/clustering_eval/clustering_metrics.json \
+  --plot_only
+```
 
 **Output structure:**
 
 ```
 outputs/cot_vision/
-├── cot_cls_<model>.csv        ← one row per (image, condition) with judged_correct
-├── cot_vision_metrics.json    ← direct + judged F1 per condition × dataset
-└── cot_comparison.png         ← bar chart: self_cot vs cot_yaml per dataset
+├── cot_cls_<model>.csv                          ← one row per (image, condition) with judged_correct
+├── cot_vision_metrics.json                      ← direct + judged F1 per condition × dataset
+├── cot_comparison.png                           ← bar chart: self_cot vs cot_yaml per dataset
+├── cot_difficulty_bins_f1.png                   ← datasets binned by baseline F1 → judged F1
+├── cot_difficulty_bins_{metric}.png             ← binned by clustering metric (silhouette, fisher_dr, …)
+├── cot_difficulty_correlation.png               ← scatter: baseline F1 vs CoT judged F1
+├── hard_four_condition_subsample.png            ← grouped bar: baseline / Self-CoT / CoT YAML / Desc-Aug (+ MV if available)
+└── difficulty_correlation/
+    └── difficulty_vs_perf_cot_conditions.png    ← clustering difficulty vs judged F1 per condition
+```
+
+---
+
+### Stage 4c — Majority Vote (test-time compute scaling)
+
+Runs majority voting (self-consistency) over N completions per image as a test-time compute baseline. A single vLLM `generate()` call with `n=N` produces N diverse completions; the plurality class wins. Supports three prompt variants swept in one run:
+
+| Mode | Conditions produced | How |
+|------|---------------------|-----|
+| Baseline (default) | `mv_1`, `mv_4`, `mv_8`, `mv_16` | Plain vision assessment prompt, N samples |
+| `--cot_run` | `mv_self_cot_N`, `mv_cot_yaml_N` | Step 0 uses `n=N, T>0`; subsequent CoT steps use `n=1, T=0` on expanded histories |
+
+```bash
+# Baseline MV sweep
+python main.py majority-vote \
+  --model      google/gemma-4-26B-A4B-it \
+  --output_dir outputs/majority_vote/ \
+  --hard_only \
+  --n_samples  30 \
+  --n_votes    1 4 8 16
+
+# CoT MV variants (self_cot + cot_yaml)
+python main.py majority-vote \
+  --model      google/gemma-4-26B-A4B-it \
+  --output_dir outputs/majority_vote/ \
+  --hard_only \
+  --n_samples  30 \
+  --n_votes    1 4 8 \
+  --temperature 0.8 \
+  --cot_run \
+  --cot_dir    outputs/cot_vision/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `google/gemma-4-26B-A4B-it` | HuggingFace model ID |
+| `--output_dir` | `outputs/majority_vote/` | Where to write CSV, metrics, and charts |
+| `--n_votes` | `1 4 8 16` | Vote counts to sweep |
+| `--temperature` | `0.8` | Sampling temperature (must be > 0 for diversity) |
+| `--cot_run` | off | Run `mv_self_cot` and `mv_cot_yaml` variants instead of baseline prompt |
+| `--hard_only` | off | Restrict to the 3 worst datasets per task type (uses vision baseline F1) |
+| `--n_samples` | all | Max images per class |
+| `--cot_dir` | `outputs/cot_vision/` | CoT metrics dir — used for reference lines on the scaling curve |
+| `--vis_dir` | `outputs/vision_assessment/` | Vision assessment dir — baseline reference line |
+| `--aug_dir` | `outputs/desc_augmented_vision/` | Desc-aug dir — desc_aug bar in combined chart |
+| `--clustering_metrics` | `outputs/clustering_eval/clustering_metrics.json` | Clustering metrics for difficulty correlation |
+| `--plot_only` | off | Skip inference; regenerate plots from existing CSV + JSON |
+
+#### Regenerate plots without re-running inference
+
+```bash
+python main.py majority-vote \
+  --model      google/gemma-4-26B-A4B-it \
+  --output_dir outputs/majority_vote/ \
+  --hard_only \
+  --n_samples  30 \
+  --n_votes    1 4 8 \
+  --cot_dir    outputs/cot_vision/ \
+  --vis_dir    outputs/vision_assessment/ \
+  --aug_dir    outputs/desc_augmented_vision/ \
+  --clustering_metrics outputs/clustering_eval/clustering_metrics.json \
+  --plot_only
+```
+
+**Output structure:**
+
+```
+outputs/majority_vote/
+├── mv_cls_<model>.csv                           ← one row per (image, condition, n_votes)
+├── majority_vote_metrics.json                   ← F1 + judged F1 per condition × dataset
+├── mv_scaling_curve.png                         ← F1 vs N (all series + CoT reference lines)
+├── mv_vote_calibration.png                      ← vote fraction vs accuracy scatter
+├── hard_four_condition_subsample.png            ← combined chart: base conditions + MV bars
+└── difficulty_correlation/
+    └── difficulty_vs_perf_majority_vote.png     ← clustering difficulty vs judged F1 per N
+```
+
+---
+
+### Stage 1b — Clustering Visualisation
+
+Generates sample image panels for the top-N easiest and hardest datasets per task, ranked by silhouette score and Fisher discriminant ratio. Useful for paper figures and qualitative inspection of what makes a dataset hard for frozen features.
+
+```bash
+python main.py cluster-viz \
+  --clustering_metrics outputs/clustering_eval/clustering_metrics.json \
+  --backbone           dinov3-vitb16-pretrain-lvd1689m \
+  --agml_root          ~/.agml/datasets \
+  --output_dir         outputs/clustering_eval/ \
+  --n_top              3 \
+  --n_per_class        2
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--clustering_metrics` | `outputs/clustering_eval/clustering_metrics.json` | Path to clustering metrics |
+| `--backbone` | `dinov3-vitb16-pretrain-lvd1689m` | Which backbone's scores to rank by |
+| `--agml_root` | `~/.agml/datasets` | Root directory of AgML datasets (must be downloaded locally) |
+| `--n_top` | `3` | Number of easiest and hardest datasets per task |
+| `--n_per_class` | `2` | Sample images per class per dataset |
+
+**Output structure:**
+
+```
+outputs/clustering_eval/
+├── clustering_difficulty_samples_silhouette.png
+└── clustering_difficulty_samples_fisher_dr.png
 ```
 
 ---
