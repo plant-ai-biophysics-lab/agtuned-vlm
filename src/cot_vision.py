@@ -307,52 +307,58 @@ def _make_row(item: dict, condition: str, pred: str) -> dict:
     }
 
 
-def run_self_cot(items: list[dict], llm, tokenizer) -> list[dict]:
+def run_self_cot(items: list[dict], llm, tokenizer, prompt_batch_size: int = 256) -> list[dict]:
     """
-    Staged batching: all images processed together per stage.
-    Stage 1 (describe) runs across all images, then Stage 2 (classify) runs across all.
-    PIL images are loaded lazily per stage — not held in memory between stages.
+    Staged batching with mini-batches to cap peak CPU RAM.
+    Stage 1 (describe) runs in chunks, then Stage 2 (classify) runs in chunks.
+    PIL images are loaded lazily per chunk — never held across stages.
     """
-    # Stage 1 — describe all images
-    print(f"\n[self_cot] Stage 1/2: describing ({len(items)} images)...")
-    stage1_prompts = []
-    for item in tqdm(items, desc="  Building prompts (stage 1)", unit="img", dynamic_ncols=True):
-        desc_q = _desc_question(item["task_type"], item["crop"])
-        msgs = _sys_msg() + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": desc_q},
-        ]}]
-        stage1_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
-    print(f"  Generating...")
-    descriptions = [_clean(o.outputs[0].text) for o in llm.generate(stage1_prompts, _COT_PARAMS)]
-    del stage1_prompts
+    # Stage 1 — describe all images in mini-batches
+    print(f"\n[self_cot] Stage 1/2: describing ({len(items)} images, batch={prompt_batch_size})...")
+    descriptions: list[str] = []
+    for start in range(0, len(items), prompt_batch_size):
+        batch = items[start:start + prompt_batch_size]
+        prompts = []
+        for item in tqdm(batch, desc=f"  Building prompts (stage 1, chunk {start//prompt_batch_size+1})",
+                         unit="img", dynamic_ncols=True):
+            desc_q = _desc_question(item["task_type"], item["crop"])
+            msgs = _sys_msg() + [{"role": "user", "content": [
+                {"type": "image"}, {"type": "text", "text": desc_q},
+            ]}]
+            prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+        descriptions.extend(_clean(o.outputs[0].text) for o in llm.generate(prompts, _COT_PARAMS))
+        del prompts
 
-    # Stage 2 — classify all images using their stage-1 descriptions
-    print(f"[self_cot] Stage 2/2: classifying ({len(items)} images)...")
-    stage2_prompts = []
-    for item, desc in tqdm(zip(items, descriptions), desc="  Building prompts (stage 2)", unit="img", total=len(items), dynamic_ncols=True):
-        desc_q = _desc_question(item["task_type"], item["crop"])
-        cls_q  = _cls_question(item["task_type"], item["crop"])
-        msgs = _sys_msg() + [
-            {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
-            {"role": "assistant", "content": desc},
-            {"role": "user",      "content": cls_q},
-        ]
-        stage2_prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
-    print(f"  Generating...")
-    predictions = [_clean(o.outputs[0].text) for o in llm.generate(stage2_prompts, _CLS_PARAMS)]
-    del stage2_prompts
+    # Stage 2 — classify in mini-batches using stage-1 descriptions
+    print(f"[self_cot] Stage 2/2: classifying ({len(items)} images, batch={prompt_batch_size})...")
+    predictions: list[str] = []
+    for start in range(0, len(items), prompt_batch_size):
+        batch_items = items[start:start + prompt_batch_size]
+        batch_descs = descriptions[start:start + prompt_batch_size]
+        prompts = []
+        for item, desc in tqdm(zip(batch_items, batch_descs),
+                               desc=f"  Building prompts (stage 2, chunk {start//prompt_batch_size+1})",
+                               unit="img", total=len(batch_items), dynamic_ncols=True):
+            desc_q = _desc_question(item["task_type"], item["crop"])
+            cls_q  = _cls_question(item["task_type"], item["crop"])
+            msgs = _sys_msg() + [
+                {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
+                {"role": "assistant", "content": desc},
+                {"role": "user",      "content": cls_q},
+            ]
+            prompts.append(_build_prompt(msgs, tokenizer, _load_image(item)))
+        predictions.extend(_clean(o.outputs[0].text) for o in llm.generate(prompts, _CLS_PARAMS))
+        del prompts
 
     return [_make_row(item, "self_cot", pred) for item, pred in zip(items, predictions)]
 
 
-def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
+def run_cot_yaml(items: list[dict], llm, tokenizer, prompt_batch_size: int = 256) -> list[dict]:
     """
     Staged batching split by CoT path (disease_pest vs weed_identification).
-    Within each group, all images run each CoT step together as a batch.
-    PIL images are loaded lazily per stage.
+    Within each group, each CoT step runs in mini-batches to cap peak CPU RAM.
+    PIL images are loaded lazily per chunk — never held across steps.
     """
-
-
     groups: dict[str, list[tuple[int, dict]]] = {}
     for idx, item in enumerate(items):
         cot_key = _COT_PROMPTS["task_type_to_cot"].get(item["task_type"], "disease_pest")
@@ -364,36 +370,46 @@ def run_cot_yaml(items: list[dict], llm, tokenizer) -> list[dict]:
         steps       = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
         orig_idxs   = [idx for idx, _ in indexed_items]
         group_items = [item for _, item in indexed_items]
-        print(f"\n[cot_yaml] {cot_key}: {len(group_items)} images × {len(steps)} steps")
+        print(f"\n[cot_yaml] {cot_key}: {len(group_items)} images × {len(steps)} steps (batch={prompt_batch_size})")
 
         histories: list[list[dict]] = [
             _sys_msg() + [{"role": "user", "content": [
                 {"type": "image"}, {"type": "text", "text": steps[0]},
             ]}]
-            for item in group_items
+            for _ in group_items
         ]
 
         for step_idx in range(len(steps)):
-            print(f"  Step {step_idx + 1}/{len(steps)}: building prompts...")
-            prompts = [_build_prompt(h, tokenizer, _load_image(item))
-                       for h, item in tqdm(zip(histories, group_items), desc=f"    Prompts step {step_idx+1}", unit="img", total=len(group_items), dynamic_ncols=True)]
-            print(f"    Generating...")
-            responses = [_clean(o.outputs[0].text) for o in llm.generate(prompts, _COT_PARAMS)]
-            del prompts
+            print(f"  Step {step_idx + 1}/{len(steps)}: {len(group_items)} prompts...")
+            responses: list[str] = []
+            for start in range(0, len(group_items), prompt_batch_size):
+                batch_items = group_items[start:start + prompt_batch_size]
+                batch_hist  = histories[start:start + prompt_batch_size]
+                prompts = [_build_prompt(h, tokenizer, _load_image(item))
+                           for h, item in tqdm(zip(batch_hist, batch_items),
+                                               desc=f"    Prompts step {step_idx+1} chunk {start//prompt_batch_size+1}",
+                                               unit="img", total=len(batch_items), dynamic_ncols=True)]
+                responses.extend(_clean(o.outputs[0].text) for o in llm.generate(prompts, _COT_PARAMS))
+                del prompts
             for i, resp in enumerate(responses):
                 histories[i].append({"role": "assistant", "content": resp})
                 if step_idx < len(steps) - 1:
                     histories[i].append({"role": "user", "content": steps[step_idx + 1]})
 
-        print(f"  Classification turn: building prompts...")
+        # Classification turn
+        print(f"  Classification: {len(group_items)} prompts...")
         for i, item in enumerate(group_items):
-            cls_q = _cls_question(item["task_type"], item["crop"])
-            histories[i].append({"role": "user", "content": cls_q})
-        cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
-                       for h, item in tqdm(zip(histories, group_items), desc="    Prompts cls", unit="img", total=len(group_items), dynamic_ncols=True)]
-        print(f"    Generating...")
-        predictions = [_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, _CLS_PARAMS)]
-        del cls_prompts
+            histories[i].append({"role": "user", "content": _cls_question(item["task_type"], item["crop"])})
+        predictions: list[str] = []
+        for start in range(0, len(group_items), prompt_batch_size):
+            batch_items = group_items[start:start + prompt_batch_size]
+            batch_hist  = histories[start:start + prompt_batch_size]
+            cls_prompts = [_build_prompt(h, tokenizer, _load_image(item))
+                           for h, item in tqdm(zip(batch_hist, batch_items),
+                                               desc=f"    Prompts cls chunk {start//prompt_batch_size+1}",
+                                               unit="img", total=len(batch_items), dynamic_ncols=True)]
+            predictions.extend(_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, _CLS_PARAMS))
+            del cls_prompts
 
         for orig_idx, item, pred in zip(orig_idxs, group_items, predictions):
             all_rows.append((orig_idx, _make_row(item, "cot_yaml", pred)))
@@ -929,6 +945,8 @@ def main() -> None:
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument("--max_num_seqs",  type=int, default=32)
+    parser.add_argument("--prompt_batch_size", type=int, default=256,
+                        help="Images per prompt-build+generate chunk — reduce to lower peak CPU RAM")
     parser.add_argument("--vis_dir",    default="outputs/vision_assessment/",
                         help="Vision assessment output dir — used to load baseline judged F1 for difficulty plots")
     parser.add_argument("--aug_dir",    default="outputs/desc_augmented_vision/",
@@ -998,11 +1016,11 @@ def main() -> None:
 
         # Phase 1: self_cot (2 stages)
         print("\n=== Phase 1: self_cot ===")
-        self_cot_rows = run_self_cot(items, llm, tokenizer)
+        self_cot_rows = run_self_cot(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
 
         # Phase 2: cot_yaml (N stages per CoT path)
         print("\n=== Phase 2: cot_yaml ===")
-        cot_yaml_rows = run_cot_yaml(items, llm, tokenizer)
+        cot_yaml_rows = run_cot_yaml(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
 
         all_rows = self_cot_rows + cot_yaml_rows
 
