@@ -1005,6 +1005,11 @@ def main() -> None:
             print("[error] No work items collected — check datasets and test_split")
             return
 
+        # Checkpoint paths — each phase saves on completion so a rerun can skip done phases
+        ckpt_self_cot  = output_dir / "ckpt_self_cot.csv"
+        ckpt_cot_yaml  = output_dir / "ckpt_cot_yaml.csv"
+        ckpt_judged    = output_dir / "ckpt_judged.csv"
+
         # Load vLLM once for all phases
         llm, tokenizer = load_llm(
             args.model,
@@ -1014,27 +1019,48 @@ def main() -> None:
             max_num_seqs=args.max_num_seqs,
         )
 
-        # Phase 1: self_cot (2 stages)
-        print("\n=== Phase 1: self_cot ===")
-        self_cot_rows = run_self_cot(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
+        # Phase 1: self_cot
+        if ckpt_self_cot.exists():
+            print(f"\n=== Phase 1: self_cot [SKIPPED — checkpoint found] ===")
+            self_cot_rows = list(csv.DictReader(open(ckpt_self_cot, encoding="utf-8")))
+            print(f"  Loaded {len(self_cot_rows)} rows from {ckpt_self_cot.name}")
+        else:
+            print("\n=== Phase 1: self_cot ===")
+            self_cot_rows = run_self_cot(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
+            write_cls_csv(self_cot_rows, ckpt_self_cot)
+            print(f"  Checkpoint saved: {ckpt_self_cot.name}")
 
-        # Phase 2: cot_yaml (N stages per CoT path)
-        print("\n=== Phase 2: cot_yaml ===")
-        cot_yaml_rows = run_cot_yaml(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
+        # Phase 2: cot_yaml
+        if ckpt_cot_yaml.exists():
+            print(f"\n=== Phase 2: cot_yaml [SKIPPED — checkpoint found] ===")
+            cot_yaml_rows = list(csv.DictReader(open(ckpt_cot_yaml, encoding="utf-8")))
+            print(f"  Loaded {len(cot_yaml_rows)} rows from {ckpt_cot_yaml.name}")
+        else:
+            print("\n=== Phase 2: cot_yaml ===")
+            cot_yaml_rows = run_cot_yaml(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
+            write_cls_csv(cot_yaml_rows, ckpt_cot_yaml)
+            print(f"  Checkpoint saved: {ckpt_cot_yaml.name}")
 
         all_rows = self_cot_rows + cot_yaml_rows
 
-        # Phase 3: judge (all rows, one batched call via shared apply_judge)
-        print(f"\n=== Phase 3: judge ({len(all_rows)} rows) ===")
-        all_rows = apply_judge(
-            rows=all_rows,
-            llm=llm,
-            tokenizer=tokenizer,
-            system_prompt=_PROMPTS.get("judge_system_vision", ""),
-            judge_template=_PROMPTS["judge_classification_template"],
-            gt_key="ground_truth",
-            pred_key="prediction",
-        )
+        # Phase 3: judge
+        if ckpt_judged.exists():
+            print(f"\n=== Phase 3: judge [SKIPPED — checkpoint found] ===")
+            all_rows = list(csv.DictReader(open(ckpt_judged, encoding="utf-8")))
+            print(f"  Loaded {len(all_rows)} judged rows from {ckpt_judged.name}")
+        else:
+            print(f"\n=== Phase 3: judge ({len(all_rows)} rows) ===")
+            all_rows = apply_judge(
+                rows=all_rows,
+                llm=llm,
+                tokenizer=tokenizer,
+                system_prompt=_PROMPTS.get("judge_system_vision", ""),
+                judge_template=_PROMPTS["judge_classification_template"],
+                gt_key="ground_truth",
+                pred_key="prediction",
+            )
+            write_cls_csv(all_rows, ckpt_judged)
+            print(f"  Checkpoint saved: {ckpt_judged.name}")
 
         elapsed = time.perf_counter() - t0
         print(f"\nTotal time: {elapsed:.1f}s  ({len(all_rows)} rows)")
