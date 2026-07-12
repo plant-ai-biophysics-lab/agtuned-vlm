@@ -353,11 +353,17 @@ def run_self_cot(items: list[dict], llm, tokenizer, prompt_batch_size: int = 256
     return [_make_row(item, "self_cot", pred) for item, pred in zip(items, predictions)]
 
 
-def run_cot_yaml(items: list[dict], llm, tokenizer, prompt_batch_size: int = 256) -> list[dict]:
+def run_cot_yaml(
+    items: list[dict],
+    llm,
+    tokenizer,
+    prompt_batch_size: int = 256,
+    ckpt_dir: Path | None = None,
+) -> list[dict]:
     """
     Staged batching split by CoT path (disease_pest vs weed_identification).
-    Within each group, each CoT step runs in mini-batches to cap peak CPU RAM.
-    PIL images are loaded lazily per chunk — never held across steps.
+    Each group is checkpointed independently to ckpt_dir/ckpt_cot_yaml_{group}.csv
+    so a rerun can skip completed groups.
     """
     groups: dict[str, list[tuple[int, dict]]] = {}
     for idx, item in enumerate(items):
@@ -367,6 +373,16 @@ def run_cot_yaml(items: list[dict], llm, tokenizer, prompt_batch_size: int = 256
     all_rows: list[tuple[int, dict]] = []
 
     for cot_key, indexed_items in groups.items():
+        # Per-group checkpoint
+        ckpt_group = (ckpt_dir / f"ckpt_cot_yaml_{cot_key}.csv") if ckpt_dir else None
+        if ckpt_group and ckpt_group.exists():
+            print(f"\n[cot_yaml] {cot_key}: SKIPPED — checkpoint found ({ckpt_group.name})")
+            group_rows = list(csv.DictReader(open(ckpt_group, encoding="utf-8")))
+            for i, (orig_idx, _) in enumerate(indexed_items):
+                if i < len(group_rows):
+                    all_rows.append((orig_idx, group_rows[i]))
+            continue
+
         steps       = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
         orig_idxs   = [idx for idx, _ in indexed_items]
         group_items = [item for _, item in indexed_items]
@@ -411,8 +427,16 @@ def run_cot_yaml(items: list[dict], llm, tokenizer, prompt_batch_size: int = 256
             predictions.extend(_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, _CLS_PARAMS))
             del cls_prompts
 
-        for orig_idx, item, pred in zip(orig_idxs, group_items, predictions):
-            all_rows.append((orig_idx, _make_row(item, "cot_yaml", pred)))
+        group_result = [_make_row(item, "cot_yaml", pred)
+                        for item, pred in zip(group_items, predictions)]
+
+        # Save group checkpoint immediately
+        if ckpt_group:
+            write_cls_csv(group_result, ckpt_group)
+            print(f"  Checkpoint saved: {ckpt_group.name}")
+
+        for orig_idx, row in zip(orig_idxs, group_result):
+            all_rows.append((orig_idx, row))
 
     all_rows.sort(key=lambda x: x[0])
     return [row for _, row in all_rows]
@@ -877,6 +901,131 @@ def plot_difficulty_bins_clustering(
         )
 
 
+_CONDITION_STYLE = [
+    ("Vision Baseline", "#1f77b4"),
+    ("Self-CoT",        "#ff7f0e"),
+    ("CoT YAML",        "#2ca02c"),
+    ("Desc-Aug",        "#9467bd"),
+]
+
+
+def _f1(m: dict) -> float:
+    return m.get("judge_f1_macro") or m.get("f1_macro", 0.0)
+
+
+def _build_condition_map(
+    metrics: dict,
+    vis_per_ds: dict[str, float] | None,
+    aug_per_ds: dict[str, float] | None,
+) -> dict[str, dict[str, float]]:
+    """Return {condition_label: {dataset: f1}} for all available conditions."""
+    cond_map: dict[str, dict[str, float]] = {}
+    if vis_per_ds:
+        cond_map["Vision Baseline"] = dict(vis_per_ds)
+    for cot_key, label in [("self_cot", "Self-CoT"), ("cot_yaml", "CoT YAML")]:
+        if cot_key in metrics:
+            cond_map[label] = {
+                ds: _f1(m)
+                for ds, m in metrics[cot_key]["per_dataset"].items()
+            }
+    if aug_per_ds:
+        cond_map["Desc-Aug"] = dict(aug_per_ds)
+    return cond_map
+
+
+def plot_conditions_per_task(
+    metrics: dict,
+    vis_per_ds: dict[str, float] | None,
+    aug_per_ds: dict[str, float] | None,
+    output_dir: Path,
+) -> None:
+    """Grouped bar chart: mean judged F1 per condition × task type."""
+    import matplotlib.pyplot as plt
+
+    cond_map = _build_condition_map(metrics, vis_per_ds, aug_per_ds)
+    if not cond_map:
+        return
+
+    ds_to_task = {ds: tt for ds, (tt, _) in DATASET_TASK_TYPES.items()}
+    task_types = sorted({tt for tt in ds_to_task.values()
+                         if tt in ("disease", "pest_damage", "weed_identification")})
+
+    # mean F1 per (condition, task)
+    def _task_mean(per_ds: dict[str, float], task: str) -> float:
+        vals = [v for ds, v in per_ds.items() if ds_to_task.get(ds) == task]
+        return float(np.mean(vals)) if vals else 0.0
+
+    conditions = [lbl for lbl, _ in _CONDITION_STYLE if lbl in cond_map]
+    colors     = {lbl: c for lbl, c in _CONDITION_STYLE}
+
+    x     = np.arange(len(task_types))
+    width = 0.8 / len(conditions)
+    fig, ax = plt.subplots(figsize=(max(7, len(task_types) * len(conditions) * 0.5 + 2), 5))
+
+    for i, lbl in enumerate(conditions):
+        vals   = [_task_mean(cond_map[lbl], tt) for tt in task_types]
+        offset = (i - len(conditions) / 2 + 0.5) * width
+        bars   = ax.bar(x + offset, vals, width, label=lbl,
+                        color=colors[lbl], alpha=0.85, edgecolor="black", linewidth=0.5)
+        for bar, v in zip(bars, vals):
+            if v > 0.01:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.008,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=7)
+
+    task_labels = {"disease": "Disease", "pest_damage": "Pest Damage",
+                   "weed_identification": "Weed ID"}
+    ax.set_xticks(x)
+    ax.set_xticklabels([task_labels.get(tt, tt) for tt in task_types], fontsize=10)
+    ax.set_ylabel("Mean Judged F1")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("CoT Assessment — Mean Judged F1 by Task Type")
+    ax.legend(fontsize=8)
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    path = output_dir / "cot_per_task_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_conditions_overall(
+    metrics: dict,
+    vis_per_ds: dict[str, float] | None,
+    aug_per_ds: dict[str, float] | None,
+    output_dir: Path,
+) -> None:
+    """Single grouped bar: mean judged F1 across all datasets per condition."""
+    import matplotlib.pyplot as plt
+
+    cond_map = _build_condition_map(metrics, vis_per_ds, aug_per_ds)
+    if not cond_map:
+        return
+
+    conditions = [lbl for lbl, _ in _CONDITION_STYLE if lbl in cond_map]
+    colors     = {lbl: c for lbl, c in _CONDITION_STYLE}
+    means      = [float(np.mean(list(cond_map[lbl].values()))) for lbl in conditions]
+
+    fig, ax = plt.subplots(figsize=(max(5, len(conditions) * 1.2), 5))
+    bars = ax.bar(conditions, means,
+                  color=[colors[lbl] for lbl in conditions],
+                  alpha=0.85, edgecolor="black", linewidth=0.5)
+    for bar, v in zip(bars, means):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.008,
+                f"{v:.3f}", ha="center", va="bottom", fontsize=9)
+
+    ax.set_ylabel("Mean Judged F1 (all datasets)")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("CoT Assessment — Overall Mean Judged F1")
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    path = output_dir / "cot_overall_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
     """Bar chart: F1 per condition per dataset."""
     import matplotlib.pyplot as plt
@@ -957,6 +1106,9 @@ def main() -> None:
                         help="Backbone key in clustering_metrics.json to use for difficulty binning")
     parser.add_argument("--mv_dir", default="outputs/majority_vote/",
                         help="Majority vote output dir — adds MV bars to the hard-condition chart")
+    parser.add_argument("--from_ckpt", action="store_true",
+                        help="Compute metrics from checkpoint CSVs (ckpt_self_cot.csv etc.) "
+                             "and regenerate plots — use when inference is incomplete")
     parser.add_argument("--plot_only", action="store_true",
                         help="Skip inference; regenerate plots from existing cot_vision_metrics.json + CSV")
     args = parser.parse_args()
@@ -988,7 +1140,27 @@ def main() -> None:
     metrics_path = output_dir / "cot_vision_metrics.json"
     cls_csv      = output_dir / f"cot_cls_{safe_model}.csv"
 
-    if args.plot_only:
+    if args.from_ckpt:
+        # Load from whichever checkpoint CSVs exist and compute partial metrics
+        ckpt_files = {
+            "self_cot":  output_dir / "ckpt_self_cot.csv",
+            "cot_yaml":  output_dir / "ckpt_cot_yaml.csv",
+        }
+        all_rows: list[dict] = []
+        for cond, path in ckpt_files.items():
+            if path.exists():
+                rows = list(csv.DictReader(open(path, encoding="utf-8")))
+                all_rows.extend(rows)
+                print(f"  Loaded {len(rows)} rows from {path.name} ({cond})")
+            else:
+                print(f"  [skip] {path.name} not found")
+        if not all_rows:
+            print("[error] No checkpoint CSVs found in output_dir")
+            return
+        metrics = compute_metrics(all_rows)
+        print(f"[from_ckpt] Computed metrics for conditions: {list(metrics.keys())}")
+
+    elif args.plot_only:
         if not metrics_path.exists():
             print(f"[error] --plot_only requires {metrics_path} — run inference first")
             return
@@ -1037,7 +1209,9 @@ def main() -> None:
             print(f"  Loaded {len(cot_yaml_rows)} rows from {ckpt_cot_yaml.name}")
         else:
             print("\n=== Phase 2: cot_yaml ===")
-            cot_yaml_rows = run_cot_yaml(items, llm, tokenizer, prompt_batch_size=args.prompt_batch_size)
+            cot_yaml_rows = run_cot_yaml(items, llm, tokenizer,
+                                         prompt_batch_size=args.prompt_batch_size,
+                                         ckpt_dir=output_dir)
             write_cls_csv(cot_yaml_rows, ckpt_cot_yaml)
             print(f"  Checkpoint saved: {ckpt_cot_yaml.name}")
 
@@ -1093,7 +1267,12 @@ def main() -> None:
         print("  [warn] No vision baseline found — skipping difficulty plots")
 
     print("\n=== Generating plots ===")
+    aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)
+
     plot_condition_comparison(metrics, output_dir / "cot_comparison.png")
+    plot_conditions_per_task(metrics, vis_per_ds, aug_per_ds, output_dir)
+    plot_conditions_overall(metrics, vis_per_ds, aug_per_ds, output_dir)
+
     if vis_per_ds:
         plot_difficulty_correlation(metrics, vis_per_ds, output_dir)
         plot_difficulty_bins(metrics, vis_per_ds, output_dir)
@@ -1110,9 +1289,7 @@ def main() -> None:
             return {ds: m["judge_f1_macro"] for ds, m in per_ds.items()
                     if "judge_f1_macro" in m}
 
-        cot_conditions = {
-            "Vision Baseline": vis_per_ds,  # already float per ds
-        }
+        cot_conditions = {"Vision Baseline": vis_per_ds}
         for cond, label in [("self_cot", "Self-CoT"), ("cot_yaml", "CoT YAML")]:
             if cond in metrics:
                 cot_conditions[label] = _judged_f1_per_ds(cond)
