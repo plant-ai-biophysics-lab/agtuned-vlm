@@ -542,14 +542,19 @@ def select_hard_datasets(
 
 
 def load_aug_per_dataset(aug_dir: Path, model_id: str) -> dict[str, float]:
-    """Load per-dataset augmented F1 from desc_augmented_metrics_all.json."""
+    """Load per-dataset augmented judged F1 from desc_augmented_metrics_all.json.
+
+    Uses judge_f1_macro where available, falls back to f1_macro — consistent
+    with load_vis_per_dataset which also returns judged F1.
+    """
     for label in ("all", "filtered"):
         path = aug_dir / f"desc_augmented_metrics_{label}.json"
         if path.exists():
             data = json.loads(path.read_text())
             model_data = data.get("models", {}).get(model_id, {})
             per_ds = model_data.get("augmented_per_dataset", {})
-            return {ds: v.get("f1_macro", 0.0) for ds, v in per_ds.items()}
+            return {ds: v.get("judge_f1_macro") or v.get("f1_macro", 0.0)
+                    for ds, v in per_ds.items()}
     print(f"  [warn] No desc_augmented_metrics JSON found in {aug_dir}")
     return {}
 
@@ -901,12 +906,7 @@ def plot_difficulty_bins_clustering(
         )
 
 
-_CONDITION_STYLE = [
-    ("Vision Baseline", "#1f77b4"),
-    ("Self-CoT",        "#ff7f0e"),
-    ("CoT YAML",        "#2ca02c"),
-    ("Desc-Aug",        "#9467bd"),
-]
+from src.common.method_comparison import CONDITION_STYLES as _CONDITION_STYLE
 
 
 def _f1(m: dict) -> float:
@@ -933,60 +933,76 @@ def _build_condition_map(
     return cond_map
 
 
+def _judge_f1_per_class_from_rows(rows: list[dict]) -> dict[tuple[str, str, str], float]:
+    """Returns {(ds, task, class_label): judge_f1} — mirrors gather_judge_per_class_by_dataset."""
+    from collections import defaultdict as _defaultdict
+    from sklearn.metrics import f1_score as _sk_f1
+    by_key: dict[tuple, list[dict]] = _defaultdict(list)
+    for r in rows:
+        ds   = r.get("agml_dataset", "")
+        task = r.get("task_type", "")
+        cls  = r.get("class_label", "")
+        if not ds or not cls or r.get("judged_correct", "") == "":
+            continue
+        by_key[(ds, task, cls)].append(r)
+    result: dict[tuple, float] = {}
+    for (ds, task, cls), cls_rows in by_key.items():
+        refs  = [r["class_label"] for r in cls_rows]
+        preds = [r["class_label"] if int(r["judged_correct"]) else "" for r in cls_rows]
+        result[(ds, task, cls)] = _sk_f1(refs, preds, average="macro", zero_division=0)
+    return result
+
+
+def _task_means_from_cls_map(
+    cls_map: dict[tuple[str, str, str], float],
+    task_types: list[str],
+) -> tuple[list[float], list[int]]:
+    """Mean judge F1 per task and n (number of classes) from a per-class map."""
+    by_task: dict[str, list[float]] = {tt: [] for tt in task_types}
+    for (ds, task, cls), f1 in cls_map.items():
+        if task in by_task:
+            by_task[task].append(f1)
+    means = [float(np.mean(by_task[tt])) if by_task[tt] else 0.0 for tt in task_types]
+    ns    = [len(by_task[tt]) for tt in task_types]
+    return means, ns
+
+
 def plot_conditions_per_task(
     metrics: dict,
-    vis_per_ds: dict[str, float] | None,
-    aug_per_ds: dict[str, float] | None,
+    vis_rows: list[dict] | None,
+    aug_rows: list[dict] | None,
     output_dir: Path,
+    cot_rows: list[dict] | None = None,
 ) -> None:
-    """Grouped bar chart: mean judged F1 per condition × task type."""
-    import matplotlib.pyplot as plt
+    """Grouped bar charts: judged F1 and direct+judged F1 per condition × task type."""
+    from src.common.method_comparison import (
+        plot_per_task_full_comparison,
+        plot_per_task_judge_comparison,
+    )
 
-    cond_map = _build_condition_map(metrics, vis_per_ds, aug_per_ds)
-    if not cond_map:
-        return
+    rows_by_cond: dict[str, list[dict]] = {}
+    if vis_rows:
+        rows_by_cond["Vision Baseline"] = vis_rows
+    for cot_key, label in [("self_cot", "Self-CoT"), ("cot_yaml", "CoT YAML")]:
+        if cot_key not in metrics:
+            continue
+        filtered = [r for r in (cot_rows or []) if r.get("condition") == cot_key
+                    and r.get("judged_correct", "") != ""]
+        if filtered:
+            rows_by_cond[label] = filtered
+    if aug_rows:
+        rows_by_cond["Desc-Aug"] = aug_rows
 
-    ds_to_task = {ds: tt for ds, (tt, _) in DATASET_TASK_TYPES.items()}
-    task_types = sorted({tt for tt in ds_to_task.values()
-                         if tt in ("disease", "pest_damage", "weed_identification")})
-
-    # mean F1 per (condition, task)
-    def _task_mean(per_ds: dict[str, float], task: str) -> float:
-        vals = [v for ds, v in per_ds.items() if ds_to_task.get(ds) == task]
-        return float(np.mean(vals)) if vals else 0.0
-
-    conditions = [lbl for lbl, _ in _CONDITION_STYLE if lbl in cond_map]
-    colors     = {lbl: c for lbl, c in _CONDITION_STYLE}
-
-    x     = np.arange(len(task_types))
-    width = 0.8 / len(conditions)
-    fig, ax = plt.subplots(figsize=(max(7, len(task_types) * len(conditions) * 0.5 + 2), 5))
-
-    for i, lbl in enumerate(conditions):
-        vals   = [_task_mean(cond_map[lbl], tt) for tt in task_types]
-        offset = (i - len(conditions) / 2 + 0.5) * width
-        bars   = ax.bar(x + offset, vals, width, label=lbl,
-                        color=colors[lbl], alpha=0.85, edgecolor="black", linewidth=0.5)
-        for bar, v in zip(bars, vals):
-            if v > 0.01:
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.008,
-                        f"{v:.2f}", ha="center", va="bottom", fontsize=7)
-
-    task_labels = {"disease": "Disease", "pest_damage": "Pest Damage",
-                   "weed_identification": "Weed ID"}
-    ax.set_xticks(x)
-    ax.set_xticklabels([task_labels.get(tt, tt) for tt in task_types], fontsize=10)
-    ax.set_ylabel("Mean Judged F1")
-    ax.set_ylim(0, 1.05)
-    ax.set_title("CoT Assessment — Mean Judged F1 by Task Type")
-    ax.legend(fontsize=8)
-    ax.yaxis.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    path = output_dir / "cot_per_task_comparison.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {path}")
+    plot_per_task_judge_comparison(
+        rows_by_cond,
+        output_path=output_dir / "cot_per_task_comparison.png",
+        title="CoT Assessment — Mean Judged F1 by Task Type",
+    )
+    plot_per_task_full_comparison(
+        rows_by_cond,
+        output_path=output_dir / "cot_per_task_full_comparison.png",
+        title="CoT Assessment — Direct vs Judged F1 by Task Type",
+    )
 
 
 def plot_conditions_overall(
@@ -1269,8 +1285,43 @@ def main() -> None:
     print("\n=== Generating plots ===")
     aug_per_ds = load_aug_per_dataset(Path(args.aug_dir), args.model)
 
+    # Load raw rows for plot_conditions_per_task — mirrors desc_augmented_vision_plot.py
+    safe_model = args.model.replace("/", "_")
+    _vis_cls_path      = Path(args.vis_dir) / f"cls_{safe_model}.csv"
+    _baseline_cls_path = Path(args.aug_dir) / f"baseline_cls_all_{safe_model}.csv"
+    _aug_cls_path      = Path(args.aug_dir) / f"aug_cls_all_{safe_model}.csv"
+    _cot_cls_path      = output_dir / f"cot_cls_{safe_model}.csv"
+
+    # Prefer the desc-aug baseline CSV (same subset as aug run) so numbers match desc-aug chart.
+    # Merge judged_correct from vis CSV just like desc_augmented_vision_plot.py does.
+    if _baseline_cls_path.exists():
+        vis_rows = list(csv.DictReader(open(_baseline_cls_path, encoding="utf-8")))
+        if _vis_cls_path.exists():
+            vis_judged = {(r["agml_dataset"], r["image_name"], r["class_label"]): r.get("judged_correct", "")
+                          for r in csv.DictReader(open(_vis_cls_path, encoding="utf-8"))}
+            for r in vis_rows:
+                key = (r.get("agml_dataset", ""), r.get("image_name", ""), r.get("class_label", ""))
+                if not r.get("judged_correct") and key in vis_judged:
+                    r["judged_correct"] = vis_judged[key]
+            print(f"  Merged judged_correct into baseline rows from {_vis_cls_path.name}")
+    elif _vis_cls_path.exists():
+        vis_rows = list(csv.DictReader(open(_vis_cls_path, encoding="utf-8")))
+    else:
+        vis_rows = None
+
+    aug_rows = list(csv.DictReader(open(_aug_cls_path, encoding="utf-8"))) if _aug_cls_path.exists() else None
+    if _cot_cls_path.exists():
+        cot_rows = list(csv.DictReader(open(_cot_cls_path, encoding="utf-8")))
+    else:
+        # Fall back to ckpt CSVs (used by --from_ckpt and partial runs)
+        cot_rows = []
+        for _ckpt in [output_dir / "ckpt_self_cot.csv", output_dir / "ckpt_cot_yaml.csv"]:
+            if _ckpt.exists():
+                cot_rows.extend(csv.DictReader(open(_ckpt, encoding="utf-8")))
+        cot_rows = cot_rows or None
+
     plot_condition_comparison(metrics, output_dir / "cot_comparison.png")
-    plot_conditions_per_task(metrics, vis_per_ds, aug_per_ds, output_dir)
+    plot_conditions_per_task(metrics, vis_rows, aug_rows, output_dir, cot_rows=cot_rows)
     plot_conditions_overall(metrics, vis_per_ds, aug_per_ds, output_dir)
 
     if vis_per_ds:

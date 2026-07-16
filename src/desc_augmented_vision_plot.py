@@ -25,6 +25,10 @@ import argparse
 
 from src.common.dataset_config import datasets_by_name
 from src.common.difficulty_plots import plot_difficulty_correlation_conditions
+from src.common.method_comparison import (
+    plot_per_task_full_comparison,
+    plot_per_task_judge_comparison,
+)
 from src.desc_augmented_vision import (
     _read_csv,
     _safe_name,
@@ -32,6 +36,7 @@ from src.desc_augmented_vision import (
     load_clustering_per_dataset,
     plot_aug_distribution,
     plot_comparison,
+    plot_delta_per_task,
     plot_difficulty_bins,
     plot_difficulty_bins_clustering,
     plot_difficulty_correlation,
@@ -57,6 +62,8 @@ def main(args: argparse.Namespace) -> None:
 
     baseline_per_model:  dict[str, dict[str, dict]] = {}
     augmented_per_model: dict[str, dict[str, dict]] = {}
+    baseline_rows_by_model:  dict[str, list[dict]] = {}
+    augmented_rows_by_model: dict[str, list[dict]] = {}
     summary: dict[str, dict] = {}
 
     for model_id in args.models:
@@ -85,6 +92,8 @@ def main(args: argparse.Namespace) -> None:
 
         augmented_per_model[model_id] = compute_cls_metrics_per_dataset(aug_rows)
         baseline_per_model[model_id]  = compute_cls_metrics_per_dataset(baseline_rows)
+        augmented_rows_by_model[model_id] = aug_rows
+        baseline_rows_by_model[model_id]  = baseline_rows
         summary[model_id] = {}  # presence flag for plot_aug_distribution
         print(f"  Loaded {aug_csv.name} ({len(aug_rows)} rows)")
 
@@ -93,9 +102,31 @@ def main(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
     print("\n=== Generating plots ===")
+
+    # Shared method comparison charts (same pipeline as cls_per_task_all_errorbar.png)
+    for model_id in args.models:
+        if model_id not in baseline_rows_by_model or model_id not in augmented_rows_by_model:
+            continue
+        rows_by_cond = {
+            "Vision Baseline": baseline_rows_by_model[model_id],
+            "Desc-Aug":        augmented_rows_by_model[model_id],
+        }
+        plot_per_task_judge_comparison(
+            rows_by_cond,
+            output_path=output_dir / f"method_cmp_per_task_{filter_label}.png",
+            title=f"Desc-Aug — Mean Judged F1 by Task ({filter_label})",
+        )
+        plot_per_task_full_comparison(
+            rows_by_cond,
+            output_path=output_dir / f"method_cmp_per_task_full_{filter_label}.png",
+            title=f"Desc-Aug — Direct vs Judged F1 by Task ({filter_label})",
+        )
+
     plot_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
     plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir, suffix=filter_label)
     plot_overall_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
+    plot_delta_per_task(baseline_rows_by_model, augmented_rows_by_model, output_dir,
+                        suffix=filter_label, config_path=Path(args.config))
     plot_transitions(vis_dir, output_dir, ds_to_task, output_dir, args.models,
                      filter_label=filter_label)
     plot_aug_distribution(args.models, summary, output_dir, filter_label, ds_to_task, vis_dir=vis_dir)

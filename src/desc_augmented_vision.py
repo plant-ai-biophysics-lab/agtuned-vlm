@@ -759,6 +759,101 @@ def plot_overall_comparison(
     print(f"  Saved: {path}")
 
 
+def plot_delta_per_task(
+    baseline_rows_by_model: dict[str, list[dict]],
+    augmented_rows_by_model: dict[str, list[dict]],
+    output_dir: Path,
+    suffix: str = "all",
+    config_path: Path = Path("src/config/datasets.yaml"),
+) -> None:
+    """Paired delta chart: mean(judge_f1_aug − judge_f1_baseline) ± std per task.
+
+    Mirrors cls_per_task_all_errorbar.png exactly:
+    - Groups by task_type from the CSV row (dataset-level, same as errorbar chart)
+    - Computes per-class judge F1 within each (dataset, task) group
+    - Delta = aug_per_class_judge_f1 − baseline_per_class_judge_f1 per class
+    - Error bars = std of per-class deltas (paired → between-dataset variance cancels)
+    """
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import f1_score as _sk_f1
+
+    task_types  = ["disease", "pest_damage", "weed_identification"]
+    task_labels = {"disease": "Disease", "pest_damage": "Pest Damage",
+                   "weed_identification": "Weed ID"}
+
+    models = sorted(set(baseline_rows_by_model) & set(augmented_rows_by_model))
+    if not models:
+        return
+
+    def _judge_f1_per_class(
+        rows: list[dict],
+    ) -> dict[tuple[str, str, str], float]:
+        """Returns {(ds, task, class_label): judge_f1} matching errorbar grouping."""
+        by_dt_cls: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+        for r in rows:
+            ds   = r.get("agml_dataset", "")
+            task = r.get("task_type", "")
+            cls  = r.get("class_label", "")
+            if not ds or not cls or r.get("judged_correct", "") == "":
+                continue
+            by_dt_cls[(ds, task, cls)].append(r)
+
+        result: dict[tuple[str, str, str], float] = {}
+        for (ds, task, cls), cls_rows in by_dt_cls.items():
+            refs  = [r["class_label"] for r in cls_rows]
+            preds = [r["class_label"] if int(r["judged_correct"]) else "" for r in cls_rows]
+            result[(ds, task, cls)] = _sk_f1(refs, preds, average="macro", zero_division=0)
+        return result
+
+    fig, ax = plt.subplots(figsize=(max(6, len(task_types) * len(models) * 0.9 + 2), 5))
+    x     = np.arange(len(task_types))
+    width = 0.6 / max(len(models), 1)
+
+    for i, model_id in enumerate(models):
+        short = model_id.split("/")[-1]
+
+        b_f1_map = _judge_f1_per_class(baseline_rows_by_model[model_id])
+        a_f1_map = _judge_f1_per_class(augmented_rows_by_model[model_id])
+
+        deltas_by_task: dict[str, list[float]] = {tt: [] for tt in task_types}
+        for key in set(b_f1_map) & set(a_f1_map):
+            ds, task, cls = key
+            if task not in deltas_by_task:
+                continue
+            deltas_by_task[task].append(a_f1_map[key] - b_f1_map[key])
+
+        means = [float(np.mean(deltas_by_task[tt])) if deltas_by_task[tt] else 0.0
+                 for tt in task_types]
+        stds  = [float(np.std(deltas_by_task[tt]))  if deltas_by_task[tt] else 0.0
+                 for tt in task_types]
+        ns    = [len(deltas_by_task[tt]) for tt in task_types]
+
+        offset = (i - len(models) / 2 + 0.5) * width
+        bars   = ax.bar(x + offset, means, width, yerr=stds, capsize=4,
+                        label=short, alpha=0.85, edgecolor="black", linewidth=0.5,
+                        error_kw={"linewidth": 1.2, "ecolor": "black"})
+        for bar, m, n, s in zip(bars, means, ns, stds):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    (m + s + 0.01) if m >= 0 else (m - s - 0.03),
+                    f"{m:+.3f}\n(n={n})",
+                    ha="center", va="bottom" if m >= 0 else "top", fontsize=7)
+
+    ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels([task_labels.get(tt, tt) for tt in task_types],
+                       rotation=20, ha="right", fontsize=10)
+    ax.set_ylabel("Δ Judged F1 (aug − baseline)")
+    ax.set_title(f"Paired Delta: Description Aug vs Baseline — Judged F1 per Task ({suffix})")
+    ax.legend(fontsize=8)
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    path = output_dir / f"cls_delta_per_task_{suffix}.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace) -> None:
