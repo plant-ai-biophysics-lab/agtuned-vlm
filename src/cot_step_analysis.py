@@ -648,25 +648,24 @@ def main() -> None:
         del tokenizer, llm
         gc.collect()
 
-    # ── Phase 3 (judge_only path or deferred judge after skip_inference) ─────────
-    if args.judge_only:
-        from src.cot_vision import load_llm, destroy_llm
-        llm, tokenizer = load_llm(args.model)
-        all_rows = cum_rows + ind_rows
-        print(f"\n=== Judge only ({len(all_rows)} rows) ===")
-        all_rows = run_judge(all_rows, llm, tokenizer, ckpt_path=ckpt_judged)
-        destroy_llm(llm)
-        del tokenizer, llm
-    elif skip_inference:
-        # Inference was skipped; load judged rows from checkpoint if available,
-        # otherwise run judge now (model not loaded — user must run without --from_ckpt first)
+    # ── Phase 3 (judge_only or deferred judge when inference was skipped) ────────
+    all_rows: list[dict] = []
+    need_judge = (args.judge_only or skip_inference) and not args.plot_only
+
+    if need_judge:
         if ckpt_judged.exists():
             print("\n=== Phase 3: judge [SKIPPED — checkpoint found] ===")
             all_rows = _read_csv(ckpt_judged)
         else:
-            raise RuntimeError(
-                "ckpt_judged.csv not found. Run without --from_ckpt first to generate it."
-            )
+            from src.cot_vision import load_llm, destroy_llm
+            print(f"\n=== Loading model for judge: {args.model} ===")
+            llm, tokenizer = load_llm(args.model)
+            all_rows = cum_rows + ind_rows
+            print(f"\n=== Phase 3: judge ({len(all_rows)} rows) ===")
+            all_rows = run_judge(all_rows, llm, tokenizer, ckpt_path=ckpt_judged)
+            destroy_llm(llm)
+            del tokenizer, llm
+            gc.collect()
 
     # ── Phase 4: metrics + plots ───────────────────────────────────────────────
     print("\n=== Computing step F1 ===")
