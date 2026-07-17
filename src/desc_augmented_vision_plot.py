@@ -24,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import argparse
 
 from src.common.dataset_config import datasets_by_name
-from src.common.difficulty_plots import plot_difficulty_correlation_conditions
 from src.common.method_comparison import (
+    plot_difficulty_scatter_comparison,
+    plot_overall_judge_comparison,
     plot_per_task_full_comparison,
     plot_per_task_judge_comparison,
 )
@@ -121,6 +122,11 @@ def main(args: argparse.Namespace) -> None:
             output_path=output_dir / f"method_cmp_per_task_full_{filter_label}.png",
             title=f"Desc-Aug — Direct vs Judged F1 by Task ({filter_label})",
         )
+        plot_overall_judge_comparison(
+            rows_by_cond,
+            output_path=output_dir / f"method_cmp_overall_{filter_label}.png",
+            title=f"Desc-Aug — Overall Mean Judged F1 ({filter_label})",
+        )
 
     plot_comparison(baseline_per_model, augmented_per_model, output_dir, suffix=filter_label)
     plot_task_comparison(baseline_per_model, augmented_per_model, ds_to_task, output_dir, suffix=filter_label)
@@ -146,22 +152,17 @@ def main(args: argparse.Namespace) -> None:
                 bpd, apd, clustering_per_ds, output_dir,
                 suffix=filter_label, backbone=args.clustering_backbone)
 
-        # Clustering difficulty vs judged F1 — one row per condition
-        def _judged_f1_per_ds(per_ds: dict[str, dict]) -> dict[str, float]:
-            return {ds: m["judge_f1_macro"] for ds, m in per_ds.items()
-                    if "judge_f1_macro" in m}
-
-        conditions_per_ds = {
-            "Vision Baseline": _judged_f1_per_ds(bpd),
-            "Desc-Aug":        _judged_f1_per_ds(apd),
+        # Clustering difficulty vs judged F1 — overlaid scatter (shared axes, raw rows)
+        _diff_rows = {
+            "Vision Baseline": baseline_rows_by_model[model_id],
+            "Desc-Aug":        augmented_rows_by_model[model_id],
         }
-        plot_difficulty_correlation_conditions(
-            conditions_per_ds,
+        plot_difficulty_scatter_comparison(
+            _diff_rows,
             clustering_metrics_path=Path(args.clustering_metrics),
-            output_dir=output_dir / "difficulty_correlation",
+            output_path=output_dir / "difficulty_correlation" / f"difficulty_vs_perf_desc_aug_{filter_label}.png",
             backbone=args.clustering_backbone,
-            filename=f"difficulty_vs_perf_desc_aug_{filter_label}.png",
-            title=f"Difficulty vs Judged F1 — Desc-Aug ({filter_label})",
+            title=f"Dataset Difficulty vs Judged F1 — Desc-Aug ({filter_label})",
         )
 
     print("\nDone.")

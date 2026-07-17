@@ -741,95 +741,106 @@ def plot_difficulty_correlation(
     cot_metrics: dict,
     vis_per_ds: dict[str, float],
     output_dir: Path,
+    vis_rows: list[dict] | None = None,
+    aug_rows: list[dict] | None = None,
+    cot_rows: list[dict] | None = None,
 ) -> None:
-    """Scatter: vision baseline judged F1 (x=difficulty proxy) vs CoT judged F1 per dataset."""
-    import matplotlib.pyplot as plt
+    """Scatter: vision baseline judged F1 (x) vs CoT judged F1 (y) per dataset."""
+    from src.common.method_comparison import plot_baseline_vs_condition_scatter
 
-    conditions = [c for c in ("self_cot", "cot_yaml") if c in cot_metrics]
-    if not conditions or not vis_per_ds:
+    rows_by_cond = _build_rows_by_cond(cot_metrics, vis_rows, aug_rows, cot_rows)
+    if not rows_by_cond or "Vision Baseline" not in rows_by_cond:
         return
 
-    colors = {"self_cot": "#1f77b4", "cot_yaml": "#2ca02c"}
-    labels = {"self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
+    plot_baseline_vs_condition_scatter(
+        rows_by_cond,
+        output_path=output_dir / "cot_difficulty_correlation.png",
+        title="Difficulty vs CoT Performance (per dataset)",
+        separate=False,
+    )
+    plot_baseline_vs_condition_scatter(
+        rows_by_cond,
+        output_path=output_dir / "cot_difficulty_correlation_separate.png",
+        title="Difficulty vs CoT Performance (per dataset)",
+        separate=True,
+    )
 
-    fig, ax = plt.subplots(figsize=(7, 6))
-    for cond in conditions:
-        per_ds = cot_metrics[cond].get("per_dataset", {})
-        xs, ys, names = [], [], []
-        for ds, dm in per_ds.items():
-            if ds not in vis_per_ds:
-                continue
-            xs.append(vis_per_ds[ds])
-            ys.append(dm.get("judge_f1_macro") or dm.get("f1_macro", 0.0))
-            names.append(ds.replace("_classification", "").replace("_", " "))
-        ax.scatter(xs, ys, label=labels[cond], color=colors[cond], alpha=0.8, s=60)
-        for x, y, name in zip(xs, ys, names):
-            ax.annotate(name, (x, y), fontsize=5.5, alpha=0.7,
-                        xytext=(3, 3), textcoords="offset points")
 
-    ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=1, label="no change")
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-    ax.set_xlabel("Vision Baseline Judged F1  (← harder)")
-    ax.set_ylabel("CoT Judged F1")
-    ax.set_title("Difficulty vs CoT Performance (per dataset)")
-    ax.legend(fontsize=8); ax.grid(True, alpha=0.2)
-    plt.tight_layout()
-    path = output_dir / "cot_difficulty_correlation.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {path}")
+def _judged_f1_per_ds_from_rows(rows: list[dict]) -> dict[str, float]:
+    """Return {dataset: mean_judged_f1} using gather_judge_per_class_by_dataset.
+
+    Mirrors the computation in plot_conditions_per_task — mean of per-class judge F1
+    within each dataset. Returns only datasets that have judged rows.
+    """
+    from src.common.distribution_plots import gather_judge_per_class_by_dataset
+    judge_by_cls = gather_judge_per_class_by_dataset({"_": rows})
+    per_dt = judge_by_cls.get("_", {})
+    return {ds: float(np.mean(f1s)) for (ds, _task), f1s in per_dt.items() if f1s}
 
 
 def _plot_difficulty_bins_impl(
-    cot_metrics: dict,
-    vis_per_ds: dict[str, float],
+    rows_by_cond: dict[str, list[dict]],
     difficulty_per_ds: dict[str, float],
     output_dir: Path,
     title: str,
     filename: str,
     difficulty_label: str,
 ) -> None:
-    """Bar chart: mean judged F1 per difficulty tercile, binned by difficulty_per_ds."""
-    import matplotlib.pyplot as plt
+    """Bar chart: mean judged F1 per difficulty tercile, binned by difficulty_per_ds.
 
-    conditions = [c for c in ("self_cot", "cot_yaml") if c in cot_metrics]
-    if not conditions or not difficulty_per_ds:
+    Uses raw rows for all conditions so the metric is always judged F1 from
+    judged_correct — never direct match F1. Conditions with no judged rows are
+    silently skipped, so partial checkpoint runs only show what is available.
+    """
+    import matplotlib.pyplot as plt
+    from src.common.method_comparison import CONDITION_COLOR, CONDITION_STYLES
+
+    if not difficulty_per_ds:
         return
 
-    # Restrict to datasets present in difficulty scores; sort ascending (low = hard)
+    # Compute per-dataset judged F1 for each condition from raw rows
+    cond_per_ds: dict[str, dict[str, float]] = {}
+    for label, rows in rows_by_cond.items():
+        per_ds = _judged_f1_per_ds_from_rows(rows)
+        if per_ds:
+            cond_per_ds[label] = per_ds
+
+    order   = [lbl for lbl, _ in CONDITION_STYLES if lbl in cond_per_ds]
+    present = order
+    if not present:
+        print(f"  [warn] {filename}: no conditions with judged rows — skipping")
+        return
+
+    # Bin datasets by difficulty (ascending = hard first)
     all_ds = sorted(difficulty_per_ds, key=difficulty_per_ds.get)
     n = len(all_ds)
     bins = {"Hard": all_ds[:n//3], "Medium": all_ds[n//3:2*n//3], "Easy": all_ds[2*n//3:]}
 
-    colors = {"vision": "#e67e22", "self_cot": "#1f77b4", "cot_yaml": "#2ca02c"}
-    labels = {"vision": "Vision Baseline", "self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
-    all_conds = ["vision"] + conditions
-    x = np.arange(len(bins))
-    width = 0.8 / len(all_conds)
-
+    x     = np.arange(len(bins))
+    width = 0.8 / len(present)
     fig, ax = plt.subplots(figsize=(7, 5))
-    for i, cond in enumerate(all_conds):
-        means = []
-        for bin_ds in bins.values():
-            if cond == "vision":
-                vals = [vis_per_ds[d] for d in bin_ds if d in vis_per_ds]
-            else:
-                per_ds = cot_metrics[cond].get("per_dataset", {})
-                vals = [per_ds[d].get("judge_f1_macro") or per_ds[d].get("f1_macro", 0.0)
-                        for d in bin_ds if d in per_ds]
-            means.append(float(np.mean(vals)) if vals else 0.0)
-        offset = (i - len(all_conds) / 2 + 0.5) * width
-        bars = ax.bar(x + offset, means, width, label=labels[cond],
-                      color=colors[cond], alpha=0.85, edgecolor="black", linewidth=0.5)
-        for bar, v in zip(bars, means):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    f"{v:.2f}", ha="center", va="bottom", fontsize=8)
 
-    ax.set_xticks(x); ax.set_xticklabels(list(bins))
-    ax.set_ylabel("Mean Judged F1"); ax.set_ylim(0, 1.15)
+    for i, cond in enumerate(present):
+        per_ds = cond_per_ds[cond]
+        means  = [float(np.mean([per_ds[d] for d in bin_ds if d in per_ds]))
+                  if any(d in per_ds for d in bin_ds) else 0.0
+                  for bin_ds in bins.values()]
+        offset = (i - len(present) / 2 + 0.5) * width
+        color  = CONDITION_COLOR.get(cond, "#888888")
+        bars   = ax.bar(x + offset, means, width, label=cond,
+                        color=color, alpha=0.85, edgecolor="black", linewidth=0.5)
+        for bar, v in zip(bars, means):
+            if v > 0.01:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(list(bins))
+    ax.set_ylabel("Mean Judged F1")
+    ax.set_ylim(0, 1.15)
     ax.set_title(title)
-    ax.legend(fontsize=8); ax.yaxis.grid(True, alpha=0.3)
-    # Annotate difficulty axis label
+    ax.legend(fontsize=8)
+    ax.yaxis.grid(True, alpha=0.3)
     ax.set_xlabel(f"Difficulty bin (by {difficulty_label}, low → hard)")
     plt.tight_layout()
     path = output_dir / filename
@@ -838,14 +849,39 @@ def _plot_difficulty_bins_impl(
     print(f"  Saved: {path}")
 
 
+def _build_rows_by_cond(
+    cot_metrics: dict,
+    vis_rows: list[dict] | None,
+    aug_rows: list[dict] | None,
+    cot_rows: list[dict] | None,
+) -> dict[str, list[dict]]:
+    """Build {condition_label: rows} for all available conditions with judged data."""
+    rows_by_cond: dict[str, list[dict]] = {}
+    if vis_rows:
+        rows_by_cond["Vision Baseline"] = vis_rows
+    for cot_key, label in [("self_cot", "Self-CoT"), ("cot_yaml", "CoT YAML")]:
+        if cot_key in cot_metrics:
+            filtered = [r for r in (cot_rows or []) if r.get("condition") == cot_key
+                        and r.get("judged_correct", "") != ""]
+            if filtered:
+                rows_by_cond[label] = filtered
+    if aug_rows:
+        rows_by_cond["Desc-Aug"] = aug_rows
+    return rows_by_cond
+
+
 def plot_difficulty_bins(
     cot_metrics: dict,
     vis_per_ds: dict[str, float],
     output_dir: Path,
+    vis_rows: list[dict] | None = None,
+    aug_rows: list[dict] | None = None,
+    cot_rows: list[dict] | None = None,
 ) -> None:
     """Bar chart binned by vision baseline judged F1 (supervised difficulty proxy)."""
+    rows_by_cond = _build_rows_by_cond(cot_metrics, vis_rows, aug_rows, cot_rows)
     _plot_difficulty_bins_impl(
-        cot_metrics, vis_per_ds, vis_per_ds, output_dir,
+        rows_by_cond, vis_per_ds, output_dir,
         title="CoT Performance by Difficulty Bin (Vision F1)",
         filename="cot_difficulty_bins_f1.png",
         difficulty_label="Vision Baseline Judged F1",
@@ -884,6 +920,9 @@ def plot_difficulty_bins_clustering(
     clustering_per_ds: dict[str, dict[str, float]],
     output_dir: Path,
     backbone: str,
+    vis_rows: list[dict] | None = None,
+    aug_rows: list[dict] | None = None,
+    cot_rows: list[dict] | None = None,
 ) -> None:
     """One difficulty-bins chart per clustering metric (label-free difficulty proxies)."""
     metric_labels = {
@@ -893,13 +932,14 @@ def plot_difficulty_bins_clustering(
         "inter_centroid_dist": "Inter-centroid Distance",
         "fisher_dr":         "Fisher Discriminant Ratio",
     }
+    rows_by_cond  = _build_rows_by_cond(cot_metrics, vis_rows, aug_rows, cot_rows)
     backbone_short = backbone.split("/")[-1] if "/" in backbone else backbone
     for metric, label in metric_labels.items():
         diff = {ds: vals[metric] for ds, vals in clustering_per_ds.items() if metric in vals}
         if not diff:
             continue
         _plot_difficulty_bins_impl(
-            cot_metrics, vis_per_ds, diff, output_dir,
+            rows_by_cond, diff, output_dir,
             title=f"CoT Performance by Difficulty Bin ({label}, {backbone_short})",
             filename=f"cot_difficulty_bins_{metric}.png",
             difficulty_label=label,
@@ -1010,36 +1050,21 @@ def plot_conditions_overall(
     vis_per_ds: dict[str, float] | None,
     aug_per_ds: dict[str, float] | None,
     output_dir: Path,
+    vis_rows: list[dict] | None = None,
+    aug_rows: list[dict] | None = None,
+    cot_rows: list[dict] | None = None,
 ) -> None:
-    """Single grouped bar: mean judged F1 across all datasets per condition."""
-    import matplotlib.pyplot as plt
+    """Single bar per condition: mean judged F1 across all datasets."""
+    from src.common.method_comparison import plot_overall_judge_comparison
 
-    cond_map = _build_condition_map(metrics, vis_per_ds, aug_per_ds)
-    if not cond_map:
+    rows_by_cond = _build_rows_by_cond(metrics, vis_rows, aug_rows, cot_rows)
+    if not rows_by_cond:
         return
-
-    conditions = [lbl for lbl, _ in _CONDITION_STYLE if lbl in cond_map]
-    colors     = {lbl: c for lbl, c in _CONDITION_STYLE}
-    means      = [float(np.mean(list(cond_map[lbl].values()))) for lbl in conditions]
-
-    fig, ax = plt.subplots(figsize=(max(5, len(conditions) * 1.2), 5))
-    bars = ax.bar(conditions, means,
-                  color=[colors[lbl] for lbl in conditions],
-                  alpha=0.85, edgecolor="black", linewidth=0.5)
-    for bar, v in zip(bars, means):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.008,
-                f"{v:.3f}", ha="center", va="bottom", fontsize=9)
-
-    ax.set_ylabel("Mean Judged F1 (all datasets)")
-    ax.set_ylim(0, 1.05)
-    ax.set_title("CoT Assessment — Overall Mean Judged F1")
-    ax.yaxis.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    path = output_dir / "cot_overall_comparison.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {path}")
+    plot_overall_judge_comparison(
+        rows_by_cond,
+        output_path=output_dir / "cot_overall_comparison.png",
+        title="CoT Assessment — Overall Mean Judged F1",
+    )
 
 
 def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
@@ -1322,36 +1347,31 @@ def main() -> None:
 
     plot_condition_comparison(metrics, output_dir / "cot_comparison.png")
     plot_conditions_per_task(metrics, vis_rows, aug_rows, output_dir, cot_rows=cot_rows)
-    plot_conditions_overall(metrics, vis_per_ds, aug_per_ds, output_dir)
+    plot_conditions_overall(metrics, vis_per_ds, aug_per_ds, output_dir,
+                            vis_rows=vis_rows, aug_rows=aug_rows, cot_rows=cot_rows)
 
     if vis_per_ds:
-        plot_difficulty_correlation(metrics, vis_per_ds, output_dir)
-        plot_difficulty_bins(metrics, vis_per_ds, output_dir)
+        plot_difficulty_correlation(metrics, vis_per_ds, output_dir,
+                                    vis_rows=vis_rows, aug_rows=aug_rows, cot_rows=cot_rows)
+        plot_difficulty_bins(metrics, vis_per_ds, output_dir,
+                             vis_rows=vis_rows, aug_rows=aug_rows, cot_rows=cot_rows)
         clustering_per_ds = load_clustering_per_dataset(
             Path(args.clustering_metrics), backbone=args.clustering_backbone)
         if clustering_per_ds:
             plot_difficulty_bins_clustering(
                 metrics, vis_per_ds, clustering_per_ds, output_dir,
-                backbone=args.clustering_backbone)
+                backbone=args.clustering_backbone,
+                vis_rows=vis_rows, aug_rows=aug_rows, cot_rows=cot_rows)
 
-        # Clustering difficulty vs judged F1 per CoT condition
-        def _judged_f1_per_ds(cond_key: str) -> dict[str, float]:
-            per_ds = metrics.get(cond_key, {}).get("per_dataset", {})
-            return {ds: m["judge_f1_macro"] for ds, m in per_ds.items()
-                    if "judge_f1_macro" in m}
-
-        cot_conditions = {"Vision Baseline": vis_per_ds}
-        for cond, label in [("self_cot", "Self-CoT"), ("cot_yaml", "CoT YAML")]:
-            if cond in metrics:
-                cot_conditions[label] = _judged_f1_per_ds(cond)
-
-        plot_difficulty_correlation_conditions(
-            cot_conditions,
+        # Clustering difficulty vs judged F1 — overlaid scatter (all conditions, shared axes)
+        from src.common.method_comparison import plot_difficulty_scatter_comparison
+        _diff_rows = _build_rows_by_cond(metrics, vis_rows, aug_rows, cot_rows)
+        plot_difficulty_scatter_comparison(
+            _diff_rows,
             clustering_metrics_path=Path(args.clustering_metrics),
-            output_dir=output_dir / "difficulty_correlation",
+            output_path=output_dir / "difficulty_correlation" / "difficulty_vs_perf_cot_overlay.png",
             backbone=args.clustering_backbone,
-            filename="difficulty_vs_perf_cot_conditions.png",
-            title="Difficulty vs Judged F1 — CoT Conditions",
+            title="Dataset Difficulty vs Judged F1 — CoT Conditions",
         )
 
     if args.hard_only and vis_per_ds:
