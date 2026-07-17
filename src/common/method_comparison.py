@@ -37,6 +37,14 @@ CONDITION_STYLES: list[tuple[str, str]] = [
     ("Desc-Aug",        "#9467bd"),
     ("Majority Vote",   "#e15759"),
     ("Fine-tuned",      "#17becf"),
+    # Verifier conditions (direct generation)
+    ("Direct-N1",       "#d62728"),
+    ("Direct-N5",       "#e07070"),
+    ("Direct-N10",      "#f7b6b6"),
+    # Verifier conditions (self-cot generation)
+    ("SelfCoT-N1",      "#8c564b"),
+    ("SelfCoT-N5",      "#b57a73"),
+    ("SelfCoT-N10",     "#d4a69f"),
 ]
 
 CONDITION_COLOR: dict[str, str] = dict(CONDITION_STYLES)
