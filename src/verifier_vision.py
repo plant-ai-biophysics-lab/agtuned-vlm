@@ -171,29 +171,50 @@ def _verifier_text(task_type: str, crop: str | None, candidate: str) -> str:
 
 # ── Dataset selection (same logic as cot_step_analysis) ───────────────────────
 
-def _build_task_datasets(config_path: str) -> dict[str, list[str]]:
+def _build_task_datasets(config_path: str) -> dict[str, dict[str, list[str]]]:
+    """Return {task: {"primary": [...], "override": [...]}} for each task type."""
     import yaml
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
-    task_datasets: dict[str, set[str]] = defaultdict(set)
+    primary: dict[str, set[str]] = defaultdict(set)
+    override: dict[str, set[str]] = defaultdict(set)
     for d in cfg["datasets"]:
         if d.get("skip"):
             continue
         name = d["agml_name"]
-        task_datasets[d["task_type"]].add(name)
+        primary[d["task_type"]].add(name)
         for task in (d.get("class_overrides") or {}).values():
-            task_datasets[task].add(name)
-    return {t: sorted(v) for t, v in task_datasets.items()
-            if t in ("disease", "pest_damage", "weed_identification")}
+            if task != d["task_type"]:
+                override[task].add(name)
+    tasks = ("disease", "pest_damage", "weed_identification")
+    return {
+        t: {
+            "primary":  sorted(primary.get(t, [])),
+            "override": sorted(override.get(t, [])),
+        }
+        for t in tasks
+    }
 
 
 def select_datasets(n_per_task: int = N_DATASETS_PER_TASK,
                     seed: int = SEED,
                     config_path: str = "src/config/datasets.yaml") -> dict[str, list[str]]:
-    task_datasets = _build_task_datasets(config_path)
+    """Sample n_per_task datasets per task, prioritising primary task_type datasets
+    before filling remaining slots with class_override datasets."""
+    pools = _build_task_datasets(config_path)
     rng = random.Random(seed)
-    return {task: rng.sample(names, min(n_per_task, len(names)))
-            for task, names in task_datasets.items()}
+    selected: dict[str, list[str]] = {}
+    for task, buckets in pools.items():
+        primary  = buckets["primary"]
+        override = buckets["override"]
+        # Fill from primary first, then override for remaining slots
+        n_primary = min(n_per_task, len(primary))
+        chosen = rng.sample(primary, n_primary)
+        remaining = n_per_task - len(chosen)
+        if remaining > 0 and override:
+            chosen += rng.sample(override, min(remaining, len(override)))
+        selected[task] = chosen
+    return selected
 
 
 def load_items(
@@ -682,7 +703,7 @@ def main() -> None:
         gc.collect()
 
     # ── Phase 4: Plot ──────────────────────────────────────────────────────────
-    model_safe = args.model.replace("/", "_").replace("-", "_")
+    model_safe = args.model.replace("/", "_")
     image_keys = {(r["agml_dataset"], r["image_name"]) for r in judged}
     print(f"\n=== Phase 4: plot ({len(image_keys)} unique images) ===")
 
