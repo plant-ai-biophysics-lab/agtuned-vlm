@@ -123,7 +123,7 @@ def load_items(
         for p in paths:
             items.append({
                 "ds": ds_name, "task_type": task_type,
-                "crop": crop, "cls": cls, "img_path": str(p),
+                "crop": crop, "cls": cls, "image_path": p,
             })
     rng = random.Random(seed)
     rng.shuffle(items)
@@ -230,7 +230,7 @@ def run_cumulative(
                     "class_label":   gt,
                     "task_type":     item["task_type"],
                     "crop":          item["crop"] or "",
-                    "image_name":    item["img_path"],
+                    "image_name":    str(item["image_path"]),
                     "mode":          "cumulative",
                     "step_idx":      step_idx + 1,
                     "prediction":    pred,
@@ -327,7 +327,7 @@ def run_independent(
                     "class_label":   gt,
                     "task_type":     item["task_type"],
                     "crop":          item["crop"] or "",
-                    "image_name":    item["img_path"],
+                    "image_name":    str(item["image_path"]),
                     "mode":          "independent",
                     "step_idx":      step_idx + 1,
                     "prediction":    pred,
