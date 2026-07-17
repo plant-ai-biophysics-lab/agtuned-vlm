@@ -597,6 +597,18 @@ def main() -> None:
         cum_rows = _read_csv(ckpt_cumulative)
         ind_rows = _read_csv(ckpt_independent)
     else:
+        # Load dataset items only when inference is actually needed
+        all_items: list[dict] = []
+        for task, ds_names in selected.items():
+            for ds in ds_names:
+                info = ds_info.get(ds, {})
+                crop = info.get("crop", "plant")
+                class_overrides = info.get("class_overrides", {})
+                items = load_items(ds, task, crop, n_samples=args.n_samples,
+                                   class_overrides=class_overrides, seed=args.seed)
+                all_items.extend(items)
+        print(f"Total items loaded: {len(all_items)}")
+
         from src.cot_vision import load_llm, destroy_llm
         print(f"\n=== Loading model: {args.model} ===")
         llm, tokenizer = load_llm(args.model)
