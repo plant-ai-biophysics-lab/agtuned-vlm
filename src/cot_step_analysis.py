@@ -353,7 +353,7 @@ def run_judge(
     ckpt_path: Path | None = None,
 ) -> list[dict]:
     from src.cot_vision import _PROMPTS
-    from src.assess import apply_judge
+    from src.common.metrics import apply_judge
     rows = apply_judge(
         rows=rows,
         llm=llm,
