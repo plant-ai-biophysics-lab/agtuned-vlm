@@ -265,11 +265,13 @@ def collect_work_items(
         except Exception as e:
             tqdm.write(f"  [skip] {ds}: {e}")
             continue
-        task_type, crop = DATASET_TASK_TYPES.get(ds, ("disease", "plant"))
+        primary_task_type, crop = DATASET_TASK_TYPES.get(ds, ("disease", "plant"))
         # Use DatasetConfig.clean_classes for resolve_class — same source as vision_assessment
         cfg = ds_cfg_map.get(ds)
         clean_classes = cfg.clean_classes if cfg else sorted(by_class.keys())
         for cls, paths in by_class.items():
+            # Use effective_task_type per class (respects class_overrides, same as baseline)
+            task_type = cfg.effective_task_type(cls) if cfg else primary_task_type
             tqdm.write(f"  {ds} / {cls}  ({len(paths)} images)")
             for path in paths:
                 items.append({
