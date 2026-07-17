@@ -576,20 +576,10 @@ def main() -> None:
 
     ds_to_task = {ds: task for task, names in selected.items() for ds in names}
 
-    # ── Load items ─────────────────────────────────────────────────────────────
-    all_items: list[dict] = []
-    for task, ds_names in selected.items():
-        for ds_name in ds_names:
-            d = ds_info.get(ds_name, {})
-            crop = d.get("crop")
-            overrides = d.get("class_overrides") or {}
-            print(f"  Loading {ds_name} ({task}, crop={crop})")
-            items = load_items(ds_name, task, crop, args.n_samples,
-                               class_overrides=overrides, seed=args.seed)
-            print(f"    {len(items)} images")
-            all_items.extend(items)
-
-    print(f"\nTotal: {len(all_items)} images across {sum(len(v) for v in selected.values())} datasets")
+    skip_inference = args.plot_only or (
+        args.from_ckpt and ckpt_cumulative.exists() and ckpt_independent.exists()
+    )
+    skip_judge = args.plot_only or (args.from_ckpt and ckpt_judged.exists())
 
     if args.plot_only:
         rows = _read_csv(ckpt_judged)
