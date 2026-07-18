@@ -1,44 +1,36 @@
 """
-Verifier LMV — Logprob-based Verification (arxiv 2607.05391)
+Verifier LMV — LLM-as-a-Verifier (arxiv 2607.05391)
 
-Implements the three scaling axes from the LLM-as-a-Verifier paper:
-  G = 20  (fixed): logprob expectation over A-T score tokens → continuous reward
-  K (--n_evals)  : repeated evaluations averaged → lower variance
-  C (--n_criteria): criteria decomposition averaged → richer rubric signal
+Uses Probabilistic Pivot Tournament (PPT) from the official llm-verifier package:
+  - llm_verifier.pivot_tournament: ring_cycle, select_pivots, pivot_round_pairs, bradley_terry
+  - llm_verifier.fine_grained_reward: extract_score
+  - Inline vLLM for generation (Phase 1), PPT scoring, and judge (Phase 3)
 
-Two selection modes (--selection_mode):
-  pointwise  — each candidate scored independently; argmax = winner
-  ppt        — Probabilistic Pivot Tournament (pairwise logprob comparisons)
+Three scaling axes from the paper:
+  G = 20  (fixed): candidates per image
+  K (--n_evals): repeated evaluations per pairwise comparison (averaged)
+  C (--n_criteria): criteria decomposition (1 generic or 3 task-specific)
 
 Two generation strategies × N ∈ {1, 5, 10}:
-  direct   — N classification samples at T=0.8
-  self_cot — greedy description (T=0.0) then N classification samples at T=0.8
+  direct   — N diverse samples at T=0.8
+  self_cot — greedy description (T=0.0) then N diverse samples
 
-Outputs compared against subsampled Vision Baseline, Self-CoT, CoT YAML,
-Desc-Aug, and the text-score verifier from verifier_vision.py.
+Condition labels: PPT-Direct-N{1,5,10}, PPT-SelfCoT-N{1,5,10}
 
 Usage:
   uv run python src/verifier_lmv.py \\
     --model google/gemma-4-26B-A4B-it \\
     --output_dir outputs/verifier_lmv/ \\
-    --vis_dir outputs/vision_assessment/ \\
-    --cot_dir outputs/cot_vision/ \\
-    --aug_dir outputs/desc_augmented_vision/ \\
-    --verifier_dir outputs/verifier_vision/ \\
-    --n_samples 50 --n_datasets 3 --seed 42 \\
-    --n_evals 4 --n_criteria 3 --selection_mode pointwise
+    --n_samples 50 --n_datasets 3 --n_evals 4 --n_criteria 3
 
-  # PPT mode:
-  uv run python src/verifier_lmv.py ... --selection_mode ppt --ppt_pivots 3
-
-  # Ablation — different K/C → use a distinct --output_dir:
+  # Ablation — different K or C → distinct --output_dir:
   uv run python src/verifier_lmv.py ... --n_evals 1 --n_criteria 1 \\
     --output_dir outputs/verifier_lmv_K1C1/
 
   # Resume from checkpoints:
   uv run python src/verifier_lmv.py ... --from_ckpt
 
-  # Plot only (all checkpoints must exist):
+  # Plot only:
   uv run python src/verifier_lmv.py ... --plot_only
 """
 
@@ -60,19 +52,31 @@ import numpy as np
 from PIL import Image as PILImage
 from tqdm import tqdm
 
+try:
+    from vllm import LLM, SamplingParams
+except ImportError:
+    LLM = None
+    SamplingParams = None
+
+try:
+    from llm_verifier.pivot_tournament import (
+        ring_cycle, select_pivots, pivot_round_pairs, bradley_terry,
+    )
+    from llm_verifier.fine_grained_reward import extract_score
+    _HAS_LMV = True
+except ImportError:
+    _HAS_LMV = False
+    ring_cycle = select_pivots = pivot_round_pairs = bradley_terry = extract_score = None
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 N_DATASETS_PER_TASK = 3
-SEED                = 42
-N_MAX_DEFAULT       = 10
+SEED = 42
+N_MAX_DEFAULT = 10
+G = 20            # fixed candidates per image (paper's G axis)
+DEFAULT_PIVOTS = 2
 
-# Score tokens A=20 (best) … T=1 (worst), matching the paper's φ mapping
-SCORE_TOKENS: list[str] = list("ABCDEFGHIJKLMNOPQRST")
-SCORE_VALUES: dict[str, int] = {letter: 20 - i for i, letter in enumerate(SCORE_TOKENS)}
-SCORE_TOKENS_SET = set(SCORE_TOKENS)
-G = len(SCORE_TOKENS)  # = 20
-
-# ── Criteria (C=1 and C=3) ─────────────────────────────────────────────────────
+# ── Criteria ────────────────────────────────────────────────────────────────────
 
 _CRITERIA_DISEASE_C1 = {
     "Visual_Match": (
@@ -96,7 +100,6 @@ _CRITERIA_DISEASE_C3 = {
         "specific, not generic, and visually consistent with all features in the image?"
     ),
 }
-
 _CRITERIA_WEED_C1 = {
     "Visual_Match": (
         "Does the prediction correctly identify the weed species in a way that "
@@ -122,18 +125,11 @@ _CRITERIA_WEED_C3 = {
 
 
 def _criteria_for(task_type: str, n_criteria: int) -> dict[str, str]:
-    """Return the appropriate criteria dict for a task and C value."""
     is_weed = task_type == "weed_identification"
     if n_criteria == 1:
         return _CRITERIA_WEED_C1 if is_weed else _CRITERIA_DISEASE_C1
     return _CRITERIA_WEED_C3 if is_weed else _CRITERIA_DISEASE_C3
 
-
-try:
-    from vllm import LLM, SamplingParams
-except ImportError:
-    LLM = None          # type: ignore[assignment,misc]
-    SamplingParams = None  # type: ignore[assignment,misc]
 
 # ── CSV helpers ────────────────────────────────────────────────────────────────
 
@@ -141,8 +137,8 @@ CANDIDATE_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop",
     "image_name", "image_path", "gen_mode", "n_idx", "prediction",
 ]
-SCORED_FIELDS  = CANDIDATE_FIELDS + ["ppt_reward"]
-JUDGED_FIELDS  = [
+SCORED_FIELDS = CANDIDATE_FIELDS + ["ppt_reward"]
+JUDGED_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop",
     "image_name", "gen_mode", "n_max",
     "final_prediction", "ppt_reward", "ground_truth",
@@ -162,51 +158,6 @@ def _write_csv(rows: list[dict], path: Path, fields: list[str]) -> None:
 def _read_csv(path: Path) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return list(csv.DictReader(f))
-
-
-# ── Logprob reward extraction ──────────────────────────────────────────────────
-
-def _logprob_reward(logprobs_dict: dict) -> float:
-    """Compute E[φ(v)] over score tokens from a vLLM logprobs dict.
-
-    logprobs_dict: {token_id: Logprob} for one generated token position.
-    Returns normalized reward in [0, 1].
-    """
-    total = 0.0
-    mass  = 0.0
-    for token_id, lp_obj in logprobs_dict.items():
-        decoded = getattr(lp_obj, "decoded_token", "").strip().upper()
-        if decoded in SCORE_TOKENS_SET:
-            p = float(np.exp(lp_obj.logprob))
-            total += p * SCORE_VALUES[decoded]
-            mass  += p
-    if mass < 1e-9:
-        return 0.5  # no score token in top logprobs — fallback to neutral
-    return (total / mass) / 20.0  # normalize [1,20] → [0,1]
-
-
-def _find_score_tokens_in_output(output) -> list[dict]:
-    """Return logprob dicts at positions where the model generated an A-T letter."""
-    score_logprobs: list[dict] = []
-    for lp_dict in (output.outputs[0].logprobs or []):
-        if lp_dict is None:
-            continue
-        # Check if the generated token at this position is a score letter
-        for token_id, lp_obj in lp_dict.items():
-            if getattr(lp_obj, "decoded_token", "").strip().upper() in SCORE_TOKENS_SET:
-                score_logprobs.append(lp_dict)
-                break
-        if len(score_logprobs) == 2:
-            break
-    return score_logprobs
-
-
-def _extract_pairwise_rewards(output) -> tuple[float, float]:
-    """Extract rewards for candidates A and B from a single pairwise generation."""
-    positions = _find_score_tokens_in_output(output)
-    r_a = _logprob_reward(positions[0]) if len(positions) > 0 else 0.5
-    r_b = _logprob_reward(positions[1]) if len(positions) > 1 else 0.5
-    return r_a, r_b
 
 
 # ── Prompt builders ────────────────────────────────────────────────────────────
@@ -229,42 +180,60 @@ def _raw_cls_question(task_type: str, crop: str | None) -> str:
     return _p["visual_classification_disease"].format(crop=crop or "plant")
 
 
-def _pointwise_prompt_text(task_type: str, crop: str | None,
-                            prediction: str, criterion_desc: str) -> str:
+def _pairwise_prompt_text(
+    task_type: str,
+    crop: str | None,
+    pred_a: str,
+    pred_b: str,
+    criterion_name: str,
+    criterion_desc: str,
+) -> str:
+    """Pairwise verifier prompt using <score_A>/<score_B> tags for extract_score."""
     question = _raw_cls_question(task_type, crop)
     return (
-        "You are evaluating an agricultural image classification prediction.\n\n"
-        f'Question asked: "{question}"\n'
-        f'Prediction: "{prediction[:300]}"\n\n'
-        f"Evaluation criterion: {criterion_desc}\n\n"
-        "Rate this prediction with a single letter grade where:\n"
-        "  A = 20 (perfectly correct, specific, and visually grounded)\n"
-        "  J = 11 (borderline — partially correct or vague)\n"
-        "  T = 1  (completely wrong or irrelevant to the image)\n\n"
-        "Output only the single letter grade (A through T):"
+        "You are evaluating two agricultural image classification predictions. "
+        "The image is attached.\n\n"
+        f"Question asked: {question}\n\n"
+        f"Prediction A:\n{pred_a[:300]}\n\n"
+        f"Prediction B:\n{pred_b[:300]}\n\n"
+        f"Criterion — {criterion_name}: {criterion_desc}\n\n"
+        "Rate each prediction on a 20-point letter scale:\n"
+        "  A = 20 (best: perfectly correct, specific, visually grounded)\n"
+        "  J = 11 (uncertain, partially correct)\n"
+        "  T = 1  (worst: completely wrong or irrelevant)\n\n"
+        "Briefly analyze both predictions against the criterion, then output:\n"
+        "<score_A>LETTER_A_TO_T</score_A>\n"
+        "<score_B>LETTER_A_TO_T</score_B>"
     )
 
 
-def _pairwise_prompt_text(task_type: str, crop: str | None,
-                           pred_a: str, pred_b: str, criterion_desc: str) -> str:
-    question = _raw_cls_question(task_type, crop)
-    return (
-        "You are evaluating two agricultural image classification predictions.\n\n"
-        f'Question asked: "{question}"\n'
-        f'Candidate A: "{pred_a[:300]}"\n'
-        f'Candidate B: "{pred_b[:300]}"\n\n'
-        f"Evaluation criterion: {criterion_desc}\n\n"
-        "Rate each prediction with a letter grade where:\n"
-        "  A = 20 (perfectly correct, specific, and visually grounded)\n"
-        "  J = 11 (borderline — partially correct or vague)\n"
-        "  T = 1  (completely wrong or irrelevant to the image)\n\n"
-        "Output exactly two letters separated by a space: first for Candidate A, "
-        "then for Candidate B. Example: \"F K\" means A is good, B is mediocre.\n"
-        "Output:"
-    )
+# ── vLLM → extract_score format ───────────────────────────────────────────────
+
+def _vllm_to_score_format(out) -> tuple[str, list[str], list[list[tuple]]]:
+    """Convert vLLM RequestOutput to (text, tokens, position_logprobs) for extract_score.
+
+    extract_score expects:
+      text: full generated string
+      tokens: list of decoded token strings
+      position_logprobs: list of [(decoded_token, logprob)] per token position
+    """
+    text = out.outputs[0].text
+    token_ids = out.outputs[0].token_ids
+    logprobs_list = out.outputs[0].logprobs or []
+
+    tokens: list[str] = []
+    position_logprobs: list[list[tuple]] = []
+    for i, tid in enumerate(token_ids):
+        lp_dict = logprobs_list[i] if i < len(logprobs_list) else {}
+        tok_str = lp_dict[tid].decoded_token if (lp_dict and tid in lp_dict) else ""
+        tokens.append(tok_str)
+        alts = [(lp.decoded_token, lp.logprob) for lp in (lp_dict or {}).values()]
+        position_logprobs.append(alts)
+
+    return text, tokens, position_logprobs
 
 
-# ── Dataset selection (shared with verifier_vision) ───────────────────────────
+# ── Dataset selection (same logic as verifier_vision.py) ─────────────────────
 
 def _build_task_datasets(config_path: str) -> dict[str, dict[str, list[str]]]:
     import yaml
@@ -287,17 +256,19 @@ def _build_task_datasets(config_path: str) -> dict[str, dict[str, list[str]]]:
     }
 
 
-def select_datasets(n_per_task: int = N_DATASETS_PER_TASK,
-                    seed: int = SEED,
-                    config_path: str = "src/config/datasets.yaml") -> dict[str, list[str]]:
+def select_datasets(
+    n_per_task: int = N_DATASETS_PER_TASK,
+    seed: int = SEED,
+    config_path: str = "src/config/datasets.yaml",
+) -> dict[str, list[str]]:
     pools = _build_task_datasets(config_path)
-    rng   = random.Random(seed)
+    rng = random.Random(seed)
     selected: dict[str, list[str]] = {}
     for task, buckets in pools.items():
-        primary  = buckets["primary"]
+        primary = buckets["primary"]
         override = buckets["override"]
         n_primary = min(n_per_task, len(primary))
-        chosen    = rng.sample(primary, n_primary)
+        chosen = rng.sample(primary, n_primary)
         remaining = n_per_task - len(chosen)
         if remaining > 0 and override:
             chosen += rng.sample(override, min(remaining, len(override)))
@@ -315,7 +286,7 @@ def load_items(
     test_split: dict | None = None,
 ) -> list[dict]:
     from src.cot_vision import load_dataset_classes, DATASET_TASK_TYPES
-    by_class    = load_dataset_classes(ds_name, n_samples, test_split)
+    by_class = load_dataset_classes(ds_name, n_samples, test_split)
     primary_task = DATASET_TASK_TYPES.get(ds_name, (task_type, crop))[0]
     items: list[dict] = []
     for cls, paths in by_class.items():
@@ -332,13 +303,13 @@ def load_items(
     return items
 
 
-# ── Phase 1: Generate candidates (same as verifier_vision) ────────────────────
+# ── Phase 1: Generate candidates ──────────────────────────────────────────────
 
 def run_generate(
     items: list[dict],
     llm,
     tokenizer,
-    n_max: int = N_MAX_DEFAULT,
+    n_max: int = G,
     batch_size: int = 256,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
@@ -351,10 +322,9 @@ def run_generate(
 
     rows: list[dict] = []
 
-    # ── Strategy A: direct ────────────────────────────────────────────────────
     print(f"\n[generate/direct] {len(items)} images × {n_max} candidates")
     for start in tqdm(range(0, len(items), batch_size), desc="direct", unit="batch"):
-        batch   = items[start:start + batch_size]
+        batch = items[start:start + batch_size]
         prompts = [
             _build_prompt(
                 _sys_msg() + [{"role": "user", "content": [
@@ -382,17 +352,16 @@ def run_generate(
                 })
         del prompts
 
-    # ── Strategy B: self_cot ──────────────────────────────────────────────────
-    print(f"\n[generate/self_cot] {len(items)} images — describe (T=0) then ×{n_max} classify")
+    print(f"\n[generate/self_cot] {len(items)} images — describe then ×{n_max} classify")
     descriptions:   list[str]        = []
     desc_histories: list[list[dict]] = []
 
     for start in tqdm(range(0, len(items), batch_size), desc="self_cot desc", unit="batch"):
-        batch    = items[start:start + batch_size]
+        batch = items[start:start + batch_size]
         prompts, hists = [], []
         for item in batch:
             desc_q = _desc_question(item["task_type"], item["crop"])
-            hist   = _sys_msg() + [{"role": "user", "content": [
+            hist = _sys_msg() + [{"role": "user", "content": [
                 {"type": "image"}, {"type": "text", "text": desc_q},
             ]}]
             hists.append(hist)
@@ -439,110 +408,47 @@ def run_generate(
     return rows
 
 
-# ── Phase 2a: Pointwise logprob scoring ───────────────────────────────────────
-
-def run_verify_pointwise(
-    candidates: list[dict],
-    llm,
-    tokenizer,
-    n_evals: int = 4,
-    n_criteria: int = 3,
-    batch_size: int = 256,
-    seed: int = SEED,
-    ckpt_path: Path | None = None,
-) -> list[dict]:
-    """Score each candidate with G=20 logprob expected reward, averaged over K×C.
-
-    Builds (candidate × criterion × eval_rep) scoring requests and runs them
-    in a single batched pass for efficiency.
-    """
-    (_sys_msg, _, _, _build_prompt, _, _, _) = _import_cot_helpers()
-    _SCORE_P = SamplingParams(temperature=0.0, max_tokens=5, logprobs=G)
-
-    # Build flat request list: (row, criterion_desc, k_rep)
-    requests: list[tuple[dict, str, int]] = [
-        (row, crit_desc, k)
-        for row in candidates
-        for crit_desc in _criteria_for(row["task_type"], n_criteria).values()
-        for k in range(n_evals)
-    ]
-
-    print(f"\n[verify/pointwise] {len(candidates)} candidates × "
-          f"{n_criteria} criteria × {n_evals} evals = {len(requests)} scoring calls")
-
-    # Accumulate rewards per candidate key
-    reward_acc: dict[tuple, list[float]] = defaultdict(list)
-    _key = lambda r: (r["agml_dataset"], r["image_name"], r["gen_mode"], r["n_idx"])
-
-    for start in tqdm(range(0, len(requests), batch_size), desc="pointwise", unit="batch"):
-        batch   = requests[start:start + batch_size]
-        prompts = []
-        for row, crit_desc, _k in batch:
-            text = _pointwise_prompt_text(
-                row["task_type"], row.get("crop") or None,
-                row["prediction"], crit_desc,
-            )
-            msgs = _sys_msg() + [{"role": "user", "content": [
-                {"type": "image"}, {"type": "text", "text": text},
-            ]}]
-            prompts.append(_build_prompt(
-                msgs, tokenizer,
-                PILImage.open(row["image_path"]).convert("RGB"),
-            ))
-        outputs = llm.generate(prompts, _SCORE_P)
-        for (row, _cd, _k), out in zip(batch, outputs):
-            lp_list = out.outputs[0].logprobs or []
-            reward  = _logprob_reward(lp_list[0]) if lp_list else 0.5
-            reward_acc[_key(row)].append(reward)
-        del prompts
-
-    # Average K×C rewards per candidate
-    scored = []
-    for row in candidates:
-        k   = _key(row)
-        avg = float(np.mean(reward_acc[k])) if reward_acc[k] else 0.5
-        scored.append({**row, "ppt_reward": avg})
-
-    if ckpt_path:
-        _write_csv(scored, ckpt_path, SCORED_FIELDS)
-    return scored
-
-
-# ── Phase 2b: PPT pairwise logprob scoring ────────────────────────────────────
+# ── Phase 2: PPT verification ─────────────────────────────────────────────────
 
 def _score_pairs_batch(
-    pair_specs: list[tuple],           # [(image_key, i, j), ...]
-    groups: dict[tuple, list[dict]],   # image_key → [candidate_rows]
-    criteria_by_task: dict[tuple, dict[str, str]],  # image_key → criteria dict
+    pair_specs: list[tuple],              # [(key, a_idx, b_idx), ...]
+    groups: dict[tuple, list[dict]],
+    criteria_by_key: dict[tuple, dict],   # key → {name: desc}
     llm,
     tokenizer,
     n_evals: int,
     batch_size: int,
 ) -> list[tuple[float, float]]:
-    """Score all (i, j) pairs across all images, returns (reward_i, reward_j) per spec."""
-    (_sys_msg, _, _, _build_prompt, _, _, _) = _import_cot_helpers()
-    _PAIR_P = SamplingParams(temperature=0.0, max_tokens=10, logprobs=G)
+    """Score all (key, a_idx, b_idx) pairs using inline vLLM + extract_score.
 
-    # Expand to (pair_spec, criterion_desc, k_rep)
-    requests: list[tuple[int, str, int]] = [
-        (spec_idx, crit_desc, k)
-        for spec_idx, (key, _i, _j) in enumerate(pair_specs)
-        for crit_desc in criteria_by_task[key].values()
-        for k in range(n_evals)
+    Each pair is scored n_evals × n_criteria times; rewards averaged per pair.
+    Returns [(avg_ra, avg_rb)] in the same order as pair_specs.
+    """
+    (_sys_msg, _, _, _build_prompt, _, _, _) = _import_cot_helpers()
+    _PAIR_P = SamplingParams(temperature=1.0, max_tokens=150, logprobs=20)
+
+    # Expand: each spec × criteria × n_evals evaluations
+    requests: list[tuple[int, str, str]] = [
+        (spec_idx, crit_name, crit_desc)
+        for spec_idx, (key, _a, _b) in enumerate(pair_specs)
+        for crit_name, crit_desc in criteria_by_key[key].items()
+        for _ in range(n_evals)
     ]
 
     rewards_a: dict[int, list[float]] = defaultdict(list)
     rewards_b: dict[int, list[float]] = defaultdict(list)
 
     for start in range(0, len(requests), batch_size):
-        batch   = requests[start:start + batch_size]
+        batch = requests[start:start + batch_size]
         prompts = []
-        for spec_idx, crit_desc, _k in batch:
-            key, i, j = pair_specs[spec_idx]
-            row_a, row_b = groups[key][i], groups[key][j]
+        for spec_idx, crit_name, crit_desc in batch:
+            key, a_idx, b_idx = pair_specs[spec_idx]
+            row_a = groups[key][a_idx]
+            row_b = groups[key][b_idx]
             text = _pairwise_prompt_text(
                 row_a["task_type"], row_a.get("crop") or None,
-                row_a["prediction"], row_b["prediction"], crit_desc,
+                row_a["prediction"], row_b["prediction"],
+                crit_name, crit_desc,
             )
             msgs = _sys_msg() + [{"role": "user", "content": [
                 {"type": "image"}, {"type": "text", "text": text},
@@ -552,10 +458,12 @@ def _score_pairs_batch(
                 PILImage.open(row_a["image_path"]).convert("RGB"),
             ))
         outputs = llm.generate(prompts, _PAIR_P)
-        for (spec_idx, _cd, _k), out in zip(batch, outputs):
-            r_a, r_b = _extract_pairwise_rewards(out)
-            rewards_a[spec_idx].append(r_a)
-            rewards_b[spec_idx].append(r_b)
+        for (spec_idx, _, _), out in zip(batch, outputs):
+            text_out, tokens, pos_lp = _vllm_to_score_format(out)
+            ra = extract_score(text_out, tokens, pos_lp, "<score_A>")
+            rb = extract_score(text_out, tokens, pos_lp, "<score_B>")
+            rewards_a[spec_idx].append(ra)
+            rewards_b[spec_idx].append(rb)
         del prompts
 
     return [
@@ -570,97 +478,101 @@ def run_verify_ppt(
     tokenizer,
     n_evals: int = 4,
     n_criteria: int = 3,
-    k_pivots: int = 3,
+    k_pivots: int = DEFAULT_PIVOTS,
     batch_size: int = 256,
     seed: int = SEED,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
-    """Probabilistic Pivot Tournament: ring pass + pivot rounds using pairwise logprob scoring.
+    """Probabilistic Pivot Tournament using llm_verifier.pivot_tournament.
 
-    Algorithm (Figure 6 / Algorithm 1 of arxiv 2607.05391):
-      1. Ring pass: random Hamiltonian cycle → N pairwise comparisons (bias-cancelling)
-      2. Pivot selection: top-k by ring-pass mean preference w_i/c_i
-      3. Pivot rounds: non-pivot×pivot + pivot×pivot comparisons
-      4. Winner: argmax_i (w_i / c_i)
+    Algorithm (Algorithm 1, arxiv 2607.05391):
+      1. Ring pass: random Hamiltonian cycle (N directed pairs, bias-cancelling)
+      2. Pivot selection: top-k by mean preference w_i / c_i
+      3. Pivot rounds: non-pivot×pivot + pivot×pivot
+      4. ppt_reward = w_i / c_i (Bradley-Terry mean preference)
+
+    Uses ring_cycle, select_pivots, pivot_round_pairs, bradley_terry from
+    llm_verifier.pivot_tournament, and extract_score from
+    llm_verifier.fine_grained_reward for reward extraction from logprobs.
     """
+    if not _HAS_LMV:
+        raise RuntimeError(
+            "llm-verifier is not installed. Run: uv add llm-verifier"
+        )
+
     rng = random.Random(seed)
 
-    # Group candidates by (dataset, image_name, gen_mode)
+    # Group candidates by (ds, image, gen_mode), sort by n_idx
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for row in candidates:
         key = (row["agml_dataset"], row["image_name"], row["gen_mode"])
         groups[key].append(row)
-
-    # Sort each group by n_idx for deterministic indexing
     for key in groups:
         groups[key].sort(key=lambda r: int(r.get("n_idx", 0)))
 
-    # Pre-compute criteria dict per image key (keyed by task_type)
-    criteria_by_task: dict[tuple, dict[str, str]] = {
+    # Precompute criteria per image group
+    criteria_by_key: dict[tuple, dict[str, str]] = {
         key: _criteria_for(rows[0]["task_type"], n_criteria)
         for key, rows in groups.items()
     }
 
-    # Build ring-pass pair specs for all images simultaneously
-    ring_specs: list[tuple] = []      # (key, i, j)
-    group_perms: dict[tuple, list[int]] = {}
-    for key, rows in groups.items():
-        n    = len(rows)
-        perm = list(range(n))
-        rng.shuffle(perm)
-        group_perms[key] = perm
-        for t in range(n):
-            ring_specs.append((key, perm[t], perm[(t + 1) % n]))
-
-    print(f"\n[verify/ppt] {len(groups)} images, "
-          f"{sum(len(r) for r in groups.values())} candidates, "
-          f"k_pivots={k_pivots}")
-    print(f"  Ring pass: {len(ring_specs)} pairs")
+    # ── Step 1: Ring pass ────────────────────────────────────────────────────
+    rings: dict[tuple, list[tuple[int, int]]] = {
+        key: ring_cycle(len(rows), rng)
+        for key, rows in groups.items()
+    }
+    ring_specs: list[tuple] = [
+        (key, a, b)
+        for key, ring in rings.items()
+        for (a, b) in ring
+    ]
+    n_scoring = len(ring_specs) * len(next(iter(criteria_by_key.values()))) * n_evals
+    print(f"\n[PPT] {len(groups)} images × {len(next(iter(groups.values())))} candidates")
+    print(f"  Ring pass: {len(ring_specs)} pairs "
+          f"({n_scoring} scoring calls with K={n_evals}, C={n_criteria})")
 
     ring_rewards = _score_pairs_batch(
-        ring_specs, groups, criteria_by_task, llm, tokenizer, n_evals, batch_size,
+        ring_specs, groups, criteria_by_key, llm, tokenizer, n_evals, batch_size,
     )
 
-    # Accumulate wins and counts from ring pass
-    wins:   dict[tuple, dict[int, float]] = {key: defaultdict(float) for key in groups}
-    counts: dict[tuple, dict[int, int]]   = {key: defaultdict(int)   for key in groups}
-    for (key, i, j), (r_i, r_j) in zip(ring_specs, ring_rewards):
-        wins[key][i] += r_i;  counts[key][i] += 1
-        wins[key][j] += r_j;  counts[key][j] += 1
+    # Accumulate ring pass wins / counts (Bradley-Terry)
+    wins:   dict[tuple, list[float]] = {key: [0.0] * len(rows) for key, rows in groups.items()}
+    counts: dict[tuple, list[int]]   = {key: [0]   * len(rows) for key, rows in groups.items()}
+    for (key, a_idx, b_idx), (ra, rb) in zip(ring_specs, ring_rewards):
+        p = bradley_terry(ra, rb)
+        wins[key][a_idx]   += p
+        counts[key][a_idx] += 1
+        wins[key][b_idx]   += 1.0 - p
+        counts[key][b_idx] += 1
 
-    # Select pivots per image
+    # ── Steps 2+3: Pivot selection + pivot rounds ────────────────────────────
     pivot_specs: list[tuple] = []
-    group_pivots: dict[tuple, list[int]] = {}
     for key, rows in groups.items():
-        n         = len(rows)
-        mean_w    = [wins[key][i] / counts[key][i] if counts[key][i] else 0.0 for i in range(n)]
-        pivots    = sorted(range(n), key=lambda i: -mean_w[i])[:k_pivots]
-        non_pivot = [i for i in range(n) if i not in pivots]
-        group_pivots[key] = pivots
-        for i in non_pivot:
-            for p in pivots:
-                pivot_specs.append((key, i, p))
-        for a in range(len(pivots)):
-            for b in range(a + 1, len(pivots)):
-                pivot_specs.append((key, pivots[a], pivots[b]))
+        n      = len(rows)
+        pivots = select_pivots(wins[key], counts[key], k_pivots)
+        for (a, b) in pivot_round_pairs(n, pivots):
+            pivot_specs.append((key, a, b))
 
-    print(f"  Pivot rounds: {len(pivot_specs)} pairs")
+    n_piv_scoring = len(pivot_specs) * len(next(iter(criteria_by_key.values()))) * n_evals
+    print(f"  Pivot rounds: {len(pivot_specs)} pairs ({n_piv_scoring} scoring calls)")
 
     if pivot_specs:
         pivot_rewards = _score_pairs_batch(
-            pivot_specs, groups, criteria_by_task, llm, tokenizer, n_evals, batch_size,
+            pivot_specs, groups, criteria_by_key, llm, tokenizer, n_evals, batch_size,
         )
-        for (key, i, j), (r_i, r_j) in zip(pivot_specs, pivot_rewards):
-            wins[key][i] += r_i;  counts[key][i] += 1
-            wins[key][j] += r_j;  counts[key][j] += 1
+        for (key, a_idx, b_idx), (ra, rb) in zip(pivot_specs, pivot_rewards):
+            p = bradley_terry(ra, rb)
+            wins[key][a_idx]   += p
+            counts[key][a_idx] += 1
+            wins[key][b_idx]   += 1.0 - p
+            counts[key][b_idx] += 1
 
-    # Build scored rows
-    scored = []
+    # Build scored rows: ppt_reward = mean Bradley-Terry preference
+    scored: list[dict] = []
     for key, rows in groups.items():
-        n     = len(rows)
-        final = [wins[key][i] / counts[key][i] if counts[key][i] else 0.0 for i in range(n)]
-        for idx, row in enumerate(rows):
-            scored.append({**row, "ppt_reward": final[idx]})
+        for i, row in enumerate(rows):
+            reward = wins[key][i] / counts[key][i] if counts[key][i] else 0.5
+            scored.append({**row, "ppt_reward": reward})
 
     if ckpt_path:
         _write_csv(scored, ckpt_path, SCORED_FIELDS)
@@ -673,10 +585,10 @@ def run_argmax_and_judge(
     scored: list[dict],
     llm,
     tokenizer,
-    n_max: int = N_MAX_DEFAULT,
+    n_max: int = G,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
-    """Pick best candidate per (image, gen_mode, n_slice) by ppt_reward and judge."""
+    """Pick best candidate per (image, gen_mode, n_slice) by ppt_reward, then judge."""
     from src.common.metrics import apply_judge
     import yaml
     _p = yaml.safe_load(
@@ -727,7 +639,7 @@ def run_argmax_and_judge(
     return judged
 
 
-# ── Load and filter existing CSVs ─────────────────────────────────────────────
+# ── Load existing CSVs for comparison ─────────────────────────────────────────
 
 def load_existing_rows(
     image_keys: set[tuple[str, str]],
@@ -737,7 +649,6 @@ def load_existing_rows(
     verifier_dir: Path,
     model_safe: str,
 ) -> dict[str, list[dict]]:
-    """Load and filter existing experiment CSVs to the selected image set."""
     def _filter(rows: list[dict]) -> list[dict]:
         return [r for r in rows
                 if (r.get("agml_dataset"), r.get("image_name")) in image_keys]
@@ -768,19 +679,20 @@ def load_existing_rows(
     else:
         print(f"  [skip] {aug_csv.name}")
 
-    # Text-score verifier (verifier_vision.py) for direct comparison
+    # Text-score verifier (verifier_vision.py) for head-to-head comparison
     ver_csv = verifier_dir / "ckpt_judged.csv"
     if ver_csv.exists():
         ver_rows = _filter(_read_csv(ver_csv))
         for cond in ("Direct-N1", "Direct-N5", "Direct-N10",
                      "SelfCoT-N1", "SelfCoT-N5", "SelfCoT-N10"):
             gen_mode = "direct" if cond.startswith("Direct") else "self_cot"
-            n_max    = int(cond.split("N")[1])
+            n_val    = int(cond.split("N")[1])
             result[cond] = [
                 r for r in ver_rows
-                if r.get("gen_mode") == gen_mode and str(r.get("n_max")) == str(n_max)
+                if r.get("gen_mode") == gen_mode and str(r.get("n_max")) == str(n_val)
             ]
-        total = sum(len(v) for k, v in result.items() if k.startswith("Direct") or k.startswith("SelfCoT"))
+        total = sum(len(v) for k, v in result.items()
+                    if k.startswith("Direct") or k.startswith("SelfCoT"))
         print(f"  Text-verifier conditions: {total} rows total")
     else:
         print(f"  [skip] {ver_csv.name} (verifier_vision judged CSV)")
@@ -788,31 +700,25 @@ def load_existing_rows(
     return result
 
 
-# ── Condition labels and row merging ──────────────────────────────────────────
+# ── Condition labels ───────────────────────────────────────────────────────────
 
-def _condition_label(gen_mode: str, n_max: int, selection_mode: str) -> str:
-    prefix = "LMV" if selection_mode == "pointwise" else "PPT"
-    gm     = "Direct" if gen_mode == "direct" else "SelfCoT"
-    return f"{prefix}-{gm}-N{n_max}"
+def _condition_label(gen_mode: str, n_max: int) -> str:
+    gm = "Direct" if gen_mode == "direct" else "SelfCoT"
+    return f"PPT-{gm}-N{n_max}"
 
 
 def build_rows_by_condition(
     judged: list[dict],
     existing: dict[str, list[dict]],
-    selection_mode: str,
 ) -> dict[str, list[dict]]:
-    result: dict[str, list[dict]] = {}
-
     by_cond: dict[str, list[dict]] = defaultdict(list)
     for row in judged:
-        label = _condition_label(row["gen_mode"], int(row["n_max"]), selection_mode)
+        label = _condition_label(row["gen_mode"], int(row["n_max"]))
         by_cond[label].append(row)
-    result.update(by_cond)
-
+    result: dict[str, list[dict]] = dict(by_cond)
     for label, rows in existing.items():
         if rows:
             result[label] = rows
-
     return result
 
 
@@ -822,9 +728,8 @@ def plot_reward_spread(
     ckpt_scored: Path,
     ckpt_judged: Path,
     output_dir: Path,
-    selection_mode: str,
 ) -> None:
-    """Continuous reward [0,1] spread per gen_mode vs correctness at each N slice."""
+    """PPT reward [0,1] spread per gen_mode vs correctness at N=1,5,10."""
     import matplotlib.pyplot as plt
 
     scored_all = _read_csv(ckpt_scored)
@@ -851,12 +756,17 @@ def plot_reward_spread(
     gen_modes  = ["direct", "self_cot"]
     gen_labels = {"direct": "Direct", "self_cot": "Self-CoT"}
     colors     = {"correct": "#2ca02c", "incorrect": "#d62728"}
-    mode_title = "LMV Pointwise" if selection_mode == "pointwise" else "PPT Pairwise"
 
     for n_slice in (1, 5, 10):
-        all_rewards: dict[str, dict[str, list[float]]] = {gm: {"correct": [], "incorrect": []} for gm in gen_modes}
-        std_data:    dict[str, dict[str, list[float]]] = {gm: {"correct": [], "incorrect": []} for gm in gen_modes}
-        margin_data: dict[str, dict[str, list[float]]] = {gm: {"correct": [], "incorrect": []} for gm in gen_modes}
+        all_rewards: dict[str, dict[str, list[float]]] = {
+            gm: {"correct": [], "incorrect": []} for gm in gen_modes
+        }
+        std_data:    dict[str, dict[str, list[float]]] = {
+            gm: {"correct": [], "incorrect": []} for gm in gen_modes
+        }
+        margin_data: dict[str, dict[str, list[float]]] = {
+            gm: {"correct": [], "incorrect": []} for gm in gen_modes
+        }
 
         for key, all_s in groups.items():
             _, _, gen_mode = key
@@ -891,7 +801,7 @@ def plot_reward_spread(
             ax.set_xticks([0, 1])
             ax.set_xticklabels([f"Correct\n(n={len(std_data[gm]['correct'])})",
                                  f"Incorrect\n(n={len(std_data[gm]['incorrect'])})"])
-            ax.set_ylabel("Reward [0–1]")
+            ax.set_ylabel("PPT Reward [0–1]")
             ax.set_ylim(-0.05, 1.05)
             ax.set_title(f"{lbl} — Reward Distribution")
             ax.yaxis.grid(True, alpha=0.3)
@@ -930,10 +840,10 @@ def plot_reward_spread(
             ax.set_title(f"{lbl} — Winning Margin")
             ax.yaxis.grid(True, alpha=0.3)
 
-        fig.suptitle(f"{mode_title} — Reward Spread vs Correctness (N={n_slice})",
+        fig.suptitle(f"PPT Reward Spread vs Correctness (N={n_slice})",
                      fontsize=13, fontweight="bold")
         plt.tight_layout()
-        out = output_dir / f"lmv_reward_spread_N{n_slice}.png"
+        out = output_dir / f"ppt_reward_spread_N{n_slice}.png"
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out, dpi=150, bbox_inches="tight")
         plt.close()
@@ -945,7 +855,6 @@ def plot_reward_spread(
 def plot_per_dataset(
     rows_by_cond: dict[str, list[dict]],
     output_path: Path,
-    selection_mode: str,
 ) -> None:
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
@@ -968,7 +877,7 @@ def plot_per_dataset(
                     return (r.get("task_type", ""), ds)
         return ("", ds)
 
-    datasets  = sorted(all_ds, key=_sort_key)
+    datasets   = sorted(all_ds, key=_sort_key)
     cond_order = [lbl for lbl, _ in CONDITION_STYLES if lbl in ds_f1]
     n_conds    = len(cond_order)
     n_ds       = len(datasets)
@@ -993,12 +902,12 @@ def plot_per_dataset(
     ax.set_xticklabels(short, rotation=35, ha="right", fontsize=8)
     ax.set_ylabel("Mean Judged F1")
     ax.set_ylim(0, 1.05)
-    mode_lbl = "LMV Pointwise" if selection_mode == "pointwise" else "PPT Pairwise"
-    ax.set_title(f"Verifier {mode_lbl} — Mean Judged F1 per Dataset")
+    ax.set_title("Verifier PPT — Mean Judged F1 per Dataset")
     ax.yaxis.grid(True, alpha=0.3)
     ax.set_axisbelow(True)
     ax.legend(
-        handles=[mpatches.Patch(color=CONDITION_COLOR.get(c, "#888"), label=c) for c in cond_order],
+        handles=[mpatches.Patch(color=CONDITION_COLOR.get(c, "#888"), label=c)
+                 for c in cond_order],
         fontsize=7, ncol=2, loc="upper right",
     )
 
@@ -1021,7 +930,6 @@ def plot_all(
     judged: list[dict],
     existing: dict[str, list[dict]],
     output_dir: Path,
-    selection_mode: str,
 ) -> None:
     from src.common.method_comparison import (
         plot_overall_judge_comparison,
@@ -1029,27 +937,21 @@ def plot_all(
         plot_baseline_vs_condition_scatter,
     )
 
-    rows_by_cond = build_rows_by_condition(judged, existing, selection_mode)
-    present      = [c for c in rows_by_cond if rows_by_cond[c]]
+    rows_by_cond = build_rows_by_condition(judged, existing)
+    present = [c for c in rows_by_cond if rows_by_cond[c]]
     print(f"\n[plot] conditions: {present}")
-
-    prefix = "LMV" if selection_mode == "pointwise" else "PPT"
 
     plot_overall_judge_comparison(
         rows_by_cond,
-        output_path=output_dir / "lmv_overall.png",
-        title=f"Verifier {prefix} — Overall Mean Judged F1",
+        output_path=output_dir / "ppt_overall.png",
+        title="Verifier PPT — Overall Mean Judged F1",
     )
     plot_per_task_judge_comparison(
         rows_by_cond,
-        output_path=output_dir / "lmv_per_task.png",
-        title=f"Verifier {prefix} — Mean Judged F1 by Task",
+        output_path=output_dir / "ppt_per_task.png",
+        title="Verifier PPT — Mean Judged F1 by Task",
     )
-    plot_per_dataset(
-        rows_by_cond,
-        output_path=output_dir / "lmv_per_dataset.png",
-        selection_mode=selection_mode,
-    )
+    plot_per_dataset(rows_by_cond, output_path=output_dir / "ppt_per_dataset.png")
 
     direct_conds = {k: v for k, v in rows_by_cond.items()
                     if "Direct" in k or k == "Vision Baseline"}
@@ -1058,14 +960,14 @@ def plot_all(
 
     plot_baseline_vs_condition_scatter(
         direct_conds,
-        output_path=output_dir / "lmv_scatter_direct.png",
-        title=f"Verifier {prefix} Direct — Per-Dataset vs Baseline",
+        output_path=output_dir / "ppt_scatter_direct.png",
+        title="Verifier PPT Direct — Per-Dataset vs Baseline",
         separate=True,
     )
     plot_baseline_vs_condition_scatter(
         selfcot_conds,
-        output_path=output_dir / "lmv_scatter_selfcot.png",
-        title=f"Verifier {prefix} SelfCoT — Per-Dataset vs Baseline",
+        output_path=output_dir / "ppt_scatter_selfcot.png",
+        title="Verifier PPT SelfCoT — Per-Dataset vs Baseline",
         separate=True,
     )
 
@@ -1073,36 +975,35 @@ def plot_all(
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verifier LMV — logprob-based verification")
-    parser.add_argument("--model",          required=True)
-    parser.add_argument("--output_dir",     default="outputs/verifier_lmv/")
-    parser.add_argument("--vis_dir",        default="outputs/vision_assessment/")
-    parser.add_argument("--cot_dir",        default="outputs/cot_vision/")
-    parser.add_argument("--aug_dir",        default="outputs/desc_augmented_vision/")
-    parser.add_argument("--verifier_dir",   default="outputs/verifier_vision/",
-                        help="Dir with ckpt_judged.csv from verifier_vision.py (for comparison)")
-    parser.add_argument("--config",         default="src/config/datasets.yaml")
-    parser.add_argument("--test_split",     default="outputs/linear_probe/test_split.json")
-    parser.add_argument("--n_samples",      type=int, default=50)
-    parser.add_argument("--n_datasets",     type=int, default=N_DATASETS_PER_TASK)
-    parser.add_argument("--n_max",          type=int, default=N_MAX_DEFAULT)
-    parser.add_argument("--seed",           type=int, default=SEED)
-    parser.add_argument("--batch_size",     type=int, default=256)
-    # LMV-specific
-    parser.add_argument("--n_evals",        type=int, default=4,
-                        help="K: repeated evaluations per criterion (paper ablation: 1,4,8)")
-    parser.add_argument("--n_criteria",     type=int, default=3, choices=[1, 3],
-                        help="C: criteria decomposition (1=single, 3=decomposed)")
-    parser.add_argument("--selection_mode", default="pointwise",
-                        choices=["pointwise", "ppt"],
-                        help="pointwise=independent scoring; ppt=Probabilistic Pivot Tournament")
-    parser.add_argument("--ppt_pivots",     type=int, default=3,
-                        help="k: number of pivots in PPT (only used when --selection_mode ppt)")
+    parser = argparse.ArgumentParser(description="Verifier LMV — PPT logprob verification")
+    parser.add_argument("--model",        required=True)
+    parser.add_argument("--output_dir",   default="outputs/verifier_lmv/")
+    parser.add_argument("--vis_dir",      default="outputs/vision_assessment/")
+    parser.add_argument("--cot_dir",      default="outputs/cot_vision/")
+    parser.add_argument("--aug_dir",      default="outputs/desc_augmented_vision/")
+    parser.add_argument("--verifier_dir", default="outputs/verifier_vision/",
+                        help="Dir with ckpt_judged.csv from verifier_vision.py")
+    parser.add_argument("--config",       default="src/config/datasets.yaml")
+    parser.add_argument("--test_split",   default="outputs/linear_probe/test_split.json")
+    parser.add_argument("--n_samples",    type=int, default=50)
+    parser.add_argument("--n_datasets",   type=int, default=N_DATASETS_PER_TASK)
+    parser.add_argument("--n_max",        type=int, default=N_MAX_DEFAULT,
+                        help="Candidates per image (sliced to 1/5/10 at judge time)")
+    parser.add_argument("--seed",         type=int, default=SEED)
+    parser.add_argument("--batch_size",   type=int, default=256)
+    # LMV paper axes (ablation: use distinct --output_dir per config)
+    parser.add_argument("--n_evals",      type=int, default=4,
+                        help="K: repeated evaluations per comparison (paper ablation: 1,4,8)")
+    parser.add_argument("--n_criteria",   type=int, default=3, choices=[1, 3],
+                        help="C: criteria count (1=single generic, 3=task-decomposed)")
+    parser.add_argument("--ppt_pivots",   type=int, default=DEFAULT_PIVOTS,
+                        help="k: PPT pivot count")
     # Control flags
-    parser.add_argument("--from_ckpt",      action="store_true")
-    parser.add_argument("--score_only",     action="store_true")
-    parser.add_argument("--judge_only",     action="store_true")
-    parser.add_argument("--plot_only",      action="store_true")
+    parser.add_argument("--from_ckpt",   action="store_true",
+                        help="Skip phases whose checkpoint CSV already exists")
+    parser.add_argument("--score_only",  action="store_true")
+    parser.add_argument("--judge_only",  action="store_true")
+    parser.add_argument("--plot_only",   action="store_true")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1132,12 +1033,9 @@ def main() -> None:
     for task, names in selected.items():
         print(f"  {task} ({len(names)}): {names}")
 
-    print(f"\n=== Config: K={args.n_evals}, C={args.n_criteria}, "
-          f"mode={args.selection_mode}"
-          + (f", pivots={args.ppt_pivots}" if args.selection_mode == "ppt" else "")
-          + " ===")
+    print(f"\n=== Config: G={args.n_max}, K={args.n_evals}, C={args.n_criteria}, "
+          f"pivots={args.ppt_pivots} ===")
 
-    # ── Checkpoint skip flags ──────────────────────────────────────────────────
     skip_generate = (args.plot_only or args.score_only or args.judge_only or
                      (args.from_ckpt and ckpt_candidates.exists()))
     skip_score    = (args.plot_only or args.judge_only or
@@ -1176,33 +1074,25 @@ def main() -> None:
                                   n_max=args.n_max, batch_size=args.batch_size,
                                   ckpt_path=ckpt_candidates)
 
-    # ── Phase 2: Verify ────────────────────────────────────────────────────────
+    # ── Phase 2: PPT verify ────────────────────────────────────────────────────
     if skip_score:
-        print("\n=== Phase 2: verify [SKIPPED] ===")
+        print("\n=== Phase 2: PPT verify [SKIPPED] ===")
         scored = _read_csv(ckpt_scored)
     else:
-        print(f"\n=== Phase 2: verify ({len(candidates)} candidates, "
-              f"mode={args.selection_mode}) ===")
-        if args.selection_mode == "ppt":
-            scored = run_verify_ppt(
-                candidates, llm, tokenizer,
-                n_evals=args.n_evals, n_criteria=args.n_criteria,
-                k_pivots=args.ppt_pivots, batch_size=args.batch_size,
-                seed=args.seed, ckpt_path=ckpt_scored,
-            )
-        else:
-            scored = run_verify_pointwise(
-                candidates, llm, tokenizer,
-                n_evals=args.n_evals, n_criteria=args.n_criteria,
-                batch_size=args.batch_size, seed=args.seed,
-                ckpt_path=ckpt_scored,
-            )
+        print(f"\n=== Phase 2: PPT verify ({len(candidates)} candidates) ===")
+        scored = run_verify_ppt(
+            candidates, llm, tokenizer,
+            n_evals=args.n_evals, n_criteria=args.n_criteria,
+            k_pivots=args.ppt_pivots, batch_size=args.batch_size,
+            seed=args.seed, ckpt_path=ckpt_scored,
+        )
 
     # ── Phase 3: Argmax + Judge ────────────────────────────────────────────────
     if skip_judge:
         print("\n=== Phase 3: judge [SKIPPED] ===")
         judged = _read_csv(ckpt_judged)
     else:
+        print("\n=== Phase 3: argmax + judge ===")
         judged = run_argmax_and_judge(
             scored, llm, tokenizer,
             n_max=args.n_max, ckpt_path=ckpt_judged,
@@ -1215,8 +1105,8 @@ def main() -> None:
         gc.collect()
 
     # ── Phase 4: Plot ──────────────────────────────────────────────────────────
-    model_safe  = args.model.replace("/", "_")
-    image_keys  = {(r["agml_dataset"], r["image_name"]) for r in judged}
+    model_safe = args.model.replace("/", "_")
+    image_keys = {(r["agml_dataset"], r["image_name"]) for r in judged}
     print(f"\n=== Phase 4: plot ({len(image_keys)} unique images) ===")
 
     existing = load_existing_rows(
@@ -1228,10 +1118,10 @@ def main() -> None:
         model_safe=model_safe,
     )
 
-    plot_all(judged, existing, output_dir, args.selection_mode)
+    plot_all(judged, existing, output_dir)
 
     if ckpt_scored.exists():
-        plot_reward_spread(ckpt_scored, ckpt_judged, output_dir, args.selection_mode)
+        plot_reward_spread(ckpt_scored, ckpt_judged, output_dir)
 
     print("\nDone.")
 

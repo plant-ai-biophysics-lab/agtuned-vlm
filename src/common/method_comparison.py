@@ -45,14 +45,6 @@ CONDITION_STYLES: list[tuple[str, str]] = [
     ("SelfCoT-N1",      "#8c564b"),
     ("SelfCoT-N5",      "#b57a73"),
     ("SelfCoT-N10",     "#d4a69f"),
-    # LMV pointwise logprob conditions (direct)
-    ("LMV-Direct-N1",   "#1a9850"),
-    ("LMV-Direct-N5",   "#66bd63"),
-    ("LMV-Direct-N10",  "#a6d96a"),
-    # LMV pointwise logprob conditions (self-cot)
-    ("LMV-SelfCoT-N1",  "#006837"),
-    ("LMV-SelfCoT-N5",  "#31a354"),
-    ("LMV-SelfCoT-N10", "#74c476"),
     # PPT pairwise conditions (direct)
     ("PPT-Direct-N1",   "#4575b4"),
     ("PPT-Direct-N5",   "#74add1"),

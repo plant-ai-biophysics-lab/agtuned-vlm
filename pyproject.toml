@@ -40,6 +40,9 @@ dependencies = [
     "lxml>=4.9",
     "requests>=2.31",
 
+    # LLM-as-a-Verifier (PPT tournament + logprob reward extraction)
+    "llm-verifier>=0.1.0",
+
     # Config, plotting, UI
     "pyyaml>=6.0",
     "matplotlib>=3.8.0",
