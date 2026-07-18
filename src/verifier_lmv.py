@@ -7,7 +7,7 @@ Uses Probabilistic Pivot Tournament (PPT) from the official llm-verifier package
   - Inline vLLM for generation (Phase 1), PPT scoring, and judge (Phase 3)
 
 Three scaling axes from the paper:
-  G = 20  (fixed): candidates per image
+  G = 20  (fixed): score token granularity (A-T letters), baked into extract_score
   K (--n_evals): repeated evaluations per pairwise comparison (averaged)
   C (--n_criteria): criteria decomposition (1 generic or 3 task-specific)
 
@@ -72,8 +72,7 @@ except ImportError:
 
 N_DATASETS_PER_TASK = 3
 SEED = 42
-N_MAX_DEFAULT = 10
-G = 20            # fixed candidates per image (paper's G axis)
+N_MAX_DEFAULT = 10   # candidates generated per image (paper calls this N)
 DEFAULT_PIVOTS = 2
 
 # ── Criteria ────────────────────────────────────────────────────────────────────
@@ -309,7 +308,7 @@ def run_generate(
     items: list[dict],
     llm,
     tokenizer,
-    n_max: int = G,
+    n_max: int = N_MAX_DEFAULT,
     batch_size: int = 256,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
@@ -585,7 +584,7 @@ def run_argmax_and_judge(
     scored: list[dict],
     llm,
     tokenizer,
-    n_max: int = G,
+    n_max: int = N_MAX_DEFAULT,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
     """Pick best candidate per (image, gen_mode, n_slice) by ppt_reward, then judge."""
@@ -988,7 +987,7 @@ def main() -> None:
     parser.add_argument("--n_samples",    type=int, default=50)
     parser.add_argument("--n_datasets",   type=int, default=N_DATASETS_PER_TASK)
     parser.add_argument("--n_max",        type=int, default=N_MAX_DEFAULT,
-                        help="Candidates per image (sliced to 1/5/10 at judge time)")
+                        help="N: candidates per image for PPT to select from (sliced to 1/5/10 at judge time)")
     parser.add_argument("--seed",         type=int, default=SEED)
     parser.add_argument("--batch_size",   type=int, default=256)
     # LMV paper axes (ablation: use distinct --output_dir per config)
@@ -1033,8 +1032,8 @@ def main() -> None:
     for task, names in selected.items():
         print(f"  {task} ({len(names)}): {names}")
 
-    print(f"\n=== Config: G={args.n_max}, K={args.n_evals}, C={args.n_criteria}, "
-          f"pivots={args.ppt_pivots} ===")
+    print(f"\n=== Config: N={args.n_max}, K={args.n_evals}, C={args.n_criteria}, "
+          f"pivots={args.ppt_pivots} (G=20 fixed by scoring scale) ===")
 
     skip_generate = (args.plot_only or args.score_only or args.judge_only or
                      (args.from_ckpt and ckpt_candidates.exists()))
