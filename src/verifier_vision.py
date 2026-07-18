@@ -18,7 +18,7 @@ Usage:
     --vis_dir outputs/vision_assessment/ \\
     --cot_dir outputs/cot_vision/ \\
     --aug_dir outputs/desc_augmented_vision/ \\
-    --n_samples 50 --n_datasets 3 --seed 42 --batch_size 64
+    --n_samples 50 --n_datasets 3 --seed 42 --batch_size 256
 
   # Resume from checkpoints:
   uv run python src/verifier_vision.py ... --from_ckpt
@@ -253,7 +253,7 @@ def run_generate(
     llm,
     tokenizer,
     n_max: int = N_MAX_DEFAULT,
-    batch_size: int = 64,
+    batch_size: int = 256,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
     """Generate n_max candidates per image for both direct and self_cot strategies."""
@@ -356,7 +356,7 @@ def run_verify(
     candidates: list[dict],
     llm,
     tokenizer,
-    batch_size: int = 64,
+    batch_size: int = 256,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
     """Score each (image, candidate) pair with the LLM verifier (1–10)."""
@@ -528,7 +528,221 @@ def build_rows_by_condition(
     return result
 
 
+# ── Score spread analysis ──────────────────────────────────────────────────────
+
+def plot_score_spread(
+    ckpt_scored: Path,
+    ckpt_judged: Path,
+    output_dir: Path,
+) -> None:
+    """Three charts per gen_mode showing verifier score variation vs correctness.
+
+    One figure per N slice (N=1, N=5, N=10).  Each figure is a 2×3 grid:
+      rows = gen_mode (direct, self_cot)
+      cols = score distribution (violin) | score std (box) | winning margin (box)
+
+    Scores used per image are the first N candidates (n_idx 0..N-1).
+    Correctness is taken from the n_max=N row in ckpt_judged.
+    """
+    import matplotlib.pyplot as plt
+
+    scored_all = _read_csv(ckpt_scored)
+    judged     = _read_csv(ckpt_judged)
+
+    # correctness_by_n[(dataset, image_name, gen_mode)][n] = judged_correct
+    correctness_by_n: dict[tuple, dict[int, int]] = defaultdict(dict)
+    for r in judged:
+        n = int(r.get("n_max", 0))
+        if n in (1, 5, 10):
+            key = (r["agml_dataset"], r["image_name"], r["gen_mode"])
+            correctness_by_n[key][n] = int(r["judged_correct"])
+
+    # Group ALL scored rows by (dataset, image_name, gen_mode), sorted by n_idx
+    raw_groups: dict[tuple, list[tuple[int, int]]] = defaultdict(list)
+    for r in scored_all:
+        key = (r["agml_dataset"], r["image_name"], r["gen_mode"])
+        raw_groups[key].append((int(r["n_idx"]), int(r["verifier_score"])))
+    # Sort by n_idx so slicing 0..N-1 is deterministic
+    groups: dict[tuple, list[int]] = {
+        k: [s for _, s in sorted(v)] for k, v in raw_groups.items()
+    }
+
+    gen_modes  = ["direct", "self_cot"]
+    gen_labels = {"direct": "Direct", "self_cot": "Self-CoT"}
+    colors     = {"correct": "#2ca02c", "incorrect": "#d62728"}
+
+    for n_slice in (1, 5, 10):
+        all_scores:  dict[str, dict[str, list[float]]] = {gm: {"correct": [], "incorrect": []} for gm in gen_modes}
+        std_data:    dict[str, dict[str, list[float]]] = {gm: {"correct": [], "incorrect": []} for gm in gen_modes}
+        margin_data: dict[str, dict[str, list[float]]] = {gm: {"correct": [], "incorrect": []} for gm in gen_modes}
+
+        for key, all_s in groups.items():
+            _, _, gen_mode = key
+            if gen_mode not in all_scores:
+                continue
+            jc = correctness_by_n.get(key, {}).get(n_slice)
+            if jc is None:
+                continue
+            scores = all_s[:n_slice]
+            label  = "correct" if jc else "incorrect"
+            all_scores[gen_mode][label].extend(scores)
+            std_data[gen_mode][label].append(float(np.std(scores)))
+            sorted_s = sorted(scores, reverse=True)
+            margin_data[gen_mode][label].append(
+                float(sorted_s[0] - sorted_s[1]) if len(sorted_s) > 1 else 0.0
+            )
+
+        fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+
+        for row, gm in enumerate(gen_modes):
+            lbl = gen_labels[gm]
+
+            # ── Chart 1: Score distribution (violin) ───────────────────────────
+            ax = axes[row, 0]
+            data_v = [all_scores[gm]["correct"], all_scores[gm]["incorrect"]]
+            if all(len(d) > 1 for d in data_v):
+                parts = ax.violinplot(data_v, positions=[0, 1], showmedians=True, showextrema=True)
+                for pc, c in zip(parts["bodies"], [colors["correct"], colors["incorrect"]]):
+                    pc.set_facecolor(c)
+                    pc.set_alpha(0.6)
+                for vkey in ("cmedians", "cmins", "cmaxes", "cbars"):
+                    if vkey in parts:
+                        parts[vkey].set_color("black")
+                        parts[vkey].set_linewidth(1.2)
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels([f"Correct\n(n={len(std_data[gm]['correct'])})",
+                                 f"Incorrect\n(n={len(std_data[gm]['incorrect'])})"])
+            ax.set_ylabel("Verifier Score (1–10)")
+            ax.set_ylim(0, 11)
+            ax.set_title(f"{lbl} — Score Distribution")
+            ax.yaxis.grid(True, alpha=0.3)
+
+            # ── Chart 2: Score spread / std ────────────────────────────────────
+            ax = axes[row, 1]
+            if n_slice > 1:
+                bp = ax.boxplot(
+                    [std_data[gm]["correct"], std_data[gm]["incorrect"]],
+                    labels=[f"Correct\n(n={len(std_data[gm]['correct'])})",
+                            f"Incorrect\n(n={len(std_data[gm]['incorrect'])})"],
+                    patch_artist=True, widths=0.5,
+                )
+                for patch, c in zip(bp["boxes"], [colors["correct"], colors["incorrect"]]):
+                    patch.set_facecolor(c)
+                    patch.set_alpha(0.5)
+            else:
+                ax.text(0.5, 0.5, "N=1: std undefined", ha="center", va="center", transform=ax.transAxes)
+            ax.set_ylabel(f"Score Std across N={n_slice} candidates")
+            ax.set_title(f"{lbl} — Score Spread (Std)")
+            ax.yaxis.grid(True, alpha=0.3)
+
+            # ── Chart 3: Winning margin (best − 2nd best) ──────────────────────
+            ax = axes[row, 2]
+            if n_slice > 1:
+                bp = ax.boxplot(
+                    [margin_data[gm]["correct"], margin_data[gm]["incorrect"]],
+                    labels=[f"Correct\n(n={len(margin_data[gm]['correct'])})",
+                            f"Incorrect\n(n={len(margin_data[gm]['incorrect'])})"],
+                    patch_artist=True, widths=0.5,
+                )
+                for patch, c in zip(bp["boxes"], [colors["correct"], colors["incorrect"]]):
+                    patch.set_facecolor(c)
+                    patch.set_alpha(0.5)
+            else:
+                ax.text(0.5, 0.5, "N=1: margin undefined", ha="center", va="center", transform=ax.transAxes)
+            ax.set_ylabel("Score gap (1st − 2nd candidate)")
+            ax.set_title(f"{lbl} — Winning Margin")
+            ax.yaxis.grid(True, alpha=0.3)
+
+        fig.suptitle(f"Verifier Score Spread — Correct vs Incorrect (N={n_slice})",
+                     fontsize=13, fontweight="bold")
+        plt.tight_layout()
+        out = output_dir / f"verifier_score_spread_N{n_slice}.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"Saved: {out}")
+    print(f"  Saved: {out}")
+
+
 # ── Plots ──────────────────────────────────────────────────────────────────────
+
+def plot_per_dataset(
+    rows_by_cond: dict[str, list[dict]],
+    output_path: Path,
+) -> None:
+    """Grouped bar chart: one group per dataset, one bar per condition."""
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from src.common.method_comparison import CONDITION_STYLES, CONDITION_COLOR
+    from src.common.distribution_plots import gather_judge_per_class_by_dataset
+
+    judge_by_cls = gather_judge_per_class_by_dataset(rows_by_cond)
+
+    # Collect per-dataset mean F1 per condition: {cond: {ds: mean_f1}}
+    ds_f1: dict[str, dict[str, float]] = {}
+    all_ds: set[str] = set()
+    for cond, by_dt in judge_by_cls.items():
+        ds_f1[cond] = {}
+        for (ds, task), vals in by_dt.items():
+            ds_f1[cond][ds] = float(np.mean(vals)) if vals else 0.0
+            all_ds.add(ds)
+
+    # Order datasets by task then name
+    def _ds_sort_key(ds):
+        for cond_rows in rows_by_cond.values():
+            for r in cond_rows:
+                if r.get("agml_dataset") == ds:
+                    return (r.get("task_type", ""), ds)
+        return ("", ds)
+
+    datasets = sorted(all_ds, key=_ds_sort_key)
+    cond_order = [lbl for lbl, _ in CONDITION_STYLES if lbl in ds_f1]
+    n_conds = len(cond_order)
+    n_ds = len(datasets)
+
+    fig, ax = plt.subplots(figsize=(max(14, n_ds * 1.4), 6))
+    bar_w = 0.8 / max(n_conds, 1)
+    offsets = np.linspace(-(n_conds - 1) / 2, (n_conds - 1) / 2, n_conds) * bar_w
+
+    for i, cond in enumerate(cond_order):
+        vals = [ds_f1[cond].get(ds, np.nan) for ds in datasets]
+        xs = np.arange(n_ds) + offsets[i]
+        color = CONDITION_COLOR.get(cond, "#888888")
+        bars = ax.bar(xs, vals, width=bar_w * 0.9, color=color, alpha=0.85, label=cond)
+        for bar, v in zip(bars, vals):
+            if not np.isnan(v) and v > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                        f"{v:.2f}", ha="center", va="bottom", fontsize=5.5, rotation=90)
+
+    # Dataset labels — short names
+    short = [ds.replace("_classification", "").replace("_disease", "")
+               .replace("_", " ") for ds in datasets]
+    ax.set_xticks(np.arange(n_ds))
+    ax.set_xticklabels(short, rotation=35, ha="right", fontsize=8)
+    ax.set_ylabel("Mean Judged F1")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("Verifier (Subsample) — Mean Judged F1 per Dataset")
+    ax.yaxis.grid(True, alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.legend(handles=[mpatches.Patch(color=CONDITION_COLOR.get(c, "#888"), label=c)
+                        for c in cond_order],
+              fontsize=7, ncol=2, loc="upper right")
+
+    # Task separator lines
+    task_seen: list[str] = []
+    for idx, ds in enumerate(datasets):
+        tt = _ds_sort_key(ds)[0]
+        if not task_seen or task_seen[-1] != tt:
+            if task_seen:
+                ax.axvline(idx - 0.5, color="gray", lw=0.8, linestyle="--")
+            task_seen.append(tt)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {output_path}")
+
 
 def plot_all(
     judged: list[dict],
@@ -554,6 +768,10 @@ def plot_all(
         rows_by_cond,
         output_path=output_dir / "verifier_per_task.png",
         title="Verifier (Subsample) — Mean Judged F1 by Task",
+    )
+    plot_per_dataset(
+        rows_by_cond,
+        output_path=output_dir / "verifier_per_dataset.png",
     )
 
     # Scatter: baseline vs verifier conditions, separate panels per gen_mode × N
@@ -595,7 +813,7 @@ def main() -> None:
     parser.add_argument("--n_max",       type=int, default=N_MAX_DEFAULT,
                         help="Max candidates to generate per image (sliced to 1/5/10)")
     parser.add_argument("--seed",        type=int, default=SEED)
-    parser.add_argument("--batch_size",  type=int, default=64)
+    parser.add_argument("--batch_size",  type=int, default=256)
     parser.add_argument("--from_ckpt",   action="store_true",
                         help="Skip phases if their checkpoint CSV exists")
     parser.add_argument("--score_only",  action="store_true",
@@ -716,6 +934,10 @@ def main() -> None:
     )
 
     plot_all(judged, existing, output_dir)
+
+    if ckpt_scored.exists():
+        plot_score_spread(ckpt_scored, ckpt_judged, output_dir)
+
     print("\nDone.")
 
 
