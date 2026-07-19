@@ -417,6 +417,7 @@ def _score_pairs_batch(
     tokenizer,
     n_evals: int,
     batch_size: int,
+    desc: str = "scoring",
 ) -> list[tuple[float, float]]:
     """Score all (key, a_idx, b_idx) pairs using inline vLLM + extract_score.
 
@@ -437,7 +438,9 @@ def _score_pairs_batch(
     rewards_a: dict[int, list[float]] = defaultdict(list)
     rewards_b: dict[int, list[float]] = defaultdict(list)
 
-    for start in range(0, len(requests), batch_size):
+    n_batches = (len(requests) + batch_size - 1) // batch_size
+    for start in tqdm(range(0, len(requests), batch_size),
+                      total=n_batches, desc=desc, unit="batch"):
         batch = requests[start:start + batch_size]
         prompts = []
         for spec_idx, crit_name, crit_desc in batch:
@@ -532,6 +535,7 @@ def run_verify_ppt(
 
     ring_rewards = _score_pairs_batch(
         ring_specs, groups, criteria_by_key, llm, tokenizer, n_evals, batch_size,
+        desc=f"ring ({len(ring_specs)} pairs)",
     )
 
     # Accumulate ring pass wins / counts (Bradley-Terry)
@@ -558,6 +562,7 @@ def run_verify_ppt(
     if pivot_specs:
         pivot_rewards = _score_pairs_batch(
             pivot_specs, groups, criteria_by_key, llm, tokenizer, n_evals, batch_size,
+            desc=f"pivot ({len(pivot_specs)} pairs)",
         )
         for (key, a_idx, b_idx), (ra, rb) in zip(pivot_specs, pivot_rewards):
             p = bradley_terry(ra, rb)
