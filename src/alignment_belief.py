@@ -59,7 +59,7 @@ from src.cot_vision import (
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-DESC_AUG_CSV       = "outputs/desc_augmented_vision/aug_cls_all_google_gemma-4-26B-A4B-it.csv"
+DEFAULT_INPUT_CSV  = "outputs/desc_augmented_vision/aug_cls_all_google_gemma-4-26B-A4B-it.csv"
 VERIFIER_CKPT      = "outputs/verifier_vision/ckpt_candidates.csv"
 DATASETS_YAML      = "src/config/datasets.yaml"
 
@@ -151,7 +151,7 @@ def build_items(
             "crop":          crop,
             "class_label":   row["class_label"],
             "prediction":    row["prediction"],
-            "judged_correct": row["judged_correct"],
+            "judged_correct": row.get("judged_correct") or row.get("correct", "0"),
         })
 
     print(f"Matched: {len(items)} rows  |  unmatched: {missing}")
@@ -433,7 +433,8 @@ def extract_psi_lang_and_score(
 
 # ── Step 4 — Plots ────────────────────────────────────────────────────────────
 
-def plot_results(scored: list[dict], output_dir: Path, fracs_used: list[float]) -> None:
+def plot_results(scored: list[dict], output_dir: Path, fracs_used: list[float],
+                 condition: str = "unknown") -> None:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from scipy import stats
@@ -458,7 +459,7 @@ def plot_results(scored: list[dict], output_dir: Path, fracs_used: list[float]) 
         bp["boxes"][0].set_facecolor("#2ca02c")
         bp["boxes"][1].set_facecolor("#d62728")
         ax.set_ylabel(f"cos(φ_vision, ψ_lang @ {pct}% depth)")
-        ax.set_title(f"Alignment Score vs Correctness — {pct}% depth (desc_aug)")
+        ax.set_title(f"Alignment Score vs Correctness — {pct}% depth ({condition})")
         ax.yaxis.grid(True, alpha=0.3)
         r, p = stats.pointbiserialr(correct, scores)
         ax.text(0.97, 0.03, f"r = {r:.3f}  p = {p:.3g}",
@@ -491,7 +492,7 @@ def plot_results(scored: list[dict], output_dir: Path, fracs_used: list[float]) 
         r_ds, p_ds = stats.pearsonr(ds_align, ds_acc)
         ax.set_xlabel(f"Mean alignment score ({pct}% depth)")
         ax.set_ylabel("Mean accuracy (judged_correct)")
-        ax.set_title(f"Per-dataset alignment vs accuracy — {pct}% depth (desc_aug)")
+        ax.set_title(f"Per-dataset alignment vs accuracy — {pct}% depth ({condition})")
         ax.text(0.97, 0.03, f"r = {r_ds:.3f}  p = {p_ds:.3g}",
                 transform=ax.transAxes, ha="right", va="bottom", fontsize=9)
         ax.yaxis.grid(True, alpha=0.3)
@@ -507,7 +508,7 @@ def plot_results(scored: list[dict], output_dir: Path, fracs_used: list[float]) 
     ax.axhline(0, color="black", lw=0.8)
     ax.set_xlabel("Layer depth (% of total)")
     ax.set_ylabel("Point-biserial r  (align_score vs judged_correct)")
-    ax.set_title("Vision-language alignment signal by layer depth (desc_aug)")
+    ax.set_title(f"Vision-language alignment signal by layer depth ({condition})")
     ax.yaxis.grid(True, alpha=0.3)
     ax.legend(handles=[
         Patch(color="#2ca02c", label="p < 0.05"),
@@ -519,35 +520,118 @@ def plot_results(scored: list[dict], output_dir: Path, fracs_used: list[float]) 
     print(f"  Plots saved to {output_dir}")
 
 
+# ── Comparison plot (multi-condition overlay) ─────────────────────────────────
+
+def plot_comparison(output_dir: Path) -> None:
+    """
+    Scan output_dir/{condition}/ckpt_scored_layers.csv for all conditions and
+    produce a grouped bar chart of r vs layer depth with one bar group per condition.
+    """
+    import matplotlib.pyplot as plt
+    from scipy import stats
+
+    cond_dirs = sorted(p for p in output_dir.iterdir()
+                       if p.is_dir() and (p / CKPT_SCORED_MULTI).exists())
+    if not cond_dirs:
+        print("  No condition subdirectories with scored CSVs found.")
+        return
+
+    # Collect r values per condition
+    cond_data: dict[str, tuple[list[str], list[float]]] = {}
+    for cond_dir in cond_dirs:
+        condition = cond_dir.name
+        rows = _read_csv(cond_dir / CKPT_SCORED_MULTI)
+        if not rows:
+            continue
+        fracs = [int(c[len("align_score_pct"):]) / 100
+                 for c in rows[0].keys() if c.startswith("align_score_pct")]
+        correct = np.array([int(r["judged_correct"]) for r in rows])
+        pct_labels = [f"{int(round(f*100))}%" for f in fracs]
+        rs = []
+        for frac in fracs:
+            scores = np.array([float(r[_frac_col(frac)]) for r in rows])
+            r, _ = stats.pointbiserialr(correct, scores)
+            rs.append(r)
+        cond_data[condition] = (pct_labels, rs)
+        print(f"  {condition}: {dict(zip(pct_labels, [f'{v:.3f}' for v in rs]))}")
+
+    # Grouped bar chart
+    conditions = list(cond_data)
+    pct_labels = cond_data[conditions[0]][0]  # assume same fracs across conditions
+    n_conds = len(conditions)
+    x = np.arange(len(pct_labels))
+    width = 0.8 / n_conds
+    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for i, cond in enumerate(conditions):
+        _, rs = cond_data[cond]
+        offset = (i - n_conds / 2 + 0.5) * width
+        ax.bar(x + offset, rs, width, label=cond, color=palette[i % len(palette)], alpha=0.85)
+
+    ax.axhline(0, color="black", lw=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(pct_labels)
+    ax.set_xlabel("Layer depth (% of total)")
+    ax.set_ylabel("Point-biserial r  (align_score vs judged_correct)")
+    ax.set_title("Vision-language alignment signal by condition and layer depth")
+    ax.yaxis.grid(True, alpha=0.3)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    out = output_dir / "comparison_r_vs_depth.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Comparison plot saved to {out}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Track A cosine alignment experiment (desc_aug)"
+        description="Multi-layer cosine alignment experiment"
     )
-    parser.add_argument("--model",       required=True, help="HF model ID or local path")
-    parser.add_argument("--output_dir",  default="outputs/alignment_belief/")
-    parser.add_argument("--desc_aug_csv", default=DESC_AUG_CSV)
+    parser.add_argument("--model",        help="HF model ID or local path")
+    parser.add_argument("--output_dir",   default="outputs/alignment_belief/")
+    parser.add_argument("--input_csv",    default=DEFAULT_INPUT_CSV,
+                        help="CSV with columns: agml_dataset, image_name, prediction, judged_correct")
+    parser.add_argument("--condition",    default=None,
+                        help="Label for this run (subfolder + plot titles). "
+                             "Defaults to the input CSV filename stem.")
     parser.add_argument("--verifier_ckpt", default=VERIFIER_CKPT,
                         help="ckpt_candidates.csv from verifier_vision (image path source)")
-    parser.add_argument("--config",      default=DATASETS_YAML)
+    parser.add_argument("--config",       default=DATASETS_YAML)
     parser.add_argument("--batch_size",   type=int, default=8)
     parser.add_argument("--quantize",     default=None, choices=["4bit", "8bit"])
-    parser.add_argument("--probe_fracs", default=",".join(str(f) for f in DEFAULT_FRACS),
+    parser.add_argument("--probe_fracs",  default=",".join(str(f) for f in DEFAULT_FRACS),
                         help="Comma-separated fractions of model depth to probe (0.0–1.0). "
                              f"Default: {DEFAULT_FRACS}")
-    parser.add_argument("--from_ckpt",   action="store_true")
-    parser.add_argument("--plot_only",   action="store_true")
+    parser.add_argument("--from_ckpt",    action="store_true")
+    parser.add_argument("--plot_only",    action="store_true")
+    parser.add_argument("--plot_compare", action="store_true",
+                        help="Overlay all conditions in output_dir and save comparison chart. "
+                             "No model needed.")
     args = parser.parse_args()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Compare mode: no model required ───────────────────────────────────
+    if args.plot_compare:
+        print("\n=== Comparison plot ===")
+        plot_comparison(output_dir)
+        return
+
+    # Resolve condition label and per-condition directory
+    condition = args.condition or Path(args.input_csv).stem
+    cond_dir  = output_dir / condition
+    cond_dir.mkdir(parents=True, exist_ok=True)
 
     layer_fracs = [float(x) for x in args.probe_fracs.split(",")]
 
-    output_dir   = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    ckpt_items      = output_dir / CKPT_ITEMS
+    # phi_vision cache lives at the top level (shared across conditions)
     ckpt_phi_vision = output_dir / CKPT_PHI_VISION
-    ckpt_scored     = output_dir / CKPT_SCORED_MULTI
+    ckpt_items      = cond_dir / CKPT_ITEMS
+    ckpt_scored     = cond_dir / CKPT_SCORED_MULTI
 
     # ── Plot only ──────────────────────────────────────────────────────────
     if args.plot_only:
@@ -561,17 +645,20 @@ def main() -> None:
         scored = [r for r in scored if all(
             r.get(_frac_col(f)) not in ("", None) for f in fracs_used
         )]
-        plot_results(scored, output_dir, fracs_used)
+        plot_results(scored, cond_dir, fracs_used, condition)
         return
+
+    if not args.model:
+        parser.error("--model is required unless using --plot_only or --plot_compare")
 
     # ── Step 1 — items ─────────────────────────────────────────────────────
     if args.from_ckpt and ckpt_items.exists():
-        print("\n=== Step 1: items [SKIPPED — loading from ckpt] ===")
+        print(f"\n=== Step 1: items [SKIPPED — loading from ckpt ({condition})] ===")
         items = _read_csv(ckpt_items)
     else:
-        print("\n=== Step 1: Build evaluation items ===")
+        print(f"\n=== Step 1: Build evaluation items ({condition}) ===")
         items = build_items(
-            Path(args.desc_aug_csv),
+            Path(args.input_csv),
             Path(args.verifier_ckpt),
             Path(args.config),
             ckpt_items,
@@ -583,7 +670,7 @@ def main() -> None:
     print(f"\n=== Loading model: {args.model} ===")
     processor, model, mm_root = load_gemma4(args.model, device="cuda", quantize=args.quantize)
 
-    # ── Step 2a — φ_vision ─────────────────────────────────────────────────
+    # ── Step 2a — φ_vision (shared cache) ─────────────────────────────────
     print("\n=== Step 2a: φ_vision (post-projector embeddings) ===")
     phi_vision = extract_phi_vision(
         items, processor, model, mm_root,
@@ -602,8 +689,8 @@ def main() -> None:
     print(f"Scored: {len(scored)} rows  (fracs: {fracs_used})")
 
     # ── Step 4 — Plots ─────────────────────────────────────────────────────
-    print("\n=== Step 4: Plots ===")
-    plot_results(scored, output_dir, fracs_used)
+    print(f"\n=== Step 4: Plots ({condition}) ===")
+    plot_results(scored, cond_dir, fracs_used, condition)
 
 
 if __name__ == "__main__":
