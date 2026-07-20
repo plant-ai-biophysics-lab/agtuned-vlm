@@ -20,8 +20,7 @@ Reuses from probe.py:
 Usage:
   uv run python src/alignment_belief.py \\
     --model google/gemma-4-26B-A4B-it \\
-    --output_dir outputs/alignment_belief/ \\
-    --cache_dir outputs/linear_probe/embedding_cache/
+    --output_dir outputs/alignment_belief/
 
   # Resume from checkpoints:
   uv run python src/alignment_belief.py ... --from_ckpt
@@ -34,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -51,9 +49,6 @@ from src.linear_probe.probe import (
     load_gemma4,
     resolve_mm_root,
     resolve_projector,
-    extract_vlm_embeddings_postproj,
-    load_cached_embeddings,
-    save_cached_embeddings,
 )
 
 # ── cot_vision helpers ────────────────────────────────────────────────────────
@@ -61,12 +56,10 @@ from src.linear_probe.probe import (
 from src.cot_vision import (
     _sys_msg,
     _cls_question,
-    _build_prompt,
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-MODEL_SAFE_DEFAULT = "google_gemma-4-26B-A4B-it"
 DESC_AUG_CSV       = "outputs/desc_augmented_vision/aug_cls_all_google_gemma-4-26B-A4B-it.csv"
 VERIFIER_CKPT      = "outputs/verifier_vision/ckpt_candidates.csv"
 DATASETS_YAML      = "src/config/datasets.yaml"
@@ -180,14 +173,9 @@ def extract_phi_vision(
     """
     Return {image_key: φ_vision} for all unique images in items.
 
-    Tries the linear_probe embedding cache first. If the cache doesn't cover
-    a dataset (or stores no per-image filenames), falls back to fresh
-    extraction using the same hook as probe.py.
-
-    Cache lookup: try to load the existing npz for each dataset. Since cache
-    only stores (embeddings, labels) without image filenames, we can't do
-    reliable per-image lookup → always extract fresh but save to a separate
-    per-image npz keyed by image_name for future reuse.
+    Hooks the embed_vision projector (same approach as probe.py) with an early
+    exit so we never run the full language model. Mean-pools over visual tokens.
+    Saves to ckpt_phi_vision.npz keyed by "dataset/image_name" for resumability.
     """
     from PIL import Image as PILImage
     from tqdm import tqdm
