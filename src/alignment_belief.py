@@ -175,8 +175,6 @@ def extract_phi_vision(
     processor,
     model,
     mm_root,
-    cache_dir: Path,
-    backbone_key: str,
     ckpt_path: Path,
 ) -> dict[str, np.ndarray]:
     """
@@ -501,8 +499,6 @@ def main() -> None:
     )
     parser.add_argument("--model",       required=True, help="HF model ID or local path")
     parser.add_argument("--output_dir",  default="outputs/alignment_belief/")
-    parser.add_argument("--cache_dir",   default="outputs/linear_probe/embedding_cache/",
-                        help="Linear probe embedding cache directory")
     parser.add_argument("--desc_aug_csv", default=DESC_AUG_CSV)
     parser.add_argument("--verifier_ckpt", default=VERIFIER_CKPT,
                         help="ckpt_candidates.csv from verifier_vision (image path source)")
@@ -515,7 +511,6 @@ def main() -> None:
 
     output_dir   = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir    = Path(args.cache_dir)
 
     ckpt_items      = output_dir / CKPT_ITEMS
     ckpt_phi_vision = output_dir / CKPT_PHI_VISION
@@ -550,14 +545,9 @@ def main() -> None:
     processor, model, mm_root = load_gemma4(args.model, device="cuda", quantize=args.quantize)
 
     # ── Step 2a — φ_vision ─────────────────────────────────────────────────
-    model_safe = args.model.replace("/", "_").replace("-", "_")
-    backbone_key = f"{model_safe}_postproj"
-
     print("\n=== Step 2a: φ_vision (post-projector embeddings) ===")
     phi_vision = extract_phi_vision(
         items, processor, model, mm_root,
-        cache_dir=cache_dir,
-        backbone_key=backbone_key,
         ckpt_path=ckpt_phi_vision,
     )
 
