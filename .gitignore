@@ -39,3 +39,4 @@ experiments/text_qa/uv.lock
 =======
 experiments/**/**/*.npy
 >>>>>>> Stashed changes
+/legacy/outputs/verifier_lmv
