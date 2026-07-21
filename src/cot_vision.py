@@ -429,8 +429,19 @@ def run_cot_yaml(
             predictions.extend(_clean(o.outputs[0].text) for o in llm.generate(cls_prompts, _CLS_PARAMS))
             del cls_prompts
 
-        group_result = [_make_row(item, "cot_yaml", pred)
-                        for item, pred in zip(group_items, predictions)]
+        # Extract intermediate step responses from histories for the reasoning column.
+        # Each history at this point is: [sys, user(step0+img), asst(resp0), user(step1), asst(resp1), ...]
+        # Assistant turns are every other message starting at index 2.
+        group_result = []
+        for item, pred, hist in zip(group_items, predictions, histories):
+            asst_responses = [m["content"] for m in hist if m["role"] == "assistant"]
+            reasoning = "\n\n".join(
+                f"Q: {steps[i]}\nA: {asst_responses[i]}"
+                for i in range(min(len(steps), len(asst_responses)))
+            )
+            row = _make_row(item, "cot_yaml", pred)
+            row["reasoning"] = reasoning
+            group_result.append(row)
 
         # Save group checkpoint immediately
         if ckpt_group:
@@ -482,7 +493,7 @@ def compute_metrics(rows: list[dict]) -> dict:
 
 _CLS_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
-    "condition", "prediction", "resolved_class", "ground_truth",
+    "condition", "prediction", "reasoning", "resolved_class", "ground_truth",
     "correct", "contains_match", "judged_correct", "judge_reasoning",
 ]
 
@@ -1069,6 +1080,293 @@ def plot_conditions_overall(
     )
 
 
+def plot_delta_per_dataset(
+    metrics: dict,
+    vis_per_ds: dict[str, float],
+    aug_per_ds: dict[str, float],
+    output_dir: Path,
+    top_n: int = 5,
+) -> None:
+    """
+    For each method (desc_aug, self_cot, cot_yaml), produce two horizontal bar charts:
+      - top N datasets with the largest positive delta vs baseline (judged F1)
+      - top N datasets with the largest negative delta vs baseline (judged F1)
+    Saves 2 * n_methods plots into output_dir.
+    """
+    import matplotlib.pyplot as plt
+
+    method_f1: dict[str, dict[str, float]] = {}
+    if aug_per_ds:
+        method_f1["desc_aug"] = aug_per_ds
+    for cond in ("self_cot", "cot_yaml"):
+        if cond in metrics:
+            method_f1[cond] = {
+                ds: m.get("judge_f1_macro") or m.get("f1_macro", 0.0)
+                for ds, m in metrics[cond].get("per_dataset", {}).items()
+            }
+
+    if not vis_per_ds or not method_f1:
+        print("  [delta plot] missing baseline or method data — skipping")
+        return
+
+    labels = {"desc_aug": "Desc-Aug", "self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for method, per_ds in method_f1.items():
+        deltas = {
+            ds: per_ds[ds] - vis_per_ds[ds]
+            for ds in per_ds if ds in vis_per_ds
+        }
+        if not deltas:
+            continue
+
+        sorted_ds = sorted(deltas, key=lambda d: deltas[d])
+        top_pos = sorted_ds[-top_n:][::-1]   # largest positive first
+        top_neg = sorted_ds[:top_n]           # most negative first
+
+        for subset, ds_list, title_suffix, fname_suffix in [
+            (top_pos, top_pos, f"Top {top_n} Gains",     "gains"),
+            (top_neg, top_neg, f"Top {top_n} Regressions", "regressions"),
+        ]:
+            vals   = [deltas[ds] for ds in ds_list]
+            colors = ["#2ca02c" if v >= 0 else "#d62728" for v in vals]
+            ylabels = [ds.replace("_classification", "").replace("_", " ") for ds in ds_list]
+
+            fig, ax = plt.subplots(figsize=(7, max(3, len(ds_list) * 0.65)))
+            bars = ax.barh(range(len(ds_list)), vals, color=colors, edgecolor="white")
+            ax.set_yticks(range(len(ds_list)))
+            ax.set_yticklabels(ylabels, fontsize=9)
+            ax.axvline(0, color="black", lw=0.8)
+            ax.set_xlabel("Δ Judged F1 Macro (method − baseline)")
+            ax.set_title(f"{labels.get(method, method)} — {title_suffix} vs Baseline")
+            ax.xaxis.grid(True, alpha=0.3)
+            for bar, v in zip(bars, vals):
+                x_pos = v + 0.005 if v >= 0 else v - 0.005
+                ha = "left" if v >= 0 else "right"
+                ax.text(x_pos, bar.get_y() + bar.get_height() / 2,
+                        f"{v:+.3f}", va="center", ha=ha, fontsize=8)
+            plt.tight_layout()
+            out = output_dir / f"cot_delta_{method}_{fname_suffix}.png"
+            fig.savefig(out, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  Saved: {out}")
+
+
+def plot_delta_response_examples(
+    metrics: dict,
+    vis_per_ds: dict[str, float],
+    aug_per_ds: dict[str, float],
+    aug_rows: list[dict] | None,
+    cot_rows: list[dict] | None,
+    output_dir: Path,
+    top_n: int = 5,
+) -> None:
+    """
+    For each method × direction (gains / regressions), render one PNG that shows
+    top_n dataset cards, each with one correct and one incorrect example response.
+    Saved to output_dir/delta_examples/{method}_{direction}.png.
+    """
+    import textwrap
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    METHOD_LABELS = {"desc_aug": "Desc-Aug", "self_cot": "Self-CoT", "cot_yaml": "CoT YAML"}
+    METHOD_COLORS = {"desc_aug": "#1f77b4", "self_cot": "#ff7f0e", "cot_yaml": "#2ca02c"}
+
+    method_f1: dict[str, dict[str, float]] = {}
+    if aug_per_ds:
+        method_f1["desc_aug"] = aug_per_ds
+    for cond in ("self_cot", "cot_yaml"):
+        if cond in metrics:
+            method_f1[cond] = {
+                ds: m.get("judge_f1_macro") or m.get("f1_macro", 0.0)
+                for ds, m in metrics[cond].get("per_dataset", {}).items()
+            }
+
+    if not vis_per_ds or not method_f1:
+        return
+
+    # Build per-method row lookup: {ds: [rows]}
+    from collections import defaultdict
+
+    def _build_lookup(rows, cond_filter=None):
+        d = defaultdict(list)
+        for r in (rows or []):
+            if cond_filter and r.get("condition") != cond_filter:
+                continue
+            d[r.get("agml_dataset", "")].append(r)
+        return dict(d)
+
+    rows_by_method = {
+        "desc_aug": _build_lookup(aug_rows),
+        "self_cot": _build_lookup(cot_rows, "self_cot"),
+        "cot_yaml": _build_lookup(cot_rows, "cot_yaml"),
+    }
+
+    def _wrap(text, width=88, max_lines=4):
+        if not text:
+            return "(no response)"
+        lines = textwrap.wrap(text.strip().replace("\n", " "), width)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines[-1] = lines[-1][: width - 3] + "..."
+        return "\n".join(lines) or text[:width]
+
+    def _format_response(row, method):
+        pred = row.get("prediction", "")
+        if method == "desc_aug":
+            desc = row.get("lang_description", "")
+            parts = []
+            if desc:
+                parts.append("Desc:   " + _wrap(desc, 84, 2))
+            if pred:
+                parts.append("Answer: " + _wrap(pred, 84, 2))
+            return "\n".join(parts) if parts else _wrap(pred)
+        if method == "cot_yaml":
+            reasoning = row.get("reasoning", "")
+            if reasoning:
+                # Show each Q/A step, one line per step (question truncated, answer wrapped)
+                parts = []
+                for block in reasoning.split("\n\n"):
+                    lines = block.split("\n", 1)
+                    q = lines[0][3:].strip() if lines[0].startswith("Q:") else lines[0]
+                    a = lines[1][3:].strip() if len(lines) > 1 and lines[1].startswith("A:") else ""
+                    parts.append(f"Q: {q[:70]}")
+                    if a:
+                        parts.append("   " + _wrap(a, 85, 2))
+                return "\n".join(parts) if parts else _wrap(pred, 88, 4)
+        return _wrap(pred, 88, 4)
+
+    # Layout (all units in inches, origin bottom-left)
+    FIG_W      = 13.5
+    MARGIN_X   = 0.45
+    INNER_W    = FIG_W - 2 * MARGIN_X
+    TITLE_H    = 0.75
+    HDR_H      = 0.42    # dataset header bar
+    CARD_H     = 1.55    # one example card
+    DS_GAP     = 0.28    # gap between dataset blocks
+    BOTTOM_PAD = 0.35
+    LINE_H     = 0.165   # approx height of one text line at 8.5pt
+
+    cards_per_ds = 2     # correct + incorrect
+    ds_block_h   = HDR_H + cards_per_ds * CARD_H
+    total_h      = TITLE_H + top_n * (ds_block_h + DS_GAP) + BOTTOM_PAD
+
+    out_dir = output_dir / "delta_examples"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for method, per_ds in method_f1.items():
+        deltas = {
+            ds: per_ds[ds] - vis_per_ds[ds]
+            for ds in per_ds if ds in vis_per_ds
+        }
+        if not deltas:
+            continue
+
+        sorted_ds   = sorted(deltas, key=lambda d: deltas[d])
+        m_color     = METHOD_COLORS.get(method, "#555555")
+        m_label     = METHOD_LABELS.get(method, method)
+        method_rows = rows_by_method.get(method, {})
+
+        for direction, ds_list, dir_label in [
+            ("gains",       sorted_ds[-top_n:][::-1], f"Top {top_n} Gains vs Baseline"),
+            ("regressions", sorted_ds[:top_n],        f"Top {top_n} Regressions vs Baseline"),
+        ]:
+            fig, ax = plt.subplots(figsize=(FIG_W, total_h))
+            ax.set_xlim(0, FIG_W)
+            ax.set_ylim(0, total_h)
+            ax.axis("off")
+            fig.patch.set_facecolor("#f8f8f8")
+
+            # ── Title ──────────────────────────────────────────────────────
+            y = total_h - 0.18
+            ax.text(FIG_W / 2, y, f"{m_label}  —  {dir_label}  (judged F1 Δ vs baseline)",
+                    ha="center", va="top", fontsize=13, fontweight="bold", color=m_color)
+            y -= TITLE_H
+
+            for ds in ds_list:
+                delta      = deltas.get(ds, 0.0)
+                ds_label   = ds.replace("_classification", "").replace("_", " ").title()
+                ds_rows    = method_rows.get(ds, [])
+                correct_ex = next((r for r in ds_rows if str(r.get("judged_correct", "")) == "1"), None)
+                wrong_ex   = next((r for r in ds_rows if str(r.get("judged_correct", "")) == "0"), None)
+
+                # ── Dataset header bar ──────────────────────────────────────
+                hdr = mpatches.FancyBboxPatch(
+                    (MARGIN_X, y - HDR_H), INNER_W, HDR_H,
+                    boxstyle="round,pad=0.05", linewidth=0,
+                    facecolor=m_color, alpha=0.18, zorder=1,
+                )
+                ax.add_patch(hdr)
+                ax.text(MARGIN_X + 0.18, y - HDR_H / 2,
+                        ds_label, ha="left", va="center",
+                        fontsize=11, fontweight="bold", color="#111111", zorder=2)
+                d_color = "#2ca02c" if delta >= 0 else "#d62728"
+                ax.text(FIG_W - MARGIN_X - 0.18, y - HDR_H / 2,
+                        f"Δ = {delta:+.3f}", ha="right", va="center",
+                        fontsize=11, fontweight="bold", color=d_color, zorder=2)
+                y -= HDR_H
+
+                # ── Example cards ───────────────────────────────────────────
+                for row, card_label, bg, border in [
+                    (correct_ex, "✓  Correct",   "#f0faf0", "#4caf50"),
+                    (wrong_ex,   "✗  Incorrect", "#fff5f5", "#ef5350"),
+                ]:
+                    body = _format_response(row, method) if row else "(no example found)"
+                    gt   = (row or {}).get("class_label", "")
+                    pred = (row or {}).get("resolved_class", "") or (row or {}).get("prediction", "")[:40]
+
+                    card = mpatches.FancyBboxPatch(
+                        (MARGIN_X, y - CARD_H + 0.06), INNER_W, CARD_H - 0.1,
+                        boxstyle="round,pad=0.06", linewidth=1.4,
+                        edgecolor=border, facecolor=bg, zorder=1,
+                    )
+                    ax.add_patch(card)
+
+                    label_str = card_label
+                    if gt:
+                        label_str += f"     GT: {gt}"
+                    if pred:
+                        label_str += f"   →   Pred: {pred[:60]}"
+                    ax.text(MARGIN_X + 0.22, y - 0.15,
+                            label_str, ha="left", va="top",
+                            fontsize=8.5, fontweight="bold",
+                            color="#2ca02c" if "Correct" in card_label else "#c62828",
+                            zorder=2)
+                    ax.text(MARGIN_X + 0.22, y - 0.42,
+                            body, ha="left", va="top",
+                            fontsize=8, color="#2e2e2e",
+                            fontfamily="monospace", linespacing=1.45, zorder=2)
+                    y -= CARD_H
+
+                y -= DS_GAP
+
+            out = out_dir / f"{method}_{direction}.png"
+            fig.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+            plt.close(fig)
+            print(f"  Saved: {out}")
+
+            # ── CSV: all rows for selected datasets ────────────────────────
+            csv_rows = []
+            for ds in ds_list:
+                rank = ds_list.index(ds) + 1
+                delta_val = deltas.get(ds, 0.0)
+                for r in method_rows.get(ds, []):
+                    csv_rows.append({
+                        **r,
+                        "delta": f"{delta_val:+.4f}",
+                        "delta_rank": rank,
+                    })
+            if csv_rows:
+                csv_out = out_dir / f"{method}_{direction}.csv"
+                fieldnames = list(csv_rows[0].keys())
+                with open(csv_out, "w", newline="", encoding="utf-8") as f:
+                    w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                    w.writeheader()
+                    w.writerows(csv_rows)
+                print(f"  Saved: {csv_out}  ({len(csv_rows)} rows)")
+
+
 def plot_condition_comparison(metrics: dict, output_path: Path) -> None:
     """Bar chart: F1 per condition per dataset."""
     import matplotlib.pyplot as plt
@@ -1260,15 +1558,36 @@ def main() -> None:
 
         all_rows = self_cot_rows + cot_yaml_rows
 
-        # Phase 3: judge
+        # Phase 3: judge (incremental — skips rows already in ckpt_judged.csv)
+        _row_key = lambda r: (
+            r.get("agml_dataset", ""), r.get("image_name", ""),
+            r.get("class_label", ""),  r.get("condition", ""),
+        )
+        already_judged: dict[tuple, dict] = {}
         if ckpt_judged.exists():
-            print(f"\n=== Phase 3: judge [SKIPPED — checkpoint found] ===")
-            all_rows = list(csv.DictReader(open(ckpt_judged, encoding="utf-8")))
-            print(f"  Loaded {len(all_rows)} judged rows from {ckpt_judged.name}")
+            for r in csv.DictReader(open(ckpt_judged, encoding="utf-8")):
+                if r.get("judged_correct", "") != "":
+                    already_judged[_row_key(r)] = r
+
+        todo  = [r for r in all_rows if _row_key(r) not in already_judged]
+        n_skip = len(all_rows) - len(todo)
+
+        def _merge_judged(new_row: dict, judged_row: dict) -> dict:
+            # Keep all fields from the new row (e.g. reasoning), overlay only the
+            # judge outputs so we don't lose new columns added since the last run.
+            return {**new_row,
+                    "judged_correct":  judged_row.get("judged_correct", ""),
+                    "judge_reasoning": judged_row.get("judge_reasoning", "")}
+
+        if not todo:
+            print(f"\n=== Phase 3: judge [SKIPPED — all {len(all_rows)} rows already judged] ===")
+            all_rows = [_merge_judged(r, already_judged[_row_key(r)])
+                        if _row_key(r) in already_judged else r
+                        for r in all_rows]
         else:
-            print(f"\n=== Phase 3: judge ({len(all_rows)} rows) ===")
-            all_rows = apply_judge(
-                rows=all_rows,
+            print(f"\n=== Phase 3: judge ({len(todo)} new rows, {n_skip} already done) ===")
+            judged_new = apply_judge(
+                rows=todo,
                 llm=llm,
                 tokenizer=tokenizer,
                 system_prompt=_PROMPTS.get("judge_system_vision", ""),
@@ -1276,6 +1595,12 @@ def main() -> None:
                 gt_key="ground_truth",
                 pred_key="prediction",
             )
+            new_judged_map = {_row_key(r): r for r in judged_new}
+            all_rows = [
+                _merge_judged(r, already_judged[_row_key(r)]) if _row_key(r) in already_judged
+                else new_judged_map.get(_row_key(r), r)
+                for r in all_rows
+            ]
             write_cls_csv(all_rows, ckpt_judged)
             print(f"  Checkpoint saved: {ckpt_judged.name}")
 
@@ -1348,6 +1673,8 @@ def main() -> None:
         cot_rows = cot_rows or None
 
     plot_condition_comparison(metrics, output_dir / "cot_comparison.png")
+    plot_delta_per_dataset(metrics, vis_per_ds, aug_per_ds, output_dir)
+    plot_delta_response_examples(metrics, vis_per_ds, aug_per_ds, aug_rows, cot_rows, output_dir)
     plot_conditions_per_task(metrics, vis_rows, aug_rows, output_dir, cot_rows=cot_rows)
     plot_conditions_overall(metrics, vis_per_ds, aug_per_ds, output_dir,
                             vis_rows=vis_rows, aug_rows=aug_rows, cot_rows=cot_rows)
