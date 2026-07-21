@@ -493,6 +493,7 @@ def _plot_step_chart(
     title: str,
     color_by: str = "task",
     palette: list[str] | None = None,
+    baseline_f1: dict[str, float] | None = None,
 ) -> None:
     default_palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
     pal = palette or default_palette
@@ -512,6 +513,10 @@ def _plot_step_chart(
         label = ds.replace("_classification", "").replace("_", " ")
         ax.plot(steps_sorted, ys, marker="o", color=color,
                 alpha=0.55, linewidth=1.2, label=label)
+        # Per-dataset baseline as a dashed horizontal line in the same colour
+        if baseline_f1 and ds in baseline_f1:
+            ax.axhline(baseline_f1[ds], color=color, linestyle="--",
+                       linewidth=0.9, alpha=0.45)
 
     mean_ys = []
     for s in all_steps:
@@ -524,6 +529,14 @@ def _plot_step_chart(
         if not np.isnan(y):
             ax.annotate(f"{y:.2f}", (s, y), fontsize=7,
                         xytext=(0, 6), textcoords="offset points", ha="center")
+
+    # Mean baseline across all datasets in this chart
+    if baseline_f1:
+        base_vals = [baseline_f1[ds] for ds in ds_list if ds in baseline_f1]
+        if base_vals:
+            mean_base = float(np.mean(base_vals))
+            ax.axhline(mean_base, color="red", linestyle="--", linewidth=1.6,
+                       label=f"baseline mean ({mean_base:.2f})", zorder=4)
 
     ax.set_xticks(all_steps)
     ax.set_xlabel("Step", fontsize=9)
@@ -539,6 +552,7 @@ def plot_all(
     selected_datasets: dict[str, list[str]],
     ds_to_task: dict[str, str],
     output_dir: Path,
+    baseline_f1: dict[str, float] | None = None,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -565,6 +579,22 @@ def plot_all(
                 if not np.isnan(y):
                     ax.annotate(f"{y:.2f}", (s, y), fontsize=7,
                                 xytext=(0, 6), textcoords="offset points", ha="center")
+            # Baseline mean for this task as dashed line in same colour
+            if baseline_f1:
+                base_vals = [baseline_f1[ds] for ds in ds_list if ds in baseline_f1]
+                if base_vals:
+                    mean_base = float(np.mean(base_vals))
+                    ax.axhline(mean_base, color=task_color, linestyle="--",
+                               linewidth=1.2, alpha=0.6)
+
+        # Single red dashed line = grand mean baseline across all selected datasets
+        if baseline_f1:
+            all_ds = [ds for names in selected_datasets.values() for ds in names]
+            grand_base_vals = [baseline_f1[ds] for ds in all_ds if ds in baseline_f1]
+            if grand_base_vals:
+                grand_mean = float(np.mean(grand_base_vals))
+                ax.axhline(grand_mean, color="red", linestyle="--", linewidth=1.8,
+                           label=f"baseline (mean {grand_mean:.2f})", zorder=4)
 
         ax.set_xticks(range(1, 8))
         ax.set_xlabel("Step", fontsize=10)
@@ -587,6 +617,7 @@ def plot_all(
                 ax, ds_f1, ds_to_task,
                 title=f"{mode.capitalize()} — {TASK_LABEL[task]}",
                 color_by="dataset",
+                baseline_f1=baseline_f1,
             )
             plt.tight_layout()
             path = output_dir / f"step_{mode}_{task}.png"
@@ -897,7 +928,7 @@ def main() -> None:
         rows = _read_csv(ckpt_judged)
         step_f1 = compute_step_f1(rows)
         print("\n=== Plotting step charts ===")
-        plot_all(step_f1, selected, ds_to_task, output_dir)
+        plot_all(step_f1, selected, ds_to_task, output_dir, baseline_f1=baseline_f1_map or None)
         if gains or regressions:
             selected_set = set(all_selected)
             print("\n=== Plotting response cards ===")
