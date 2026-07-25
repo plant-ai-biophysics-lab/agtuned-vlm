@@ -30,6 +30,7 @@ import csv
 import gc
 import json
 import random
+import re
 import sys
 import time
 from collections import defaultdict
@@ -52,7 +53,7 @@ TASK_LABEL = {
 
 CLS_CSV_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop",
-    "image_name", "mode", "step_idx",
+    "image_name", "mode", "step_idx", "rotation", "question_id",
     "prediction", "reasoning", "ground_truth", "correct", "contains_match",
     "judged_correct", "judge_reasoning",
 ]
@@ -167,12 +168,15 @@ def load_items(
     class_overrides: dict[str, str] | None = None,
     seed: int = SEED,
     test_split: dict[str, list[str]] | None = None,
+    n_per_class: int | None = None,
 ) -> list[dict]:
     """Load items for ds_name filtered to classes that belong to task_type.
 
     When test_split is provided (dict mapping ds_name -> list of image filenames),
     only those images are included (mirroring cot_vision's test split behaviour).
     n_samples is applied before test_split filtering when test_split is absent.
+    n_per_class caps the number of images sampled per class (random subsample,
+    applied after test_split filtering) — used by --swap_order for fast iteration.
     """
     from src.cot_vision import load_dataset_classes, DATASET_TASK_TYPES
     by_class = load_dataset_classes(ds_name, n_samples if test_split is None else None)
@@ -186,18 +190,21 @@ def load_items(
         }
 
     primary_task = DATASET_TASK_TYPES.get(ds_name, (task_type, crop))[0]
+    rng = random.Random(seed)
 
     items: list[dict] = []
     for cls, paths in by_class.items():
         effective = (class_overrides or {}).get(cls, primary_task)
         if effective != task_type:
             continue
+        paths = list(paths)
+        if n_per_class is not None and len(paths) > n_per_class:
+            paths = rng.sample(paths, n_per_class)
         for p in paths:
             items.append({
                 "ds": ds_name, "task_type": task_type,
                 "crop": crop, "cls": cls, "image_path": p,
             })
-    rng = random.Random(seed)
     rng.shuffle(items)
     return items
 
@@ -226,12 +233,20 @@ def run_cumulative(
     tokenizer,
     prompt_batch_size: int = 128,
     ckpt_path: Path | None = None,
+    step_order: list[int] | None = None,
+    rotation_tag: int | None = None,
 ) -> list[dict]:
     """Predict after each step k using the growing conversation history.
 
     For step k the model has seen responses to steps 1..k then gets the
     classification question. The 'reasoning' column accumulates all Q&A pairs
     seen so far at each step.
+
+    step_order, if given, is a permutation of question indices (0-based, into
+    the track's default step list) — used to test whether results depend on
+    which question is asked first. All items passed in a single call must
+    belong to the same track (disease_pest or weed_identification) when
+    step_order is given, since a permutation is track-specific.
     """
     (_sys_msg, _cls_question, _build_prompt, _clean, _load_image,
      _COT_PARAMS, _CLS_PARAMS, _, _, _COT_PROMPTS) = _import_cot_helpers()
@@ -247,9 +262,11 @@ def run_cumulative(
     all_rows: list[dict] = []
 
     for cot_key, group in by_cot.items():
-        steps   = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
+        orig_steps = _COT_PROMPTS["thinking_prompts"][cot_key]["steps"]
+        steps   = [orig_steps[i] for i in step_order] if step_order else orig_steps
         n_steps = len(steps)
-        print(f"\n[cumulative] {cot_key}: {len(group)} images × {n_steps} steps")
+        tag = f" [rotation {rotation_tag}]" if rotation_tag is not None else ""
+        print(f"\n[cumulative] {cot_key}: {len(group)} images × {n_steps} steps{tag}")
 
         # Build initial history (step 0 question with image)
         histories: list[list[dict]] = [
@@ -297,6 +314,7 @@ def run_cumulative(
                               for o in llm.generate(prompts, _CLS_P))
                 del prompts
 
+            orig_idx_at_pos = step_order[step_idx] if step_order else step_idx
             for i, (item, pred) in enumerate(zip(group, preds)):
                 from src.cot_vision import resolve_class, contains_match
                 gt = item["cls"]
@@ -314,6 +332,8 @@ def run_cumulative(
                     "image_name":      str(item["image_path"]),
                     "mode":            "cumulative",
                     "step_idx":        step_idx + 1,
+                    "rotation":        str(rotation_tag) if rotation_tag is not None else "",
+                    "question_id":     str(orig_idx_at_pos),
                     "prediction":      pred,
                     "reasoning":       reasoning,
                     "ground_truth":    gt,
@@ -332,6 +352,47 @@ def run_cumulative(
     if ckpt_path:
         _write_csv(all_rows, ckpt_path)
         print(f"  Checkpoint saved: {ckpt_path.name}")
+    return all_rows
+
+
+# ── Inference: swap-order (anchor-rate robustness check) ──────────────────────
+
+def run_swap_order(
+    items: list[dict],
+    llm,
+    tokenizer,
+    prompt_batch_size: int = 128,
+    ckpt_path: Path | None = None,
+) -> list[dict]:
+    """Run cumulative inference once per cyclic rotation of each track's step
+    order, so every question gets a turn going first. Checkpoints after each
+    rotation (accumulated rows) so a long run can be resumed/inspected.
+    """
+    (*_, _COT_PROMPTS) = _import_cot_helpers()
+
+    by_track: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        by_track[_cot_key(item["task_type"])].append(item)
+
+    all_rows: list[dict] = []
+    for track, group in by_track.items():
+        n_steps = len(_COT_PROMPTS["thinking_prompts"][track]["steps"])
+        print(f"\n=== Swap-order track: {track}  "
+              f"({len(group)} images × {n_steps} rotations) ===")
+
+        for rot in range(n_steps):
+            step_order = list(range(rot, n_steps)) + list(range(rot))
+            print(f"\n--- Rotation {rot + 1}/{n_steps}: question {rot + 1} goes first ---")
+            rows = run_cumulative(
+                group, llm, tokenizer,
+                prompt_batch_size=prompt_batch_size,
+                step_order=step_order, rotation_tag=rot,
+            )
+            all_rows.extend(rows)
+            if ckpt_path:
+                _write_csv(all_rows, ckpt_path)
+                print(f"  Checkpoint saved ({len(all_rows):,} rows so far): {ckpt_path.name}")
+
     return all_rows
 
 
@@ -475,6 +536,102 @@ def compute_step_f1(rows: list[dict]) -> dict[str, dict[str, dict[int, float]]]:
         result[mode][ds][step] = float(f1)
 
     return result
+
+
+def compute_swap_anchor_rates(rows: list[dict]) -> dict[str, dict[str, dict]]:
+    """Return {track: {rotation: {anchor_rate, recovery_rate, n_step1_correct,
+    n_step1_wrong}}} from swap-order rows — i.e. does the anchor rate hold up
+    regardless of which question was asked first?
+    """
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r.get("judged_correct", "") == "":
+            continue
+        key = (r.get("agml_dataset", ""), r.get("image_name", ""),
+               r.get("class_label", ""), r.get("rotation", ""))
+        groups[key].append(r)
+
+    by_track_rot: dict[tuple, dict] = defaultdict(lambda: {
+        "step1_correct": 0, "step1_correct_final_correct": 0,
+        "step1_wrong": 0, "step1_wrong_final_correct": 0,
+    })
+    for grp in groups.values():
+        grp.sort(key=lambda r: int(r["step_idx"]))
+        if len(grp) < 2:
+            continue
+        track = _cot_key(grp[0]["task_type"])
+        rot = grp[0].get("rotation", "")
+        first_ok = grp[0]["judged_correct"] == "1"
+        final_ok = grp[-1]["judged_correct"] == "1"
+        d = by_track_rot[(track, rot)]
+        if first_ok:
+            d["step1_correct"] += 1
+            d["step1_correct_final_correct"] += int(final_ok)
+        else:
+            d["step1_wrong"] += 1
+            d["step1_wrong_final_correct"] += int(final_ok)
+
+    result: dict[str, dict[str, dict]] = defaultdict(dict)
+    for (track, rot), d in by_track_rot.items():
+        result[track][str(rot)] = {
+            "anchor_rate": (d["step1_correct_final_correct"] / d["step1_correct"]
+                            if d["step1_correct"] else float("nan")),
+            "recovery_rate": (d["step1_wrong_final_correct"] / d["step1_wrong"]
+                              if d["step1_wrong"] else float("nan")),
+            "n_step1_correct": d["step1_correct"],
+            "n_step1_wrong": d["step1_wrong"],
+        }
+    return {t: dict(sorted(v.items(), key=lambda kv: int(kv[0])))
+            for t, v in result.items()}
+
+
+def plot_swap_anchor_rates(result: dict[str, dict[str, dict]], output_dir: Path) -> None:
+    """One bar chart per track: anchor/recovery rate by which question went first."""
+    import matplotlib.pyplot as plt
+
+    for track, by_rot in result.items():
+        rots = sorted(by_rot, key=int)
+        if not rots:
+            continue
+        labels   = [f"Q{int(r) + 1}\nfirst" for r in rots]
+        anchor   = [by_rot[r]["anchor_rate"] * 100 for r in rots]
+        recovery = [by_rot[r]["recovery_rate"] * 100 for r in rots]
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        x = list(range(len(rots)))
+        w = 0.35
+        ax.bar([i - w / 2 for i in x], anchor, width=w, color="#1f77b4",
+               label="Anchor rate (step-1 right -> final right)")
+        ax.bar([i + w / 2 for i in x], recovery, width=w, color="#ff7f0e",
+               label="Recovery rate (step-1 wrong -> final right)")
+        for i, v in enumerate(anchor):
+            if not np.isnan(v):
+                ax.annotate(f"{v:.0f}", (i - w / 2, v), fontsize=7, ha="center",
+                            xytext=(0, 4), textcoords="offset points")
+        for i, v in enumerate(recovery):
+            if not np.isnan(v):
+                ax.annotate(f"{v:.0f}", (i + w / 2, v), fontsize=7, ha="center",
+                            xytext=(0, 4), textcoords="offset points")
+
+        mean_anchor = float(np.nanmean(anchor))
+        ax.axhline(mean_anchor, color="#1f77b4", linestyle="--", linewidth=1.2,
+                   alpha=0.6, label=f"mean anchor ({mean_anchor:.0f}%)")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=8)
+        ax.set_ylim(0, 100)
+        ax.set_ylabel("Rate (%)", fontsize=10)
+        ax.set_xlabel("Question asked first (rotation)", fontsize=10)
+        ax.set_title(f"{track.replace('_', ' ').title()} — anchor/recovery rate "
+                     f"by which question leads", fontsize=11)
+        ax.legend(fontsize=8)
+        ax.grid(True, axis="y", alpha=0.25)
+        plt.tight_layout()
+
+        path = output_dir / f"swap_anchor_{track}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
 
 
 # ── Step charts ───────────────────────────────────────────────────────────────
@@ -624,6 +781,265 @@ def plot_all(
             fig.savefig(path, dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"  Saved: {path}")
+
+
+# ── Per-dataset plots ─────────────────────────────────────────────────────────
+
+def plot_per_dataset(
+    step_f1: dict[str, dict[str, dict[int, float]]],
+    all_datasets: list[str],
+    ds_to_task: dict[str, str],
+    output_dir: Path,
+    baseline_f1: dict[str, float] | None = None,
+    deltas: dict[str, float] | None = None,
+) -> None:
+    """One PNG per dataset: cumulative and independent on the same axes vs baseline."""
+    import matplotlib.pyplot as plt
+
+    per_ds_dir = output_dir / "per_dataset"
+    per_ds_dir.mkdir(parents=True, exist_ok=True)
+
+    MODE_COLOR  = {"cumulative": "#1f77b4", "independent": "#ff7f0e"}
+    MODE_LABEL  = {"cumulative": "Cumulative", "independent": "Independent"}
+
+    for ds in sorted(all_datasets):
+        task  = ds_to_task.get(ds, "disease")
+        base  = (baseline_f1 or {}).get(ds)
+        delta = (deltas or {}).get(ds)
+        label = ds.replace("_classification", "").replace("_", " ")
+
+        # Determine max steps across modes
+        all_steps: set[int] = set()
+        for mode in ("cumulative", "independent"):
+            all_steps.update(step_f1.get(mode, {}).get(ds, {}).keys())
+        if not all_steps:
+            continue
+        xs = sorted(all_steps)
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+
+        for mode in ("cumulative", "independent"):
+            ys_by_step = step_f1.get(mode, {}).get(ds, {})
+            if not ys_by_step:
+                continue
+            ys = [ys_by_step.get(s, float("nan")) for s in xs]
+            ax.plot(xs, ys, marker="o", color=MODE_COLOR[mode],
+                    linewidth=2, label=MODE_LABEL[mode])
+            for x, y in zip(xs, ys):
+                if not np.isnan(y):
+                    ax.annotate(f"{y:.3f}", (x, y), fontsize=7,
+                                xytext=(0, 7), textcoords="offset points", ha="center")
+
+        if base is not None:
+            ax.axhline(base, color="red", linestyle="--", linewidth=1.6,
+                       label=f"baseline ({base:.3f})", zorder=4)
+
+        direction = ""
+        if delta is not None:
+            sign = "▲" if delta >= 0 else "▼"
+            direction = f"  [{sign}{abs(delta):.3f} vs baseline]"
+
+        ax.set_xticks(xs)
+        ax.set_xlabel("Step", fontsize=10)
+        ax.set_ylabel("Judged F1", fontsize=10)
+        ax.set_ylim(0, 1.0)
+        ax.set_title(f"{label}{direction}\n({TASK_LABEL.get(task, task)})", fontsize=10)
+        ax.legend(fontsize=9, loc="lower right")
+        ax.grid(True, alpha=0.25)
+        plt.tight_layout()
+
+        path = per_ds_dir / f"{ds}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    print(f"  Saved {len(all_datasets)} per-dataset plots → {per_ds_dir}")
+
+
+# ── Step-example cards ────────────────────────────────────────────────────────
+
+def _extract_step_qa(reasoning: str) -> tuple[str, str]:
+    """Return (question, answer) for the last step in a cumulative reasoning string."""
+    # Split on blank-line + Q: to isolate each step's block
+    blocks = re.split(r"\n\nQ:\s*", reasoning.strip())
+    last = blocks[-1].strip()
+    # First block already has "Q: "; later blocks don't after the split
+    if last.startswith("Q: "):
+        last = last[3:]
+    elif last.startswith("Q:"):
+        last = last[2:]
+    if "\nA: " in last:
+        q, a = last.split("\nA: ", 1)
+        return q.strip(), a.strip()
+    if "\nA:" in last:
+        q, a = last.split("\nA:", 1)
+        return q.strip(), a.strip()
+    return "", last.strip()
+
+
+def plot_step_examples(
+    rows: list[dict],
+    all_datasets: list[str],
+    output_dir: Path,
+    examples_per_ds: int = 3,
+    mode: str = "cumulative",
+) -> None:
+    """Per-dataset PNG showing intermediate CoT step responses for selected examples.
+
+    Layout: each example is a column; each step is a row within that column.
+    Green card = model was correct at that step; red = incorrect.
+    """
+    import textwrap
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    step_dir = output_dir / "step_examples"
+    step_dir.mkdir(parents=True, exist_ok=True)
+
+    # Group rows by (ds, image_name, class_label) for the chosen mode
+    from collections import defaultdict
+    by_ds: dict[str, dict[tuple, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for r in rows:
+        if r.get("mode") != mode:
+            continue
+        key = (r.get("image_name", ""), r.get("class_label", ""))
+        by_ds[r.get("agml_dataset", "")][key].append(r)
+
+    # Layout constants (inches / figure units)
+    COL_W    = 7.0    # width of each example column
+    STEP_H   = 1.55   # height of each step card
+    HDR_H    = 0.55   # height of per-example header
+    PAD      = 0.18   # horizontal padding inside card
+    MARGIN   = 0.10   # gap between columns
+    TOP_H    = 0.45   # figure-level title
+
+    for ds in sorted(all_datasets):
+        img_groups = by_ds.get(ds)
+        if not img_groups:
+            continue
+
+        # Sort each image's steps; find max step count
+        sorted_groups: dict[tuple, list[dict]] = {
+            k: sorted(v, key=lambda r: int(r.get("step_idx", 0)))
+            for k, v in img_groups.items()
+        }
+        max_steps = max(len(v) for v in sorted_groups.values())
+
+        # Select examples: prefer 1 correct + rest incorrect at final step
+        correct_keys   = [k for k, v in sorted_groups.items()
+                          if str(v[-1].get("judged_correct", "")) == "1"]
+        incorrect_keys = [k for k, v in sorted_groups.items()
+                          if str(v[-1].get("judged_correct", "")) == "0"]
+        rng_local = random.Random(42)
+        chosen_keys: list[tuple] = []
+        n_correct = max(1, examples_per_ds // 3)
+        chosen_keys += rng_local.sample(correct_keys,   min(n_correct, len(correct_keys)))
+        remaining_n  = examples_per_ds - len(chosen_keys)
+        chosen_keys += rng_local.sample(incorrect_keys, min(remaining_n, len(incorrect_keys)))
+        # Fill up if needed
+        if len(chosen_keys) < examples_per_ds:
+            pool = [k for k in sorted_groups if k not in chosen_keys]
+            chosen_keys += rng_local.sample(pool, min(examples_per_ds - len(chosen_keys), len(pool)))
+        chosen_keys = chosen_keys[:examples_per_ds]
+
+        n_ex    = len(chosen_keys)
+        fig_w   = n_ex * COL_W + (n_ex - 1) * MARGIN
+        fig_h   = TOP_H + HDR_H + max_steps * STEP_H + 0.2
+        fig     = plt.figure(figsize=(fig_w, fig_h))
+        ax      = fig.add_axes([0, 0, 1, 1])
+        ax.set_xlim(0, fig_w)
+        ax.set_ylim(0, fig_h)
+        ax.axis("off")
+
+        ds_label = ds.replace("_classification", "").replace("_", " ")
+        ax.text(fig_w / 2, fig_h - 0.12,
+                f"{ds_label}  —  Step Reasoning ({mode.capitalize()})",
+                ha="center", va="top", fontsize=11, fontweight="bold")
+
+        for col_i, key in enumerate(chosen_keys):
+            step_rows = sorted_groups[key]
+            final     = step_rows[-1]
+            gt        = final.get("ground_truth") or final.get("class_label", "?")
+            final_pred = (final.get("prediction") or "")[:70]
+            is_correct = str(final.get("judged_correct", "")) == "1"
+            verdict    = "✓ CORRECT" if is_correct else "✗ INCORRECT"
+            v_color    = "#2e7d32" if is_correct else "#c62828"
+            img_name   = Path(key[0]).name
+
+            col_x = col_i * (COL_W + MARGIN)
+
+            # Column header
+            hdr_y = fig_h - TOP_H - 0.05
+            ax.text(col_x + PAD, hdr_y,
+                    f"GT: {gt}",
+                    fontsize=8, va="top", color="#333")
+            ax.text(col_x + PAD, hdr_y - 0.18,
+                    f"Final pred: {final_pred}",
+                    fontsize=7.5, va="top", color="#333")
+            ax.text(col_x + COL_W - PAD, hdr_y,
+                    verdict,
+                    fontsize=8.5, va="top", ha="right",
+                    color=v_color, fontweight="bold")
+            ax.text(col_x + PAD, hdr_y - 0.36,
+                    img_name[:60],
+                    fontsize=6, va="top", color="#888", style="italic")
+
+            # Step cards
+            card_top = fig_h - TOP_H - HDR_H
+            for step_row in step_rows:
+                step_idx   = int(step_row.get("step_idx", 0))
+                step_pred  = (step_row.get("prediction") or "")[:70]
+                step_ok    = str(step_row.get("judged_correct", "")) == "1"
+                face_color = "#e8f5e9" if step_ok else "#ffebee"
+                edge_color = "#4caf50" if step_ok else "#f44336"
+                pred_color = "#2e7d32" if step_ok else "#c62828"
+
+                # Extract just this step's Q and A
+                q_text, a_text = _extract_step_qa(step_row.get("reasoning", ""))
+                q_wrapped = textwrap.fill(q_text, width=58, max_lines=2, placeholder="…")
+                a_wrapped = textwrap.fill(a_text, width=72, max_lines=4, placeholder="…")
+
+                card_bot = card_top - STEP_H
+                patch = mpatches.FancyBboxPatch(
+                    (col_x + 0.05, card_bot + 0.06),
+                    COL_W - 0.10, STEP_H - 0.12,
+                    boxstyle="round,pad=0.04", linewidth=1.0,
+                    edgecolor=edge_color, facecolor=face_color,
+                )
+                ax.add_patch(patch)
+
+                # Step label + prediction (right-aligned)
+                ax.text(col_x + PAD, card_top - 0.14,
+                        f"Step {step_idx}",
+                        fontsize=7.5, va="top", fontweight="bold", color="#444")
+                ax.text(col_x + COL_W - PAD, card_top - 0.14,
+                        f"→ {step_pred}",
+                        fontsize=7, va="top", ha="right",
+                        color=pred_color, fontweight="bold")
+
+                # Q
+                if q_text:
+                    ax.text(col_x + PAD, card_top - 0.34,
+                            f"Q: {q_wrapped}",
+                            fontsize=6.5, va="top", color="#555", style="italic")
+                    a_y = card_top - 0.34 - (q_wrapped.count("\n") + 1) * 0.155
+                else:
+                    a_y = card_top - 0.34
+
+                # A
+                ax.text(col_x + PAD, a_y,
+                        f"A: {a_wrapped}",
+                        fontsize=6.5, va="top", color="#222")
+
+                card_top -= STEP_H
+
+        path = step_dir / f"{ds}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path.name}")
+
+    print(f"  → {step_dir}")
 
 
 # ── Response card helpers ─────────────────────────────────────────────────────
@@ -835,6 +1251,70 @@ def plot_response_cards(
             print(f"  Saved: {csv_path}")
 
 
+# ── Swap-order pipeline ────────────────────────────────────────────────────────
+
+def run_swap_order_pipeline(
+    all_selected: list[str],
+    ds_to_task: dict[str, str],
+    ds_to_crop: dict[str, str],
+    ds_info: dict[str, dict],
+    test_split: dict[str, list[str]] | None,
+    n_per_class: int,
+    model: str,
+    batch_size: int,
+    output_dir: Path,
+) -> None:
+    """Run cumulative CoT inference with rotated step order on the given
+    datasets (capped to n_per_class images/class), then check whether the
+    anchor rate holds up regardless of which question is asked first.
+    """
+    swap_dir = output_dir / "swap_order"
+    swap_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_raw    = swap_dir / "ckpt_swap_raw.csv"
+    ckpt_judged = swap_dir / "ckpt_swap_judged.csv"
+
+    all_items: list[dict] = []
+    for ds in all_selected:
+        task      = ds_to_task[ds]
+        crop      = ds_to_crop.get(ds, "plant")
+        info      = ds_info.get(ds, {})
+        overrides = info.get("class_overrides", {})
+        items = load_items(ds, task, crop, n_samples=None, class_overrides=overrides,
+                           seed=SEED, test_split=test_split, n_per_class=n_per_class)
+        all_items.extend(items)
+    print(f"\n=== Swap-order: {len(all_items):,} images (<= {n_per_class}/class) "
+          f"across {len(all_selected)} datasets ===")
+
+    from src.cot_vision import load_llm, destroy_llm
+    print(f"\n=== Loading model: {model} ===")
+    llm, tokenizer = load_llm(model)
+
+    rows = run_swap_order(all_items, llm, tokenizer,
+                          prompt_batch_size=batch_size, ckpt_path=ckpt_raw)
+
+    print(f"\n=== Judging {len(rows):,} rows ===")
+    rows = run_judge(rows, llm, tokenizer, ckpt_path=ckpt_judged)
+
+    destroy_llm(llm)
+    del tokenizer, llm
+    gc.collect()
+
+    print("\n=== Computing anchor/recovery rate by rotation ===")
+    result = compute_swap_anchor_rates(rows)
+    (swap_dir / "swap_anchor_rates.json").write_text(json.dumps(result, indent=2))
+    for track, by_rot in result.items():
+        print(f"  {track}:")
+        for rot, v in by_rot.items():
+            print(f"    Q{int(rot) + 1} first: anchor={v['anchor_rate']:.3f} "
+                  f"(n={v['n_step1_correct']})  recovery={v['recovery_rate']:.3f} "
+                  f"(n={v['n_step1_wrong']})")
+
+    print("\n=== Plotting swap-order anchor rate chart ===")
+    plot_swap_anchor_rates(result, swap_dir)
+
+    print(f"\nDone. Swap-order artifacts in {swap_dir}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -860,6 +1340,15 @@ def main() -> None:
                         help="Top-N gain + regression datasets to select (default 5)")
     parser.add_argument("--test_split", default=None,
                         help="Path to test_split.json {ds_name: [filenames]}")
+    parser.add_argument("--swap_order", action="store_true",
+                        help="Robustness check: for each track, cyclically rotate the "
+                             "CoT step order so every question gets a turn going first, "
+                             "then compare anchor/recovery rate across rotations. Runs on "
+                             "the same top-N gain/regression datasets (requires --vis_dir "
+                             "and --cot_dir). Writes to <output_dir>/swap_order/.")
+    parser.add_argument("--n_per_class", type=int, default=None,
+                        help="Cap images sampled per class (random subsample). "
+                             "Defaults to 50 when --swap_order is set.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -923,12 +1412,30 @@ def main() -> None:
     for task, names in selected.items():
         print(f"  {task}: {names}")
 
+    # ── Swap-order shortcut ────────────────────────────────────────────────────
+    if args.swap_order:
+        if not (args.vis_dir and args.cot_dir):
+            parser.error("--swap_order requires --vis_dir and --cot_dir "
+                         "(delta-based dataset selection)")
+        n_per_class = args.n_per_class if args.n_per_class is not None else 50
+        run_swap_order_pipeline(
+            all_selected=all_selected, ds_to_task=ds_to_task, ds_to_crop=ds_to_crop,
+            ds_info=ds_info, test_split=test_split, n_per_class=n_per_class,
+            model=args.model, batch_size=args.batch_size, output_dir=output_dir,
+        )
+        return
+
     # ── Plot-only shortcut ─────────────────────────────────────────────────────
     if args.plot_only:
         rows = _read_csv(ckpt_judged)
         step_f1 = compute_step_f1(rows)
         print("\n=== Plotting step charts ===")
         plot_all(step_f1, selected, ds_to_task, output_dir, baseline_f1=baseline_f1_map or None)
+        print("\n=== Plotting per-dataset charts ===")
+        plot_per_dataset(step_f1, all_selected, ds_to_task, output_dir,
+                         baseline_f1=baseline_f1_map or None, deltas=deltas or None)
+        print("\n=== Plotting step-example cards ===")
+        plot_step_examples(rows, all_selected, output_dir)
         if gains or regressions:
             selected_set = set(all_selected)
             print("\n=== Plotting response cards ===")
@@ -1007,7 +1514,6 @@ def main() -> None:
         gc.collect()
 
     # ── Deferred judge (judge_only or after from_ckpt inference skip) ──────────
-    all_rows: list[dict] = []
     need_judge = (args.judge_only or skip_inference) and not args.plot_only
 
     if need_judge:
@@ -1026,6 +1532,11 @@ def main() -> None:
             gc.collect()
 
     # ── Phase 4: metrics + step charts ────────────────────────────────────────
+    # Always prefer the on-disk checkpoint so phase 4 gets complete data even
+    # when all_rows was populated inline (inline path doesn't set need_judge).
+    if not all_rows and ckpt_judged.exists():
+        all_rows = _read_csv(ckpt_judged)
+
     print("\n=== Computing step F1 ===")
     step_f1 = compute_step_f1(all_rows)
     for mode in ("cumulative", "independent"):
@@ -1034,7 +1545,14 @@ def main() -> None:
             print(f"  [{mode}] {ds}: {steps_str}")
 
     print("\n=== Plotting step charts ===")
-    plot_all(step_f1, selected, ds_to_task, output_dir)
+    plot_all(step_f1, selected, ds_to_task, output_dir, baseline_f1=baseline_f1_map or None)
+
+    print("\n=== Plotting per-dataset charts ===")
+    plot_per_dataset(step_f1, all_selected, ds_to_task, output_dir,
+                     baseline_f1=baseline_f1_map or None, deltas=deltas or None)
+
+    print("\n=== Plotting step-example cards ===")
+    plot_step_examples(all_rows, all_selected, output_dir)
 
     # ── Phase 5: response cards ────────────────────────────────────────────────
     if gains or regressions:

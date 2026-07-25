@@ -440,15 +440,17 @@ def plot_overall_distribution(
                     mean, std = float(np.mean(vals)), float(np.std(vals))
                     ax.bar(x + offset - sub_w / 2, mean, sub_w, color=color, alpha=0.85,
                            edgecolor="black", linewidth=0.5, label=label, hatch=hatch)
-                    ax.errorbar(x + offset - sub_w / 2, mean, yerr=std, fmt="none",
-                                color="black", capsize=3, linewidth=1.2, zorder=4)
+                    if chart_type == "errorbar":
+                        ax.errorbar(x + offset - sub_w / 2, mean, yerr=std, fmt="none",
+                                    color="black", capsize=3, linewidth=1.2, zorder=4)
                 if jvals:
                     jmean, jstd = float(np.mean(jvals)), float(np.std(jvals))
                     ax.bar(x + offset + sub_w / 2, jmean, sub_w, color=color, alpha=0.4,
                            edgecolor="black", linewidth=0.5,
                            label="judge" if not judge_drawn else "_nolegend_")
-                    ax.errorbar(x + offset + sub_w / 2, jmean, yerr=jstd, fmt="none",
-                                color="black", capsize=3, linewidth=1.2, zorder=4)
+                    if chart_type == "errorbar":
+                        ax.errorbar(x + offset + sub_w / 2, jmean, yerr=jstd, fmt="none",
+                                    color="black", capsize=3, linewidth=1.2, zorder=4)
                     judge_drawn = True
         else:
             _render_errorbar(ax, x, values_list, colors, labels, bar_width=0.7, hatches=hatches)
@@ -535,8 +537,9 @@ def plot_per_task_distribution(
                     mean, std = float(np.mean(vals)), float(np.std(vals))
                     ax.bar(xi + offset + shift, mean, bar_w, color=color, alpha=0.85,
                            edgecolor="black", linewidth=0.5, label=label, hatch=hatch)
-                    ax.errorbar(xi + offset + shift, mean, yerr=std, fmt="none",
-                                color="black", capsize=3, linewidth=1.2, zorder=4)
+                    if chart_type == "errorbar":
+                        ax.errorbar(xi + offset + shift, mean, yerr=std, fmt="none",
+                                    color="black", capsize=3, linewidth=1.2, zorder=4)
             if has_judge:
                 for mi, (jvals, color) in enumerate(zip(jvals_list, colors)):
                     if not jvals: continue
@@ -545,8 +548,9 @@ def plot_per_task_distribution(
                     ax.bar(xi + offset + sub_w / 2, jmean, sub_w, color=color, alpha=0.4,
                            edgecolor="black", linewidth=0.5,
                            label="judge" if not judge_drawn else "_nolegend_")
-                    ax.errorbar(xi + offset + sub_w / 2, jmean, yerr=jstd, fmt="none",
-                                color="black", capsize=3, linewidth=1.2, zorder=4)
+                    if chart_type == "errorbar":
+                        ax.errorbar(xi + offset + sub_w / 2, jmean, yerr=jstd, fmt="none",
+                                    color="black", capsize=3, linewidth=1.2, zorder=4)
                     judge_drawn = True
 
     if naive_line is not None:
@@ -647,26 +651,29 @@ def plot_per_dataset_distribution(
                         ax.bar(xi + offset - sub_w / 2, mean_m, sub_w, color=color,
                                alpha=0.85, edgecolor="black", linewidth=0.5,
                                label=leg_label, hatch=hatch)
-                        ax.errorbar(xi + offset - sub_w / 2, mean_m, yerr=std_m,
-                                    fmt="none", color="black", capsize=3, linewidth=1.2,
-                                    zorder=4)
+                        if chart_type == "errorbar":
+                            ax.errorbar(xi + offset - sub_w / 2, mean_m, yerr=std_m,
+                                        fmt="none", color="black", capsize=3, linewidth=1.2,
+                                        zorder=4)
                     if jvals:
                         mean_j = float(np.mean(jvals)); std_j = float(np.std(jvals))
                         ax.bar(xi + offset + sub_w / 2, mean_j, sub_w, color=color,
                                alpha=0.38, edgecolor="black", linewidth=0.5,
                                label=jleg_label, hatch=hatch)
-                        ax.errorbar(xi + offset + sub_w / 2, mean_j, yerr=std_j,
-                                    fmt="none", color="black", capsize=3, linewidth=1.2,
-                                    zorder=4)
+                        if chart_type == "errorbar":
+                            ax.errorbar(xi + offset + sub_w / 2, mean_j, yerr=std_j,
+                                        fmt="none", color="black", capsize=3, linewidth=1.2,
+                                        zorder=4)
                 else:
                     if vals:
                         mean_v = float(np.mean(vals)); std_v = float(np.std(vals))
                         ax.bar(xi + offset, mean_v, slot_w, color=color,
                                alpha=0.85, edgecolor="black", linewidth=0.5,
                                label=leg_label, hatch=hatch)
-                        ax.errorbar(xi + offset, mean_v, yerr=std_v,
-                                    fmt="none", color="black", capsize=3, linewidth=1.2,
-                                    zorder=4)
+                        if chart_type == "errorbar":
+                            ax.errorbar(xi + offset, mean_v, yerr=std_v,
+                                        fmt="none", color="black", capsize=3, linewidth=1.2,
+                                        zorder=4)
 
     if naive_line is not None:
         ax.axhline(naive_line, color="red", linestyle="--", linewidth=1.2,

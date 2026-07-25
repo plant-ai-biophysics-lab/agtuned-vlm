@@ -240,7 +240,7 @@ def main() -> None:
     uniform_f1    = uniform_cls_overall.get("f1_macro") if uniform_cls_overall else None
     naive_sem_sim = naive_ov_desc.get("sem_sim") if naive_ov_desc else None
 
-    for chart_type, suffix in [("strip", "strip"), ("errorbar", "errorbar")]:
+    for chart_type, suffix in [("strip", "strip"), ("errorbar", "errorbar"), ("bar", "bar")]:
         plot_overall_distribution(
             cls_by_ds, models, color_map, multimodal_set, "F1 Macro",
             "Vision Assessment — Classification Overall",

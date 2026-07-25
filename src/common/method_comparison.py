@@ -536,3 +536,201 @@ def plot_per_task_full_comparison(
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {output_path}")
+
+
+def plot_per_task_delta(
+    rows_by_condition: dict[str, list[dict]],
+    output_path: Path,
+    title: str = "Method Comparison — ΔF1 by Task Type (vs Baseline)",
+    task_types: list[str] = TASK_TYPES_DEFAULT,
+    baseline_label: str = "Vision Baseline",
+    condition_order: list[str] | None = None,
+    show_error_bars: bool = False,
+) -> None:
+    """Delta version of plot_per_task_full_comparison (judged scores only).
+
+    Bars show ΔJudged F1 vs Vision Baseline per task type.
+    When show_error_bars=True, error bars show std of per-dataset deltas.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    from src.common.distribution_plots import gather_judge_per_class_by_dataset
+
+    judge_by_task = compute_per_task_judge_f1(rows_by_condition, task_types)
+
+    base_judge = {tt: float(np.mean(v)) if v else 0.0
+                  for tt, v in judge_by_task.get(baseline_label, {}).items()}
+
+    order    = condition_order or [lbl for lbl, _ in CONDITION_STYLES]
+    non_base = [lbl for lbl in order
+                if lbl != baseline_label and lbl in judge_by_task]
+    if not non_base:
+        print(f"  [warn] plot_per_task_delta: no non-baseline conditions — skipping")
+        return
+
+    # Per-dataset delta stds for error bars
+    ds_delta_stds: dict[str, dict[str, float]] = {}
+    if show_error_bars:
+        judge_by_cls = gather_judge_per_class_by_dataset(rows_by_condition)
+        # Per-dataset mean judged F1: {cond: {(ds,task): mean}}
+        ds_means: dict[str, dict[tuple, float]] = {}
+        for cond, by_dt in judge_by_cls.items():
+            ds_means[cond] = {key: float(np.mean(vals)) for key, vals in by_dt.items() if vals}
+        base_ds = ds_means.get(baseline_label, {})
+        for cond in non_base:
+            cond_ds = ds_means.get(cond, {})
+            by_task_deltas: dict[str, list[float]] = {tt: [] for tt in task_types}
+            for (ds, task), cond_val in cond_ds.items():
+                if (ds, task) in base_ds and task in task_types:
+                    by_task_deltas[task].append(cond_val - base_ds[(ds, task)])
+            ds_delta_stds[cond] = {
+                tt: float(np.std(vals)) if len(vals) > 1 else 0.0
+                for tt, vals in by_task_deltas.items()
+            }
+
+    def _tint(hex_color: str, factor: float = 0.5) -> str:
+        r, g, b = mcolors.to_rgb(hex_color)
+        return mcolors.to_hex((r + (1 - r) * factor,
+                                g + (1 - g) * factor,
+                                b + (1 - b) * factor))
+
+    x     = np.arange(len(task_types))
+    width = min(0.8 / len(non_base), 0.18)
+    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * len(non_base) * 0.4 + 2), 5))
+
+    for i, cond in enumerate(non_base):
+        color  = _tint(CONDITION_COLOR.get(cond, "#888888"), 0.55)
+        by_task = judge_by_task.get(cond, {})
+        deltas  = [
+            float(np.mean(by_task.get(tt, []))) - base_judge.get(tt, 0.0)
+            if by_task.get(tt) else 0.0
+            for tt in task_types
+        ]
+        yerr   = [ds_delta_stds.get(cond, {}).get(tt, 0.0) for tt in task_types] \
+                 if show_error_bars else None
+        offset = (i - len(non_base) / 2 + 0.5) * width
+
+        bars = ax.bar(x + offset, deltas, width,
+                      label=f"{cond} (judged)",
+                      color=color, alpha=0.85, edgecolor="black", linewidth=0.5,
+                      hatch="//",
+                      yerr=yerr, capsize=3,
+                      error_kw={"elinewidth": 1.0, "ecolor": "black"} if show_error_bars else {})
+        for bar, v in zip(bars, deltas):
+            if abs(v) > 0.005:
+                va    = "bottom" if v >= 0 else "top"
+                y_off = 0.006 if v >= 0 else -0.006
+                ax.text(bar.get_x() + bar.get_width() / 2, v + y_off,
+                        f"{v:+.2f}", ha="center", va=va, fontsize=5.5)
+
+    ax.axhline(0, color="black", linewidth=1.0, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels([TASK_LABEL.get(tt, tt) for tt in task_types], fontsize=10)
+    ax.set_ylabel(f"ΔF1 vs {baseline_label}")
+    ax.set_title(title)
+    ax.legend(fontsize=7, ncol=2)
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")
+
+
+def plot_per_dataset_delta(
+    rows_by_condition: dict[str, list[dict]],
+    output_path: Path,
+    title: str = "Method Comparison — ΔJudged F1 per Dataset (sorted by method score)",
+    task_types: list[str] = TASK_TYPES_DEFAULT,
+    baseline_label: str = "Vision Baseline",
+    condition_order: list[str] | None = None,
+) -> None:
+    """Grouped bar chart: ΔJudged F1 vs baseline per dataset, sorted by baseline F1.
+
+    Each cluster = one dataset. Bars = non-baseline conditions (judged only).
+    X-axis labels are coloured by task type. Dashed line at y=0.
+    Datasets sorted ascending by baseline judged F1 (hardest → easiest).
+    A dotted grey line shows the raw baseline F1 for context.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    from src.common.distribution_plots import gather_judge_per_class_by_dataset
+
+    _TASK_COLOR = {
+        "disease":             "#d62728",
+        "pest_damage":         "#1f77b4",
+        "weed_identification": "#2ca02c",
+    }
+
+    judge_by_cls = gather_judge_per_class_by_dataset(rows_by_condition)
+
+    ds_f1:  dict[str, dict[str, float]] = {}
+    ds_task: dict[str, str] = {}
+    for cond, by_dt in judge_by_cls.items():
+        ds_f1[cond] = {}
+        for (ds, task), vals in by_dt.items():
+            ds_task[ds] = task
+            ds_f1[cond][ds] = float(np.mean(vals)) if vals else 0.0
+
+    baseline_ds = ds_f1.get(baseline_label, {})
+    if not baseline_ds:
+        print(f"  [warn] plot_per_dataset_delta: baseline '{baseline_label}' not found — skipping")
+        return
+
+    # Sort by mean judged F1 across non-baseline conditions (hardest → easiest)
+    def _method_mean(ds: str) -> float:
+        vals = [ds_f1[c][ds] for c in ds_f1 if c != baseline_label and ds in ds_f1[c]]
+        return float(np.mean(vals)) if vals else 0.0
+
+    all_ds = sorted(baseline_ds, key=_method_mean)
+
+    order    = condition_order or [lbl for lbl, _ in CONDITION_STYLES]
+    non_base = [lbl for lbl in order if lbl != baseline_label and lbl in ds_f1]
+    if not non_base:
+        print(f"  [warn] plot_per_dataset_delta: no non-baseline conditions — skipping")
+        return
+
+    n_ds   = len(all_ds)
+    n_cond = len(non_base)
+    width  = min(0.8 / n_cond, 0.22)
+    fig, ax = plt.subplots(figsize=(max(14, n_ds * (n_cond * 0.28 + 0.15)), 5))
+
+    x = np.arange(n_ds)
+    for ci, cond in enumerate(non_base):
+        color  = CONDITION_COLOR.get(cond, "#888888")
+        offset = (ci - n_cond / 2 + 0.5) * width
+        deltas = [ds_f1[cond].get(ds, 0.0) - baseline_ds[ds] for ds in all_ds]
+        ax.bar(x + offset, deltas, width,
+               label=cond, color=color, alpha=0.82,
+               edgecolor="black", linewidth=0.4)
+
+    ax.axhline(0, color="black", linewidth=1.0, linestyle="--")
+
+    ax.set_xticks(x)
+    tick_labels = ax.set_xticklabels(
+        [ds.replace("_classification", "").replace("_", " ") for ds in all_ds],
+        rotation=45, ha="right", fontsize=7,
+    )
+    for tick, ds in zip(tick_labels, all_ds):
+        tick.set_color(_TASK_COLOR.get(ds_task.get(ds, ""), "#333333"))
+
+    task_patches = [mpatches.Patch(color=c, label=t.replace("_", " "))
+                    for t, c in _TASK_COLOR.items() if t in ds_task.values()]
+    cond_handles, cond_labels = ax.get_legend_handles_labels()
+    # Condition legend top-left; task-type legend at bottom centre
+    ax.legend(handles=cond_handles, labels=cond_labels,
+              fontsize=7, loc="upper left")
+    fig.legend(handles=task_patches, labels=[p.get_label() for p in task_patches],
+               fontsize=7, ncol=len(task_patches),
+               loc="lower center", bbox_to_anchor=(0.5, -0.02),
+               frameon=True)
+
+    ax.set_ylabel(f"ΔJudged F1 vs {baseline_label}")
+    ax.set_title(title)
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {output_path}")

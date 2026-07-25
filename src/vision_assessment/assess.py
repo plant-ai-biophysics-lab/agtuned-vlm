@@ -25,8 +25,6 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image as PILImage
-from vllm import LLM, SamplingParams
-
 from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
 from src.common.distribution_plots import (
     gather_cls_per_class_by_dataset,
@@ -68,8 +66,6 @@ from src.common.metrics import (
     sample_class_images,
 )
 
-DESC_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.1)
-CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
 
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
@@ -210,7 +206,8 @@ def load_llm(
     gpu_memory_utilization: float = 0.9,
     max_model_len: int = 8192,
     enforce_eager: bool = False,
-) -> tuple[LLM, object]:
+):
+    from vllm import LLM
     if _is_mamba(model_id):
         effective_seqs = min(max_num_seqs, _MAMBA_MAX_NUM_SEQS)
         if effective_seqs < max_num_seqs:
@@ -263,11 +260,11 @@ def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str, sys
 
 
 def run_batch(
-    llm: LLM,
+    llm,
     tokenizer,
     images: list[PILImage.Image],
     question: str,
-    params: SamplingParams,
+    params,
     system_prompt: str = "",
 ) -> list[str]:
     prompts = [build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt) for img in images]
@@ -306,6 +303,10 @@ def run_model(
     system_prompt: str = "",
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
+    from vllm import SamplingParams
+    DESC_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.1)
+    CLS_PARAMS  = SamplingParams(temperature=0.0, max_tokens=64,  repetition_penalty=1.1)
+
     llm, tokenizer = load_llm(
         model_id, quantization=quantization, max_num_seqs=max_num_seqs,
         gpu_memory_utilization=gpu_memory_utilization, max_model_len=max_model_len,

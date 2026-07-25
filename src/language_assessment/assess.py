@@ -23,8 +23,6 @@ from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
-from vllm import LLM, SamplingParams
-
 from src.common.dataset_config import datasets_by_name
 from src.common.distribution_plots import (
     gather_cls_per_class_by_dataset,
@@ -65,12 +63,6 @@ from src.common.metrics import (
     rouge_scores_per_sample,
 )
 
-_SAMPLING = SamplingParams(
-    temperature=0.0,
-    max_tokens=128,
-    repetition_penalty=1.1,
-    stop=["Question:", "\n\nQ:", "\n\nAnswer:", "[Answer"],
-)
 
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _MARKDOWN_RE = re.compile(r"\*{1,3}([^*]*)\*{1,3}|^#{1,6}\s*|^[-*+]\s+", re.MULTILINE)
@@ -202,7 +194,8 @@ def load_llm(
     gpu_memory_utilization: float = 0.9,
     max_model_len: int = 4096,
     enforce_eager: bool = False,
-) -> tuple[LLM, object]:
+):
+    from vllm import LLM
     from transformers import AutoTokenizer
 
     if _is_mamba(model_id):
@@ -242,7 +235,7 @@ def destroy_llm(llm) -> None:
 
 
 def run_inference(
-    llm: LLM,
+    llm,
     prompts: list[str],
     label: str,
     tokenizer,
@@ -250,11 +243,18 @@ def run_inference(
     system_prompt: str = "",
     step: str = "",
 ) -> tuple[list[str], float, int]:
+    from vllm import SamplingParams
+    _sampling = SamplingParams(
+        temperature=0.0,
+        max_tokens=128,
+        repetition_penalty=1.1,
+        stop=["Question:", "\n\nQ:", "\n\nAnswer:", "[Answer"],
+    )
     formatted = [_apply_chat_template(tokenizer, p, prompt_template, system_prompt=system_prompt) for p in prompts]
     step_str = f"  [{step}]" if step else ""
     print(f"\nRunning inference [{label}]{step_str}  ({len(prompts)} records)...")
     t_start = time.perf_counter()
-    outputs = llm.generate(formatted, sampling_params=_SAMPLING)
+    outputs = llm.generate(formatted, sampling_params=_sampling)
     elapsed = time.perf_counter() - t_start
     responses = [_clean_response(o.outputs[0].text) for o in outputs]
     total_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
@@ -284,7 +284,7 @@ def _apply_healthy_override(records: list[dict]) -> list[dict]:
 
 
 def run_descriptions(
-    llm: LLM,
+    llm,
     tokenizer,
     records: list[dict],
     prompt_template: str,
@@ -318,7 +318,7 @@ def run_descriptions(
 
 
 def run_classifications(
-    llm: LLM,
+    llm,
     tokenizer,
     records: list[dict],
     prompt_template: str,

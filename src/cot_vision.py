@@ -1031,6 +1031,8 @@ def plot_conditions_per_task(
     from src.common.method_comparison import (
         plot_per_task_full_comparison,
         plot_per_task_judge_comparison,
+        plot_per_task_delta,
+        plot_per_dataset_delta,
     )
 
     rows_by_cond: dict[str, list[dict]] = {}
@@ -1056,6 +1058,120 @@ def plot_conditions_per_task(
         output_path=output_dir / "cot_per_task_full_comparison.png",
         title="CoT Assessment — Direct vs Judged F1 by Task Type",
     )
+    plot_per_task_delta(
+        rows_by_cond,
+        output_path=output_dir / "cot_per_task_delta.png",
+        title="CoT Assessment — ΔF1 by Task Type (vs Vision Baseline)",
+    )
+    plot_per_task_delta(
+        rows_by_cond,
+        output_path=output_dir / "cot_per_task_delta_errorbar.png",
+        title="CoT Assessment — ΔF1 by Task Type (vs Vision Baseline)",
+        show_error_bars=True,
+    )
+    plot_per_dataset_delta(
+        rows_by_cond,
+        output_path=output_dir / "cot_per_dataset_delta.png",
+        title="CoT Assessment — ΔJudged F1 per Dataset (sorted by method score)",
+    )
+    save_method_stats_table(rows_by_cond, output_dir)
+
+
+def save_method_stats_table(
+    rows_by_cond: dict[str, list[dict]],
+    output_dir: Path,
+    baseline_label: str = "Vision Baseline",
+    threshold: float = 0.02,
+) -> None:
+    """Compute per-method dataset-level stats vs baseline and save CSV + PNG table."""
+    import csv as _csv
+    import matplotlib.pyplot as plt
+    from src.common.distribution_plots import gather_judge_per_class_by_dataset
+
+    # Build {condition: {dataset: mean_judged_f1}}
+    ds_f1: dict[str, dict[str, float]] = {}
+    for cond, rows in rows_by_cond.items():
+        by_cls = gather_judge_per_class_by_dataset({cond: rows})
+        per_dt = by_cls.get(cond, {})
+        ds_f1[cond] = {ds: float(np.mean(f1s)) for (ds, _t), f1s in per_dt.items() if f1s}
+
+    baseline = ds_f1.get(baseline_label, {})
+    conditions = [c for c in rows_by_cond if c != baseline_label]
+    all_ds = sorted(baseline.keys())
+
+    rows_out = []
+    for cond in conditions:
+        method = ds_f1.get(cond, {})
+        deltas = [method[ds] - baseline[ds] for ds in all_ds if ds in method and ds in baseline]
+        if not deltas:
+            continue
+        gains     = [d for d in deltas if d > 0]
+        regressions = [d for d in deltas if d < 0]
+        n_total   = len(deltas)
+        n_wins    = len(gains)
+        n_losses  = len(regressions)
+        win_rate  = n_wins / n_total if n_total else 0.0
+        wl_ratio  = n_wins / n_losses if n_losses else float("inf")
+        mean_gain = float(np.mean(gains)) if gains else 0.0
+        mean_loss = float(np.mean(regressions)) if regressions else 0.0
+        updown    = mean_gain / abs(mean_loss) if mean_loss != 0 else float("inf")
+        median_d  = float(np.median(deltas))
+        consistency = sum(1 for d in deltas if d > threshold) / n_total if n_total else 0.0
+        rows_out.append({
+            "Method":             cond,
+            "Datasets":           n_total,
+            "Wins":               n_wins,
+            "Losses":             n_losses,
+            "Win Rate":           round(win_rate, 3),
+            "Win/Loss Ratio":     round(wl_ratio, 2) if wl_ratio != float("inf") else "∞",
+            "Mean Gain":          round(mean_gain, 4),
+            "Mean Loss":          round(mean_loss, 4),
+            "Upside/Downside":    round(updown, 2) if updown != float("inf") else "∞",
+            "Median ΔF1":         round(median_d, 4),
+            f"Consistency (>{int(threshold*100)}% gain)": round(consistency, 3),
+        })
+
+    if not rows_out:
+        return
+
+    # Save CSV
+    csv_path = output_dir / "method_stats_table.csv"
+    fieldnames = list(rows_out[0].keys())
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows_out)
+    print(f"  Saved: {csv_path}")
+
+    # Save PNG table
+    fig, ax = plt.subplots(figsize=(14, 0.55 * (len(rows_out) + 2)))
+    ax.axis("off")
+    col_labels = fieldnames
+    cell_text  = [[str(r[c]) for c in fieldnames] for r in rows_out]
+    tbl = ax.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        cellLoc="center",
+        loc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.auto_set_column_width(list(range(len(col_labels))))
+    for (row_i, col_i), cell in tbl.get_celld().items():
+        if row_i == 0:
+            cell.set_facecolor("#2c3e50")
+            cell.set_text_props(color="white", fontweight="bold")
+        elif row_i % 2 == 0:
+            cell.set_facecolor("#f0f0f0")
+        cell.set_edgecolor("#cccccc")
+    ax.set_title(
+        f"Method Comparison Stats vs {baseline_label}  (threshold={int(threshold*100)}%)",
+        fontsize=11, fontweight="bold", pad=12,
+    )
+    png_path = output_dir / "method_stats_table.png"
+    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {png_path}")
 
 
 def plot_conditions_overall(
@@ -1243,7 +1359,7 @@ def plot_delta_response_examples(
     INNER_W    = FIG_W - 2 * MARGIN_X
     TITLE_H    = 0.75
     HDR_H      = 0.42    # dataset header bar
-    CARD_H     = 1.55    # one example card
+    CARD_H     = 2.0     # one example card
     DS_GAP     = 0.28    # gap between dataset blocks
     BOTTOM_PAD = 0.35
     LINE_H     = 0.165   # approx height of one text line at 8.5pt
@@ -1314,7 +1430,8 @@ def plot_delta_response_examples(
                 ]:
                     body = _format_response(row, method) if row else "(no example found)"
                     gt   = (row or {}).get("class_label", "")
-                    pred = (row or {}).get("resolved_class", "") or (row or {}).get("prediction", "")[:40]
+                    _r = row or {}
+                    pred = _r.get("resolved_class", "") or _r.get("prediction", "")
 
                     card = mpatches.FancyBboxPatch(
                         (MARGIN_X, y - CARD_H + 0.06), INNER_W, CARD_H - 0.1,
@@ -1323,17 +1440,23 @@ def plot_delta_response_examples(
                     )
                     ax.add_patch(card)
 
-                    label_str = card_label
-                    if gt:
-                        label_str += f"     GT: {gt}"
-                    if pred:
-                        label_str += f"   →   Pred: {pred[:60]}"
+                    import textwrap
+                    lbl_color = "#2ca02c" if "Correct" in card_label else "#c62828"
+                    line1 = card_label + (f"     GT: {gt}" if gt else "")
                     ax.text(MARGIN_X + 0.22, y - 0.15,
-                            label_str, ha="left", va="top",
+                            line1, ha="left", va="top",
                             fontsize=8.5, fontweight="bold",
-                            color="#2ca02c" if "Correct" in card_label else "#c62828",
-                            zorder=2)
-                    ax.text(MARGIN_X + 0.22, y - 0.42,
+                            color=lbl_color, zorder=2)
+                    body_y = y - 0.38  # default body start when no pred
+                    if pred:
+                        pred_wrapped = textwrap.fill(f"→   Pred: {pred}", width=60, max_lines=3, placeholder="…")
+                        n_pred_lines = pred_wrapped.count("\n") + 1
+                        ax.text(MARGIN_X + 0.22, y - 0.32,
+                                pred_wrapped, ha="left", va="top",
+                                fontsize=7.5, fontweight="bold",
+                                color=lbl_color, zorder=2)
+                        body_y = y - 0.32 - n_pred_lines * 0.155
+                    ax.text(MARGIN_X + 0.22, body_y,
                             body, ha="left", va="top",
                             fontsize=8, color="#2e2e2e",
                             fontfamily="monospace", linespacing=1.45, zorder=2)
