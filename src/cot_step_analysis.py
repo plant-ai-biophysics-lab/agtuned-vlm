@@ -364,9 +364,20 @@ def run_swap_order(
     prompt_batch_size: int = 128,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
-    """Run cumulative inference once per cyclic rotation of each track's step
-    order, so every question gets a turn going first. Checkpoints after each
-    rotation (accumulated rows) so a long run can be resumed/inspected.
+    """Run cumulative inference once per cyclic rotation of each track's
+    *observation* questions, so every observation question gets a turn going
+    first. Checkpoints after each rotation (accumulated rows) so a long run
+    can be resumed/inspected.
+
+    The last step of every track is a synthesis question ("Based on the
+    visual markers so far, what is the most likely...") whose wording
+    presupposes prior observations exist. It is deliberately kept fixed at
+    the end of every chain rather than rotated — moving it earlier would
+    have it answer with no evidence, which tests a broken prompt rather than
+    whether observation order matters. Note the graded/scored answer is a
+    separate classification question asked after every step regardless
+    (see _cls_question in cot_vision.py), so every chain still ends with a
+    real, comparable final answer irrespective of rotation.
     """
     (*_, _COT_PROMPTS) = _import_cot_helpers()
 
@@ -377,12 +388,17 @@ def run_swap_order(
     all_rows: list[dict] = []
     for track, group in by_track.items():
         n_steps = len(_COT_PROMPTS["thinking_prompts"][track]["steps"])
+        synthesis_idx = n_steps - 1          # always kept last
+        n_obs = synthesis_idx                # observation questions: 0..n_obs-1
         print(f"\n=== Swap-order track: {track}  "
-              f"({len(group)} images × {n_steps} rotations) ===")
+              f"({len(group)} images × {n_obs} rotations, "
+              f"synthesis question fixed last) ===")
 
-        for rot in range(n_steps):
-            step_order = list(range(rot, n_steps)) + list(range(rot))
-            print(f"\n--- Rotation {rot + 1}/{n_steps}: question {rot + 1} goes first ---")
+        for rot in range(n_obs):
+            obs_order  = list(range(rot, n_obs)) + list(range(rot))
+            step_order = obs_order + [synthesis_idx]
+            print(f"\n--- Rotation {rot + 1}/{n_obs}: observation question "
+                  f"{rot + 1} goes first ---")
             rows = run_cumulative(
                 group, llm, tokenizer,
                 prompt_batch_size=prompt_batch_size,
@@ -561,8 +577,10 @@ def compute_swap_anchor_rates(rows: list[dict]) -> dict[str, dict[str, dict]]:
             continue
         track = _cot_key(grp[0]["task_type"])
         rot = grp[0].get("rotation", "")
-        first_ok = grp[0]["judged_correct"] == "1"
-        final_ok = grp[-1]["judged_correct"] == "1"
+        # judged_correct is int (0/1) fresh from apply_judge, but str after a
+        # CSV round-trip — normalise via int() rather than comparing to "1".
+        first_ok = bool(int(grp[0]["judged_correct"]))
+        final_ok = bool(int(grp[-1]["judged_correct"]))
         d = by_track_rot[(track, rot)]
         if first_ok:
             d["step1_correct"] += 1
@@ -632,6 +650,122 @@ def plot_swap_anchor_rates(result: dict[str, dict[str, dict]], output_dir: Path)
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path}")
+
+
+def compute_swap_step_f1(
+    rows: list[dict],
+) -> tuple[dict[str, dict[str, dict[int, float]]], dict[str, dict[str, dict[int, int]]]]:
+    """Return (step_f1, question_ids), both keyed [rotation][dataset][step_idx].
+
+    step_f1 gives the judged F1 at that chain position; question_ids gives the
+    1-based original question number that was actually asked at that position
+    (constant across images for a given rotation, since rotation is a fixed
+    permutation) — lets callers label the x-axis by question rather than by
+    raw chain position.
+    """
+    from sklearn.metrics import f1_score
+
+    by_key: dict[tuple, list] = defaultdict(list)
+    for r in rows:
+        if r.get("judged_correct", "") == "":
+            continue
+        key = (r.get("rotation", ""), r["agml_dataset"], int(r["step_idx"]))
+        by_key[key].append(r)
+
+    step_f1: dict[str, dict[str, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
+    question_ids: dict[str, dict[str, dict[int, int]]] = defaultdict(lambda: defaultdict(dict))
+    for (rot, ds, step), ds_rows in by_key.items():
+        refs  = [r["class_label"] for r in ds_rows]
+        preds = [r["class_label"] if int(r["judged_correct"]) else "" for r in ds_rows]
+        f1 = f1_score(refs, preds, average="macro", zero_division=0)
+        step_f1[rot][ds][step] = float(f1)
+        question_ids[rot][ds][step] = int(ds_rows[0].get("question_id", step - 1)) + 1
+
+    return step_f1, question_ids
+
+
+def plot_swap_per_dataset(
+    step_f1_by_rot: dict[str, dict[str, dict[int, float]]],
+    question_ids_by_rot: dict[str, dict[str, dict[int, int]]],
+    all_datasets: list[str],
+    ds_to_task: dict[str, str],
+    output_dir: Path,
+    baseline_f1: dict[str, float] | None = None,
+    deltas: dict[str, float] | None = None,
+) -> None:
+    """One PNG per (rotation, dataset), grouped into numbered subfolders —
+    per_dataset/<n>/<dataset>.png where <n> is the 1-based question that
+    went first for that rotation. Lets you flip through subfolders to see
+    whether a dataset's step curve depends on which question leads.
+
+    The x-axis is labelled by the actual question number asked at each chain
+    position (e.g. Q3, Q4, Q5, Q6, Q1, Q2 for the rotation that starts on
+    question 3) rather than by raw chain position 1..n, so the question order
+    is readable straight off the axis.
+    """
+    import matplotlib.pyplot as plt
+
+    per_ds_dir = output_dir / "per_dataset"
+    per_ds_dir.mkdir(parents=True, exist_ok=True)
+
+    for rot in sorted(step_f1_by_rot, key=int):
+        rot_label = str(int(rot) + 1)
+        rot_dir = per_ds_dir / rot_label
+        rot_dir.mkdir(parents=True, exist_ok=True)
+
+        by_ds  = step_f1_by_rot[rot]
+        qid_ds = question_ids_by_rot.get(rot, {})
+        n_saved = 0
+        for ds in sorted(all_datasets):
+            f1_by_step = by_ds.get(ds)
+            if not f1_by_step:
+                continue
+            qid_by_step = qid_ds.get(ds, {})
+
+            task  = ds_to_task.get(ds, "disease")
+            base  = (baseline_f1 or {}).get(ds)
+            delta = (deltas or {}).get(ds)
+            label = ds.replace("_classification", "").replace("_", " ")
+
+            positions = sorted(f1_by_step)          # chain order, 1..n_steps
+            ys = [f1_by_step[s] for s in positions]
+            xtick_labels = [f"Q{qid_by_step[s]}" if s in qid_by_step else str(s)
+                            for s in positions]
+
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.plot(positions, ys, marker="o", color="#1f77b4", linewidth=2,
+                    label=f"Q{rot_label} first")
+            for x, y in zip(positions, ys):
+                ax.annotate(f"{y:.3f}", (x, y), fontsize=7, ha="center",
+                            xytext=(0, 7), textcoords="offset points")
+
+            if base is not None:
+                ax.axhline(base, color="red", linestyle="--", linewidth=1.6,
+                           label=f"baseline ({base:.3f})", zorder=4)
+
+            direction = ""
+            if delta is not None:
+                sign = "▲" if delta >= 0 else "▼"
+                direction = f"  [{sign}{abs(delta):.3f} vs baseline]"
+
+            ax.set_xticks(positions)
+            ax.set_xticklabels(xtick_labels)
+            ax.set_xlabel("Question asked (in order)", fontsize=10)
+            ax.set_ylabel("Judged F1", fontsize=10)
+            ax.set_ylim(0, 1.0)
+            ax.set_title(f"{label}{direction}\n"
+                         f"({TASK_LABEL.get(task, task)}) — Q{rot_label} asked first",
+                         fontsize=10)
+            ax.legend(fontsize=9, loc="lower right")
+            ax.grid(True, alpha=0.25)
+            plt.tight_layout()
+
+            path = rot_dir / f"{ds}.png"
+            fig.savefig(path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            n_saved += 1
+
+        print(f"  Saved {n_saved} plots → {rot_dir}")
 
 
 # ── Step charts ───────────────────────────────────────────────────────────────
@@ -1263,6 +1397,8 @@ def run_swap_order_pipeline(
     model: str,
     batch_size: int,
     output_dir: Path,
+    baseline_f1: dict[str, float] | None = None,
+    deltas: dict[str, float] | None = None,
 ) -> None:
     """Run cumulative CoT inference with rotated step order on the given
     datasets (capped to n_per_class images/class), then check whether the
@@ -1312,6 +1448,11 @@ def run_swap_order_pipeline(
     print("\n=== Plotting swap-order anchor rate chart ===")
     plot_swap_anchor_rates(result, swap_dir)
 
+    print("\n=== Plotting per-dataset swap-order charts ===")
+    swap_step_f1, swap_question_ids = compute_swap_step_f1(rows)
+    plot_swap_per_dataset(swap_step_f1, swap_question_ids, all_selected, ds_to_task,
+                         swap_dir, baseline_f1=baseline_f1 or None, deltas=deltas or None)
+
     print(f"\nDone. Swap-order artifacts in {swap_dir}")
 
 
@@ -1342,10 +1483,13 @@ def main() -> None:
                         help="Path to test_split.json {ds_name: [filenames]}")
     parser.add_argument("--swap_order", action="store_true",
                         help="Robustness check: for each track, cyclically rotate the "
-                             "CoT step order so every question gets a turn going first, "
-                             "then compare anchor/recovery rate across rotations. Runs on "
-                             "the same top-N gain/regression datasets (requires --vis_dir "
-                             "and --cot_dir). Writes to <output_dir>/swap_order/.")
+                             "CoT *observation* questions so each gets a turn going first, "
+                             "then compare anchor/recovery rate across rotations. The final "
+                             "synthesis question ('based on visual markers so far...') is "
+                             "always kept last, since its wording presupposes prior "
+                             "observations. Runs on the same top-N gain/regression datasets "
+                             "(requires --vis_dir and --cot_dir). Writes to "
+                             "<output_dir>/swap_order/.")
     parser.add_argument("--n_per_class", type=int, default=None,
                         help="Cap images sampled per class (random subsample). "
                              "Defaults to 50 when --swap_order is set.")
@@ -1422,6 +1566,7 @@ def main() -> None:
             all_selected=all_selected, ds_to_task=ds_to_task, ds_to_crop=ds_to_crop,
             ds_info=ds_info, test_split=test_split, n_per_class=n_per_class,
             model=args.model, batch_size=args.batch_size, output_dir=output_dir,
+            baseline_f1=baseline_f1_map, deltas=deltas,
         )
         return
 
