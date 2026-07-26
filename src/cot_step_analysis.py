@@ -364,20 +364,18 @@ def run_swap_order(
     prompt_batch_size: int = 128,
     ckpt_path: Path | None = None,
 ) -> list[dict]:
-    """Run cumulative inference once per cyclic rotation of each track's
-    *observation* questions, so every observation question gets a turn going
-    first. Checkpoints after each rotation (accumulated rows) so a long run
-    can be resumed/inspected.
+    """Run cumulative inference once per cyclic rotation of each track's step
+    order, so every question gets a turn going first. Checkpoints after each
+    rotation (accumulated rows) so a long run can be resumed/inspected.
 
-    The last step of every track is a synthesis question ("Based on the
-    visual markers so far, what is the most likely...") whose wording
-    presupposes prior observations exist. It is deliberately kept fixed at
-    the end of every chain rather than rotated — moving it earlier would
-    have it answer with no evidence, which tests a broken prompt rather than
-    whether observation order matters. Note the graded/scored answer is a
-    separate classification question asked after every step regardless
-    (see _cls_question in cot_vision.py), so every chain still ends with a
-    real, comparable final answer irrespective of rotation.
+    All CoT steps in cot_prompts.yaml are now plain observation questions —
+    the old synthesis step ("Based on the visual markers so far...") was
+    dropped in favour of always using the separate, fixed-wording
+    classification question (_cls_question in cot_vision.py) for the graded
+    answer. That question is asked after every step regardless of rotation,
+    so every chain ends with a real, comparable final answer, and there is no
+    longer a step whose wording presupposes being asked last — so all steps
+    are safe to rotate freely.
     """
     (*_, _COT_PROMPTS) = _import_cot_helpers()
 
@@ -388,17 +386,12 @@ def run_swap_order(
     all_rows: list[dict] = []
     for track, group in by_track.items():
         n_steps = len(_COT_PROMPTS["thinking_prompts"][track]["steps"])
-        synthesis_idx = n_steps - 1          # always kept last
-        n_obs = synthesis_idx                # observation questions: 0..n_obs-1
         print(f"\n=== Swap-order track: {track}  "
-              f"({len(group)} images × {n_obs} rotations, "
-              f"synthesis question fixed last) ===")
+              f"({len(group)} images × {n_steps} rotations) ===")
 
-        for rot in range(n_obs):
-            obs_order  = list(range(rot, n_obs)) + list(range(rot))
-            step_order = obs_order + [synthesis_idx]
-            print(f"\n--- Rotation {rot + 1}/{n_obs}: observation question "
-                  f"{rot + 1} goes first ---")
+        for rot in range(n_steps):
+            step_order = list(range(rot, n_steps)) + list(range(rot))
+            print(f"\n--- Rotation {rot + 1}/{n_steps}: question {rot + 1} goes first ---")
             rows = run_cumulative(
                 group, llm, tokenizer,
                 prompt_batch_size=prompt_batch_size,
@@ -887,7 +880,10 @@ def plot_all(
                 ax.axhline(grand_mean, color="red", linestyle="--", linewidth=1.8,
                            label=f"baseline (mean {grand_mean:.2f})", zorder=4)
 
-        ax.set_xticks(range(1, 8))
+        max_step = max(
+            (s for ds in step_f1[mode] for s in step_f1[mode][ds]), default=1
+        )
+        ax.set_xticks(range(1, max_step + 1))
         ax.set_xlabel("Step", fontsize=10)
         ax.set_ylabel("Mean Judged F1", fontsize=10)
         ax.set_ylim(0, 1.0)
@@ -1483,13 +1479,10 @@ def main() -> None:
                         help="Path to test_split.json {ds_name: [filenames]}")
     parser.add_argument("--swap_order", action="store_true",
                         help="Robustness check: for each track, cyclically rotate the "
-                             "CoT *observation* questions so each gets a turn going first, "
-                             "then compare anchor/recovery rate across rotations. The final "
-                             "synthesis question ('based on visual markers so far...') is "
-                             "always kept last, since its wording presupposes prior "
-                             "observations. Runs on the same top-N gain/regression datasets "
-                             "(requires --vis_dir and --cot_dir). Writes to "
-                             "<output_dir>/swap_order/.")
+                             "CoT step order so every question gets a turn going first, "
+                             "then compare anchor/recovery rate across rotations. Runs on "
+                             "the same top-N gain/regression datasets (requires --vis_dir "
+                             "and --cot_dir). Writes to <output_dir>/swap_order/.")
     parser.add_argument("--n_per_class", type=int, default=None,
                         help="Cap images sampled per class (random subsample). "
                              "Defaults to 50 when --swap_order is set.")
