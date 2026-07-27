@@ -2,7 +2,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
+import numpy as np
 import yaml
 
 DISEASE_TASK_TYPES = {"disease", "pest_damage"}
@@ -21,6 +22,7 @@ class DatasetConfig:
     skip_description: bool = False
     notes: str = ""
     class_overrides: dict = None  # {clean_class_label: task_type}
+    hf_config: Optional[str] = None  # Project-AgML HF dataset config/split-group, e.g. "raw" vs "augmented"
 
     @property
     def clean_classes(self) -> list[str]:
@@ -54,6 +56,7 @@ def load_datasets(config_path: Path) -> list[DatasetConfig]:
             skip_description=d.get("skip_description", False),
             notes=d.get("notes", ""),
             class_overrides=d.get("class_overrides", {}),
+            hf_config=d.get("hf_config"),
         ))
     return result
 
@@ -98,3 +101,52 @@ def parse_class_label(raw_label: str, dataset_crop: Optional[str]) -> tuple[str,
         return parts[0].replace("_", " ").strip(), parts[1].replace("_", " ").strip()
     crop = dataset_crop if dataset_crop and dataset_crop != "multiple" else "plant"
     return crop, raw_label.replace("_", " ").strip()
+
+
+def subsample_class_balanced(
+    items: list[Any],
+    label_fn: Callable[[Any], str],
+    n_per_class: int,
+    seed: int = 42,
+) -> dict[str, list[int]]:
+    """Group items by label_fn(item), cap each group at n_per_class via seeded,
+    without-replacement sampling. Returns {label: [selected indices into items]}.
+
+    Shared sampling primitive for "representative, class-balanced subset" use
+    cases (e.g. scripts/agml_hf/download_and_sample.py, linear_probe/probe.py's
+    per-class train cap) — a fixed cap per class rather than proportional/scaled,
+    since source-dataset class imbalance reflects collection effort, not
+    real-world prevalence.
+    """
+    rng = np.random.default_rng(seed)
+    by_class: dict[str, list[int]] = {}
+    for i, item in enumerate(items):
+        by_class.setdefault(label_fn(item), []).append(i)
+    selected: dict[str, list[int]] = {}
+    for label, indices in by_class.items():
+        if len(indices) > n_per_class:
+            chosen = rng.choice(len(indices), size=n_per_class, replace=False)
+            indices = sorted(indices[i] for i in chosen)
+        selected[label] = indices
+    return selected
+
+
+def prefetch_hf_datasets(datasets: list[DatasetConfig], hf_catalog_path: Path) -> None:
+    """Trigger Project-AgML HuggingFace dataset downloads for all datasets upfront
+    (HF-sourced analog of prefetch_agml_datasets, additive — does not replace it)."""
+    import json
+    from datasets import load_dataset_builder
+
+    catalog = json.loads(Path(hf_catalog_path).read_text())
+    print(f"\n=== Prefetching {len(datasets)} HuggingFace (Project-AgML) datasets ===")
+    for i, d in enumerate(datasets, 1):
+        repo_id = f"Project-AgML/{d.agml_name}"
+        config = d.hf_config or catalog.get(d.agml_name, {}).get("preferred_config")
+        print(f"  [{i}/{len(datasets)}] {repo_id} (config={config})", end=" ", flush=True)
+        try:
+            builder = load_dataset_builder(repo_id, config)
+            builder.download_and_prepare()
+            print("ok")
+        except Exception as e:
+            print(f"ERROR: {e}")
+    print()

@@ -43,7 +43,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoImageProcessor, AutoModel, AutoModelForImageTextToText, AutoProcessor
 
-from src.common.dataset_config import active_datasets, DatasetConfig, prefetch_agml_datasets
+from src.common.dataset_config import active_datasets, DatasetConfig, prefetch_agml_datasets, subsample_class_balanced
 from src.common.io import save_json, update_pipeline_results
 
 # Path to the layer selections config written by app/layer_explorer.py
@@ -155,16 +155,8 @@ def load_dg_samples(images_dir: Path, dg_descriptions_jsonl: Path) -> list[dict]
 
 def subsample_per_class(samples: list[dict], n_per_class: int, seed: int = 42) -> list[dict]:
     """Cap each class to n_per_class images (seeded shuffle) for a balanced comparison."""
-    rng = np.random.default_rng(seed)
-    by_class: dict[str, list[int]] = {}
-    for i, s in enumerate(samples):
-        by_class.setdefault(s["label"], []).append(i)
-    selected: list[int] = []
-    for indices in by_class.values():
-        if len(indices) > n_per_class:
-            indices = rng.choice(indices, size=n_per_class, replace=False).tolist()
-        selected.extend(indices)
-    selected.sort()
+    by_class = subsample_class_balanced(samples, lambda s: s["label"], n_per_class, seed)
+    selected = sorted(i for indices in by_class.values() for i in indices)
     return [samples[i] for i in selected]
 
 
