@@ -198,13 +198,20 @@ def stance(text: str) -> str:
 
 def analyse_final_answers(path: Path) -> dict:
     """Marker analysis on final answers, split by condition and GT stratum."""
+    return analyse_final_answers_rows(list(csv.DictReader(open(path, encoding="utf-8"))))
+
+
+def analyse_final_answers_rows(rows: list[dict]) -> dict:
+    """Same as analyse_final_answers but takes pre-loaded rows — lets callers
+    build a synthetic final-answer set (e.g. self_cot rows from one source
+    combined with cot_yaml rows derived from a different pipeline)."""
     # (cond, stratum) -> tally
     tallies: dict[tuple, MarkerTally] = defaultdict(MarkerTally)
     calib: dict[tuple, list] = defaultdict(lambda: [0, 0])  # (cond,stratum,stance)->[correct,total]
     length_bins: dict[str, list] = defaultdict(list)
     overall: dict[tuple, list] = defaultdict(lambda: [0, 0])
 
-    for r in csv.DictReader(open(path, encoding="utf-8")):
+    for r in rows:
         jc = r.get("judged_correct", "")
         if jc == "":
             continue
@@ -458,6 +465,264 @@ def analyse_steps(path: Path) -> dict:
     }
 
 
+def analyse_steps_swap(swap_path: Path, rotation: str = "0") -> dict:
+    """Same output shape as analyse_steps(), sourced from cot_step_analysis's
+    --swap_order checkpoint instead of the full-test-split step checkpoint.
+
+    Only mode=='cumulative' rows exist in swap-order data (no independent
+    mode was run), so:
+      - step_accuracy / markers / trajectory / step_calibration come from the
+        single `rotation` given (default "0" = natural, unrotated question
+        order) — the direct analog of the original single-order run.
+      - self_consistency is redefined as CROSS-ROTATION agreement: for each
+        image, the final-step prediction under every rotation it was tested
+        with is treated as one "probe" and compared pairwise, mirroring the
+        independent-mode agreement measure structurally but built from
+        genuinely different question orderings rather than genuinely
+        independent (no shared context) questions. Reported under the same
+        keys so downstream chart/report code needs no changes; callers should
+        label this distinction explicitly in any write-up.
+    """
+    step_tally: dict[int, MarkerTally] = defaultdict(MarkerTally)
+    answer_tally: dict[str, MarkerTally] = defaultdict(MarkerTally)
+    pred_tally = MarkerTally()
+    step_acc: dict[int, list] = defaultdict(lambda: [0, 0])
+    step_acc_track: dict[tuple, list] = defaultdict(lambda: [0, 0])
+    step_calib: dict[tuple, list] = defaultdict(lambda: [0, 0])
+    question_text: dict[int, str] = {}
+
+    cumulative: dict[tuple, list] = defaultdict(list)  # rotation-filtered trajectory
+    final_by_rotation: dict[tuple, dict[str, tuple]] = defaultdict(dict)  # key -> {rot: (correct, fp, step)}
+
+    with open(swap_path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            jc = r.get("judged_correct", "")
+            if jc == "" or r.get("mode", "") != "cumulative":
+                continue
+            correct = int(jc)
+            step = int(r.get("step_idx", 0))
+            rot = r.get("rotation", "")
+            pred = r.get("prediction", "") or ""
+            key = (r.get("agml_dataset", ""), r.get("image_name", ""), r.get("class_label", ""))
+            strat = ("nonspecific_gt" if is_nonspecific_class(r.get("ground_truth", ""))
+                     else "specific_gt")
+            fp = fingerprint(pred)
+
+            # Track the last-seen-so-far prediction per rotation for
+            # cross-rotation agreement, independent of the primary rotation.
+            prev = final_by_rotation[key].get(rot)
+            if prev is None or step > prev[2]:
+                final_by_rotation[key][rot] = (correct, fp, step)
+
+            if rot != rotation:
+                continue  # everything below uses only the primary rotation
+
+            q, a = extract_step_qa(r.get("reasoning", "") or "")
+            cumulative[key].append((step, correct, fp, stance(pred), strat))
+            step_acc[step][0] += correct
+            step_acc[step][1] += 1
+            track = ("weed" if r.get("task_type") == "weed_identification"
+                     else "disease_pest")
+            step_acc_track[(track, strat, step)][0] += correct
+            step_acc_track[(track, strat, step)][1] += 1
+            step_tally[step].add(a, correct)
+            pred_tally.add(pred, correct)
+            for s in ("all", strat):
+                answer_tally[s].add(a, correct)
+                ck = (s, stance(a))
+                step_calib[ck][0] += correct
+                step_calib[ck][1] += 1
+            if step not in question_text and q:
+                question_text[step] = q
+
+    # ── Trajectory (cumulative, primary rotation only) ────────────────────────
+    traj = {
+        "n_groups": 0,
+        "step1_correct_final_correct": 0,
+        "step1_correct_total": 0,
+        "step1_wrong_final_correct": 0,
+        "step1_wrong_total": 0,
+        "never_changed": 0,
+        "flip_counts": defaultdict(int),
+        "flips_vs_final": defaultdict(lambda: [0, 0]),
+    }
+    for key, entries in cumulative.items():
+        entries.sort(key=lambda e: e[0])
+        if len(entries) < 2:
+            continue
+        traj["n_groups"] += 1
+        first_ok, final_ok = entries[0][1], entries[-1][1]
+        if first_ok:
+            traj["step1_correct_total"] += 1
+            traj["step1_correct_final_correct"] += final_ok
+        else:
+            traj["step1_wrong_total"] += 1
+            traj["step1_wrong_final_correct"] += final_ok
+
+        flips = sum(
+            1 for i in range(len(entries) - 1)
+            if jaccard(entries[i][2], entries[i + 1][2]) < AGREE_THRESHOLD
+        )
+        traj["flip_counts"][flips] += 1
+        traj["flips_vs_final"][flips][0] += final_ok
+        traj["flips_vs_final"][flips][1] += 1
+        if flips == 0:
+            traj["never_changed"] += 1
+
+    # ── Cross-rotation agreement (substitutes independent-mode consistency) ───
+    consistency_buckets: dict[str, list] = defaultdict(lambda: [0, 0])
+    consistency_raw: list[tuple[float, int]] = []
+    sim_by_key: dict[tuple, float] = {}
+    for key, by_rot in final_by_rotation.items():
+        if len(by_rot) < 2:
+            continue
+        fps = [v[1] for v in by_rot.values()]
+        corrects = [v[0] for v in by_rot.values()]
+        sims = [jaccard(fps[i], fps[j])
+                for i in range(len(fps)) for j in range(i + 1, len(fps))]
+        mean_sim = float(np.mean(sims)) if sims else 1.0
+        sim_by_key[key] = mean_sim
+        maj = 1 if sum(corrects) * 2 > len(corrects) else 0
+        consistency_raw.append((mean_sim, maj))
+        b = ("high (>=0.6)" if mean_sim >= 0.6
+             else "medium (0.3-0.6)" if mean_sim >= 0.3
+             else "low (<0.3)")
+        consistency_buckets[b][0] += maj
+        consistency_buckets[b][1] += 1
+
+    sims_arr = np.array([s for s, _ in consistency_raw])
+    corr_arr = np.array([c for _, c in consistency_raw])
+    point_biserial = (float(np.corrcoef(sims_arr, corr_arr)[0, 1])
+                      if len(sims_arr) > 2 and sims_arr.std() > 0 else float("nan"))
+
+    # ── Per-group records for verifier-rule evaluation ────────────────────────
+    records: list[dict] = []
+    for key, entries in cumulative.items():
+        if len(entries) < 2:
+            continue
+        entries.sort(key=lambda e: e[0])
+        flips = sum(1 for i in range(len(entries) - 1)
+                    if jaccard(entries[i][2], entries[i + 1][2]) < AGREE_THRESHOLD)
+        records.append({
+            "final_correct": entries[-1][1],
+            "step1_correct": entries[0][1],
+            "final_stance": entries[-1][3],
+            "stratum": entries[-1][4],
+            "flips": flips,
+            "mean_sim": sim_by_key.get(key, float("nan")),
+        })
+
+    rules = evaluate_rules(records)
+
+    return {
+        "step_accuracy": {
+            str(s): {"acc": v[0] / v[1], "n": v[1]}
+            for s, v in sorted(step_acc.items())
+        },
+        "step_accuracy_by_track": {
+            f"{t}/{s}": {
+                str(st): {"acc": v[0] / v[1], "n": v[1]}
+                for (t2, s2, st), v in sorted(step_acc_track.items())
+                if (t2, s2) == (t, s)
+            }
+            for t in ("disease_pest", "weed")
+            for s in ("specific_gt", "nonspecific_gt")
+        },
+        "step_questions": {str(k): v for k, v in sorted(question_text.items())},
+        "markers_in_step_answer": answer_tally["all"].table(),
+        "markers_in_step_answer_by_stratum": {
+            s: t.table() for s, t in answer_tally.items()
+        },
+        "step_calibration": {
+            f"{s}/{st}": {"n": v[1], "acc": v[0] / v[1]}
+            for (s, st), v in sorted(step_calib.items()) if v[1]
+        },
+        "markers_in_step_prediction": pred_tally.table(),
+        "markers_by_step": {
+            str(s): t.table() for s, t in sorted(step_tally.items())
+        },
+        "trajectory": {
+            "n_groups": traj["n_groups"],
+            "anchor_rate": (traj["step1_correct_final_correct"] / traj["step1_correct_total"]
+                            if traj["step1_correct_total"] else float("nan")),
+            "recovery_rate": (traj["step1_wrong_final_correct"] / traj["step1_wrong_total"]
+                              if traj["step1_wrong_total"] else float("nan")),
+            "step1_correct_total": traj["step1_correct_total"],
+            "step1_wrong_total": traj["step1_wrong_total"],
+            "never_changed_frac": traj["never_changed"] / traj["n_groups"] if traj["n_groups"] else 0,
+            "flip_distribution": {str(k): v for k, v in sorted(traj["flip_counts"].items())},
+            "final_acc_by_flips": {
+                str(k): {"acc": v[0] / v[1], "n": v[1]}
+                for k, v in sorted(traj["flips_vs_final"].items()) if v[1] >= 20
+            },
+        },
+        "self_consistency": {
+            "buckets": {
+                k: {"acc": v[0] / v[1], "n": v[1]}
+                for k, v in consistency_buckets.items() if v[1]
+            },
+            "correlation_sim_vs_correct": point_biserial,
+            "n": len(consistency_raw),
+            "method": "cross_rotation_agreement",
+        },
+        "verifier_rules": rules,
+    }
+
+
+def analyse_final_answers_swap(cot_vision_path: Path, swap_path: Path,
+                               rotation: str = "0") -> dict:
+    """final_answers-shaped dict combining self_cot rows read directly from the
+    (still-valid, prompt-change-independent) cot_vision final-answer CSV with
+    synthetic cot_yaml rows built from the swap-order checkpoint — the last
+    chain step per image under the given rotation, i.e. exactly the model's
+    graded final answer at that point.
+
+    self_cot is restricted to the EXACT SAME images as the cot_yaml sample
+    (matched on dataset + image basename + class label, not just dataset) so
+    the two conditions' accuracy numbers are a same-sample, apples-to-apples
+    comparison rather than two differently-sized pools over the same datasets.
+    """
+    def img_key(dataset: str, image_name: str, class_label: str) -> tuple:
+        return (dataset, Path(image_name).name, class_label)
+
+    by_key: dict[tuple, dict] = {}
+    with open(swap_path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r.get("mode") != "cumulative" or r.get("rotation") != rotation:
+                continue
+            if r.get("judged_correct", "") == "":
+                continue
+            key = img_key(r["agml_dataset"], r["image_name"], r["class_label"])
+            step = int(r["step_idx"])
+            prev = by_key.get(key)
+            if prev is None or step > prev["_step"]:
+                by_key[key] = {
+                    "condition": "cot_yaml",
+                    "prediction": r.get("prediction", ""),
+                    "ground_truth": r.get("ground_truth", ""),
+                    "judged_correct": r.get("judged_correct", ""),
+                    "_step": step,
+                }
+
+    swap_keys = set(by_key.keys())
+    self_cot_by_key: dict[tuple, dict] = {}
+    for r in csv.DictReader(open(cot_vision_path, encoding="utf-8")):
+        if r.get("condition") != "self_cot":
+            continue
+        k = img_key(r.get("agml_dataset", ""), r.get("image_name", ""), r.get("class_label", ""))
+        if k in swap_keys:
+            self_cot_by_key[k] = r
+
+    # Intersect both ways: a handful of swap-sample images (~2%) have no
+    # self_cot counterpart (different underlying test-split sampling), so
+    # drop those from cot_yaml too — n must be identical, not just close.
+    common_keys = swap_keys & set(self_cot_by_key.keys())
+    cot_yaml_rows = [by_key[k] for k in common_keys]
+    self_cot_rows = [self_cot_by_key[k] for k in common_keys]
+
+    return analyse_final_answers_rows(self_cot_rows + cot_yaml_rows)
+
+
 # ── Verifier rule evaluation ──────────────────────────────────────────────────
 
 RULES: dict[str, str] = {
@@ -529,7 +794,11 @@ def make_charts(results: dict, out_dir: Path) -> list[Path]:
     paths = []
 
     # 1. Marker lift, final answers, both conditions
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5), sharey=True)
+    # Not sharey: the two conditions can have different numbers of marker
+    # categories (e.g. one marker may never fire for one condition), and a
+    # shared y-scale previously crammed the taller panel's top label against
+    # the subplot title, clipping it invisibly.
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
     for ax, cond in zip(axes, ["self_cot", "cot_yaml"]):
         m = (results["final_answers"].get(cond, {})
              .get("strata", {}).get("specific_gt", {}).get("markers", {}))
@@ -540,6 +809,7 @@ def make_charts(results: dict, out_dir: Path) -> list[Path]:
         ax.barh(range(len(fams)), lifts, color=colors, alpha=0.85)
         ax.set_yticks(range(len(fams)))
         ax.set_yticklabels([f.replace("_", " ") for f in fams], fontsize=9)
+        ax.set_ylim(-0.6, len(fams) - 0.3)  # padding so the top label clears the title
         ax.axvline(0, color="black", linewidth=1)
         ax.set_xlabel("Accuracy lift when marker present (pp)", fontsize=9)
         ax.set_title(f"{cond} — final answer markers (specific GT only)",
@@ -640,7 +910,10 @@ def make_charts(results: dict, out_dir: Path) -> list[Path]:
         ax2.annotate(f"{cons[o]['acc']*100:.1f}%\nn={cons[o]['n']:,}",
                      (i, cons[o]["acc"] * 100), fontsize=8, ha="center",
                      xytext=(0, 4), textcoords="offset points")
-    ax2.set_xlabel("Cross-probe agreement (independent mode)", fontsize=10)
+    cons_method = results["steps"]["self_consistency"].get("method", "independent_mode")
+    cons_label = ("Cross-rotation agreement (swap-order)" if cons_method == "cross_rotation_agreement"
+                  else "Cross-probe agreement (independent mode)")
+    ax2.set_xlabel(cons_label, fontsize=10)
     ax2.set_ylabel("Majority-vote accuracy (%)", fontsize=10)
     ax2.set_title("Self-consistency vs correctness", fontsize=11, fontweight="bold")
     ax2.grid(True, axis="y", alpha=0.25)
@@ -659,6 +932,16 @@ def main() -> None:
     ap.add_argument("--cot_dir", default="outputs/cot_vision/")
     ap.add_argument("--step_dir", default="outputs/cot_step_analysis/")
     ap.add_argument("--output_dir", default="outputs/verifier_analysis/")
+    ap.add_argument("--source", choices=["full", "swap"], default="full",
+                    help="'full' = original full-test-split ckpt_judged.csv; "
+                         "'swap' = the --swap_order subsample (10 datasets, "
+                         "<=50 img/class), using rotation 0 as the primary "
+                         "(unrotated) order. Use 'swap' to refresh the "
+                         "analysis quickly against the current prompts "
+                         "without a full cot_step_analysis rerun.")
+    ap.add_argument("--rotation", default="0",
+                    help="Primary rotation to use as the natural question "
+                         "order, only relevant with --source swap.")
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -666,27 +949,45 @@ def main() -> None:
 
     safe = args.model.replace("/", "_")
     final_path = Path(args.cot_dir) / f"cot_cls_{safe}.csv"
-    step_path = Path(args.step_dir) / "ckpt_judged.csv"
 
-    print(f"Analysing final answers: {final_path}")
-    final_res = analyse_final_answers(final_path)
-    for cond, d in final_res.items():
-        print(f"  {cond}: n={d['n']:,} acc={d['accuracy']:.3f}")
+    if args.source == "swap":
+        step_path = Path(args.step_dir) / "swap_order" / "ckpt_swap_judged.csv"
+        json_path = out_dir / "verifier_analysis_swap.json"
 
-    print(f"\nAnalysing intermediate steps: {step_path}")
-    step_res = analyse_steps(step_path)
+        print(f"Analysing final answers (self_cot from {final_path.name} + "
+              f"cot_yaml derived from swap rotation {args.rotation}): {step_path}")
+        final_res = analyse_final_answers_swap(final_path, step_path, rotation=args.rotation)
+        for cond, d in final_res.items():
+            print(f"  {cond}: n={d['n']:,} acc={d['accuracy']:.3f}")
+
+        print(f"\nAnalysing intermediate steps (swap subsample, rotation {args.rotation}): {step_path}")
+        step_res = analyse_steps_swap(step_path, rotation=args.rotation)
+    else:
+        step_path = Path(args.step_dir) / "ckpt_judged.csv"
+        json_path = out_dir / "verifier_analysis.json"
+
+        print(f"Analysing final answers: {final_path}")
+        final_res = analyse_final_answers(final_path)
+        for cond, d in final_res.items():
+            print(f"  {cond}: n={d['n']:,} acc={d['accuracy']:.3f}")
+
+        print(f"\nAnalysing intermediate steps: {step_path}")
+        step_res = analyse_steps(step_path)
+
     print(f"  groups={step_res['trajectory']['n_groups']:,}  "
           f"anchor={step_res['trajectory']['anchor_rate']:.3f}  "
           f"recovery={step_res['trajectory']['recovery_rate']:.3f}")
 
-    results = {"final_answers": final_res, "steps": step_res, "model": args.model}
+    results = {"final_answers": final_res, "steps": step_res, "model": args.model,
+              "source": args.source}
 
-    json_path = out_dir / "verifier_analysis.json"
     json_path.write_text(json.dumps(results, indent=2, default=float))
     print(f"\nSaved: {json_path}")
 
-    print("\nGenerating charts...")
-    for p in make_charts(results, out_dir):
+    chart_dir = out_dir / "swap_subsample" if args.source == "swap" else out_dir
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nGenerating charts in {chart_dir}...")
+    for p in make_charts(results, chart_dir):
         print(f"  Saved: {p}")
 
 
