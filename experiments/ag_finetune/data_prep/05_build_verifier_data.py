@@ -34,6 +34,8 @@ import re
 import time
 from pathlib import Path
 
+from _progress import Progress, fmt_duration, stage_banner, sub_banner
+
 OUT_DIR = Path(__file__).parent.parent / "outputs"
 
 CORRECTION_SYSTEM = (
@@ -125,6 +127,7 @@ def format_verifier_entry(question: str, wrong: str, correct: str, correction: s
 
 
 def main() -> None:
+    stage_banner(5, "Build verifier training data")
     parser = argparse.ArgumentParser()
     parser.add_argument("--wrong_csv",    default=None,  help="CSV with wrong predictions")
     parser.add_argument("--n_hardneg",    type=int, default=1000,
@@ -169,6 +172,8 @@ def main() -> None:
                             triples.append((question, wrong, correct))
 
                 print(f"  {len(triples)} wrong-prediction triples")
+                prog = Progress(total=len(triples), label="CSV corrections",
+                                every=max(args.batch_size, 1))
                 for batch_start in range(0, len(triples), args.batch_size):
                     batch = triples[batch_start : batch_start + args.batch_size]
                     msgs = [
@@ -185,8 +190,7 @@ def main() -> None:
                     except Exception as e:
                         print(f"  Batch {batch_start} failed: {e}")
                         failed += len(batch)
-                    elapsed = time.time() - t0
-                    print(f"  CSV: {done} done ({failed} failed) [{elapsed:.0f}s]")
+                    prog.update(len(batch), extra=f"{failed:,} failed")
 
         # ── Hard negatives from agrillm seed ─────────────────────────────────
         seed_path = OUT_DIR / "stage1_agrillm_filtered.jsonl"
@@ -194,11 +198,13 @@ def main() -> None:
             seed_rows = [json.loads(l) for l in seed_path.read_text().splitlines() if l.strip()]
             n_seeds = args.n_hardneg // args.n_per_neg
             seed_rows = seed_rows[:n_seeds]
-            print(f"\nGenerating hard negatives: {n_seeds} seeds × {args.n_per_neg} = "
-                  f"~{args.n_hardneg} target triples...")
+            sub_banner(f"Hard negatives: {n_seeds} seeds × {args.n_per_neg} = "
+                      f"~{args.n_hardneg} target triples")
 
             # Pass 1: generate wrong alternatives for each seed
             neg_triples: list[tuple[str, str, str]] = []
+            prog1 = Progress(total=len(seed_rows), label="Pass 1 (hard negs)",
+                             every=max(args.batch_size, 1))
             for batch_start in range(0, len(seed_rows), args.batch_size):
                 batch = seed_rows[batch_start : batch_start + args.batch_size]
                 msgs = [
@@ -218,12 +224,13 @@ def main() -> None:
                     print(f"  Hard-neg batch {batch_start} failed: {e}")
                     failed += len(batch)
 
-                print(f"  Pass 1: {batch_start + len(batch)}/{len(seed_rows)} seeds → "
-                      f"{len(neg_triples)} triples so far")
+                prog1.update(len(batch), extra=f"{len(neg_triples):,} triples so far")
 
-            print(f"\nPass 2: generating corrections for {len(neg_triples)} triples...")
+            sub_banner(f"Pass 2: generating corrections for {len(neg_triples):,} triples")
 
             # Pass 2: generate corrections for all triples
+            prog2 = Progress(total=len(neg_triples), label="Pass 2 (corrections)",
+                             every=max(args.batch_size, 1))
             for batch_start in range(0, len(neg_triples), args.batch_size):
                 batch = neg_triples[batch_start : batch_start + args.batch_size]
                 msgs = [
@@ -241,13 +248,11 @@ def main() -> None:
                     print(f"  Correction batch {batch_start} failed: {e}")
                     failed += len(batch)
 
-                elapsed = time.time() - t0
-                print(f"  Pass 2: {batch_start + len(batch)}/{len(neg_triples)} "
-                      f"({failed} failed) [{elapsed:.0f}s]")
+                prog2.update(len(batch), extra=f"{failed:,} failed total")
 
     stats = {"done": done, "failed": failed, "model": args.model}
     (OUT_DIR / "stage5_verifier_stats.json").write_text(json.dumps(stats, indent=2))
-    print(f"\nDone. {done:,} verifier examples → {out_path}")
+    print(f"\nDone in {fmt_duration(time.time() - t0)}. {done:,} verifier examples → {out_path}")
 
 
 if __name__ == "__main__":

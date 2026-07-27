@@ -645,6 +645,128 @@ def plot_swap_anchor_rates(result: dict[str, dict[str, dict]], output_dir: Path)
         print(f"  Saved: {path}")
 
 
+def compute_swap_step_anchor_rates(rows: list[dict]) -> dict[str, dict[str, dict[int, dict]]]:
+    """Generalizes compute_swap_anchor_rates from "step 1 vs final" to every
+    intermediate chain position. Return {track: {rotation: {step_position:
+    {anchor_rate, recovery_rate, n_correct, n_wrong}}}} where step_position
+    runs 1..n_steps-1 (the true final step is excluded — comparing it to
+    itself is trivial).
+
+    anchor_rate at position k = P(final correct | step-k correct)
+    recovery_rate at position k = P(final correct | step-k wrong)
+
+    This shows how quickly correctness "locks in" as the chain progresses,
+    and whether that speed depends on which question happened to lead.
+    """
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r.get("judged_correct", "") == "":
+            continue
+        key = (r.get("agml_dataset", ""), r.get("image_name", ""),
+               r.get("class_label", ""), r.get("rotation", ""))
+        groups[key].append(r)
+
+    by_track_rot_step: dict[tuple, dict] = defaultdict(lambda: {
+        "correct": 0, "correct_final_correct": 0,
+        "wrong": 0, "wrong_final_correct": 0,
+    })
+    for grp in groups.values():
+        grp.sort(key=lambda r: int(r["step_idx"]))
+        n_steps = len(grp)
+        if n_steps < 2:
+            continue
+        track = _cot_key(grp[0]["task_type"])
+        rot = grp[0].get("rotation", "")
+        final_ok = bool(int(grp[-1]["judged_correct"]))
+
+        for pos in range(n_steps - 1):  # exclude the final step itself
+            step_ok = bool(int(grp[pos]["judged_correct"]))
+            d = by_track_rot_step[(track, rot, pos + 1)]
+            if step_ok:
+                d["correct"] += 1
+                d["correct_final_correct"] += int(final_ok)
+            else:
+                d["wrong"] += 1
+                d["wrong_final_correct"] += int(final_ok)
+
+    result: dict[str, dict[str, dict[int, dict]]] = defaultdict(lambda: defaultdict(dict))
+    for (track, rot, step), d in by_track_rot_step.items():
+        result[track][str(rot)][step] = {
+            "anchor_rate": (d["correct_final_correct"] / d["correct"]
+                            if d["correct"] else float("nan")),
+            "recovery_rate": (d["wrong_final_correct"] / d["wrong"]
+                              if d["wrong"] else float("nan")),
+            "n_correct": d["correct"],
+            "n_wrong": d["wrong"],
+        }
+
+    return {
+        t: {r: dict(sorted(steps.items()))
+            for r, steps in sorted(v.items(), key=lambda kv: int(kv[0]))}
+        for t, v in result.items()
+    }
+
+
+def plot_swap_step_anchor_rates(
+    result: dict[str, dict[str, dict[int, dict]]], output_dir: Path
+) -> None:
+    """Per track: two grouped bar charts (anchor, recovery) with step
+    position on the x-axis and one bar cluster per rotation — the per-step
+    generalization of plot_swap_anchor_rates (which only covers step 1).
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+
+    for track, by_rot in result.items():
+        rots = sorted(by_rot, key=int)
+        if not rots:
+            continue
+        all_steps = sorted({s for by_step in by_rot.values() for s in by_step})
+        if not all_steps:
+            continue
+
+        n_rot   = len(rots)
+        cmap    = cm.get_cmap("tab10", max(n_rot, 1))
+        group_w = 0.8
+        bar_w   = group_w / n_rot
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
+        for i, rot in enumerate(rots):
+            by_step  = by_rot[rot]
+            xs       = [s + (i - (n_rot - 1) / 2) * bar_w for s in all_steps]
+            anchor   = [by_step.get(s, {}).get("anchor_rate", float("nan")) * 100
+                        for s in all_steps]
+            recovery = [by_step.get(s, {}).get("recovery_rate", float("nan")) * 100
+                        for s in all_steps]
+            color = cmap(i)
+            label = f"Q{int(rot) + 1} first"
+            ax1.bar(xs, anchor, width=bar_w, color=color, label=label)
+            ax2.bar(xs, recovery, width=bar_w, color=color, label=label)
+
+        for ax, title, ylabel in [
+            (ax1, "Anchor rate by step position",
+             "Anchor rate (%)\nstep-k right → final right"),
+            (ax2, "Recovery rate by step position",
+             "Recovery rate (%)\nstep-k wrong → final right"),
+        ]:
+            ax.set_xticks(all_steps)
+            ax.set_xlabel("Step position in chain", fontsize=10)
+            ax.set_ylabel(ylabel, fontsize=9)
+            ax.set_ylim(0, 100)
+            ax.set_title(title, fontsize=11)
+            ax.grid(True, axis="y", alpha=0.25)
+
+        ax2.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=(1.01, 1))
+        fig.suptitle(f"{track.replace('_', ' ').title()} — anchor/recovery by "
+                     f"step position and lead question", fontsize=12)
+        plt.tight_layout()
+
+        path = output_dir / f"swap_anchor_by_step_{track}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
+
+
 def compute_swap_step_f1(
     rows: list[dict],
 ) -> tuple[dict[str, dict[str, dict[int, float]]], dict[str, dict[str, dict[int, int]]]]:
@@ -1443,6 +1565,11 @@ def run_swap_order_pipeline(
 
     print("\n=== Plotting swap-order anchor rate chart ===")
     plot_swap_anchor_rates(result, swap_dir)
+
+    print("\n=== Plotting per-step anchor/recovery rate chart ===")
+    step_result = compute_swap_step_anchor_rates(rows)
+    (swap_dir / "swap_anchor_by_step.json").write_text(json.dumps(step_result, indent=2))
+    plot_swap_step_anchor_rates(step_result, swap_dir)
 
     print("\n=== Plotting per-dataset swap-order charts ===")
     swap_step_f1, swap_question_ids = compute_swap_step_f1(rows)

@@ -16,9 +16,12 @@ Usage:
 
 import json
 import re
+import time
 from pathlib import Path
 
 import huggingface_hub
+
+from _progress import Progress, fmt_duration, stage_banner, sub_banner
 
 OUT_DIR = Path(__file__).parent.parent / "outputs"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -122,6 +125,7 @@ def process_dataset(name: str, schema: str, local_path: str, f, stats: dict) -> 
         return
 
     doc_count = chunk_count = skip_count = 0
+    prog = Progress(total=len(ds), label=short_name, every=max(len(ds) // 50, 1))
 
     for row in ds:
         doc_count += 1
@@ -147,8 +151,7 @@ def process_dataset(name: str, schema: str, local_path: str, f, stats: dict) -> 
         if not texts:
             skip_count += 1
 
-        if doc_count % 5000 == 0:
-            print(f"    {doc_count:,} docs → {chunk_count:,} chunks so far")
+        prog.update(1, extra=f"{chunk_count:,} chunks, {skip_count:,} empty")
 
     print(f"  ✅ {short_name}: {doc_count:,} docs → {chunk_count:,} chunks ({skip_count} empty)")
     stats["by_dataset"][short_name] = {"docs": doc_count, "chunks": chunk_count, "skipped": skip_count}
@@ -157,6 +160,9 @@ def process_dataset(name: str, schema: str, local_path: str, f, stats: dict) -> 
 
 
 def main() -> None:
+    stage_banner(3, "GARDIAN RAG passages")
+    t0 = time.time()
+
     token = None
     token_path = Path.home() / ".cache/huggingface/token"
     if token_path.exists():
@@ -180,8 +186,10 @@ def main() -> None:
         print(f"  Resuming: already done {done_datasets}")
 
     with open(out_path, "a") as f:  # append so completed datasets survive restarts
-        for name, schema in DATASETS:
+        for i, (name, schema) in enumerate(DATASETS, 1):
             short_name = name.split("/")[1]
+            sub_banner(f"Dataset {i}/{len(DATASETS)}: {short_name}  "
+                      f"[elapsed {fmt_duration(time.time() - t0)}]")
             if short_name in done_datasets:
                 print(f"  Skipping {short_name} (already done)")
                 continue
@@ -195,7 +203,8 @@ def main() -> None:
             process_dataset(name, schema, local_path, f, stats)
             stats_path.write_text(json.dumps(stats, indent=2))  # checkpoint after each dataset
 
-    print(f"\nDone. {stats['total_chunks']:,} passages from {stats['total_docs']:,} docs → {out_path}")
+    print(f"\nDone in {fmt_duration(time.time() - t0)}. "
+          f"{stats['total_chunks']:,} passages from {stats['total_docs']:,} docs → {out_path}")
     print(json.dumps(stats, indent=2))
 
 

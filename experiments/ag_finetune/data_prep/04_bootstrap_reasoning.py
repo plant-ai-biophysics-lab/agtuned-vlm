@@ -32,6 +32,8 @@ import json
 import time
 from pathlib import Path
 
+from _progress import fmt_duration, stage_banner
+
 OUT_DIR = Path(__file__).parent.parent / "outputs"
 
 SYSTEM_PROMPT = (
@@ -58,6 +60,7 @@ def build_messages(question: str, answer: str) -> list[dict]:
 
 
 def main() -> None:
+    stage_banner(4, "Bootstrap CoT reasoning chains")
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_samples",     type=int,   default=5000)
     parser.add_argument("--model",         default="Qwen/Qwen3.5-122B-A10B")
@@ -147,11 +150,13 @@ def main() -> None:
                 done += 1
 
             elapsed = time.time() - t0
-            rate = (done - len(done_ids)) / elapsed if elapsed > 0 else 0
-            eta_s = (len(pending) - (done - len(done_ids))) / rate if rate > 0 else 0
-            eta_h = eta_s / 3600
-            print(f"  {done}/{len(rows)} done  ({failed} failed)  "
-                  f"[{rate:.1f} samples/s  ETA {eta_h:.1f}h]")
+            n_done_this_run = done - len(done_ids)
+            rate = n_done_this_run / elapsed if elapsed > 0 else 0
+            eta_s = (len(pending) - n_done_this_run) / rate if rate > 0 else 0
+            pct = 100 * done / len(rows)
+            print(f"  [chains] {done:,}/{len(rows):,} ({pct:.1f}%) done  ({failed:,} failed)  "
+                  f"| elapsed {fmt_duration(elapsed)} | rate {rate:.1f}/s "
+                  f"| ETA {fmt_duration(eta_s)}")
 
     stats = {
         "done":      done,
@@ -160,7 +165,7 @@ def main() -> None:
         "n_samples": len(rows),
     }
     (OUT_DIR / "stage4_reasoning_stats.json").write_text(json.dumps(stats, indent=2))
-    print(f"\nDone. {done:,} chains → {out_path}")
+    print(f"\nDone in {fmt_duration(time.time() - t0)}. {done:,} chains → {out_path}")
 
 
 if __name__ == "__main__":
