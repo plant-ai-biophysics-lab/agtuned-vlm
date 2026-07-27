@@ -4,11 +4,16 @@ import runpy
 import sys
 
 STAGES = {
+    "catalog-datasets":   "scripts.agml_hf.catalog_datasets",
+    "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
+    "download-datasets":  "scripts.agml_hf.download_and_sample",
+    "data-gen":           "src.legacy.data_generation.generate",
     "probe":         "src.linear_probe.probe",
     "cluster":       "src.clustering_eval.eval",
     "cluster-viz":   "src.clustering_eval.sample_viz",
     "majority-vote": "src.majority_vote",
     "cot":           "src.cot_vision",
+    "cot-step-analysis": "src.cot_step_analysis",
     "language":      "src.language_assessment.assess",
     "language-plot": "src.language_assessment.plot",
     "vision":        "src.vision_assessment.assess",
@@ -25,6 +30,10 @@ Usage:
     python main.py <stage> [stage-args...]
 
 Stages:
+    catalog-datasets   Stage 0a — catalog all Project-AgML datasets on HuggingFace
+    migrate-datasets   Stage 0a — regenerate src/config/datasets.yaml from the HF catalog
+    download-datasets  Stage 0a — download + class-balanced sample datasets, write selection manifest
+    data-gen           Stage 0  — regenerate agml_descriptions.jsonl / agml_classification.jsonl
     probe           Stage 1 — linear probe: frozen-embedding separability across backbones
     cluster                 — unsupervised clustering eval of frozen embeddings (NMI, ARI, Silhouette)
     cluster-viz             — visualise easiest/hardest datasets per task with sample class images
@@ -34,6 +43,8 @@ Stages:
     vision-plot             — regenerate vision assessment charts from saved metrics JSON
     aug-vision      Stage 4 — description-augmented vision: test if language descriptions improve vision cls
     aug-vision-plot         — regenerate aug-vision charts from saved CSVs
+    cot             Stage 4b — chain-of-thought vision assessment (self-cot + cot-yaml)
+    cot-step-analysis        — per-step CoT accuracy/anchoring analysis
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
