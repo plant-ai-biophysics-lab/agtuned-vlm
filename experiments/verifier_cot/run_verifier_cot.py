@@ -162,6 +162,77 @@ def _import_helpers():
     return _sys_msg, _cls_question, _desc_question, _build_prompt, _clean
 
 
+# ── Sampling: guarantee overlap with existing self_cot/cot_yaml, don't hope for it ──
+#
+# sample_class_images(names, n, seed) is NOT nested across different n for the
+# same seed (np.random.default_rng(seed).choice(N, size=n) picks different
+# specific indices for n=5 vs n=50) — so independently re-sampling here and
+# only filtering existing self_cot/cot_yaml rows down to the intersection
+# afterward (verifier_vision.py's load_existing_rows pattern) can silently
+# yield ZERO overlap if this run's --n_samples differs from whatever the
+# original self_cot/cot_yaml run used. Fix: restrict the candidate pool to
+# images already covered by the existing CSV BEFORE sampling, so overlap is
+# guaranteed regardless of n_samples mismatches between runs.
+
+def existing_cot_image_names(cot_dir: Path, model_safe: str) -> dict[tuple, set[str]]:
+    """Return {(agml_dataset, class_label): {image_name, ...}} already covered
+    by cot_cls_{model}.csv (both self_cot and cot_yaml rows — same file)."""
+    cot_csv = cot_dir / f"cot_cls_{model_safe}.csv"
+    covered: dict[tuple, set[str]] = {}
+    if not cot_csv.exists():
+        print(f"  [warn] {cot_csv} not found — cannot restrict sampling to overlap with it")
+        return covered
+    for r in _read_csv(cot_csv):
+        key = (r.get("agml_dataset", ""), r.get("class_label", ""))
+        covered.setdefault(key, set()).add(r.get("image_name", ""))
+    return covered
+
+
+def load_items_matching_existing(
+    ds_name: str,
+    task_type: str,
+    crop: str | None,
+    n_samples: int | None,
+    class_overrides: dict[str, str] | None,
+    seed: int,
+    test_split: dict | None,
+    covered: dict[tuple, set[str]],
+) -> list[dict]:
+    """Same behavior/shape as src.verifier_vision.load_items, but restricts
+    each class's candidate pool to images already in `covered` (if any exist
+    for that dataset/class) before applying the --n_samples cap, so the
+    resulting sample is guaranteed to overlap with the existing self_cot/
+    cot_yaml CSV instead of hoping two independent random draws collide."""
+    import random
+    from src.cot_vision import load_dataset_classes, DATASET_TASK_TYPES
+    from src.common.metrics import sample_class_images
+
+    by_class = load_dataset_classes(ds_name, None, test_split)  # uncapped — full per-class pool
+    primary_task = DATASET_TASK_TYPES.get(ds_name, (task_type, crop))[0]
+    items: list[dict] = []
+    for cls, paths in by_class.items():
+        effective = (class_overrides or {}).get(cls, primary_task)
+        if effective != task_type:
+            continue
+        cov = covered.get((ds_name, cls))
+        candidates = [p for p in paths if p.name in cov] if cov else paths
+        if cov and not candidates:
+            print(f"    [warn] {ds_name}/{cls}: no overlap with existing self_cot/cot_yaml "
+                  f"images — falling back to full pool ({len(paths)} images), comparison "
+                  f"charts for this class will be missing Self-CoT/CoT YAML")
+            candidates = paths
+        names = sample_class_images([p.name for p in candidates], n_samples, seed=seed)
+        name_set = set(names)
+        for p in candidates:
+            if p.name in name_set:
+                items.append({
+                    "ds": ds_name, "task_type": task_type, "crop": crop, "cls": cls,
+                    "image_path": str(p), "image_name": p.name,
+                })
+    random.Random(seed).shuffle(items)
+    return items
+
+
 # ── Verifier-in-the-loop generation ────────────────────────────────────────────
 
 def run_verifier_loop(
@@ -394,7 +465,9 @@ def main() -> None:
     else:
         print(f"[warn] test_split not found at {ts_path} — using all images")
 
-    from src.verifier_vision import select_datasets, load_items, load_existing_rows
+    from src.verifier_vision import select_datasets, load_existing_rows
+
+    model_safe = args.model.replace("/", "_")
 
     selected = select_datasets(n_per_task=args.n_datasets, seed=args.seed, config_path=args.config)
     print("\n=== Selected datasets ===")
@@ -418,15 +491,20 @@ def main() -> None:
         print("\n=== Phase 1: verifier loop [SKIPPED] ===")
         verifier_rows = _read_csv(ckpt_verifier_cot)
     else:
+        covered = existing_cot_image_names(Path(args.cot_dir), model_safe)
+        print(f"  Existing self_cot/cot_yaml coverage: {len(covered)} (dataset, class) groups")
+
         all_items: list[dict] = []
         for task, ds_names in selected.items():
             for ds in ds_names:
                 info = ds_info.get(ds, {})
                 crop = info.get("crop", "plant")
                 class_overrides = info.get("class_overrides", {})
-                items = load_items(ds, task, crop, n_samples=args.n_samples,
-                                   class_overrides=class_overrides, seed=args.seed,
-                                   test_split=test_split)
+                items = load_items_matching_existing(
+                    ds, task, crop, n_samples=args.n_samples,
+                    class_overrides=class_overrides, seed=args.seed,
+                    test_split=test_split, covered=covered,
+                )
                 all_items.extend(items)
                 print(f"  {ds} ({task}): {len(items)} items")
         print(f"Total items: {len(all_items)}")
@@ -459,7 +537,6 @@ def main() -> None:
         del tokenizer, llm
         gc.collect()
 
-    model_safe = args.model.replace("/", "_")
     image_keys = {(r["agml_dataset"], r["image_name"]) for r in judged}
     print(f"\n=== Phase 3: plot ({len(image_keys)} unique images) ===")
 
