@@ -77,6 +77,7 @@ CLS_FIELDS = [
     "condition", "prediction", "reasoning", "ground_truth",
     "judged_correct", "judge_reasoning",
     "n_rounds", "final_verifier_verdict", "final_verifier_confidence",
+    "transcript_json",
 ]
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
@@ -187,6 +188,10 @@ def run_verifier_loop(
     final_statement = [""] * n
     final_verdict = [""] * n
     final_confidence = [0] * n
+    # Full round-by-round record per item, for quality review — each entry is
+    # {"round", "vlm_statement", "verifier_verdict", "verifier_response",
+    # "verifier_confidence"}. Not just the final accepted statement.
+    transcript: list[list[dict]] = [[] for _ in range(n)]
 
     def _img(i: int) -> PILImage.Image:
         return PILImage.open(items[i]["image_path"]).convert("RGB")
@@ -234,8 +239,16 @@ def run_verifier_loop(
         for i, out in zip(active_idx, ver_outputs):
             verdict, response, confidence = _parse_verifier_json(out.outputs[0].text)
             n_rounds[i] = rnd
+            statement_this_round = hist[i][-1]["content"]
+            transcript[i].append({
+                "round": rnd,
+                "vlm_statement": statement_this_round,
+                "verifier_verdict": verdict,
+                "verifier_response": response,
+                "verifier_confidence": confidence,
+            })
             if verdict == "SUPPORTED" or rnd == max_rounds:
-                final_statement[i] = hist[i][-1]["content"]
+                final_statement[i] = statement_this_round
                 final_verdict[i] = "SUPPORTED" if verdict == "SUPPORTED" else "UNSUPPORTED_MAXROUNDS"
                 final_confidence[i] = confidence
             else:
@@ -273,6 +286,13 @@ def run_verifier_loop(
     rows = []
     for i, item in enumerate(items):
         fallback_statement = hist[i][-1]["content"] if hist[i] and hist[i][-1]["role"] == "assistant" else ""
+        reasoning = "\n\n".join(
+            f"Round {t['round']}:\n"
+            f"  VLM: {t['vlm_statement']}\n"
+            f"  Verifier: {t['verifier_verdict']} (confidence {t['verifier_confidence']})\n"
+            f"  Verifier response: {t['verifier_response']}"
+            for t in transcript[i]
+        )
         rows.append({
             "agml_dataset": item["ds"],
             "class_label":  item["cls"],
@@ -281,13 +301,14 @@ def run_verifier_loop(
             "image_name":   item["image_name"],
             "condition":    "verifier_cot",
             "prediction":   predictions[i],
-            "reasoning":    final_statement[i] or fallback_statement,
+            "reasoning":    reasoning or final_statement[i] or fallback_statement,
             "ground_truth": item["cls"],
             "judged_correct": "",
             "judge_reasoning": "",
             "n_rounds": n_rounds[i],
             "final_verifier_verdict": final_verdict[i],
             "final_verifier_confidence": final_confidence[i],
+            "transcript_json": json.dumps(transcript[i]),
         })
 
     if ckpt_path:
