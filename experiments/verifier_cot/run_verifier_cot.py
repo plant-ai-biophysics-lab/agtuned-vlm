@@ -112,22 +112,50 @@ def _verifier_user_turn(verified_history: str, statement: str) -> str:
     )
 
 
+def _extract_first_json_object(text: str) -> dict | None:
+    """Find and parse the first balanced {...} object in text, tracking brace
+    depth rather than naively spanning first-'{' to last-'}' — the naive span
+    breaks whenever the model wraps its JSON in a markdown code fence or the
+    response text itself contains other brace-like content, silently grabbing
+    the wrong substring instead of failing loudly."""
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        start = None  # keep scanning for the next balanced pair
+    return None
+
+
 def _parse_verifier_json(text: str) -> tuple[str, str, int]:
     """Extract (verdict, response, confidence) from the verifier's JSON reply,
-    tolerating surrounding prose / stray <think> blocks."""
+    tolerating surrounding prose, code fences, and stray <think> blocks."""
     text = _THINK_RE.sub("", text).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end != -1:
+    text = re.sub(r"```(?:json)?\s*", "", text)  # strip markdown code fences
+
+    data = _extract_first_json_object(text)
+    if data is not None:
+        verdict = str(data.get("verdict", "UNSUPPORTED")).strip().upper()
+        if verdict not in ("SUPPORTED", "UNSUPPORTED"):
+            verdict = "UNSUPPORTED"
+        response = str(data.get("response", ""))[:500]
         try:
-            data = json.loads(text[start:end + 1])
-            verdict = str(data.get("verdict", "UNSUPPORTED")).strip().upper()
-            if verdict not in ("SUPPORTED", "UNSUPPORTED"):
-                verdict = "UNSUPPORTED"
-            response = str(data.get("response", ""))[:500]
             confidence = max(1, min(20, int(data.get("confidence", 1))))
-            return verdict, response, confidence
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
+        except (ValueError, TypeError):
+            confidence = 1
+        return verdict, response, confidence
+
+    # Only reached if no balanced, parseable {...} exists at all (e.g. output
+    # was truncated mid-JSON by max_tokens before the closing brace).
     m = re.search(r'"verdict"\s*:\s*"(\w+)"', text, re.IGNORECASE)
     verdict = m.group(1).upper() if m else "UNSUPPORTED"
     if verdict not in ("SUPPORTED", "UNSUPPORTED"):
@@ -250,7 +278,10 @@ def run_verifier_loop(
     _sys_msg, _cls_question, _desc_question, _build_prompt, _clean = _import_helpers()
 
     _VLM_P = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
-    _VER_P = SamplingParams(temperature=0.0, max_tokens=256)
+    # 512 not 256 — the "response" field has no length cap in the prompt, and
+    # this model tends to write multi-paragraph analyses that can otherwise
+    # truncate mid-JSON before the closing "confidence" field is ever reached.
+    _VER_P = SamplingParams(temperature=0.0, max_tokens=512)
     _CLS_P = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
 
     n = len(items)

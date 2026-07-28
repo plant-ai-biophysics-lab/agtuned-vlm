@@ -40,8 +40,11 @@ verifier_system: |
   Add a confidence score between 1-20. Where 1 is not confident at all, 10 means
   needs more evidence and or current knowledge is not sufficient, and 20 is
   fully confident.
+  Keep "response" to 1-3 concise sentences. Do not write a multi-paragraph
+  analysis or use markdown formatting (no headers, no numbered lists, no bold)
+  - a long response risks being cut off before the JSON closes.
 
-  Return JSON only:
+  Return JSON only, with no markdown code fence around it:
   {"verdict": "SUPPORTED" | "UNSUPPORTED", "response": "<your response to the VLM>", "confidence": <int 1-20>}
 
 verifier_user_turn: |
