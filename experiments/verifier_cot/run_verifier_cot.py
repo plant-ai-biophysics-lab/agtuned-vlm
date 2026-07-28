@@ -56,6 +56,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from PIL import Image as PILImage
 
+from src.common.progress import Progress, fmt_duration, stage_banner, sub_banner
+
 try:
     from vllm import SamplingParams
 except ImportError:
@@ -299,7 +301,8 @@ def run_verifier_loop(
         return PILImage.open(items[i]["image_path"]).convert("RGB")
 
     # ── Round 1: initial free-form description (self_cot-style) ────────────────
-    print(f"\n[verifier_cot] Round 1/{max_rounds}: initial description ({n} images)")
+    sub_banner(f"Round 1/{max_rounds}: initial description ({n} images)")
+    prog = Progress(total=n, label="Round 1 description", every=max(batch_size, 1))
     for start in range(0, n, batch_size):
         batch_idx = list(range(start, min(start + batch_size, n)))
         prompts = []
@@ -315,53 +318,62 @@ def run_verifier_loop(
         for i, out in zip(batch_idx, outputs):
             hist[i].append({"role": "assistant", "content": _clean(out.outputs[0].text)})
         del prompts
+        prog.update(len(batch_idx))
 
     active_idx = list(range(n))
 
     for rnd in range(1, max_rounds + 1):
         if not active_idx:
             break
-        print(f"\n[verifier_cot] Verifying round {rnd}/{max_rounds}: {len(active_idx)} active images")
-
-        ver_prompts = []
-        for i in active_idx:
-            item = items[i]
-            statement = hist[i][-1]["content"]
-            rubric = _RUBRIC_WEED if item["task_type"] == "weed_identification" else _RUBRIC_DISEASE
-            sys_p = _verifier_system(rubric)
-            user_p = _verifier_user_turn("(none yet)", statement)
-            msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": [
-                {"type": "image"}, {"type": "text", "text": user_p},
-            ]}]
-            ver_prompts.append(_build_prompt(msgs, tokenizer, _img(i)))
-        ver_outputs = llm.generate(ver_prompts, _VER_P)
-        del ver_prompts
+        sub_banner(f"Verifying round {rnd}/{max_rounds}: {len(active_idx)} active images")
 
         still_active = []
-        for i, out in zip(active_idx, ver_outputs):
-            verdict, response, confidence = _parse_verifier_json(out.outputs[0].text)
-            n_rounds[i] = rnd
-            statement_this_round = hist[i][-1]["content"]
-            transcript[i].append({
-                "round": rnd,
-                "vlm_statement": statement_this_round,
-                "verifier_verdict": verdict,
-                "verifier_response": response,
-                "verifier_confidence": confidence,
-            })
-            if verdict == "SUPPORTED" or rnd == max_rounds:
-                final_statement[i] = statement_this_round
-                final_verdict[i] = "SUPPORTED" if verdict == "SUPPORTED" else "UNSUPPORTED_MAXROUNDS"
-                final_confidence[i] = confidence
-            else:
-                hist[i].append({"role": "user", "content": response})
-                still_active.append(i)
+        n_supported_this_round = 0
+        prog = Progress(total=len(active_idx), label=f"Verify round {rnd}", every=max(batch_size, 1))
+        for start in range(0, len(active_idx), batch_size):
+            batch_idx = active_idx[start:start + batch_size]
+            ver_prompts = []
+            for i in batch_idx:
+                item = items[i]
+                statement = hist[i][-1]["content"]
+                rubric = _RUBRIC_WEED if item["task_type"] == "weed_identification" else _RUBRIC_DISEASE
+                sys_p = _verifier_system(rubric)
+                user_p = _verifier_user_turn("(none yet)", statement)
+                msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": [
+                    {"type": "image"}, {"type": "text", "text": user_p},
+                ]}]
+                ver_prompts.append(_build_prompt(msgs, tokenizer, _img(i)))
+            ver_outputs = llm.generate(ver_prompts, _VER_P)
+            del ver_prompts
+
+            for i, out in zip(batch_idx, ver_outputs):
+                verdict, response, confidence = _parse_verifier_json(out.outputs[0].text)
+                n_rounds[i] = rnd
+                statement_this_round = hist[i][-1]["content"]
+                transcript[i].append({
+                    "round": rnd,
+                    "vlm_statement": statement_this_round,
+                    "verifier_verdict": verdict,
+                    "verifier_response": response,
+                    "verifier_confidence": confidence,
+                })
+                if verdict == "SUPPORTED" or rnd == max_rounds:
+                    final_statement[i] = statement_this_round
+                    final_verdict[i] = "SUPPORTED" if verdict == "SUPPORTED" else "UNSUPPORTED_MAXROUNDS"
+                    final_confidence[i] = confidence
+                    if verdict == "SUPPORTED":
+                        n_supported_this_round += 1
+                else:
+                    hist[i].append({"role": "user", "content": response})
+                    still_active.append(i)
+            prog.update(len(batch_idx), extra=f"{n_supported_this_round} supported so far")
 
         active_idx = still_active
         if not active_idx or rnd == max_rounds:
             break
 
-        print(f"[verifier_cot] Generating round {rnd + 1} statements: {len(active_idx)} images")
+        sub_banner(f"Generating round {rnd + 1} statements: {len(active_idx)} images")
+        prog = Progress(total=len(active_idx), label=f"Round {rnd + 1} generation", every=max(batch_size, 1))
         for start in range(0, len(active_idx), batch_size):
             batch_idx = active_idx[start:start + batch_size]
             prompts = [_build_prompt(hist[i], tokenizer, _img(i)) for i in batch_idx]
@@ -369,10 +381,12 @@ def run_verifier_loop(
             for i, out in zip(batch_idx, outputs):
                 hist[i].append({"role": "assistant", "content": _clean(out.outputs[0].text)})
             del prompts
+            prog.update(len(batch_idx))
 
     # ── Final classification turn for every image (matches self_cot/cot_yaml) ──
-    print(f"\n[verifier_cot] Final classification: {n} images")
+    sub_banner(f"Final classification: {n} images")
     predictions: list[str] = [""] * n
+    prog = Progress(total=n, label="Final classification", every=max(batch_size, 1))
     for start in range(0, n, batch_size):
         batch_idx = list(range(start, min(start + batch_size, n)))
         prompts = []
@@ -384,6 +398,7 @@ def run_verifier_loop(
         for i, out in zip(batch_idx, outputs):
             predictions[i] = _clean(out.outputs[0].text)
         del prompts
+        prog.update(len(batch_idx))
 
     rows = []
     for i, item in enumerate(items):
@@ -519,7 +534,7 @@ def main() -> None:
         t0 = time.perf_counter()
 
     if skip_generate:
-        print("\n=== Phase 1: verifier loop [SKIPPED] ===")
+        stage_banner(1, "Verifier loop [SKIPPED]", total_stages=3)
         verifier_rows = _read_csv(ckpt_verifier_cot)
     else:
         covered = existing_cot_image_names(Path(args.cot_dir), model_safe)
@@ -540,18 +555,21 @@ def main() -> None:
                 print(f"  {ds} ({task}): {len(items)} items")
         print(f"Total items: {len(all_items)}")
 
-        print(f"\n=== Phase 1: verifier loop ({len(all_items)} images, max {args.max_rounds} rounds) ===")
+        stage_banner(1, f"Verifier loop ({len(all_items)} images, max {args.max_rounds} rounds)", total_stages=3)
+        t_stage1 = time.perf_counter()
         verifier_rows = run_verifier_loop(all_items, llm, tokenizer, max_rounds=args.max_rounds,
                                           batch_size=args.batch_size, ckpt_path=ckpt_verifier_cot)
+        print(f"\nStage 1 done in {fmt_duration(time.perf_counter() - t_stage1)}")
 
     if skip_judge:
-        print("\n=== Phase 2: judge [SKIPPED] ===")
+        stage_banner(2, "Judge [SKIPPED]", total_stages=3)
         judged = _read_csv(ckpt_judged)
     else:
         from src.common.metrics import apply_judge
         prompts_yaml = Path(__file__).parent.parent.parent / "src" / "config" / "prompts.yaml"
         _p = yaml.safe_load(prompts_yaml.read_text())
-        print(f"\n=== Phase 2: judge ({len(verifier_rows)} rows) ===")
+        stage_banner(2, f"Judge ({len(verifier_rows)} rows)", total_stages=3)
+        t_stage2 = time.perf_counter()
         judged = apply_judge(
             verifier_rows, llm, tokenizer,
             system_prompt=_p["judge_system_vision"],
@@ -559,17 +577,18 @@ def main() -> None:
             gt_key="ground_truth", pred_key="prediction",
         )
         _write_csv(judged, ckpt_judged, CLS_FIELDS)
+        print(f"\nStage 2 done in {fmt_duration(time.perf_counter() - t_stage2)}")
 
     if need_model:
         from src.cot_vision import destroy_llm
         elapsed = time.perf_counter() - t0
-        print(f"\nInference done in {elapsed:.1f}s")
+        print(f"\nInference done in {fmt_duration(elapsed)}")
         destroy_llm(llm)
         del tokenizer, llm
         gc.collect()
 
     image_keys = {(r["agml_dataset"], r["image_name"]) for r in judged}
-    print(f"\n=== Phase 3: plot ({len(image_keys)} unique images) ===")
+    stage_banner(3, f"Plot ({len(image_keys)} unique images)", total_stages=3)
 
     existing = load_existing_rows(
         image_keys,
