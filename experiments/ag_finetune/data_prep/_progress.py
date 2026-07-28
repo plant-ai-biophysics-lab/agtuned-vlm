@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-TOTAL_STAGES = 6
+TOTAL_STAGES = 7
 
 
 def stage_banner(stage_num: int, name: str) -> None:
