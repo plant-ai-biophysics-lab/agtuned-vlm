@@ -71,6 +71,15 @@ environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'darwin'",
 ]
+# unsloth-zoo's transformers upper bound (<=5.5.0) doesn't overlap with
+# vllm==0.20.1's requirement (transformers>=4.56.0,<5.0.dev0 OR >5.5.0) —
+# the only overlap between them is entirely in the old 4.x line, which is
+# too old for Qwen3.5's model architecture. That looks like a stale/
+# conservative pin on unsloth-zoo's side rather than a real incompatibility,
+# so override it rather than downgrade transformers and lose Qwen3.5 support.
+override-dependencies = [
+    "transformers>=5.5.0",
+]
 
 [tool.uv.sources]
 unsloth = { git = "https://github.com/unslothai/unsloth.git" }
