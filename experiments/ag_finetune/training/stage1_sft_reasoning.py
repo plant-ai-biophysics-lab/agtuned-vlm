@@ -52,6 +52,12 @@ import argparse
 import json
 from pathlib import Path
 
+# Robust to CWD (matches data_prep/*.py's OUT_DIR pattern) — always resolves
+# to experiments/ag_finetune/outputs/ regardless of where this script is
+# invoked from, unlike a bare "outputs/..." default which only works if CWD
+# happens to already be experiments/ag_finetune/.
+_OUT_DIR = Path(__file__).parent.parent / "outputs"
+
 
 def make_sample(question: str, answer: str) -> dict:
     """Text-only turn in the vision-model content-list convention (matches
@@ -70,8 +76,8 @@ def main() -> None:
     parser.add_argument("--model",         default="unsloth/Qwen3.5-9B",
                         help="Vision-capable base model for the dedicated verifier — "
                              "see module docstring for why Qwen3.5-9B over Gemma-4.")
-    parser.add_argument("--data",          default="outputs/sft_data.jsonl")
-    parser.add_argument("--output_dir",    default="outputs/checkpoints/stage1_sft")
+    parser.add_argument("--data",          default=str(_OUT_DIR / "sft_data.jsonl"))
+    parser.add_argument("--output_dir",    default=str(_OUT_DIR / "checkpoints" / "stage1_sft"))
     parser.add_argument("--lora_r",        type=int,   default=16)
     parser.add_argument("--lora_alpha",    type=int,   default=16)
     parser.add_argument("--epochs",        type=int,   default=2)

@@ -34,14 +34,17 @@ import argparse
 import json
 from pathlib import Path
 
+# Robust to CWD — see stage1_sft_reasoning.py's _OUT_DIR comment for why.
+_OUT_DIR = Path(__file__).parent.parent / "outputs"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",       default="outputs/checkpoints/stage1_sft/vllm_model",
+    parser.add_argument("--model",       default=str(_OUT_DIR / "checkpoints" / "stage1_sft" / "vllm_model"),
                         help="Vision-capable base — a Stage 1 SFT merged checkpoint by "
                              "default, or pass a fresh base model to skip SFT warm-start.")
-    parser.add_argument("--data",        default="outputs/dpo_pairs.jsonl")
-    parser.add_argument("--output_dir",  default="outputs/checkpoints/stage2_dpo")
+    parser.add_argument("--data",        default=str(_OUT_DIR / "dpo_pairs.jsonl"))
+    parser.add_argument("--output_dir",  default=str(_OUT_DIR / "checkpoints" / "stage2_dpo"))
     parser.add_argument("--lora_r",      type=int,   default=16)
     parser.add_argument("--lora_alpha",  type=int,   default=16)
     parser.add_argument("--beta",        type=float, default=0.1)
