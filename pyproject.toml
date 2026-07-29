@@ -43,6 +43,11 @@ dependencies = [
     # LLM-as-a-Verifier (PPT tournament + logprob reward extraction)
     "llm-verifier>=0.1.0",
 
+    # LoRA fine-tuning (lora_setup/, ag_finetune/training/) — Linux/CUDA only,
+    # same as vllm above
+    "unsloth; sys_platform == 'linux'",
+    "trl>=0.12.0; sys_platform == 'linux'",
+
     # Config, plotting, UI
     "pyyaml>=6.0",
     "matplotlib>=3.8.0",

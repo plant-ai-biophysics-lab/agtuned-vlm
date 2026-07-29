@@ -605,6 +605,13 @@ def main() -> None:
                              "it' on the exact same statements. Loaded/destroyed sequentially, not "
                              "resident alongside --model, to keep GPU memory bounded. Omit to keep "
                              "the original single-model behavior.")
+    parser.add_argument("--max_model_len", type=int, default=16384,
+                        help="vLLM max_model_len for every load_llm() call (general + verifier "
+                             "model). Raised from cot_vision.load_llm's 8192 default because "
+                             "Qwen3.5-9B's vision tokenizer produces enough image tokens that the "
+                             "verifier prompt (rubric + image + statement) can exceed 8192 — hit "
+                             "a real 'decoder prompt length 10013 > max_model_len 8192' error with "
+                             "it as --verifier_model. Raise further if you still hit this.")
     parser.add_argument("--output_dir",  default="outputs/verifier_ppt/")
     parser.add_argument("--config",      default="src/config/datasets.yaml")
     parser.add_argument("--test_split",  default="outputs/linear_probe/test_split.json")
@@ -676,7 +683,7 @@ def main() -> None:
     separate_verifier = bool(args.verifier_model) and args.verifier_model != args.model
 
     print(f"\n=== Loading general model: {args.model} ===")
-    llm, tokenizer = load_llm(args.model)
+    llm, tokenizer = load_llm(args.model, max_model_len=args.max_model_len)
 
     statements = generate_statements(all_items, llm, tokenizer, batch_size=args.batch_size)
 
@@ -687,14 +694,14 @@ def main() -> None:
         del tokenizer, llm
         gc.collect()
         print(f"\n=== Loading verifier model: {args.verifier_model} ===")
-        verifier_llm, verifier_tokenizer = load_llm(args.verifier_model)
+        verifier_llm, verifier_tokenizer = load_llm(args.verifier_model, max_model_len=args.max_model_len)
         all_evals = run_verification(all_items, statements, verifier_llm, verifier_tokenizer,
                                      n_evals=args.n_evals, batch_size=args.batch_size)
         destroy_llm(verifier_llm)
         del verifier_tokenizer, verifier_llm
         gc.collect()
         print(f"\n=== Reloading general model for classification + judging: {args.model} ===")
-        llm, tokenizer = load_llm(args.model)
+        llm, tokenizer = load_llm(args.model, max_model_len=args.max_model_len)
     else:
         all_evals = run_verification(all_items, statements, llm, tokenizer,
                                      n_evals=args.n_evals, batch_size=args.batch_size)
