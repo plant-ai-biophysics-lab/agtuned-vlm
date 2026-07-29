@@ -23,7 +23,7 @@ What this deliberately does NOT do, on purpose:
 
 Scoring mechanism — two-pass prefill (mirrors llm_verifier's own
 _score_tags_by_prefill, not a single free-generation call):
-  Pass 1 generates the verdict/response JSON only (temperature=1.0,
+  Pass 1 generates the response JSON only (temperature=1.0,
   max_tokens=150, no logprobs needed — we don't read this call's tag).
   Pass 2 continues that EXACT prefix with "<score>" appended and the very
   next token constrained via SamplingParams(structured_outputs=
@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -204,9 +205,6 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     including) the '<score>' tag; `second_out` is pass 2's single
     grammar-constrained token generated right after a prefilled '<score>'."""
     data = _extract_first_json_object(analysis) or {}
-    verdict = str(data.get("verdict", "UNSUPPORTED")).strip().upper()
-    if verdict not in ("SUPPORTED", "UNSUPPORTED"):
-        verdict = "UNSUPPORTED"
     response = str(data.get("response", ""))[:500]
 
     letter_raw = second_out.outputs[0].text
@@ -226,11 +224,35 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     fine_grained = extract_score(synth_text, synth_tokens, synth_position_logprobs, "<score>")
     naive = naive_score_from_text(synth_text)
 
+    # Renormalized probability actually assigned to each candidate letter
+    # after grammar masking — kept explicitly (not just the final expected
+    # value) so a real distribution can be inspected directly instead of
+    # inferred from aggregate stats. Only the valid-letter subset of `alts`,
+    # since off-candidate tokens shouldn't appear under the mask anyway.
+    letter_probs = {}
+    for tok, logprob in alts:
+        t = tok.strip()
+        if t in SCALE["valid_tokens"]:
+            letter_probs[t] = max(letter_probs.get(t, 0.0), math.exp(logprob))
+    total_p = sum(letter_probs.values()) or 1.0
+    score_alts = sorted(
+        [(t, p / total_p) for t, p in letter_probs.items()],
+        key=lambda x: -x[1],
+    )
+
+    # No separate verdict is asked for in the prompt anymore (see
+    # verifier_prompt.yaml's header comment on why) — derive one from the
+    # score itself, thresholded at the scale's midpoint, purely so the
+    # existing CSV "verdict" column / majority-verdict aggregation keep working.
+    verdict = "SUPPORTED" if fine_grained >= 0.5 else "UNSUPPORTED"
+
     return {
         "verdict": verdict,
         "response": response,
         "raw_text": synth_text,  # analysis + the prefilled tag/letter, so you can see
                                  # exactly what pass 2 was constrained to continue from
+        "score_alts": score_alts,  # [(letter, renormalized_prob), ...] sorted desc —
+                                   # the actual post-mask distribution behind fine_grained_score
         "fine_grained_score": fine_grained,
         "naive_score": naive,
         "extraction": "logprob" if had_logprob_hit else ("text_fallback" if naive is not None else "failed"),
@@ -256,7 +278,7 @@ def run_feasibility_test(
     # than genuine diagnostic disagreement — worth removing as a confound
     # before drawing conclusions from the score distribution.
     _VLM_P = SamplingParams(temperature=0.0, max_tokens=512, repetition_penalty=1.1)
-    # Pass 1: verdict/response JSON only — no logprobs needed, we never read
+    # Pass 1: response JSON only — no logprobs needed, we never read
     # this call's own (unconstrained) attempt at the <score> tag.
     _VER_P = SamplingParams(temperature=1.0, max_tokens=150)
     # Pass 2: one grammar-constrained token continuing "<analysis>\n<score>",
