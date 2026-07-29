@@ -5,21 +5,33 @@ Plain open-ended {question, answer} — no <think> chain wrapper (that was
 the old stage4-based format; this simplified path drops it, see
 build_sft_data.py's docstring).
 
-IMPORTANT — base model must be vision-capable and match what
-experiments/verifier_ppt/run_verifier_ppt.py loads: --model has no default
-on purpose. This trains via unsloth's FastVisionModel (not FastLanguageModel)
-on the SAME Gemma-4 family run_verifier_ppt.py uses, with only the language
-layers unfrozen (finetune_vision_layers=False) since this data is text-only —
-the opposite split from experiments/lora_setup/lora_gemma4.py, which tunes
-vision layers for image diagnosis and freezes language. Using FastLanguageModel
-+ a text-only model (e.g. Qwen) here would produce a checkpoint with no vision
-tower at all — incompatible with verifier_ppt's image-grounded verifier prompt,
-which is the whole point of checking the score distribution afterward.
+Settled verifier model: Qwen/Qwen3.5-9B (default for --model). Chosen over
+Gemma-4 after a real comparison run (see outputs/verifier_ppt_*/score_summary.json):
+Gemma-4-26B-A4B verifying itself collapses hard (fine_grained_std=0.033,
+essentially all mass at the ceiling); every Qwen pairing — self or
+cross-model — showed 5-8x more spread. On top of that, Gemma-4 is MoE
+(26B total / ~4B active), which brings real fine-tuning-specific risk Qwen's
+dense architecture doesn't have: bitsandbytes can't quantize its fused expert
+tensors (4-bit QLoRA is out, >40GB needed for bf16 LoRA), MoE-LoRA adapters
+generally don't merge cleanly back into the base model (threatens the
+save_pretrained_merged step below, which is exactly what makes the checkpoint
+droppable into run_verifier_ppt.py's --verifier_model), and expert routing
+can shift unpredictably during fine-tuning in a way dense models don't
+exhibit. None of that is worth taking on for what's meant to be the simple
+path.
+
+Still trains via unsloth's FastVisionModel (not FastLanguageModel) — Qwen3.5
+is vision-capable, and this repo's design keeps the verifier able to see the
+image (run_verifier_ppt.py's --verifier_model flag), even though this
+particular data (build_sft_data.py's Q&A) is text-only. Only the language
+layers are unfrozen (finetune_vision_layers=False) accordingly — the
+opposite split from experiments/lora_setup/lora_gemma4.py, which tunes
+vision layers for image diagnosis and freezes language.
 
 Saves both outputs, matching lora_gemma4.py's convention:
   <output_dir>/lora_adapters/  — raw PEFT adapters
   <output_dir>/vllm_model/     — merged 16-bit weights, directly loadable by
-                                  vLLM: run_verifier_ppt.py --model <this path>
+                                  vLLM: run_verifier_ppt.py --verifier_model <this path>
 
 Loss/metrics tracking: report_to="trackio" (matches lora_gemma4.py) — a
 local-first Gradio dashboard, no account needed; run `trackio show` after
@@ -31,9 +43,9 @@ gpu_stats.json, extended with the loss curve it didn't capture).
 
 Usage:
   uv run python experiments/ag_finetune/training/stage1_sft_reasoning.py \
-    --model unsloth/gemma-4-E4B-it \
     --data  outputs/sft_data.jsonl \
     --output_dir outputs/checkpoints/stage1_sft
+  # (--model defaults to unsloth/Qwen3.5-9B; pass --model to override)
 """
 
 import argparse
@@ -55,10 +67,9 @@ def make_sample(question: str, answer: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model",         required=True,
-                        help="Vision-capable base model — must match what "
-                             "run_verifier_ppt.py --model loads, e.g. "
-                             "unsloth/gemma-4-E4B-it")
+    parser.add_argument("--model",         default="unsloth/Qwen3.5-9B",
+                        help="Vision-capable base model for the dedicated verifier — "
+                             "see module docstring for why Qwen3.5-9B over Gemma-4.")
     parser.add_argument("--data",          default="outputs/sft_data.jsonl")
     parser.add_argument("--output_dir",    default="outputs/checkpoints/stage1_sft")
     parser.add_argument("--lora_r",        type=int,   default=16)
@@ -163,7 +174,7 @@ def main() -> None:
 
     print(f"\nSaved adapters to {args.output_dir}/lora_adapters")
     print(f"Saved merged 16-bit weights to {args.output_dir}/vllm_model "
-          f"(pass this path to run_verifier_ppt.py --model)")
+          f"(pass this path to run_verifier_ppt.py --verifier_model)")
 
 
 if __name__ == "__main__":

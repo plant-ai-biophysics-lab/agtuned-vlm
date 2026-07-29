@@ -5,15 +5,19 @@ LoRA (Unsloth). Warm-starts from a Stage 1 SFT checkpoint by default.
 Plain {prompt, chosen, rejected} — no verifier JSON schema, no confidence
 field (that's stage7_verifier_dpo_pairs.jsonl's job, left untouched).
 
-IMPORTANT — same vision-capable-base requirement as stage1_sft_reasoning.py:
-uses unsloth's FastVisionModel (not FastLanguageModel), text-only data so
-only language layers are unfrozen. See that script's docstring for why this
-matters for eventually loading the result into run_verifier_ppt.py.
+Settled verifier model: Qwen/Qwen3.5-9B, same as stage1_sft_reasoning.py —
+see that script's docstring for why (real comparison run showed Gemma-4
+self-verification collapsing hard, plus MoE-specific fine-tuning risk Qwen's
+dense architecture avoids). Default --model here is stage1's own output, so
+this warm-starts from the SFT'd Qwen3.5-9B rather than the raw base model.
+
+Uses unsloth's FastVisionModel (not FastLanguageModel), text-only data so
+only language layers are unfrozen — same reasoning as stage1_sft_reasoning.py.
 
 Saves both outputs, matching stage1_sft_reasoning.py's convention:
   <output_dir>/lora_adapters/  — raw PEFT adapters
   <output_dir>/vllm_model/     — merged 16-bit weights, directly loadable by
-                                  vLLM: run_verifier_ppt.py --model <this path>
+                                  vLLM: run_verifier_ppt.py --verifier_model <this path>
 
 Loss/metrics tracking: same as stage1_sft_reasoning.py — report_to="trackio"
 (local-first Gradio dashboard) plus <output_dir>/training_stats.json with the
@@ -21,9 +25,9 @@ full per-step loss history and peak GPU memory.
 
 Usage:
   uv run python experiments/ag_finetune/training/stage2_dpo.py \
-    --model outputs/checkpoints/stage1_sft/vllm_model \
     --data  outputs/dpo_pairs.jsonl \
     --output_dir outputs/checkpoints/stage2_dpo
+  # (--model defaults to outputs/checkpoints/stage1_sft/vllm_model)
 """
 
 import argparse
@@ -134,7 +138,7 @@ def main() -> None:
 
     print(f"\nSaved adapters to {args.output_dir}/lora_adapters")
     print(f"Saved merged 16-bit weights to {args.output_dir}/vllm_model "
-          f"(pass this path to run_verifier_ppt.py --model)")
+          f"(pass this path to run_verifier_ppt.py --verifier_model)")
 
 
 if __name__ == "__main__":
