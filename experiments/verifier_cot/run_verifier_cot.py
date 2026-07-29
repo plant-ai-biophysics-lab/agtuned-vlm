@@ -511,12 +511,28 @@ def main() -> None:
                         help="Skip phases if their checkpoint CSV exists")
     parser.add_argument("--plot_only",   action="store_true",
                         help="Skip all inference; load checkpoints and plot")
+    parser.add_argument("--overwrite",   action="store_true",
+                        help="Required to proceed if --output_dir already has a "
+                             "ckpt_verifier_cot.csv and this run isn't --from_ckpt/--plot_only "
+                             "(i.e. would silently overwrite existing results)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ckpt_verifier_cot = output_dir / "ckpt_verifier_cot.csv"
     ckpt_judged = output_dir / "ckpt_judged.csv"
+
+    # Hard stop, not a print-and-continue warning — this is a long-running
+    # (potentially hours, on a remote machine you may not be watching in real
+    # time) destructive operation, and a warning buried mid-log is not a real
+    # safeguard against silently overwriting a previous run's results.
+    if ckpt_verifier_cot.exists() and not (args.from_ckpt or args.plot_only or args.overwrite):
+        print(f"ERROR: {ckpt_verifier_cot} already exists and this run is not "
+              f"--from_ckpt/--plot_only, so it would overwrite existing results.\n"
+              f"  Either point --output_dir somewhere new (e.g. matching the "
+              f"'_forced_{{max_rounds}}' convention if --force_max_rounds is set), "
+              f"or pass --overwrite to confirm you want to replace what's there.")
+        sys.exit(1)
 
     import yaml
     with open(args.config) as f:
