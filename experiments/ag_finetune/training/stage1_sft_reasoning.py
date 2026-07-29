@@ -21,6 +21,14 @@ Saves both outputs, matching lora_gemma4.py's convention:
   <output_dir>/vllm_model/     — merged 16-bit weights, directly loadable by
                                   vLLM: run_verifier_ppt.py --model <this path>
 
+Loss/metrics tracking: report_to="trackio" (matches lora_gemma4.py) — a
+local-first Gradio dashboard, no account needed; run `trackio show` after
+training to view it, or pass --output_dir's path if it doesn't auto-detect.
+Also writes <output_dir>/training_stats.json with the full per-step loss
+history and peak GPU memory, so the numbers are on disk even if nobody had
+the dashboard open during the run (same reasoning as lora_gemma4.py's
+gpu_stats.json, extended with the loss curve it didn't capture).
+
 Usage:
   uv run python experiments/ag_finetune/training/stage1_sft_reasoning.py \
     --model unsloth/gemma-4-E4B-it \
@@ -60,7 +68,19 @@ def main() -> None:
     parser.add_argument("--grad_accum",    type=int,   default=8)
     parser.add_argument("--lr",            type=float, default=2e-4)
     parser.add_argument("--max_seq_len",   type=int,   default=2048)
+    parser.add_argument("--trackio_space_id", default=None,
+                        help="HF Space id, e.g. 'yourusername/agtuned-verifier-training'. "
+                             "If set, trackio syncs to that Space instead of a local-only "
+                             "dashboard — viewable live from any browser (requires being "
+                             "logged into HF: huggingface-cli login or HF_TOKEN). Equivalent "
+                             "to exporting TRACKIO_SPACE_ID yourself; this just saves typing "
+                             "it every run.")
     args = parser.parse_args()
+
+    if args.trackio_space_id:
+        import os
+        os.environ["TRACKIO_SPACE_ID"] = args.trackio_space_id
+        print(f"trackio syncing to HF Space: {args.trackio_space_id}")
 
     from unsloth import FastVisionModel, is_bf16_supported
     from unsloth.trainer import UnslothVisionDataCollator
@@ -116,6 +136,7 @@ def main() -> None:
             save_total_limit=2,
             optim="adamw_8bit",
             seed=3407,
+            report_to="trackio",
             # Required for vision finetuning (see lora_gemma4.py):
             remove_unused_columns=False,
             dataset_text_field="",
@@ -123,11 +144,23 @@ def main() -> None:
             max_length=args.max_seq_len,
         ),
     )
-    trainer.train()
+    trainer_stats = trainer.train()
 
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")
     model.save_pretrained_merged(f"{args.output_dir}/vllm_model", processor, save_method="merged_16bit")
+
+    import torch
+    training_stats = {
+        "train_runtime_s": trainer_stats.metrics.get("train_runtime"),
+        "final_train_loss": trainer_stats.metrics.get("train_loss"),
+        "peak_reserved_memory_gb": round(torch.cuda.max_memory_reserved() / 1024**3, 3),
+        "log_history": trainer.state.log_history,  # per-step loss/lr, for plotting after the fact
+    }
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    (Path(args.output_dir) / "training_stats.json").write_text(json.dumps(training_stats, indent=2))
+    print(f"Saved training_stats.json (final_train_loss={training_stats['final_train_loss']})")
+
     print(f"\nSaved adapters to {args.output_dir}/lora_adapters")
     print(f"Saved merged 16-bit weights to {args.output_dir}/vllm_model "
           f"(pass this path to run_verifier_ppt.py --model)")

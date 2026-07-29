@@ -15,6 +15,10 @@ Saves both outputs, matching stage1_sft_reasoning.py's convention:
   <output_dir>/vllm_model/     — merged 16-bit weights, directly loadable by
                                   vLLM: run_verifier_ppt.py --model <this path>
 
+Loss/metrics tracking: same as stage1_sft_reasoning.py — report_to="trackio"
+(local-first Gradio dashboard) plus <output_dir>/training_stats.json with the
+full per-step loss history and peak GPU memory.
+
 Usage:
   uv run python experiments/ag_finetune/training/stage2_dpo.py \
     --model outputs/checkpoints/stage1_sft/vllm_model \
@@ -42,7 +46,16 @@ def main() -> None:
     parser.add_argument("--grad_accum",  type=int,   default=8)
     parser.add_argument("--lr",          type=float, default=5e-5)
     parser.add_argument("--max_seq_len", type=int,   default=1024)
+    parser.add_argument("--trackio_space_id", default=None,
+                        help="HF Space id — see stage1_sft_reasoning.py's --trackio_space_id "
+                             "for details. Use the SAME Space id across stage1/stage2 to see "
+                             "both runs in one dashboard, grouped by run name.")
     args = parser.parse_args()
+
+    if args.trackio_space_id:
+        import os
+        os.environ["TRACKIO_SPACE_ID"] = args.trackio_space_id
+        print(f"trackio syncing to HF Space: {args.trackio_space_id}")
 
     from unsloth import FastVisionModel, is_bf16_supported
     from trl import DPOTrainer, DPOConfig
@@ -99,13 +112,26 @@ def main() -> None:
             logging_steps=20,
             save_steps=200,
             max_length=args.max_seq_len,
+            report_to="trackio",
         ),
     )
-    trainer.train()
+    trainer_stats = trainer.train()
 
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")
     model.save_pretrained_merged(f"{args.output_dir}/vllm_model", processor, save_method="merged_16bit")
+
+    import torch
+    training_stats = {
+        "train_runtime_s": trainer_stats.metrics.get("train_runtime"),
+        "final_train_loss": trainer_stats.metrics.get("train_loss"),
+        "peak_reserved_memory_gb": round(torch.cuda.max_memory_reserved() / 1024**3, 3),
+        "log_history": trainer.state.log_history,  # per-step loss/lr, for plotting after the fact
+    }
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    (Path(args.output_dir) / "training_stats.json").write_text(json.dumps(training_stats, indent=2))
+    print(f"Saved training_stats.json (final_train_loss={training_stats['final_train_loss']})")
+
     print(f"\nSaved adapters to {args.output_dir}/lora_adapters")
     print(f"Saved merged 16-bit weights to {args.output_dir}/vllm_model "
           f"(pass this path to run_verifier_ppt.py --model)")

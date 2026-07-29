@@ -48,6 +48,10 @@ dependencies = [
     "unsloth; sys_platform == 'linux'",
     "trl>=0.12.0; sys_platform == 'linux'",
 
+    # Training loss/metrics dashboard (report_to="trackio" in the fine-tuning
+    # scripts above) — local-first, no account needed, cross-platform
+    "trackio>=0.1.0",
+
     # Config, plotting, UI
     "pyyaml>=6.0",
     "matplotlib>=3.8.0",

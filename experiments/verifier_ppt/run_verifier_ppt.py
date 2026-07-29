@@ -605,13 +605,19 @@ def main() -> None:
                              "it' on the exact same statements. Loaded/destroyed sequentially, not "
                              "resident alongside --model, to keep GPU memory bounded. Omit to keep "
                              "the original single-model behavior.")
-    parser.add_argument("--max_model_len", type=int, default=16384,
+    parser.add_argument("--max_model_len", type=int, default=32768,
                         help="vLLM max_model_len for every load_llm() call (general + verifier "
                              "model). Raised from cot_vision.load_llm's 8192 default because "
-                             "Qwen3.5-9B's vision tokenizer produces enough image tokens that the "
-                             "verifier prompt (rubric + image + statement) can exceed 8192 — hit "
-                             "a real 'decoder prompt length 10013 > max_model_len 8192' error with "
-                             "it as --verifier_model. Raise further if you still hit this.")
+                             "Qwen-family vision tokenizers are RESOLUTION-DEPENDENT (28x28-pixel "
+                             "blocks, one token each — e.g. a 2520x1680px image is ~5400 tokens "
+                             "on its own), unlike Gemma's fixed small patch count. This isn't a "
+                             "one-off — every image costs more tokens with Qwen as verifier, so "
+                             "16384 still overflowed (hit 'decoder prompt length 16863 > 16384' "
+                             "after first raising it from 8192). 32768 is comfortably within "
+                             "Qwen3.5's own 262144-token native context — this is purely a vLLM "
+                             "KV-cache allocation choice on our end, not a model limit. Raise "
+                             "further (GPU memory permitting) if you still hit this with larger "
+                             "images.")
     parser.add_argument("--output_dir",  default="outputs/verifier_ppt/")
     parser.add_argument("--config",      default="src/config/datasets.yaml")
     parser.add_argument("--test_split",  default="outputs/linear_probe/test_split.json")
