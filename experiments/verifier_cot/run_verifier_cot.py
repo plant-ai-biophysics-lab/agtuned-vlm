@@ -272,9 +272,20 @@ def run_verifier_loop(
     max_rounds: int = MAX_ROUNDS_DEFAULT,
     batch_size: int = 64,
     ckpt_path: Path | None = None,
+    force_max_rounds: bool = False,
 ) -> list[dict]:
     """Round-loop: VLM free-form statement -> verifier accept/reject -> repeat
-    (up to max_rounds) -> final classification turn for every image."""
+    (up to max_rounds) -> final classification turn for every image.
+
+    force_max_rounds=True ignores SUPPORTED verdicts as a stopping condition
+    and always runs every image to exactly max_rounds — the verifier still
+    scores and responds every round exactly as normal (nothing about the
+    prompt or generation changes), it just never gets to end the chain early.
+    Useful for isolating "what does round N look like" from "which images
+    survive to round N", since early-stopping normally shrinks the active set
+    fast (e.g. 1927 -> 231 -> 55 -> 17 -> 6 across 5 rounds) and later rounds
+    become too small a sample to read anything into.
+    """
     from src.verifier_vision import _RUBRIC_DISEASE, _RUBRIC_WEED
 
     _sys_msg, _cls_question, _desc_question, _build_prompt, _clean = _import_helpers()
@@ -357,7 +368,8 @@ def run_verifier_loop(
                     "verifier_response": response,
                     "verifier_confidence": confidence,
                 })
-                if verdict == "SUPPORTED" or rnd == max_rounds:
+                stop_here = rnd == max_rounds or (verdict == "SUPPORTED" and not force_max_rounds)
+                if stop_here:
                     final_statement[i] = statement_this_round
                     final_verdict[i] = "SUPPORTED" if verdict == "SUPPORTED" else "UNSUPPORTED_MAXROUNDS"
                     final_confidence[i] = confidence
@@ -484,7 +496,15 @@ def main() -> None:
     parser.add_argument("--test_split",  default="outputs/linear_probe/test_split.json")
     parser.add_argument("--n_samples",   type=int, default=50, help="Max images per class")
     parser.add_argument("--n_datasets",  type=int, default=N_DATASETS_PER_TASK, help="Datasets per task")
+    parser.add_argument("--all_datasets", action="store_true",
+                        help="Use every active dataset instead of sampling --n_datasets per task "
+                             "(--n_datasets is ignored if this is set)")
     parser.add_argument("--max_rounds",  type=int, default=MAX_ROUNDS_DEFAULT)
+    parser.add_argument("--force_max_rounds", action="store_true",
+                        help="Ignore SUPPORTED verdicts as a stopping condition — every image "
+                             "runs the full --max_rounds regardless. Useful for getting a full "
+                             "sample size at every round instead of the active set shrinking "
+                             "fast under normal early-stopping.")
     parser.add_argument("--seed",        type=int, default=SEED)
     parser.add_argument("--batch_size",  type=int, default=64)
     parser.add_argument("--from_ckpt",   action="store_true",
@@ -515,10 +535,16 @@ def main() -> None:
 
     model_safe = args.model.replace("/", "_")
 
-    selected = select_datasets(n_per_task=args.n_datasets, seed=args.seed, config_path=args.config)
-    print("\n=== Selected datasets ===")
+    if args.all_datasets and args.n_datasets != N_DATASETS_PER_TASK:
+        print(f"[warn] --all_datasets set — ignoring --n_datasets={args.n_datasets}")
+    selected = select_datasets(n_per_task=args.n_datasets, seed=args.seed,
+                               config_path=args.config, select_all=args.all_datasets)
+    print(f"\n=== Selected datasets ({'ALL' if args.all_datasets else f'{args.n_datasets}/task'}) ===")
+    total_selected = 0
     for task, names in selected.items():
         print(f"  {task} ({len(names)}): {names}")
+        total_selected += len(names)
+    print(f"  Total: {total_selected} dataset selections across all tasks")
 
     skip_generate = args.plot_only or (args.from_ckpt and ckpt_verifier_cot.exists())
     skip_judge = args.plot_only or (args.from_ckpt and ckpt_judged.exists())
@@ -555,10 +581,19 @@ def main() -> None:
                 print(f"  {ds} ({task}): {len(items)} items")
         print(f"Total items: {len(all_items)}")
 
-        stage_banner(1, f"Verifier loop ({len(all_items)} images, max {args.max_rounds} rounds)", total_stages=3)
+        mode_label = "FORCED " if args.force_max_rounds else ""
+        stage_banner(1, f"{mode_label}Verifier loop ({len(all_items)} images, max {args.max_rounds} rounds)",
+                    total_stages=3)
+        if args.force_max_rounds:
+            print(f"  --force_max_rounds set: every image will run all {args.max_rounds} rounds "
+                  f"regardless of verdict.")
+            if "_forced_" not in str(output_dir):
+                print(f"  [reminder] --output_dir does not contain '_forced_{args.max_rounds}' — "
+                      f"make sure this isn't overwriting a normal (early-stopping) run's results.")
         t_stage1 = time.perf_counter()
         verifier_rows = run_verifier_loop(all_items, llm, tokenizer, max_rounds=args.max_rounds,
-                                          batch_size=args.batch_size, ckpt_path=ckpt_verifier_cot)
+                                          batch_size=args.batch_size, ckpt_path=ckpt_verifier_cot,
+                                          force_max_rounds=args.force_max_rounds)
         print(f"\nStage 1 done in {fmt_duration(time.perf_counter() - t_stage1)}")
 
     if skip_judge:
