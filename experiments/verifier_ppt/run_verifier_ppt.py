@@ -223,7 +223,14 @@ def run_feasibility_test(
     from src.verifier_vision import _RUBRIC_DISEASE, _RUBRIC_WEED
     from src.cot_vision import _sys_msg, _cls_question, _desc_question, _build_prompt, _clean
 
-    _VLM_P = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
+    # 512 not 256 — this model consistently writes longer multi-section
+    # descriptions than 256 tokens allows (same truncation issue found
+    # elsewhere in this session: verifier_cot's response field, the
+    # ag_finetune scripts). A truncated statement gets legitimately flagged
+    # as "incomplete" by the verifier, which is a real but different signal
+    # than genuine diagnostic disagreement — worth removing as a confound
+    # before drawing conclusions from the score distribution.
+    _VLM_P = SamplingParams(temperature=0.0, max_tokens=512, repetition_penalty=1.1)
     _VER_P = SamplingParams(temperature=1.0, max_tokens=150, logprobs=20)
 
     n = len(items)
