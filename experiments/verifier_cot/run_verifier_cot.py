@@ -344,6 +344,7 @@ def run_verifier_loop(
         for start in range(0, len(active_idx), batch_size):
             batch_idx = active_idx[start:start + batch_size]
             ver_prompts = []
+            cls_prompts = []  # round-level classification snapshot, for a future per-round accuracy curve
             for i in batch_idx:
                 item = items[i]
                 statement = hist[i][-1]["content"]
@@ -354,11 +355,15 @@ def run_verifier_loop(
                     {"type": "image"}, {"type": "text", "text": user_p},
                 ]}]
                 ver_prompts.append(_build_prompt(msgs, tokenizer, _img(i)))
+                cls_h = hist[i] + [{"role": "user", "content": _cls_question(item["task_type"], item["crop"])}]
+                cls_prompts.append(_build_prompt(cls_h, tokenizer, _img(i)))
             ver_outputs = llm.generate(ver_prompts, _VER_P)
-            del ver_prompts
+            cls_outputs = llm.generate(cls_prompts, _CLS_P)
+            del ver_prompts, cls_prompts
 
-            for i, out in zip(batch_idx, ver_outputs):
+            for i, out, cls_out in zip(batch_idx, ver_outputs, cls_outputs):
                 verdict, response, confidence = _parse_verifier_json(out.outputs[0].text)
+                round_prediction = _clean(cls_out.outputs[0].text)
                 n_rounds[i] = rnd
                 statement_this_round = hist[i][-1]["content"]
                 transcript[i].append({
@@ -367,6 +372,7 @@ def run_verifier_loop(
                     "verifier_verdict": verdict,
                     "verifier_response": response,
                     "verifier_confidence": confidence,
+                    "round_prediction": round_prediction,
                 })
                 stop_here = rnd == max_rounds or (verdict == "SUPPORTED" and not force_max_rounds)
                 if stop_here:
@@ -481,6 +487,17 @@ def plot_all(judged: list[dict], existing: dict[str, list[dict]], output_dir: Pa
     verdicts = [r["final_verifier_verdict"] for r in judged]
     from collections import Counter
     print(f"\n[verifier verdict distribution] {dict(Counter(verdicts))}")
+
+    # Confidence analysis (confidence_by_round.png, final_confidence_distribution.png,
+    # accuracy_vs_confidence.png, confidence_analysis_summary.json) — same directory
+    # as everything else here, run automatically rather than requiring a separate
+    # manual invocation of analyze_confidence.py after the fact.
+    print("\n[plot] confidence analysis...")
+    from analyze_confidence import make_charts as make_confidence_charts
+    confidence_summary = make_confidence_charts(judged, output_dir)
+    confidence_summary_path = output_dir / "confidence_analysis_summary.json"
+    confidence_summary_path.write_text(json.dumps(confidence_summary, indent=2))
+    print(f"  Saved: {confidence_summary_path}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
