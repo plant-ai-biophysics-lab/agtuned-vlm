@@ -56,9 +56,19 @@ Verifier prompt: experiments/verifier_ppt/verifier_prompt.yaml — a copy of
 verifier_cot's template with the confidence integer replaced by the letter tag.
 
 Usage:
+  # General model verifies itself (original behavior):
   uv run python experiments/verifier_ppt/run_verifier_ppt.py \\
     --model google/gemma-4-26B-A4B-it \\
     --output_dir outputs/verifier_ppt/ \\
+    --n_datasets 1 --n_samples 10 --n_evals 4
+
+  # Dedicated smaller model verifies the general model's statements instead —
+  # same images/statements, so score_summary.json is directly comparable to
+  # the run above:
+  uv run python experiments/verifier_ppt/run_verifier_ppt.py \\
+    --model google/gemma-4-26B-A4B-it \\
+    --verifier_model Qwen/Qwen3.5-9B \\
+    --output_dir outputs/verifier_ppt_qwen_verifier/ \\
     --n_datasets 1 --n_samples 10 --n_evals 4
 """
 
@@ -271,16 +281,11 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     }
 
 
-def run_feasibility_test(
-    items: list[dict],
-    llm,
-    tokenizer,
-    n_evals: int = 4,
-    batch_size: int = 64,
-    ckpt_path: Path | None = None,
-) -> list[dict]:
-    from src.verifier_vision import _RUBRIC_DISEASE, _RUBRIC_WEED
-    from src.cot_vision import _sys_msg, _cls_question, _desc_question, _build_prompt, _clean
+def generate_statements(items: list[dict], llm, tokenizer, batch_size: int = 64) -> list[str]:
+    """Round 1: initial free-form description (self_cot-style, same as
+    verifier_cot). Always uses the general model — this is what's being
+    verified, not the verifier itself."""
+    from src.cot_vision import _sys_msg, _desc_question, _build_prompt, _clean
 
     # 512 not 256 — this model consistently writes longer multi-section
     # descriptions than 256 tokens allows (same truncation issue found
@@ -290,19 +295,8 @@ def run_feasibility_test(
     # than genuine diagnostic disagreement — worth removing as a confound
     # before drawing conclusions from the score distribution.
     _VLM_P = SamplingParams(temperature=0.0, max_tokens=512, repetition_penalty=1.1)
-    # Pass 1: response JSON only — no logprobs needed, we never read
-    # this call's own (unconstrained) attempt at the <score> tag.
-    _VER_P = SamplingParams(temperature=1.0, max_tokens=150)
-    # Pass 2: one grammar-constrained token continuing "<analysis>\n<score>",
-    # restricted to the 20 scale letters (+ leading-space variants) — see
-    # module docstring for why this replaces reading the free-generation
-    # top-20 logprobs directly.
-    _SCORE_P = SamplingParams(temperature=1.0, max_tokens=1, logprobs=20,
-                              structured_outputs=StructuredOutputsParams(choice=_SCORE_LETTERS))
 
     n = len(items)
-
-    # ── Round 1: initial free-form description (self_cot-style, same as verifier_cot) ──
     sub_banner(f"Generating statements ({n} images)")
     statements: list[str] = [""] * n
     prog = Progress(total=n, label="Statement generation", every=max(batch_size, 1))
@@ -321,8 +315,34 @@ def run_feasibility_test(
             statements[i] = _clean(out.outputs[0].text)
         del prompts
         prog.update(len(batch_idx))
+    return statements
 
-    # ── Verify each statement K times ───────────────────────────────────────
+
+def run_verification(
+    items: list[dict],
+    statements: list[str],
+    llm,
+    tokenizer,
+    n_evals: int = 4,
+    batch_size: int = 64,
+) -> list[list[dict]]:
+    """K repeated two-pass verifications per statement. `llm`/`tokenizer` here
+    is whichever model is playing verifier this run — the general model
+    (default) or a separate --verifier_model, chosen by the caller."""
+    from src.verifier_vision import _RUBRIC_DISEASE, _RUBRIC_WEED
+    from src.cot_vision import _build_prompt
+
+    # Pass 1: response JSON only — no logprobs needed, we never read
+    # this call's own (unconstrained) attempt at the <score> tag.
+    _VER_P = SamplingParams(temperature=1.0, max_tokens=150)
+    # Pass 2: one grammar-constrained token continuing "<analysis>\n<score>",
+    # restricted to the 20 scale letters (+ leading-space variants) — see
+    # module docstring for why this replaces reading the free-generation
+    # top-20 logprobs directly.
+    _SCORE_P = SamplingParams(temperature=1.0, max_tokens=1, logprobs=20,
+                              structured_outputs=StructuredOutputsParams(choice=_SCORE_LETTERS))
+
+    n = len(items)
     sub_banner(f"Verifying ({n} statements x {n_evals} repeated evaluations = {n * n_evals} calls)")
     all_evals: list[list[dict]] = [[] for _ in range(n)]
     total_calls = n * n_evals
@@ -359,6 +379,24 @@ def run_feasibility_test(
             for i, analysis, second_out in zip(batch_idx, analyses, second_outputs):
                 all_evals[i].append(parse_verifier_output_prefill(analysis, second_out))
             prog.update(len(batch_idx))
+    return all_evals
+
+
+def classify_and_judge(
+    items: list[dict],
+    statements: list[str],
+    all_evals: list[list[dict]],
+    llm,
+    tokenizer,
+    batch_size: int = 64,
+    ckpt_path: Path | None = None,
+) -> list[dict]:
+    """Final classification + aggregation + judging against ground truth.
+    Always uses the general model — this is the "what did the VLM actually
+    conclude" step and the judge, not the verifier being tested."""
+    from src.cot_vision import _sys_msg, _cls_question, _desc_question, _build_prompt, _clean
+
+    n = len(items)
 
     # ── Final classification, so we have something to correlate scores against ──
     # (matches self_cot/verifier_cot's ending: same statement history + the
@@ -446,7 +484,8 @@ def _as_float(v) -> float | None:
     return float(v)
 
 
-def make_charts(rows: list[dict], output_dir: Path) -> None:
+def make_charts(rows: list[dict], output_dir: Path, general_model: str | None = None,
+                verifier_model: str | None = None) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -536,6 +575,8 @@ def make_charts(rows: list[dict], output_dir: Path) -> None:
               if len(fg_paired) > 2 and np.std([a for a, _ in fg_paired]) > 0 else None)
 
     summary = {
+        "general_model": general_model,
+        "verifier_model": verifier_model or general_model,  # same model when not overridden
         "n_statements": len(rows),
         "total_evals": total_evals,
         "logprob_hit_rate": total_logprob / total_evals if total_evals else None,
@@ -555,7 +596,15 @@ def make_charts(rows: list[dict], output_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verifier-PPT feasibility test — fine-grained logprob scoring")
-    parser.add_argument("--model",       required=True)
+    parser.add_argument("--model",       required=True,
+                        help="General model — generates statements, does final classification, judges.")
+    parser.add_argument("--verifier_model", default=None,
+                        help="If set, a SEPARATE model plays the verifier role instead of --model "
+                             "(e.g. a smaller dedicated model like Qwen/Qwen3.5-9B), so you can "
+                             "compare 'general model verifies itself' vs 'dedicated model verifies "
+                             "it' on the exact same statements. Loaded/destroyed sequentially, not "
+                             "resident alongside --model, to keep GPU memory bounded. Omit to keep "
+                             "the original single-model behavior.")
     parser.add_argument("--output_dir",  default="outputs/verifier_ppt/")
     parser.add_argument("--config",      default="src/config/datasets.yaml")
     parser.add_argument("--test_split",  default="outputs/linear_probe/test_split.json")
@@ -584,7 +633,7 @@ def main() -> None:
     if args.plot_only:
         stage_banner(1, "Plot only", total_stages=1)
         rows = list(csv.DictReader(open(ckpt_path, encoding="utf-8")))
-        make_charts(rows, output_dir)
+        make_charts(rows, output_dir, general_model=args.model, verifier_model=args.verifier_model)
         print("\nDone.")
         return
 
@@ -622,19 +671,45 @@ def main() -> None:
                 total_stages=2)
 
     from src.cot_vision import load_llm, destroy_llm
-    print(f"\n=== Loading model: {args.model} ===")
+    import gc
+
+    separate_verifier = bool(args.verifier_model) and args.verifier_model != args.model
+
+    print(f"\n=== Loading general model: {args.model} ===")
     llm, tokenizer = load_llm(args.model)
 
-    rows = run_feasibility_test(all_items, llm, tokenizer, n_evals=args.n_evals,
-                                batch_size=args.batch_size, ckpt_path=ckpt_path)
+    statements = generate_statements(all_items, llm, tokenizer, batch_size=args.batch_size)
+
+    if separate_verifier:
+        # Sequential swap, not two resident models — same GPU-memory pattern
+        # as ag_finetune's stage scripts.
+        destroy_llm(llm)
+        del tokenizer, llm
+        gc.collect()
+        print(f"\n=== Loading verifier model: {args.verifier_model} ===")
+        verifier_llm, verifier_tokenizer = load_llm(args.verifier_model)
+        all_evals = run_verification(all_items, statements, verifier_llm, verifier_tokenizer,
+                                     n_evals=args.n_evals, batch_size=args.batch_size)
+        destroy_llm(verifier_llm)
+        del verifier_tokenizer, verifier_llm
+        gc.collect()
+        print(f"\n=== Reloading general model for classification + judging: {args.model} ===")
+        llm, tokenizer = load_llm(args.model)
+    else:
+        all_evals = run_verification(all_items, statements, llm, tokenizer,
+                                     n_evals=args.n_evals, batch_size=args.batch_size)
+
+    rows = classify_and_judge(all_items, statements, all_evals, llm, tokenizer,
+                              batch_size=args.batch_size, ckpt_path=ckpt_path)
 
     destroy_llm(llm)
     del tokenizer, llm
-    import gc
     gc.collect()
 
     stage_banner(2, "Score distribution + summary", total_stages=2)
-    make_charts(rows, output_dir)
+    make_charts(rows, output_dir, general_model=args.model, verifier_model=args.verifier_model)
+    if separate_verifier:
+        print(f"Verifier model used: {args.verifier_model} (general model: {args.model})")
     print("\nDone.")
 
 

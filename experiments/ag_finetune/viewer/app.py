@@ -20,6 +20,48 @@ OUT_DIR = Path(__file__).parent.parent / "outputs"
 
 # ── Stage metadata ──────────────────────────────────────────────────────────
 STAGES = {
+    "sft_data.jsonl": {
+        "label":   "Consolidated — SFT Data",
+        "purpose": "SFT (Consolidated)",
+        "day":     "Simplified",
+        "description": (
+            "<b>What it's for:</b> the current, simplified SFT dataset — plain "
+            "open-ended {question, answer}, no CoT/&lt;think&gt; wrapper, no verifier "
+            "JSON schema, no confidence scoring. Built by "
+            "<code>build_sft_data.py</code> from data already generated upstream, "
+            "not a new model run: merges Stage 1a (AgriLLM), Stage 1c (Chi-Metrics), "
+            "and Stage 2b (GARDIAN Q&A), deduping exact-repeat questions across all "
+            "three sources."
+            "<br/><br/><b>Superseded stages:</b> Stage 2a (reasoning chains) is no "
+            "longer used for this simplified path &mdash; it added a synthetic "
+            "&lt;think&gt; chain that this dataset intentionally drops."
+            "<br/><br/><b>Known quality caveat:</b> a small amount of off-topic "
+            "content survives Stage 1a's domain filter (e.g. procurement-software "
+            "boilerplate) &mdash; spot-checked, not fixed, since it's a pre-existing "
+            "gap in the upstream filter rather than something this merge introduces."
+        ),
+        "before_fields": ["question", "answer", "source"],
+        "after_fields":  ["question", "answer", "source"],
+    },
+    "dpo_pairs.jsonl": {
+        "label":   "Consolidated — DPO Pairs",
+        "purpose": "DPO (Consolidated)",
+        "day":     "Simplified",
+        "description": (
+            "<b>What it's for:</b> the current, simplified DPO dataset — plain "
+            "{prompt, chosen, rejected}, no verifier JSON schema, no confidence "
+            "field. Built by <code>build_dpo_data.py</code> by reshaping Stage 3's "
+            "existing (question, correct, wrong_pred) triples &mdash; those fields "
+            "were already sitting there, just wrapped in a verifier-correction "
+            "message format this drops."
+            "<br/><br/><b>Not used:</b> Stage 1c's DPO sibling is an empty "
+            "placeholder (see its own entry for why), and Stage 3b is the "
+            "verifier-specific DPO data (JSON verdict schema) — set aside for now, "
+            "not merged in here."
+        ),
+        "before_fields": ["prompt", "chosen", "rejected"],
+        "after_fields":  ["prompt", "chosen", "rejected"],
+    },
     "stage1_agrillm_filtered.jsonl": {
         "label":   "Stage 1a — AgriLLM Filtered",
         "purpose": "SFT Seed (Q&A)",
@@ -154,6 +196,8 @@ STAGES = {
 }
 
 PURPOSE_COLORS = {
+    "SFT (Consolidated)":       "#a3d9a5",
+    "DPO (Consolidated)":       "#ffe08a",
     "SFT Seed (Q&A)":           "#d4edda",
     "DPO Alignment":             "#fff3cd",
     "RAG QA Corpus":             "#d1ecf1",
