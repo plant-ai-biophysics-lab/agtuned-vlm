@@ -21,6 +21,24 @@ What this deliberately does NOT do, on purpose:
   - No classification / no judging against ground truth — the only question
     here is "does scoring work at all," not "is this condition more accurate."
 
+Scoring mechanism — two-pass prefill (mirrors llm_verifier's own
+_score_tags_by_prefill, not a single free-generation call):
+  Pass 1 generates the verdict/response JSON only (temperature=1.0,
+  max_tokens=150, no logprobs needed — we don't read this call's tag).
+  Pass 2 continues that EXACT prefix with "<score>" appended and the very
+  next token constrained via SamplingParams(structured_outputs=
+  StructuredOutputsParams(choice=_SCORE_LETTERS)) to just the 20 scale
+  letters (+ their leading-space tokenization variants). The resulting
+  top-20 logprobs are then a distribution already renormalized over the
+  scale itself, not competing against the model's full vocabulary.
+  This exists because an earlier single-call version (ask for the tag inline
+  and read whatever top-20 logprobs happened to land at that free-generation
+  position) collapsed onto "A" 95.8% of the time on a real 160-statement run
+  — the model's unconstrained top-20 at that position simply wasn't
+  dominated by the 20 target letters. Confirmed against vLLM 0.20.1's
+  source (this repo's pinned version) that StructuredOutputsParams.choice
+  coexists with logprobs + max_tokens=1 before building this.
+
 What it DOES test, per statement, K times ("repeated verifications"):
   - Does the model emit a <score>LETTER</score> tag the token-scanner can
     actually find? (extraction success rate, logged explicitly)
@@ -60,8 +78,10 @@ from PIL import Image as PILImage
 
 try:
     from vllm import SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
+    StructuredOutputsParams = None  # type: ignore[assignment,misc]
 
 try:
     from llm_verifier.fine_grained_reward import SCALE, extract_score
@@ -136,24 +156,24 @@ def _extract_first_json_object(text: str) -> dict | None:
     return None
 
 
-def _vllm_to_score_format(out) -> tuple[str, list[str], list[list[tuple]]]:
-    """Convert a vLLM RequestOutput into the (text, tokens, position_logprobs)
-    shape llm_verifier.fine_grained_reward.extract_score expects. Identical
-    logic to src/verifier_lmv.py's helper of the same name — duplicated, not
-    imported, since verifier_lmv.py isn't designed as a shared library module."""
-    text = out.outputs[0].text
-    token_ids = out.outputs[0].token_ids
-    logprobs_list = out.outputs[0].logprobs or []
+# The 20-letter scale plus a leading-space variant of each letter — mirrors
+# llm_verifier's own _score_tags_by_prefill comment: "Some models (e.g. Qwen
+# VL) put nearly all their mass on the letter WITH a leading space after the
+# prefilled '>'; allow both spellings so the grammar mask keeps the real
+# distribution." Constrains pass 2's single generated token to exactly these
+# 40 candidates via SamplingParams(structured_outputs=...).
+_SCORE_LETTERS = [chr(65 + i) for i in range(20)] + [f" {chr(65 + i)}" for i in range(20)]
 
-    tokens: list[str] = []
-    position_logprobs: list[list[tuple]] = []
-    for i, tid in enumerate(token_ids):
-        lp_dict = logprobs_list[i] if i < len(logprobs_list) else {}
-        tok_str = lp_dict[tid].decoded_token if (lp_dict and tid in lp_dict) else ""
-        tokens.append(tok_str)
-        alts = [(lp.decoded_token, lp.logprob) for lp in (lp_dict or {}).values()]
-        position_logprobs.append(alts)
-    return text, tokens, position_logprobs
+
+def _build_score_prompt(base_prompt: dict, analysis: str) -> dict:
+    """Continue `base_prompt`'s exact text with the verifier's own analysis
+    plus a prefilled '<score>' tag — the offline-vLLM equivalent of the
+    OpenAI-server's continue_final_message=True, since _build_prompt already
+    stops right where the assistant turn begins (add_generation_prompt=True)."""
+    return {
+        "prompt": base_prompt["prompt"] + analysis + "\n<score>",
+        "multi_modal_data": base_prompt["multi_modal_data"],
+    }
 
 
 def naive_score_from_text(text: str) -> float | None:
@@ -178,35 +198,39 @@ def naive_score_from_text(text: str) -> float | None:
     return (raw_val - lo) / (hi - lo) if hi > lo else 0.5
 
 
-def parse_verifier_output(out) -> dict:
-    """One K-repeat's full result: verdict/response (JSON) + both score variants."""
-    text, tokens, position_logprobs = _vllm_to_score_format(out)
-    clean_text = _THINK_RE.sub("", text).strip()
-
-    data = _extract_first_json_object(clean_text) or {}
+def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
+    """One K-repeat's full result under the two-pass prefill scheme (see
+    module docstring). `analysis` is pass 1's cleaned text up to (not
+    including) the '<score>' tag; `second_out` is pass 2's single
+    grammar-constrained token generated right after a prefilled '<score>'."""
+    data = _extract_first_json_object(analysis) or {}
     verdict = str(data.get("verdict", "UNSUPPORTED")).strip().upper()
     if verdict not in ("SUPPORTED", "UNSUPPORTED"):
         verdict = "UNSUPPORTED"
     response = str(data.get("response", ""))[:500]
 
-    # Did we actually find usable logprobs at the tag, or fall back?
-    from llm_verifier.fine_grained_reward import _find_tag_logprobs
-    tag_lp = _find_tag_logprobs(tokens, position_logprobs, "<score>")
-    had_logprob_hit = bool(tag_lp) and any(
-        tok.strip() in SCALE["valid_tokens"] for tok, _ in tag_lp
-    )
+    letter_raw = second_out.outputs[0].text
+    logprobs_list = second_out.outputs[0].logprobs or []
+    lp_dict = logprobs_list[0] if logprobs_list else {}
+    alts = [(lp.decoded_token, lp.logprob) for lp in lp_dict.values()] if lp_dict \
+        else [(letter_raw, 0.0)]
 
-    fine_grained = extract_score(clean_text, tokens, position_logprobs, "<score>")
-    naive = naive_score_from_text(clean_text)
+    # Reconstruct the (text, tokens, position_logprobs) shape extract_score
+    # expects, matching llm_verifier's own _score_tags_by_prefill return
+    # convention exactly, so the shared library function needs no changes.
+    synth_text = f"{analysis}\n<score>{letter_raw}</score>"
+    synth_tokens = ["\n<score>", letter_raw, "</score>"]
+    synth_position_logprobs = [[("\n<score>", 0.0)], alts, [("</score>", 0.0)]]
+
+    had_logprob_hit = any(tok.strip() in SCALE["valid_tokens"] for tok, _ in alts)
+    fine_grained = extract_score(synth_text, synth_tokens, synth_position_logprobs, "<score>")
+    naive = naive_score_from_text(synth_text)
 
     return {
         "verdict": verdict,
         "response": response,
-        "raw_text": clean_text,  # full generated text, unstripped by the 500-char JSON
-                                 # response truncation — lets you check what the model
-                                 # actually wrote when JSON parsing or score extraction
-                                 # didn't behave as expected, instead of only ever seeing
-                                 # the parser's (possibly wrong) interpretation of it
+        "raw_text": synth_text,  # analysis + the prefilled tag/letter, so you can see
+                                 # exactly what pass 2 was constrained to continue from
         "fine_grained_score": fine_grained,
         "naive_score": naive,
         "extraction": "logprob" if had_logprob_hit else ("text_fallback" if naive is not None else "failed"),
@@ -232,7 +256,15 @@ def run_feasibility_test(
     # than genuine diagnostic disagreement — worth removing as a confound
     # before drawing conclusions from the score distribution.
     _VLM_P = SamplingParams(temperature=0.0, max_tokens=512, repetition_penalty=1.1)
-    _VER_P = SamplingParams(temperature=1.0, max_tokens=150, logprobs=20)
+    # Pass 1: verdict/response JSON only — no logprobs needed, we never read
+    # this call's own (unconstrained) attempt at the <score> tag.
+    _VER_P = SamplingParams(temperature=1.0, max_tokens=150)
+    # Pass 2: one grammar-constrained token continuing "<analysis>\n<score>",
+    # restricted to the 20 scale letters (+ leading-space variants) — see
+    # module docstring for why this replaces reading the free-generation
+    # top-20 logprobs directly.
+    _SCORE_P = SamplingParams(temperature=1.0, max_tokens=1, logprobs=20,
+                              structured_outputs=StructuredOutputsParams(choice=_SCORE_LETTERS))
 
     n = len(items)
 
@@ -264,7 +296,7 @@ def run_feasibility_test(
     for k in range(n_evals):
         for start in range(0, n, batch_size):
             batch_idx = list(range(start, min(start + batch_size, n)))
-            prompts = []
+            base_prompts = []
             for i in batch_idx:
                 item = items[i]
                 rubric = _RUBRIC_WEED if item["task_type"] == "weed_identification" else _RUBRIC_DISEASE
@@ -273,11 +305,25 @@ def run_feasibility_test(
                 msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": [
                     {"type": "image"}, {"type": "text", "text": user_p},
                 ]}]
-                prompts.append(_build_prompt(msgs, tokenizer, PILImage.open(item["image_path"]).convert("RGB")))
-            outputs = llm.generate(prompts, _VER_P)
-            del prompts
-            for i, out in zip(batch_idx, outputs):
-                all_evals[i].append(parse_verifier_output(out))
+                base_prompts.append(_build_prompt(msgs, tokenizer, PILImage.open(item["image_path"]).convert("RGB")))
+
+            first_outputs = llm.generate(base_prompts, _VER_P)
+
+            analyses = []
+            score_prompts = []
+            for bp, out in zip(base_prompts, first_outputs):
+                clean_text = _THINK_RE.sub("", out.outputs[0].text).strip()
+                idx = clean_text.lower().find("<score>")
+                analysis = clean_text[:idx].rstrip() if idx != -1 else clean_text
+                analyses.append(analysis)
+                score_prompts.append(_build_score_prompt(bp, analysis))
+            del base_prompts
+
+            second_outputs = llm.generate(score_prompts, _SCORE_P)
+            del score_prompts
+
+            for i, analysis, second_out in zip(batch_idx, analyses, second_outputs):
+                all_evals[i].append(parse_verifier_output_prefill(analysis, second_out))
             prog.update(len(batch_idx))
 
     # ── Final classification, so we have something to correlate scores against ──
