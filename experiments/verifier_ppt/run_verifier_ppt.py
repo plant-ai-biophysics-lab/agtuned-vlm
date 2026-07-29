@@ -77,7 +77,8 @@ _SCORE_TAG_RE = re.compile(r"<score>\s*(.+?)\s*</score>", re.IGNORECASE)
 
 CSV_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
-    "vlm_statement", "verdict", "verifier_response", "raw_text_sample",
+    "vlm_statement", "prediction", "ground_truth", "judged_correct", "judge_reasoning",
+    "verdict", "verifier_response", "raw_text_sample",
     "n_evals", "n_logprob_hits", "n_text_fallback", "n_extraction_failed",
     "fine_grained_score", "naive_score",
     "raw_evals_json",
@@ -279,6 +280,32 @@ def run_feasibility_test(
                 all_evals[i].append(parse_verifier_output(out))
             prog.update(len(batch_idx))
 
+    # ── Final classification, so we have something to correlate scores against ──
+    # (matches self_cot/verifier_cot's ending: same statement history + the
+    # standard classification question, so accuracy is comparable to those
+    # conditions and not just an internal-only signal.)
+    _CLS_P = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
+    sub_banner(f"Final classification ({n} images)")
+    predictions: list[str] = [""] * n
+    prog = Progress(total=n, label="Classification", every=max(batch_size, 1))
+    for start in range(0, n, batch_size):
+        batch_idx = list(range(start, min(start + batch_size, n)))
+        prompts = []
+        for i in batch_idx:
+            item = items[i]
+            desc_q = _desc_question(item["task_type"], item["crop"])
+            h = _sys_msg() + [
+                {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": desc_q}]},
+                {"role": "assistant", "content": statements[i]},
+                {"role": "user", "content": _cls_question(item["task_type"], item["crop"])},
+            ]
+            prompts.append(_build_prompt(h, tokenizer, PILImage.open(item["image_path"]).convert("RGB")))
+        outputs = llm.generate(prompts, _CLS_P)
+        for i, out in zip(batch_idx, outputs):
+            predictions[i] = _clean(out.outputs[0].text)
+        del prompts
+        prog.update(len(batch_idx))
+
     # ── Aggregate per statement ──────────────────────────────────────────────
     rows = []
     for i, item in enumerate(items):
@@ -296,6 +323,10 @@ def run_feasibility_test(
             "crop":         item.get("crop") or "",
             "image_name":   item["image_name"],
             "vlm_statement": statements[i],
+            "prediction":   predictions[i],
+            "ground_truth": item["cls"],
+            "judged_correct": "",
+            "judge_reasoning": "",
             "verdict":      majority_verdict,
             "verifier_response": evals[0]["response"] if evals else "",
             "raw_text_sample": evals[0]["raw_text"] if evals else "",
@@ -308,20 +339,43 @@ def run_feasibility_test(
             "raw_evals_json": json.dumps(evals),
         })
 
+    # ── Judge predictions against ground truth (same shared judge as every
+    # other condition in this repo, so accuracy numbers are comparable) ──────
+    from src.common.metrics import apply_judge
+    import yaml as _yaml
+    _p = _yaml.safe_load((Path(__file__).parent.parent.parent / "src" / "config" / "prompts.yaml").read_text())
+    sub_banner(f"Judging ({len(rows)} predictions)")
+    rows = apply_judge(
+        rows, llm, tokenizer,
+        system_prompt=_p["judge_system_vision"],
+        judge_template=_p["judge_classification_template"],
+        gt_key="ground_truth", pred_key="prediction",
+    )
+
     if ckpt_path:
         _write_csv(rows, ckpt_path)
     return rows
+
+
+def _as_float(v) -> float | None:
+    """Handles both native floats/None (fresh run, in-memory) and strings/""
+    (rows reloaded from CSV via --plot_only, where csv.DictReader returns
+    every cell as a string and empty cells as "" rather than None)."""
+    if v is None or v == "":
+        return None
+    return float(v)
 
 
 def make_charts(rows: list[dict], output_dir: Path) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import numpy as np
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fg = [r["fine_grained_score"] for r in rows if r["fine_grained_score"] is not None]
-    nv = [r["naive_score"] for r in rows if r["naive_score"] is not None]
+    fg = [x for x in (_as_float(r["fine_grained_score"]) for r in rows) if x is not None]
+    nv = [x for x in (_as_float(r["naive_score"]) for r in rows) if x is not None]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     bins = [i / 20 for i in range(21)]
@@ -345,12 +399,62 @@ def make_charts(rows: list[dict], output_dir: Path) -> None:
     plt.close(fig)
     print(f"  Saved: {p}")
 
-    total_evals = sum(r["n_evals"] for r in rows)
-    total_logprob = sum(r["n_logprob_hits"] for r in rows)
-    total_fallback = sum(r["n_text_fallback"] for r in rows)
-    total_failed = sum(r["n_extraction_failed"] for r in rows)
+    # ── Accuracy vs score — does the score actually predict correctness? ────
+    def _acc_by_bucket(score_key: str) -> dict[float, dict]:
+        by_bucket: dict[float, list[int]] = {}
+        for r in rows:
+            jc = r.get("judged_correct", "")
+            score = _as_float(r.get(score_key))
+            if jc == "" or score is None:
+                continue
+            bucket = round(score, 1)  # 11 buckets: 0.0, 0.1, ..., 1.0
+            by_bucket.setdefault(bucket, []).append(int(jc))
+        return {b: {"n": len(v), "accuracy": sum(v) / len(v)} for b, v in sorted(by_bucket.items())}
 
-    import numpy as np
+    acc_fg = _acc_by_bucket("fine_grained_score")
+    acc_nv = _acc_by_bucket("naive_score")
+
+    if acc_fg or acc_nv:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        for ax, acc, title, color in [
+            (ax1, acc_fg, "Fine-grained score", "#4C72B0"),
+            (ax2, acc_nv, "Naive score", "#C44E52"),
+        ]:
+            buckets = sorted(acc)
+            accs = [acc[b]["accuracy"] * 100 for b in buckets]
+            ns = [acc[b]["n"] for b in buckets]
+            bars = ax.bar([f"{b:.1f}" for b in buckets], accs, color=color, alpha=0.85,
+                         edgecolor="black", linewidth=0.5)
+            for bar, n in zip(bars, ns):
+                ax.annotate(f"n={n}", (bar.get_x() + bar.get_width() / 2, bar.get_height() + 1),
+                           ha="center", fontsize=7)
+            ax.set_xlabel(f"{title} bucket")
+            ax.set_ylabel("Judged accuracy (%)")
+            ax.set_ylim(0, 105)
+            ax.set_title(f"Accuracy vs {title.lower()}")
+            ax.yaxis.grid(True, alpha=0.3)
+        plt.tight_layout()
+        p = output_dir / "accuracy_vs_score.png"
+        fig.savefig(p, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {p}")
+    else:
+        print("  [skip] accuracy_vs_score.png — no judged_correct data (rerun with the "
+              "current script to get judging, older checkpoints predate it)")
+
+    total_evals = sum(int(r["n_evals"]) for r in rows)
+    total_logprob = sum(int(r["n_logprob_hits"]) for r in rows)
+    total_fallback = sum(int(r["n_text_fallback"]) for r in rows)
+    total_failed = sum(int(r["n_extraction_failed"]) for r in rows)
+
+    all_correct = [int(r["judged_correct"]) for r in rows if r.get("judged_correct", "") != ""]
+    accuracy = sum(all_correct) / len(all_correct) if all_correct else None
+    fg_paired = [(x, int(r["judged_correct"])) for r, x in
+                ((r, _as_float(r["fine_grained_score"])) for r in rows)
+                if x is not None and r.get("judged_correct", "") != ""]
+    corr_fg = (float(np.corrcoef([a for a, _ in fg_paired], [b for _, b in fg_paired])[0, 1])
+              if len(fg_paired) > 2 and np.std([a for a, _ in fg_paired]) > 0 else None)
+
     summary = {
         "n_statements": len(rows),
         "total_evals": total_evals,
@@ -361,6 +465,8 @@ def make_charts(rows: list[dict], output_dir: Path) -> None:
         "fine_grained_std": float(np.std(fg)) if fg else None,
         "naive_mean": float(np.mean(nv)) if nv else None,
         "naive_std": float(np.std(nv)) if nv else None,
+        "accuracy": accuracy,
+        "correlation_fine_grained_score_vs_correct": corr_fg,
     }
     (output_dir / "score_summary.json").write_text(json.dumps(summary, indent=2))
     print(f"\n{json.dumps(summary, indent=2)}")
