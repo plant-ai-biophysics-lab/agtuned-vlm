@@ -224,6 +224,16 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     fine_grained = extract_score(synth_text, synth_tokens, synth_position_logprobs, "<score>")
     naive = naive_score_from_text(synth_text)
 
+    # Raw top-`logprobs=20` tokens exactly as vLLM returned them at this
+    # position, unfiltered — includes anything that isn't one of the 20
+    # scale letters, so a collapsed/ungrammatical mask or leaked non-letter
+    # tokens are visible directly instead of silently dropped by the
+    # valid-letter filter below.
+    top20_raw = sorted(
+        [(tok, math.exp(logprob)) for tok, logprob in alts],
+        key=lambda x: -x[1],
+    )
+
     # Renormalized probability actually assigned to each candidate letter
     # after grammar masking — kept explicitly (not just the final expected
     # value) so a real distribution can be inspected directly instead of
@@ -253,6 +263,8 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
                                  # exactly what pass 2 was constrained to continue from
         "score_alts": score_alts,  # [(letter, renormalized_prob), ...] sorted desc —
                                    # the actual post-mask distribution behind fine_grained_score
+        "top20_raw": top20_raw,  # unfiltered top-20 (token, prob) as vLLM returned them —
+                                 # includes non-letter tokens if any leaked through the mask
         "fine_grained_score": fine_grained,
         "naive_score": naive,
         "extraction": "logprob" if had_logprob_hit else ("text_fallback" if naive is not None else "failed"),
