@@ -80,6 +80,10 @@ def main() -> None:
         args.model,
         load_in_4bit=False,
         use_gradient_checkpointing="unsloth",
+        # See stage1_sft_reasoning.py's from_pretrained comment — Qwen3.5's
+        # non-standard sharded-safetensors naming trips up transformers'
+        # default file-discovery; forcing use_safetensors=True works around it.
+        use_safetensors=True,
     )
     model = FastVisionModel.get_peft_model(
         model,

@@ -117,6 +117,17 @@ def main() -> None:
         args.model,
         load_in_4bit=False,
         use_gradient_checkpointing="unsloth",
+        # Qwen3.5's whole family (Qwen/unsloth org, all sizes) shards weights
+        # as "model.safetensors-NNNNN-of-MMMMM.safetensors" instead of the
+        # standard "model-NNNNN-of-MMMMM.safetensors" — a real upstream
+        # naming quirk, not a broken repo (vLLM loads the same checkpoint
+        # fine elsewhere in this repo). transformers' default file-discovery
+        # (use_safetensors=None -> autodetect) misses this pattern and
+        # raises "does not appear to have a file named ... model.safetensors".
+        # Forcing True routes through a different discovery branch that
+        # (per the underlying transformers bug report) actually looks for
+        # this shard pattern.
+        use_safetensors=True,
     )
     model = FastVisionModel.get_peft_model(
         model,
