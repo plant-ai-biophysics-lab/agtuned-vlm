@@ -59,6 +59,45 @@ from pathlib import Path
 _OUT_DIR = Path(__file__).parent.parent / "outputs"
 
 
+def plot_loss_curve(training_stats: dict, output_dir: str, title_prefix: str) -> None:
+    """Loss + LR curves from trainer.state.log_history — a local, always-
+    available alternative to trackio's live dashboard (which needs HF PRO
+    for hosted Space compute and may not always be reachable)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    history = [e for e in training_stats["log_history"] if "loss" in e and "grad_norm" in e]
+    if not history:
+        print("  [skip] plot_loss_curve — no per-step loss entries in log_history")
+        return
+
+    steps = [e["step"] for e in history]
+    losses = [e["loss"] for e in history]
+    lrs = [e["learning_rate"] for e in history]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    ax1.plot(steps, losses, color="#4C72B0", linewidth=1.2)
+    ax1.set_ylabel("Training loss")
+    ax1.set_title(
+        f"{title_prefix} — final_train_loss={training_stats['final_train_loss']:.3f}, "
+        f"runtime={training_stats['train_runtime_s'] / 3600:.1f}h, "
+        f"peak_mem={training_stats['peak_reserved_memory_gb']:.1f}GB"
+    )
+    ax1.yaxis.grid(True, alpha=0.3)
+
+    ax2.plot(steps, lrs, color="#C44E52", linewidth=1.2)
+    ax2.set_xlabel("Step")
+    ax2.set_ylabel("Learning rate")
+    ax2.yaxis.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    p = Path(output_dir) / "loss_curve.png"
+    fig.savefig(p, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {p}")
+
+
 def make_sample(question: str, answer: str) -> dict:
     """Text-only turn in the vision-model content-list convention (matches
     lora_gemma4.py's make_sample / this repo's documented multimodal sample
@@ -188,6 +227,7 @@ def main() -> None:
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     (Path(args.output_dir) / "training_stats.json").write_text(json.dumps(training_stats, indent=2))
     print(f"Saved training_stats.json (final_train_loss={training_stats['final_train_loss']})")
+    plot_loss_curve(training_stats, args.output_dir, title_prefix=f"Stage 1 SFT ({args.model})")
 
     print(f"\nSaved adapters to {args.output_dir}/lora_adapters")
     print(f"Saved merged 16-bit weights to {args.output_dir}/vllm_model "
