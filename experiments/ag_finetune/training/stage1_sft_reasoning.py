@@ -213,15 +213,17 @@ def main() -> None:
     )
     trainer_stats = trainer.train()
 
-    # The trainer sets the tokenizer's model_max_length to --max_seq_len as a
-    # training-time truncation safety measure, and that value persists into
-    # the saved checkpoint — every future inference call then gets silently
-    # truncated to it, independent of vLLM's own --max_model_len (a real bug
-    # hit running the fine-tuned verifier: image-token-count mismatch traced
-    # back to input_ids truncated at 2047, exactly args.max_seq_len). Reset
-    # before saving so the checkpoint doesn't carry training's truncation
-    # ceiling into inference.
-    processor.tokenizer.model_max_length = 131072
+    # SFTConfig's max_length=args.max_seq_len (a training-time truncation
+    # setting) ends up in the tokenizer's init_kwargs["max_length"] — a
+    # SEPARATE field from init_kwargs["model_max_length"], which stays
+    # correct (262144). Qwen3VLProcessor.__call__ merges the tokenizer's
+    # entire init_kwargs into its own internal tokenizer call, so this
+    # stray max_length silently truncates every future inference call
+    # regardless of model_max_length or vLLM's --max_model_len. Confirmed
+    # by directly reproducing the failure this caused (image-token mismatch
+    # on a 3000x3000 image, input_ids truncated to exactly 2048) and
+    # verifying this removal fixes it before adding this fix.
+    processor.tokenizer.init_kwargs.pop("max_length", None)
 
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")

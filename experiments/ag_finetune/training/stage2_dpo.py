@@ -166,10 +166,9 @@ def main() -> None:
     )
     trainer_stats = trainer.train()
 
-    # See stage1_sft_reasoning.py's comment above the same line — the
-    # trainer sets processor.tokenizer.model_max_length to --max_seq_len,
-    # which then silently truncates every future inference call unless reset.
-    processor.tokenizer.model_max_length = 131072
+    # See stage1_sft_reasoning.py's comment above the same line — DPOConfig's
+    # max_length leaks into tokenizer.init_kwargs["max_length"] the same way.
+    processor.tokenizer.init_kwargs.pop("max_length", None)
 
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")
