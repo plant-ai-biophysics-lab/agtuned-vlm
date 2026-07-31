@@ -213,6 +213,16 @@ def main() -> None:
     )
     trainer_stats = trainer.train()
 
+    # The trainer sets the tokenizer's model_max_length to --max_seq_len as a
+    # training-time truncation safety measure, and that value persists into
+    # the saved checkpoint — every future inference call then gets silently
+    # truncated to it, independent of vLLM's own --max_model_len (a real bug
+    # hit running the fine-tuned verifier: image-token-count mismatch traced
+    # back to input_ids truncated at 2047, exactly args.max_seq_len). Reset
+    # before saving so the checkpoint doesn't carry training's truncation
+    # ceiling into inference.
+    processor.tokenizer.model_max_length = 131072
+
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")
     model.save_pretrained_merged(f"{args.output_dir}/vllm_model", processor, save_method="merged_16bit")

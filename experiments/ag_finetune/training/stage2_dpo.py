@@ -166,6 +166,11 @@ def main() -> None:
     )
     trainer_stats = trainer.train()
 
+    # See stage1_sft_reasoning.py's comment above the same line — the
+    # trainer sets processor.tokenizer.model_max_length to --max_seq_len,
+    # which then silently truncates every future inference call unless reset.
+    processor.tokenizer.model_max_length = 131072
+
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")
     model.save_pretrained_merged(f"{args.output_dir}/vllm_model", processor, save_method="merged_16bit")
