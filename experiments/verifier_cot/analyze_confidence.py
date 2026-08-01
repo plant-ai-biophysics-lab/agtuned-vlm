@@ -2,7 +2,7 @@
 Score analysis for Verifier-CoT — post-hoc analysis of an already-judged
 CSV from run_verifier_cot.py. No model/GPU needed.
 
-Answers three questions:
+Answers four questions:
   1. How does the verifier's fine-grained score vary across rounds (does it
      start low and climb as the VLM's statement improves, or is it flat)?
   2. What does the final score distribution look like (is the verifier
@@ -13,11 +13,16 @@ Answers three questions:
      using the FINAL round's score, and using ROUND 1's score alone (a
      cheaper, earlier signal that wouldn't require running the full loop if
      it turns out to be just as predictive)?
+  4. How many rounds does it actually take to reach a final answer — is the
+     loop mostly ending early (score cleared --score_threshold) or mostly
+     grinding to --max_rounds (forced stop)? Directly diagnostic of whether
+     the threshold is calibrated reasonably for this verifier.
 
 Outputs:
   score_by_round.png
   final_score_distribution.png
   accuracy_vs_score.png
+  n_rounds_distribution.png
   confidence_analysis_summary.json (filename kept for continuity with older
     runs' file layout; content is about the fine-grained score now)
 
@@ -101,6 +106,20 @@ def round1_score(rows: list[dict]) -> list[tuple[dict, float]]:
         score = _as_float(first.get("verifier_fine_grained_score"))
         if score is not None:
             out.append((r, score))
+    return out
+
+
+def collect_n_rounds(rows: list[dict]) -> list[tuple[int, str]]:
+    """(n_rounds, final_verifier_verdict) pairs for every row with a valid
+    n_rounds — verdict is "SUPPORTED" (ended early, score cleared threshold)
+    or "UNSUPPORTED_MAXROUNDS" (forced stop at max_rounds), so the two can be
+    told apart in the distribution rather than just plotting raw counts."""
+    out = []
+    for r in rows:
+        n = r.get("n_rounds", "")
+        if n is None or n == "":
+            continue
+        out.append((int(n), r.get("final_verifier_verdict", "")))
     return out
 
 
@@ -206,6 +225,47 @@ def make_charts(rows: list[dict], output_dir: Path) -> dict:
     fig.savefig(p, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {p}")
+
+    # ── 4. Rounds-to-final-answer distribution ───────────────────────────────
+    round_verdict_pairs = collect_n_rounds(rows)
+    n_rounds_vals = [n for n, _ in round_verdict_pairs]
+    summary["n_rounds_distribution"] = {
+        "n": len(n_rounds_vals),
+        "mean": float(np.mean(n_rounds_vals)) if n_rounds_vals else None,
+        "median": float(np.median(n_rounds_vals)) if n_rounds_vals else None,
+        "histogram": {str(v): n_rounds_vals.count(v) for v in sorted(set(n_rounds_vals))},
+    }
+
+    if n_rounds_vals:
+        round_range = list(range(1, max(n_rounds_vals) + 1))
+        early_counts = [sum(1 for n, v in round_verdict_pairs if n == r and v == "SUPPORTED")
+                        for r in round_range]
+        forced_counts = [sum(1 for n, v in round_verdict_pairs if n == r and v == "UNSUPPORTED_MAXROUNDS")
+                         for r in round_range]
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(round_range, early_counts, color="#55A868", alpha=0.85, edgecolor="black",
+              linewidth=0.5, label="Ended early (score >= threshold)")
+        ax.bar(round_range, forced_counts, bottom=early_counts, color="#C44E52", alpha=0.85,
+              edgecolor="black", linewidth=0.5, label="Hit max_rounds")
+        for r, e, f in zip(round_range, early_counts, forced_counts):
+            total = e + f
+            if total:
+                ax.annotate(str(total), (r, total), ha="center", va="bottom", fontsize=8)
+        ax.set_xlabel("Rounds taken to reach final answer")
+        ax.set_ylabel("Number of images")
+        ax.set_xticks(round_range)
+        ax.set_title(f"Rounds-to-final-answer distribution (n={len(n_rounds_vals)}, "
+                    f"mean={np.mean(n_rounds_vals):.2f})")
+        ax.legend(fontsize=9)
+        ax.yaxis.grid(True, alpha=0.3)
+        plt.tight_layout()
+        p = output_dir / "n_rounds_distribution.png"
+        fig.savefig(p, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {p}")
+    else:
+        print("  [skip] n_rounds_distribution.png — no rows with a valid n_rounds")
 
     # Overall calibration check: does the score correlate with correctness at all?
     paired = [(x, int(r["judged_correct"])) for r, x in

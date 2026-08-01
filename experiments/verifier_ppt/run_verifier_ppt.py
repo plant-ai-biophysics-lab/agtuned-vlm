@@ -78,12 +78,25 @@ import argparse
 import csv
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "verifier_cot"))
+
+# With --verifier_model set, this script reloads the general model a second
+# time after the verifier phase — repeated from_pretrained calls in one
+# process hit a real bug on farm compute nodes without reliable outbound
+# internet (a redundant cache-freshness HEAD request fails with "Network is
+# unreachable", and the retry path leaves the underlying httpx client
+# closed, crashing the next load). See run_verifier_cot.py's ModelSwitcher
+# comment for the full diagnosis — same fix here: skip that check and trust
+# the local cache, safe since every model this script loads must already be
+# cached to have loaded once already in the same run.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from PIL import Image as PILImage
 

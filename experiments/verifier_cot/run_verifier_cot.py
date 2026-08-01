@@ -74,6 +74,7 @@ import csv
 import gc
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -356,6 +357,26 @@ def load_items_matching_existing(
 # verifier_model is None or equals the general model, this never reloads —
 # .get() just returns the single loaded model every time, identical to the
 # original single-model behavior.
+#
+# Repeated reloads within one process hit a real bug on farm compute nodes
+# without reliable outbound internet: transformers/huggingface_hub still
+# issues a HEAD request on every from_pretrained call to check cache
+# freshness, even when every needed file is already local. That request
+# fails ("Network is unreachable"), and the retry path leaves the
+# underlying httpx client closed, crashing the NEXT load attempt with
+# "Cannot send a request, as the client has been closed" — hit in practice
+# reloading Gemma back after a Qwen verifier round (both already proven
+# cached earlier in the same run). HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE skip
+# that check entirely and trust the local cache — safe here since every
+# model this switcher loads (both --model and --verifier_model, or a local
+# checkpoint path) must already be fully cached to have loaded once, which
+# happens before any reload ever occurs. setdefault() so an operator's own
+# explicit choice (e.g. deliberately online for a not-yet-cached model) isn't
+# silently overridden.
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 
 class ModelSwitcher:
     def __init__(self, general_model_id: str, verifier_model_id: str | None,
