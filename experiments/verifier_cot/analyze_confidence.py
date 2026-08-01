@@ -1,22 +1,25 @@
 """
-Confidence analysis for Verifier-CoT — post-hoc analysis of an already-judged
+Score analysis for Verifier-CoT — post-hoc analysis of an already-judged
 CSV from run_verifier_cot.py. No model/GPU needed.
 
 Answers three questions:
-  1. How does verifier confidence vary across rounds (does it start low and
-     climb as the VLM's statement improves, or is it flat)?
-  2. What does the final confidence distribution look like (is the verifier
-     actually discriminating, or clustering at one end regardless of context)?
-  3. Does higher confidence actually predict a more accurate final answer —
-     both using the FINAL round's confidence, and using ROUND 1's confidence
-     alone (a cheaper, earlier signal that wouldn't require running the full
-     loop if it turns out to be just as predictive)?
+  1. How does the verifier's fine-grained score vary across rounds (does it
+     start low and climb as the VLM's statement improves, or is it flat)?
+  2. What does the final score distribution look like (is the verifier
+     actually discriminating, or clustering at one end regardless of context —
+     same question this session's verifier_ppt experiments asked, now on the
+     multi-round loop)?
+  3. Does a higher score actually predict a more accurate final answer — both
+     using the FINAL round's score, and using ROUND 1's score alone (a
+     cheaper, earlier signal that wouldn't require running the full loop if
+     it turns out to be just as predictive)?
 
 Outputs:
-  confidence_by_round.png
-  final_confidence_distribution.png
-  accuracy_vs_confidence.png
-  confidence_analysis_summary.json
+  score_by_round.png
+  final_score_distribution.png
+  accuracy_vs_score.png
+  confidence_analysis_summary.json (filename kept for continuity with older
+    runs' file layout; content is about the fine-grained score now)
 
 Usage:
   uv run python experiments/verifier_cot/analyze_confidence.py \\
@@ -38,46 +41,66 @@ def _read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def collect_round_confidences(rows: list[dict]) -> dict[int, list[int]]:
-    """{round_number: [confidence, confidence, ...]} across all images."""
-    by_round: dict[int, list[int]] = defaultdict(list)
+def _as_float(v) -> float | None:
+    """Handles both native floats/None (fresh in-memory rows) and strings/""
+    (rows reloaded from CSV, where every cell is a string and empty cells are
+    "" rather than None) — same gotcha as run_verifier_ppt.py's helper of the
+    same name."""
+    if v is None or v == "" or v == "None":
+        return None
+    return float(v)
+
+
+def collect_round_scores(rows: list[dict]) -> dict[int, list[float]]:
+    """{round_number: [score, score, ...]} across all images, skipping any
+    round entry where extraction failed (verifier_fine_grained_score is
+    None/missing) rather than crashing or silently coercing it to 0."""
+    by_round: dict[int, list[float]] = defaultdict(list)
     for r in rows:
         try:
             transcript = json.loads(r.get("transcript_json", "[]"))
         except json.JSONDecodeError:
             continue
         for entry in transcript:
-            by_round[int(entry["round"])].append(int(entry["verifier_confidence"]))
+            score = _as_float(entry.get("verifier_fine_grained_score"))
+            if score is not None:
+                by_round[int(entry["round"])].append(score)
     return dict(by_round)
 
 
-def accuracy_by_confidence(rows: list[dict], confidence_key: str) -> dict[int, dict]:
-    """{confidence_value: {"n": int, "accuracy": float}} — does this
-    confidence value actually predict judged_correct?"""
-    by_conf: dict[int, list[int]] = defaultdict(list)
+def accuracy_by_score_bucket(rows: list[dict], score_key: str) -> dict[float, dict]:
+    """{score_bucket: {"n": int, "accuracy": float}} — does this score
+    bucket (rounded to 1 decimal, matching run_verifier_ppt.py's convention)
+    actually predict judged_correct?"""
+    by_bucket: dict[float, list[int]] = defaultdict(list)
     for r in rows:
         jc = r.get("judged_correct", "")
-        if jc == "":
+        score = _as_float(r.get(score_key))
+        if jc == "" or score is None:
             continue
-        conf = int(r[confidence_key])
-        by_conf[conf].append(int(jc))
+        bucket = round(score, 1)
+        by_bucket[bucket].append(int(jc))
     return {
-        conf: {"n": len(vals), "accuracy": sum(vals) / len(vals)}
-        for conf, vals in sorted(by_conf.items())
+        b: {"n": len(vals), "accuracy": sum(vals) / len(vals)}
+        for b, vals in sorted(by_bucket.items())
     }
 
 
-def round1_confidence(rows: list[dict]) -> list[tuple[dict, int]]:
-    """(row, round_1_confidence) pairs, for rows that have a round 1 entry."""
+def round1_score(rows: list[dict]) -> list[tuple[dict, float]]:
+    """(row, round_1_fine_grained_score) pairs, for rows with a round 1 entry
+    and a successfully-extracted score."""
     out = []
     for r in rows:
         try:
             transcript = json.loads(r.get("transcript_json", "[]"))
         except json.JSONDecodeError:
             continue
-        if transcript:
-            first = min(transcript, key=lambda e: int(e["round"]))
-            out.append((r, int(first["verifier_confidence"])))
+        if not transcript:
+            continue
+        first = min(transcript, key=lambda e: int(e["round"]))
+        score = _as_float(first.get("verifier_fine_grained_score"))
+        if score is not None:
+            out.append((r, score))
     return out
 
 
@@ -90,10 +113,10 @@ def make_charts(rows: list[dict], output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     summary: dict = {}
 
-    # ── 1. Confidence by round ──────────────────────────────────────────────
-    by_round = collect_round_confidences(rows)
+    # ── 1. Score by round ────────────────────────────────────────────────────
+    by_round = collect_round_scores(rows)
     rounds = sorted(by_round)
-    summary["confidence_by_round"] = {
+    summary["score_by_round"] = {
         str(rnd): {
             "n": len(vals),
             "mean": float(np.mean(vals)),
@@ -104,100 +127,102 @@ def make_charts(rows: list[dict], output_dir: Path) -> dict:
         for rnd, vals in by_round.items()
     }
 
-    fig, ax = plt.subplots(figsize=(max(6, len(rounds) * 1.3), 5))
-    data = [by_round[r] for r in rounds]
-    bp = ax.boxplot(data, tick_labels=[f"Round {r}\n(n={len(by_round[r])})" for r in rounds],
-                    patch_artist=True, widths=0.5)
-    for patch in bp["boxes"]:
-        patch.set_facecolor("#4C72B0")
-        patch.set_alpha(0.7)
-    ax.set_ylabel("Verifier confidence (1-20)")
-    ax.set_ylim(0, 21)
-    ax.set_title("Verifier confidence by round")
-    ax.yaxis.grid(True, alpha=0.3)
-    plt.tight_layout()
-    p = output_dir / "confidence_by_round.png"
-    fig.savefig(p, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {p}")
+    if rounds:
+        fig, ax = plt.subplots(figsize=(max(6, len(rounds) * 1.3), 5))
+        data = [by_round[r] for r in rounds]
+        bp = ax.boxplot(data, tick_labels=[f"Round {r}\n(n={len(by_round[r])})" for r in rounds],
+                        patch_artist=True, widths=0.5)
+        for patch in bp["boxes"]:
+            patch.set_facecolor("#4C72B0")
+            patch.set_alpha(0.7)
+        ax.set_ylabel("Verifier fine-grained score [0,1]")
+        ax.set_ylim(0, 1.05)
+        ax.set_title("Verifier fine-grained score by round")
+        ax.yaxis.grid(True, alpha=0.3)
+        plt.tight_layout()
+        p = output_dir / "score_by_round.png"
+        fig.savefig(p, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {p}")
+    else:
+        print("  [skip] score_by_round.png — no round entries with a valid score")
 
-    # ── 2. Final confidence distribution ────────────────────────────────────
-    final_conf = [int(r["final_verifier_confidence"]) for r in rows if r.get("final_verifier_confidence", "") != ""]
-    summary["final_confidence_distribution"] = {
-        "n": len(final_conf),
-        "mean": float(np.mean(final_conf)) if final_conf else None,
-        "std": float(np.std(final_conf)) if final_conf else None,
-        "histogram": {str(v): final_conf.count(v) for v in sorted(set(final_conf))},
+    # ── 2. Final score distribution ──────────────────────────────────────────
+    final_scores = [x for x in (_as_float(r.get("final_verifier_fine_grained_score")) for r in rows)
+                    if x is not None]
+    summary["final_score_distribution"] = {
+        "n": len(final_scores),
+        "mean": float(np.mean(final_scores)) if final_scores else None,
+        "std": float(np.std(final_scores)) if final_scores else None,
     }
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    bins = np.arange(0.5, 21.5, 1)
-    ax.hist(final_conf, bins=bins, color="#4C72B0", alpha=0.85, edgecolor="black", linewidth=0.5)
-    ax.set_xlabel("Final verifier confidence (1-20)")
+    bins = [i / 20 for i in range(21)]
+    ax.hist(final_scores, bins=bins, color="#4C72B0", alpha=0.85, edgecolor="black", linewidth=0.5)
+    ax.set_xlabel("Final verifier fine-grained score [0,1]")
     ax.set_ylabel("Number of images")
-    ax.set_xticks(range(1, 21))
-    ax.set_title(f"Final confidence distribution (n={len(final_conf)})")
+    ax.set_xlim(0, 1)
+    ax.set_title(f"Final score distribution (n={len(final_scores)})")
     ax.yaxis.grid(True, alpha=0.3)
     plt.tight_layout()
-    p = output_dir / "final_confidence_distribution.png"
+    p = output_dir / "final_score_distribution.png"
     fig.savefig(p, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {p}")
 
-    # ── 3. Accuracy vs confidence — final AND round-1 ───────────────────────
-    acc_final = accuracy_by_confidence(rows, "final_verifier_confidence")
-    summary["accuracy_vs_final_confidence"] = {
-        str(c): v for c, v in acc_final.items()
-    }
+    # ── 3. Accuracy vs score — final AND round-1 ─────────────────────────────
+    acc_final = accuracy_by_score_bucket(rows, "final_verifier_fine_grained_score")
+    summary["accuracy_vs_final_score"] = {f"{b:.1f}": v for b, v in acc_final.items()}
 
-    r1_pairs = round1_confidence(rows)
-    by_r1_conf: dict[int, list[int]] = defaultdict(list)
-    for row, conf in r1_pairs:
+    r1_pairs = round1_score(rows)
+    by_r1_bucket: dict[float, list[int]] = defaultdict(list)
+    for row, score in r1_pairs:
         jc = row.get("judged_correct", "")
         if jc != "":
-            by_r1_conf[conf].append(int(jc))
+            by_r1_bucket[round(score, 1)].append(int(jc))
     acc_round1 = {
-        conf: {"n": len(vals), "accuracy": sum(vals) / len(vals)}
-        for conf, vals in sorted(by_r1_conf.items())
+        b: {"n": len(vals), "accuracy": sum(vals) / len(vals)}
+        for b, vals in sorted(by_r1_bucket.items())
     }
-    summary["accuracy_vs_round1_confidence"] = {str(c): v for c, v in acc_round1.items()}
+    summary["accuracy_vs_round1_score"] = {f"{b:.1f}": v for b, v in acc_round1.items()}
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-    for ax, acc, title in [(ax1, acc_final, "Final confidence"), (ax2, acc_round1, "Round-1 confidence")]:
-        confs = sorted(acc)
-        accs = [acc[c]["accuracy"] * 100 for c in confs]
-        ns = [acc[c]["n"] for c in confs]
-        bars = ax.bar([str(c) for c in confs], accs, color="#55A868", alpha=0.85,
+    for ax, acc, title in [(ax1, acc_final, "Final score"), (ax2, acc_round1, "Round-1 score")]:
+        buckets = sorted(acc)
+        accs = [acc[b]["accuracy"] * 100 for b in buckets]
+        ns = [acc[b]["n"] for b in buckets]
+        bars = ax.bar([f"{b:.1f}" for b in buckets], accs, color="#55A868", alpha=0.85,
                       edgecolor="black", linewidth=0.5)
         for bar, n in zip(bars, ns):
             ax.annotate(f"n={n}", (bar.get_x() + bar.get_width() / 2, bar.get_height() + 1),
                        ha="center", fontsize=8)
-        ax.set_xlabel(f"{title} score")
+        ax.set_xlabel(f"{title} bucket")
         ax.set_ylabel("Judged accuracy (%)")
         ax.set_ylim(0, 105)
         ax.set_title(f"Accuracy vs {title.lower()}")
         ax.yaxis.grid(True, alpha=0.3)
     plt.tight_layout()
-    p = output_dir / "accuracy_vs_confidence.png"
+    p = output_dir / "accuracy_vs_score.png"
     fig.savefig(p, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {p}")
 
-    # Overall calibration check: does confidence correlate with correctness at all?
-    all_conf = [int(r["final_verifier_confidence"]) for r in rows if r.get("judged_correct", "") != ""]
-    all_correct = [int(r["judged_correct"]) for r in rows if r.get("judged_correct", "") != ""]
-    if len(all_conf) > 2 and np.std(all_conf) > 0:
-        corr = float(np.corrcoef(all_conf, all_correct)[0, 1])
+    # Overall calibration check: does the score correlate with correctness at all?
+    paired = [(x, int(r["judged_correct"])) for r, x in
+             ((r, _as_float(r.get("final_verifier_fine_grained_score"))) for r in rows)
+             if x is not None and r.get("judged_correct", "") != ""]
+    if len(paired) > 2 and np.std([a for a, _ in paired]) > 0:
+        corr = float(np.corrcoef([a for a, _ in paired], [b for _, b in paired])[0, 1])
     else:
         corr = None
-    summary["correlation_final_confidence_vs_correct"] = corr
-    print(f"\n  Correlation(final_confidence, judged_correct) = {corr}")
+    summary["correlation_final_score_vs_correct"] = corr
+    print(f"\n  Correlation(final_fine_grained_score, judged_correct) = {corr}")
 
     return summary
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze Verifier-CoT confidence scores")
+    parser = argparse.ArgumentParser(description="Analyze Verifier-CoT fine-grained scores")
     parser.add_argument("--judged_csv", required=True,
                         help="Path to ckpt_judged.csv from a run_verifier_cot.py run")
     parser.add_argument("--output_dir", default="outputs/verifier_cot/")

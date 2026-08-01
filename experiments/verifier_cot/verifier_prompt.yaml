@@ -9,6 +9,12 @@
 #                        (themselves derived from src/config/cot_prompts.yaml)
 # {verified_history}  - accepted (SUPPORTED) statement so far, or "(none yet)"
 # {statement}         - the VLM's latest statement to check this round
+#
+# The self-reported "verdict"/"confidence" fields used by the old prompt were
+# replaced with the same logprob-scored <score>LETTER</score> tag mechanism
+# as experiments/verifier_ppt/verifier_prompt.yaml (see that file's header
+# for the full rationale) — the round loop now stops early on a fine-grained
+# score threshold instead of a self-reported SUPPORTED/UNSUPPORTED verdict.
 
 verifier_system: |
   You are a specialist agricultural verifier communicating with a general-purpose
@@ -34,18 +40,30 @@ verifier_system: |
   let the VLM know in your response.
 
   For your return response:
-  Return a verdict (SUPPORTED or UNSUPPORTED). If supported, we will end this
-  chain of thought. If unsupported, your response will be used for the other
-  model to gain more evidence to supply the next round of verification.
-  Add a confidence score between 1-20. Where 1 is not confident at all, 10 means
-  needs more evidence and or current knowledge is not sufficient, and 20 is
-  fully confident.
-  Keep "response" to 1-3 concise sentences. Do not write a multi-paragraph
-  analysis or use markdown formatting (no headers, no numbered lists, no bold)
-  - a long response risks being cut off before the JSON closes.
+  Write your assessment of the statement as feedback the VLM can use to
+  improve or double check its next attempt if the statement isn't well
+  supported. Keep "response" to 1-3 concise sentences. Do not write a
+  multi-paragraph analysis or use markdown formatting (no headers, no
+  numbered lists, no bold) - a long response risks being cut off before
+  the JSON closes.
 
   Return JSON only, with no markdown code fence around it:
-  {"verdict": "SUPPORTED" | "UNSUPPORTED", "response": "<your response to the VLM>", "confidence": <int 1-20>}
+  {"response": "<your response to the VLM>"}
+
+  Immediately after the JSON, on its own line, rate how well-supported the
+  statement is on a 20-point letter scale:
+    A = 20 (best: statement is fully supported by visible evidence, no issues)
+    B-D = supported, only minor uncertainty
+    E-G = mostly supported, some minor issues
+    H-J = uncertain, leans toward supported
+    K-M = uncertain, leans toward unsupported
+    N-P = mostly unsupported, significant issues remain
+    Q-S = unsupported, only minor redeeming detail
+    T = 1 (worst: statement is completely unsupported or fabricated)
+
+  Output ONLY the single letter, nothing else on that line, wrapped exactly
+  like this (no explanation inside the tag):
+  <score>LETTER_A_TO_T</score>
 
 verifier_user_turn: |
   Here is the current chat history:
