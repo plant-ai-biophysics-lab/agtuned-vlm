@@ -5,10 +5,13 @@ crop/task_type/location/class_overrides for datasets that already existed under
 the old `agml` pip package, and flagging brand-new datasets for manual review.
 
 Classification-only: dataset_type == "classification" entries from the catalog
-are the only ones written to the output YAML. Detection/segmentation datasets
-are listed in the review report for awareness but never added to datasets.yaml
-(this repo's pipeline — linear probe, vision/language assessment, CoT — is
-classification-only).
+are the only ones written to the output YAML. As of catalog_datasets.py's
+output split, --catalog (src/config/hf_catalog.json) should already contain
+classification entries exclusively — detection/segmentation/multimodal
+datasets are routed to src/config/hf_catalog_excluded.json at the catalog
+stage, not here. The dataset_type filter below is kept as a defensive
+no-op in case that invariant is ever violated (e.g. a hand-edited catalog
+file), not the primary exclusion mechanism anymore.
 
 Writes to --output (default: a `.new` file, NOT the original) plus a markdown
 review report. Inspect the diff and the report, resolve every flagged item, and
@@ -211,7 +214,8 @@ def main() -> None:
             f.write(f"- [ ] `{n}` — kept as-is in output, decide: drop, or keep sourcing via pip `agml`\n")
 
         f.write(f"\n## Excluded: non-classification datasets in the org ({len(flags['excluded_non_classification'])})\n\n")
-        f.write("Not written to datasets.yaml — detection/segmentation, out of scope for this pipeline.\n\n")
+        f.write("Not written to datasets.yaml — detection/segmentation/multimodal, out of scope "
+                "for this pipeline. Each entry's type is shown below.\n\n")
         for n in flags["excluded_non_classification"]:
             f.write(f"- `{n}` ({non_classification[n]['dataset_type']})\n")
 
