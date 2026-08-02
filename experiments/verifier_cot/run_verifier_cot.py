@@ -583,6 +583,12 @@ def run_verifier_loop(
                 "verifier_response": result["response"],
                 "verifier_extraction": result["extraction"],
                 "round_prediction": round_predictions[i],
+                "verifier_raw_text": result["raw_text"],  # analysis + prefilled tag/letter —
+                                                          # lets you see exactly what the model
+                                                          # wrote when verifier_response comes
+                                                          # back empty (JSON parse failure vs a
+                                                          # genuinely empty "response" value),
+                                                          # matching verifier_ppt.py's convention
             })
             score_ok = fg is not None and fg >= score_threshold
             stop_here = rnd == max_rounds or (score_ok and not force_max_rounds)
