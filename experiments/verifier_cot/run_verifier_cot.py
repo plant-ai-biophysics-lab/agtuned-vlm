@@ -220,14 +220,44 @@ def naive_score_from_text(text: str) -> float | None:
     return (raw_val - lo) / (hi - lo) if hi > lo else 0.5
 
 
+# Tolerant of Python-dict-repr output (single quotes) instead of valid JSON
+# — a real pattern observed from the fine-tuned verifier: {'response': '...'}
+# instead of {"response": "..."}, which json.loads() rejects outright even
+# though the braces are balanced. Quote-agnostic on both key and value
+# delimiters so it also catches mixed cases (e.g. a truncated double-quoted
+# value repaired with a stray character).
+_RESPONSE_KV_RE = re.compile(r"""['"]response['"]\s*:\s*['"](.*?)['"]\s*[,}]""", re.DOTALL)
+
+
+def _extract_response_text(analysis: str) -> tuple[str, str]:
+    """Returns (response_text, method). Three tiers, each strictly more
+    permissive than the last, so partial/malformed output isn't silently
+    discarded as "" the way a JSON-only extraction would:
+      1. Strict JSON — {"response": "..."} exactly.
+      2. Regex tolerant of single-quoted dict-repr output.
+      3. Raw fallback — the entire pre-<score> text verbatim. Many failures
+         (mostly from less fine-tuned verifiers) never attempt a JSON/dict
+         wrapper at all, just write plain critique text directly before
+         <score> — and that text is often substantive feedback, not noise,
+         so using it beats discarding it."""
+    data = _extract_first_json_object(analysis)
+    if data is not None and "response" in data:
+        return str(data["response"])[:500], "json"
+
+    m = _RESPONSE_KV_RE.search(analysis)
+    if m:
+        return m.group(1)[:500], "regex"
+
+    return analysis.strip()[:500], "raw_fallback"
+
+
 def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     """One round's verifier result under the two-pass prefill scheme — see
     experiments/verifier_ppt/run_verifier_ppt.py's function of the same name
     for the full mechanism. `analysis` is pass 1's cleaned text up to (not
     including) the '<score>' tag; `second_out` is pass 2's single
     grammar-constrained token generated right after a prefilled '<score>'."""
-    data = _extract_first_json_object(analysis) or {}
-    response = str(data.get("response", ""))[:500]
+    response, response_extraction = _extract_response_text(analysis)
 
     letter_raw = second_out.outputs[0].text
     logprobs_list = second_out.outputs[0].logprobs or []
@@ -245,6 +275,7 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
 
     return {
         "response": response,
+        "response_extraction": response_extraction,  # "json" | "regex" | "raw_fallback"
         "raw_text": synth_text,
         "fine_grained_score": fine_grained,
         "naive_score": naive,
@@ -581,7 +612,8 @@ def run_verifier_loop(
                 "verifier_fine_grained_score": fg,
                 "verifier_naive_score": result["naive_score"],
                 "verifier_response": result["response"],
-                "verifier_extraction": result["extraction"],
+                "verifier_response_extraction": result["response_extraction"],  # "json" | "regex" | "raw_fallback"
+                "verifier_extraction": result["extraction"],  # score extraction — independent of the above
                 "round_prediction": round_predictions[i],
                 "verifier_raw_text": result["raw_text"],  # analysis + prefilled tag/letter —
                                                           # lets you see exactly what the model

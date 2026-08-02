@@ -222,13 +222,35 @@ def naive_score_from_text(text: str) -> float | None:
     return (raw_val - lo) / (hi - lo) if hi > lo else 0.5
 
 
+# Tolerant of Python-dict-repr output (single quotes) instead of valid JSON —
+# see run_verifier_cot.py's _extract_response_text for the real example that
+# motivated this (a fine-tuned verifier writing {'response': '...'} instead
+# of {"response": "..."}, which json.loads() rejects outright).
+_RESPONSE_KV_RE = re.compile(r"""['"]response['"]\s*:\s*['"](.*?)['"]\s*[,}]""", re.DOTALL)
+
+
+def _extract_response_text(analysis: str) -> tuple[str, str]:
+    """Returns (response_text, method) — "json" | "regex" | "raw_fallback".
+    See run_verifier_cot.py's function of the same name for the full
+    rationale; duplicated here per this repo's self-contained-experiment
+    convention."""
+    data = _extract_first_json_object(analysis)
+    if data is not None and "response" in data:
+        return str(data["response"])[:500], "json"
+
+    m = _RESPONSE_KV_RE.search(analysis)
+    if m:
+        return m.group(1)[:500], "regex"
+
+    return analysis.strip()[:500], "raw_fallback"
+
+
 def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     """One K-repeat's full result under the two-pass prefill scheme (see
     module docstring). `analysis` is pass 1's cleaned text up to (not
     including) the '<score>' tag; `second_out` is pass 2's single
     grammar-constrained token generated right after a prefilled '<score>'."""
-    data = _extract_first_json_object(analysis) or {}
-    response = str(data.get("response", ""))[:500]
+    response, response_extraction = _extract_response_text(analysis)
 
     letter_raw = second_out.outputs[0].text
     logprobs_list = second_out.outputs[0].logprobs or []
@@ -282,6 +304,7 @@ def parse_verifier_output_prefill(analysis: str, second_out) -> dict:
     return {
         "verdict": verdict,
         "response": response,
+        "response_extraction": response_extraction,  # "json" | "regex" | "raw_fallback"
         "raw_text": synth_text,  # analysis + the prefilled tag/letter, so you can see
                                  # exactly what pass 2 was constrained to continue from
         "score_alts": score_alts,  # [(letter, renormalized_prob), ...] sorted desc —
