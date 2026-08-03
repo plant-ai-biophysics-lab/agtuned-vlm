@@ -79,7 +79,31 @@ _META_STOPWORDS = {
     "acknowledged", "noted", "additionally", "furthermore", "moreover",
     "summary", "summarize", "reassess", "reassessment", "refine", "refined",
 }
-_STOPWORDS |= _META_STOPWORDS
+
+# Round-1 statements are near-universally templated description-openers
+# ("Based on the visual evidence in this image..., there are several
+# indicators of physiological stress...") that carry no diagnostic content
+# but aren't rare enough in the corpus for IDF to fully suppress them —
+# inspection of real retrieved passages showed these words dominating the
+# query and pulling in off-topic literature (see conversation record: a
+# rangeland-weed image's grounding pulled oat genetic-resources and
+# wheat-gender-systems papers). Filtered as a fallback layer underneath the
+# predicted_class mechanism in extract_query_terms — when a resolved
+# prediction is available it dominates via its much higher weight anyway;
+# this only matters when resolution fails and the statement-text fallback is
+# all that's left.
+_BOILERPLATE_STOPWORDS = {
+    "based", "visual", "evidence", "assessment", "indicators", "indicator",
+    "however", "exhibits", "exhibit", "characteristics", "several",
+    "distinct", "potential", "potentially", "issues", "issue", "signs",
+    "sign", "observed", "observation", "observations", "provided",
+    "specimen", "detailed", "breakdown", "categorize", "identify",
+    "description", "descriptive", "definitive", "makes", "difficult",
+    "primary", "showing", "shows", "show", "suggest", "suggests",
+    "suggesting", "present", "presence", "complex", "biotic", "abiotic",
+    "physiological", "pathological", "stressors", "stressor",
+}
+_STOPWORDS |= _META_STOPWORDS | _BOILERPLATE_STOPWORDS
 
 
 def _tokenize(text: str) -> list[str]:
@@ -143,15 +167,39 @@ def load_gardian_index(
 
 
 def extract_query_terms(
-    statement: str, class_vocab: list[str] | None, max_terms: int = 12,
+    statement: str,
+    class_vocab: list[str] | None,
+    max_terms: int = 12,
+    predicted_class: str | None = None,
 ) -> list[tuple[str, float]]:
-    """Query terms derived ONLY from `statement` (the VLM's own text) — never
-    from ground truth. `class_vocab` is the full label set for the item's
-    dataset, used only to recognize when the statement itself names one of
-    those classes (an explicit-claim signal, weighted higher than generic
-    tokenized words). Returns [(term, weight), ...] sorted by weight desc."""
+    """Query terms derived ONLY from the VLM's own output — never from ground
+    truth. Three tiers, highest-confidence first:
+
+    1. predicted_class (weight 5.0, its component words 3.5): an EXPLICIT
+       classification the VLM was directly asked to make this round (see
+       run_verifier_loop — a _cls_question pass now runs before verification
+       each round, not just at the end), fuzzy-resolved against class_vocab
+       via src.common.metrics.resolve_class (the same matching the judge
+       already uses elsewhere in this repo). This is the strongest signal:
+       an explicit claim, not an incidental word match.
+    2. class_vocab substring hits in `statement` (weight 3.0 / 2.0 for
+       component words) — catches a class name mentioned in passing even
+       when the explicit prediction didn't resolve.
+    3. Generic tokenized words from `statement` (weight 1.0) — the fallback
+       when neither of the above fires, e.g. a round-1 statement that's
+       still hedging without naming anything ("several indicators of
+       physiological stress"). Downweighted at search time by corpus IDF.
+
+    Returns [(term, weight), ...] sorted by weight desc."""
     statement_l = (statement or "").lower()
     terms: dict[str, float] = {}
+
+    if predicted_class:
+        pred_l = predicted_class.lower().strip()
+        if len(pred_l) >= 3:
+            terms[pred_l] = 5.0
+            for w in _tokenize(pred_l):
+                terms[w] = max(terms.get(w, 0.0), 3.5)
 
     for cls in class_vocab or []:
         cls_l = cls.lower().strip()

@@ -1,23 +1,26 @@
 """
 Verifier-CoT — prompt-only verifier-in-the-loop experiment (no fine-tuning).
 
-Combines self_cot's free-form single description turn with cot_yaml's
-multi-turn structure: instead of a fixed step list, a verifier model plays a
-verifier role each round (different system prompt) and scores the VLM's
-latest statement on the same fine-grained logprob letter-scale as
-experiments/verifier_ppt (see that experiment's module docstring for the
-two-pass prefill mechanism) — the chain ends early once that score clears
---score_threshold (default 0.9), or unconditionally at --max_rounds.
-cot_yaml's step content is reused as the verifier's diagnostic reference
-rubric (see src/verifier_vision.py's _RUBRIC_DISEASE/_RUBRIC_WEED, already
-derived from cot_prompts.yaml) — the VLM being tested never sees it.
+Combines self_cot's describe-then-classify structure with cot_yaml's
+multi-turn structure: every round is symmetric — description/reaction turn,
+then an EXPLICIT classification turn (real, appended to the VLM's own
+history) — and a verifier model plays a verifier role each round (different
+system prompt), scoring that round's classification claim on the same
+fine-grained logprob letter-scale as experiments/verifier_ppt (see that
+experiment's module docstring for the two-pass prefill mechanism). The
+verifier always checks an explicit diagnosis, never loose reasoning text.
+The chain ends early once that score clears --score_threshold (default
+0.9), or unconditionally at --max_rounds. cot_yaml's step content is reused
+as the verifier's diagnostic reference rubric (see src/verifier_vision.py's
+_RUBRIC_DISEASE/_RUBRIC_WEED, already derived from cot_prompts.yaml) — the
+VLM being tested never sees it.
 
 Verifier can be the SAME model as the general/diagnostic model (original
 design, same weights, different system prompt) or a SEPARATE --verifier_model
 (e.g. a smaller dedicated model). Because verification and generation
-alternate every round (verify → round-classification snapshot → next-round
-generation → verify again...), a cross-model run can't do one clean swap the
-way experiments/verifier_ppt does — see ModelSwitcher below, which swaps at
+alternate every round (verify → statement+classification generation → verify
+again...), a cross-model run can't do one clean swap the way
+experiments/verifier_ppt does — see ModelSwitcher below, which swaps at
 each round boundary rather than keeping both models resident (full-weight
 MoE + a second dense model doesn't reliably fit an 80GB GPU together).
 
@@ -493,9 +496,18 @@ def run_verifier_loop(
     class_vocab_by_ds: dict[str, list[str]] | None = None,
     grounding_top_k: int = 3,
 ) -> list[dict]:
-    """Round-loop: VLM free-form statement -> verifier scores it on the
-    fine-grained letter scale -> repeat (up to max_rounds, or until the score
-    clears score_threshold) -> final classification turn for every image.
+    """Round-loop, symmetric every round: description/reaction -> EXPLICIT
+    classification (real turn, appended to hist) -> verifier scores that
+    classification on the fine-grained letter scale -> if not supported, the
+    verifier's response becomes the next prompt and the cycle repeats (up to
+    max_rounds, or until the score clears score_threshold) -> one more final
+    classification turn for every image on the full accumulated history.
+
+    Every round always verifies an explicit diagnosis claim, never loose
+    reasoning text — round 1 gets description-then-classify (self_cot
+    style); rounds 2+ get reaction-to-feedback-then-classify. This also
+    means there's exactly one classification call per round per active
+    item, real and hist-visible — no separate throwaway prediction call.
 
     force_max_rounds=True ignores the score threshold as a stopping condition
     and always runs every image to exactly max_rounds — the verifier still
@@ -507,10 +519,12 @@ def run_verifier_loop(
 
     gardian_index/class_vocab_by_ds/grounding_top_k: optional retrieval
     grounding (see retrieval.py) — when gardian_index is not None, every
-    verify-phase round builds a keyword query from the VLM's OWN statement
-    text (never the ground-truth class) plus the item's dataset class
-    vocabulary, retrieves the top grounding_top_k GARDIAN passages, and
-    injects them into the verifier's user turn via {grounding}. When
+    verify-phase round builds a keyword query from the round's classification
+    (the highest-confidence signal, fuzzy-resolved against class_vocab_by_ds
+    via resolve_class) plus generic terms from the statement text — never
+    from ground truth. Retrieves the top grounding_top_k GARDIAN passages and
+    injects their full text into the verifier's user turn via {grounding}
+    (passage IDs are logged separately, never shown to the model). When
     gardian_index is None, grounding is left at its "disabled" placeholder
     and behavior is identical to before retrieval was added.
     """
@@ -518,8 +532,20 @@ def run_verifier_loop(
 
     _sys_msg, _cls_question, _desc_question, _build_prompt, _clean = _import_helpers()
 
+    def _cls_question_in_context(task_type: str, crop: str | None) -> str:
+        """Same question as _cls_question, prefixed to explicitly point the
+        model back at the conversation so far — every mid-loop classification
+        turn follows a description or a reaction-to-feedback turn, not a bare
+        image, so the question should read as building on that, not asking
+        cold. Not used for the one-off final classification (§07 in the
+        prompt reference doc) — that one already has the full history as
+        context by construction and doesn't need the same nudge."""
+        q = _cls_question(task_type, crop)
+        return "Given the previous messages, " + q[0].lower() + q[1:]
+
     if gardian_index is not None:
         from retrieval import extract_query_terms, search_passages, format_passages_for_prompt
+        from src.common.metrics import resolve_class
 
     _VLM_P = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
     # Pass 1: response JSON only — no logprobs needed, matches verifier_ppt.py.
@@ -568,11 +594,43 @@ def run_verifier_loop(
         del prompts
         prog.update(len(batch_idx))
 
+    # ── Round 1: classification, self_cot-style — a REAL turn appended to
+    # hist[i] (unlike every other round's throwaway prediction call below),
+    # so round 1's verify phase checks this classification claim, not the
+    # bare description. Doubles as round 1's retrieval-grounding anchor —
+    # the per-round throwaway prediction call further down is skipped for
+    # rnd==1 since this turn already provides it. ────────────────────────────
+    sub_banner(f"Round 1/{max_rounds}: initial classification ({n} images)")
+    initial_predictions: dict[int, str] = {}
+    prog = Progress(total=n, label="Round 1 classification", every=max(batch_size, 1))
+    for start in range(0, n, batch_size):
+        batch_idx = list(range(start, min(start + batch_size, n)))
+        for i in batch_idx:
+            hist[i].append({"role": "user", "content": _cls_question_in_context(items[i]["task_type"], items[i]["crop"])})
+        prompts = [_build_prompt(hist[i], general_tokenizer, _img(i)) for i in batch_idx]
+        outputs = general_llm.generate(prompts, _CLS_P)
+        del prompts
+        for i, out in zip(batch_idx, outputs):
+            pred = _clean(out.outputs[0].text)
+            hist[i].append({"role": "assistant", "content": pred})
+            initial_predictions[i] = pred
+        prog.update(len(batch_idx))
+
     active_idx = list(range(n))
+
+    # Carries each item's most recent REAL classification turn across
+    # rounds — seeded from round 1's classification, updated at the end of
+    # every round that continues (see the classification sub-step in the
+    # "continue" branch below). Every round's verify phase checks exactly
+    # this: an explicit diagnosis claim, never loose reasoning text — so the
+    # verifier is always re-verifying a concrete prediction, not vibes.
+    latest_predictions: dict[int, str] = dict(initial_predictions)
 
     for rnd in range(1, max_rounds + 1):
         if not active_idx:
             break
+
+        round_predictions = {i: latest_predictions[i] for i in active_idx}
 
         # ── Verify phase (verifier role, two-pass letter-scale scoring) ────────
         verifier_llm, verifier_tokenizer = switcher.get("verifier")
@@ -591,10 +649,13 @@ def run_verifier_loop(
 
                 if gardian_index is not None:
                     vocab = (class_vocab_by_ds or {}).get(item["ds"], [])
-                    query_terms = extract_query_terms(statement, vocab)
+                    resolved_pred = resolve_class(round_predictions[i], vocab) if vocab else None
+                    query_terms = extract_query_terms(statement, vocab, predicted_class=resolved_pred)
                     passages = search_passages(gardian_index, query_terms, top_k=grounding_top_k)
                     grounding_text = format_passages_for_prompt(passages)
                     round_grounding[i] = {
+                        "predicted_class_raw": round_predictions[i],
+                        "predicted_class_resolved": resolved_pred,
                         "query_terms": [t for t, _ in query_terms],
                         "passage_ids": [p.get("chunk_id") for p in passages],
                         "passage_sources": [p.get("source") for p in passages],
@@ -625,25 +686,6 @@ def run_verifier_loop(
 
             for i, analysis, second_out in zip(batch_idx, analyses, second_outputs):
                 round_results[i] = parse_verifier_output_prefill(analysis, second_out)
-            prog.update(len(batch_idx))
-
-        # ── Round-classification snapshot (general role) ───────────────────────
-        general_llm, general_tokenizer = switcher.get("general")
-        round_predictions: dict[int, str] = {}
-        prog = Progress(total=len(active_idx), label=f"Round {rnd} snapshot", every=max(batch_size, 1))
-        for start in range(0, len(active_idx), batch_size):
-            batch_idx = active_idx[start:start + batch_size]
-            cls_prompts = [
-                _build_prompt(
-                    hist[i] + [{"role": "user", "content": _cls_question(items[i]["task_type"], items[i]["crop"])}],
-                    general_tokenizer, _img(i),
-                )
-                for i in batch_idx
-            ]
-            cls_outputs = general_llm.generate(cls_prompts, _CLS_P)
-            del cls_prompts
-            for i, cls_out in zip(batch_idx, cls_outputs):
-                round_predictions[i] = _clean(cls_out.outputs[0].text)
             prog.update(len(batch_idx))
 
         # ── Decide stop/continue per item ───────────────────────────────────────
@@ -689,7 +731,14 @@ def run_verifier_loop(
         if not active_idx or rnd == max_rounds:
             break
 
-        # ── Generate round+1 statements (general role, already loaded above) ───
+        # ── Generate round+1 statement + classification (general role) ──────────
+        # Re-fetch explicitly: the verify phase above may have switched the
+        # switcher to the verifier role for a cross-model run, which destroys
+        # the previously-loaded general engine.
+        general_llm, general_tokenizer = switcher.get("general")
+
+        # Reasoning turn: the model's reaction to the verifier's feedback
+        # (already appended as the preceding user turn above).
         sub_banner(f"Generating round {rnd + 1} statements: {len(active_idx)} images")
         prog = Progress(total=len(active_idx), label=f"Round {rnd + 1} generation", every=max(batch_size, 1))
         for start in range(0, len(active_idx), batch_size):
@@ -699,6 +748,26 @@ def run_verifier_loop(
             for i, out in zip(batch_idx, outputs):
                 hist[i].append({"role": "assistant", "content": _clean(out.outputs[0].text)})
             del prompts
+            prog.update(len(batch_idx))
+
+        # Classification turn — REAL, appended to hist, same as round 1's
+        # §03: makes every round symmetric (statement -> classify -> verify),
+        # so the verifier is always re-checking an explicit prediction after
+        # incorporating its own prior feedback, not free-form reasoning text.
+        # Updates latest_predictions for next round's verify + grounding.
+        sub_banner(f"Generating round {rnd + 1} classification: {len(active_idx)} images")
+        prog = Progress(total=len(active_idx), label=f"Round {rnd + 1} classification", every=max(batch_size, 1))
+        for start in range(0, len(active_idx), batch_size):
+            batch_idx = active_idx[start:start + batch_size]
+            for i in batch_idx:
+                hist[i].append({"role": "user", "content": _cls_question_in_context(items[i]["task_type"], items[i]["crop"])})
+            prompts = [_build_prompt(hist[i], general_tokenizer, _img(i)) for i in batch_idx]
+            outputs = general_llm.generate(prompts, _CLS_P)
+            del prompts
+            for i, out in zip(batch_idx, outputs):
+                pred = _clean(out.outputs[0].text)
+                hist[i].append({"role": "assistant", "content": pred})
+                latest_predictions[i] = pred
             prog.update(len(batch_idx))
 
     # ── Final classification turn for every image (matches self_cot/cot_yaml) ──
