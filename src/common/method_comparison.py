@@ -53,6 +53,12 @@ CONDITION_STYLES: list[tuple[str, str]] = [
     ("PPT-SelfCoT-N1",  "#313695"),
     ("PPT-SelfCoT-N5",  "#4575b4"),
     ("PPT-SelfCoT-N10", "#74add1"),
+    # Prompt-only verifier-in-the-loop experiment (experiments/verifier_cot/)
+    ("Verifier-CoT",    "#bcbd22"),
+    # Verifier-CoT with a separate --verifier_model (cross-model verification)
+    ("Verifier-CoT (Gemma-self)",     "#bcbd22"),
+    ("Verifier-CoT (Qwen-base)",      "#17a398"),
+    ("Verifier-CoT (Qwen-finetuned)", "#e07b39"),
 ]
 
 CONDITION_COLOR: dict[str, str] = dict(CONDITION_STYLES)

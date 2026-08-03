@@ -29,12 +29,15 @@ Usage:
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 
 from _progress import fmt_duration, stage_banner
 
 OUT_DIR = Path(__file__).parent.parent / "outputs"
+
+THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
 SYSTEM_PROMPT = (
     "You are an expert agricultural scientist and advisor. "
@@ -67,7 +70,10 @@ def main() -> None:
     parser.add_argument("--quantization",  default=None,
                         help="awq, awq_marlin, gptq, bitsandbytes, or None for bf16")
     parser.add_argument("--batch_size",    type=int,   default=64)
-    parser.add_argument("--max_tokens",    type=int,   default=512)
+    parser.add_argument("--max_tokens",    type=int,   default=1024,
+                        help="Raised from earlier default of 512 — reasoning models "
+                             "(e.g. Qwen3.5) spend part of this budget on an internal "
+                             "<think> block even with enable_thinking=False requested")
     parser.add_argument("--max_model_len", type=int,   default=4096)
     parser.add_argument("--gpu_util",      type=float, default=0.90)
     parser.add_argument("--tensor_parallel_size", type=int, default=1,
@@ -129,14 +135,17 @@ def main() -> None:
             messages_batch = [build_messages(r["question"], r["answer"]) for _, r in batch]
 
             try:
-                outputs = llm.chat(messages_batch, sampling_params=sampling, use_tqdm=False)
+                outputs = llm.chat(
+                    messages_batch, sampling_params=sampling, use_tqdm=False,
+                    chat_template_kwargs={"enable_thinking": False},
+                )
             except Exception as e:
                 print(f"  Batch {batch_start}–{batch_start + len(batch)} failed: {e}")
                 failed += len(batch)
                 continue
 
             for (idx, row), output in zip(batch, outputs):
-                chain = output.outputs[0].text.strip()
+                chain = THINK_RE.sub("", output.outputs[0].text).strip()
                 entry = {
                     "_idx": idx,
                     "stage": "sft_reasoning",

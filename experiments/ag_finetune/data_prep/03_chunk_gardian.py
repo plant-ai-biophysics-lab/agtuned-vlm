@@ -196,11 +196,17 @@ def main() -> None:
 
             local_path = download_dataset(name, token)
             if local_path is None:
-                stats["skipped_datasets"].append(name)
+                if name not in stats["skipped_datasets"]:
+                    stats["skipped_datasets"].append(name)
                 stats_path.write_text(json.dumps(stats, indent=2))
                 continue
 
             process_dataset(name, schema, local_path, f, stats)
+            # A dataset that succeeds on a retry was previously recorded as
+            # skipped (from an earlier failed attempt) — clear that stale
+            # entry now that by_dataset shows it actually completed.
+            if short_name in stats["by_dataset"] and name in stats["skipped_datasets"]:
+                stats["skipped_datasets"].remove(name)
             stats_path.write_text(json.dumps(stats, indent=2))  # checkpoint after each dataset
 
     print(f"\nDone in {fmt_duration(time.time() - t0)}. "

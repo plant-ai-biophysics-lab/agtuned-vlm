@@ -28,6 +28,8 @@ from pathlib import Path
 
 OUT_DIR = Path(__file__).parent.parent / "outputs"
 
+THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
 SYSTEM_PROMPT = (
     "You are an expert agricultural scientist. "
     "Given a passage from an agricultural research document, generate {n} clear "
@@ -49,7 +51,13 @@ def build_messages(passage: str, n: int) -> list[dict]:
 
 
 def parse_qa_list(text: str) -> list[dict]:
-    """Extract JSON Q&A list from model output, tolerating surrounding prose."""
+    """Extract JSON Q&A list from model output, tolerating surrounding prose.
+
+    Strips a leading <think>...</think> block first — reasoning models (e.g.
+    Qwen3.5) emit one by default even with enable_thinking=False requested,
+    and it would otherwise eat into --max_tokens before any JSON is produced.
+    """
+    text = THINK_RE.sub("", text).strip()
     m = re.search(r"\[.*?\]", text, re.DOTALL)
     if not m:
         return []
@@ -78,7 +86,11 @@ def main() -> None:
     parser.add_argument("--quantization", default=None,
                         help="awq, awq_marlin, gptq, bitsandbytes, or None for bf16")
     parser.add_argument("--batch_size",   type=int, default=32)
-    parser.add_argument("--max_tokens",   type=int, default=512)
+    parser.add_argument("--max_tokens",   type=int, default=1024,
+                        help="Raised from earlier default of 512 — reasoning models "
+                             "(e.g. Qwen3.5) spend part of this budget on an internal "
+                             "<think> block, so 512 could get truncated before any "
+                             "answer JSON is emitted")
     parser.add_argument("--max_model_len", type=int, default=3072)
     parser.add_argument("--gpu_util",     type=float, default=0.90)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
@@ -130,6 +142,20 @@ def main() -> None:
     sampling = SamplingParams(max_tokens=args.max_tokens, temperature=0.4, top_p=0.9)
     print("Model loaded.\n")
 
+    # On a resumed run, total_qa/failed below only track THIS invocation's new
+    # work — they are not reloaded from a prior run. Load the prior stats (if
+    # any) so failed_passages accumulates correctly across resumes, and
+    # recompute qa_pairs_generated from the actual output file at the end
+    # (ground truth) rather than trusting an in-memory counter that resets
+    # every invocation.
+    stats_path = OUT_DIR / "stage6_gardian_qa_stats.json"
+    prior_failed = 0
+    if stats_path.exists():
+        try:
+            prior_failed = json.loads(stats_path.read_text()).get("failed_passages", 0)
+        except Exception:
+            prior_failed = 0
+
     done_passages = len(done_ids)
     total_qa = 0
     failed = 0
@@ -141,7 +167,10 @@ def main() -> None:
             messages_batch = [build_messages(p["passage"], args.n_qa) for _, p in batch]
 
             try:
-                outputs = llm.chat(messages_batch, sampling_params=sampling, use_tqdm=False)
+                outputs = llm.chat(
+                    messages_batch, sampling_params=sampling, use_tqdm=False,
+                    chat_template_kwargs={"enable_thinking": False},
+                )
             except Exception as e:
                 print(f"  Batch {batch_start} failed: {e}")
                 failed += len(batch)
@@ -173,10 +202,14 @@ def main() -> None:
             print(f"  {done_passages}/{len(passages)} passages  →  {total_qa} Q&A pairs  "
                   f"({failed} failed)  [{rate:.1f} pass/s  ETA {eta_h:.1f}h]")
 
+    # Ground-truth recount — always correct regardless of how many times this
+    # run has been resumed, unlike an in-memory counter reset per invocation.
+    true_qa_count = sum(1 for line in out_path.read_text().splitlines() if line.strip())
+
     stats = {
         "passages_processed": done_passages,
-        "qa_pairs_generated": total_qa,
-        "failed_passages":    failed,
+        "qa_pairs_generated": true_qa_count,
+        "failed_passages":    prior_failed + failed,
         "model":              args.model,
         "n_qa_per_passage":   args.n_qa,
     }

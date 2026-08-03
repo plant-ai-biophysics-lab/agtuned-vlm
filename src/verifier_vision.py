@@ -198,10 +198,21 @@ def _build_task_datasets(config_path: str) -> dict[str, dict[str, list[str]]]:
 
 def select_datasets(n_per_task: int = N_DATASETS_PER_TASK,
                     seed: int = SEED,
-                    config_path: str = "src/config/datasets.yaml") -> dict[str, list[str]]:
+                    config_path: str = "src/config/datasets.yaml",
+                    select_all: bool = False) -> dict[str, list[str]]:
     """Sample n_per_task datasets per task, prioritising primary task_type datasets
-    before filling remaining slots with class_override datasets."""
+    before filling remaining slots with class_override datasets.
+
+    select_all=True bypasses sampling entirely and returns every dataset in
+    every task's pool (primary + override) — n_per_task is ignored in that
+    case. Backward compatible: default is unchanged for existing callers.
+    """
     pools = _build_task_datasets(config_path)
+    if select_all:
+        return {
+            task: sorted(set(buckets["primary"]) | set(buckets["override"]))
+            for task, buckets in pools.items()
+        }
     rng = random.Random(seed)
     selected: dict[str, list[str]] = {}
     for task, buckets in pools.items():

@@ -20,6 +20,48 @@ OUT_DIR = Path(__file__).parent.parent / "outputs"
 
 # ── Stage metadata ──────────────────────────────────────────────────────────
 STAGES = {
+    "sft_data.jsonl": {
+        "label":   "Consolidated — SFT Data",
+        "purpose": "SFT (Consolidated)",
+        "day":     "Simplified",
+        "description": (
+            "<b>What it's for:</b> the current, simplified SFT dataset — plain "
+            "open-ended {question, answer}, no CoT/&lt;think&gt; wrapper, no verifier "
+            "JSON schema, no confidence scoring. Built by "
+            "<code>build_sft_data.py</code> from data already generated upstream, "
+            "not a new model run: merges Stage 1a (AgriLLM), Stage 1c (Chi-Metrics), "
+            "and Stage 2b (GARDIAN Q&A), deduping exact-repeat questions across all "
+            "three sources."
+            "<br/><br/><b>Superseded stages:</b> Stage 2a (reasoning chains) is no "
+            "longer used for this simplified path &mdash; it added a synthetic "
+            "&lt;think&gt; chain that this dataset intentionally drops."
+            "<br/><br/><b>Known quality caveat:</b> a small amount of off-topic "
+            "content survives Stage 1a's domain filter (e.g. procurement-software "
+            "boilerplate) &mdash; spot-checked, not fixed, since it's a pre-existing "
+            "gap in the upstream filter rather than something this merge introduces."
+        ),
+        "before_fields": ["question", "answer", "source"],
+        "after_fields":  ["question", "answer", "source"],
+    },
+    "dpo_pairs.jsonl": {
+        "label":   "Consolidated — DPO Pairs",
+        "purpose": "DPO (Consolidated)",
+        "day":     "Simplified",
+        "description": (
+            "<b>What it's for:</b> the current, simplified DPO dataset — plain "
+            "{prompt, chosen, rejected}, no verifier JSON schema, no confidence "
+            "field. Built by <code>build_dpo_data.py</code> by reshaping Stage 3's "
+            "existing (question, correct, wrong_pred) triples &mdash; those fields "
+            "were already sitting there, just wrapped in a verifier-correction "
+            "message format this drops."
+            "<br/><br/><b>Not used:</b> Stage 1c's DPO sibling is an empty "
+            "placeholder (see its own entry for why), and Stage 3b is the "
+            "verifier-specific DPO data (JSON verdict schema) — set aside for now, "
+            "not merged in here."
+        ),
+        "before_fields": ["prompt", "chosen", "rejected"],
+        "after_fields":  ["prompt", "chosen", "rejected"],
+    },
     "stage1_agrillm_filtered.jsonl": {
         "label":   "Stage 1a — AgriLLM Filtered",
         "purpose": "SFT Seed (Q&A)",
@@ -31,13 +73,43 @@ STAGES = {
         "before_fields": ["system_prompt", "turns"],
         "after_fields":  ["question", "answer", "system"],
     },
+    "stage2_chi_sft.jsonl": {
+        "label":   "Stage 1c — Chi-Metrics SFT",
+        "purpose": "SFT Seed (Q&A)",
+        "day":     "Day 1",
+        "description": (
+            "<b>What it's for:</b> general SFT training data, same role as Stage 1a but from "
+            "a different source (Farmer.Chat interaction logs, CGIAR/Chi-Metrics-2024) for "
+            "distribution diversity."
+            "<br/><br/><b>Why score&ge;3 only:</b> the dataset's overall_score field ranges "
+            "1&ndash;3, not 1&ndash;5 as originally assumed. Score=3 rows are kept as advisory "
+            "Q&A; score&lt;3, unclear-prompt, too-short, and RAG-artifact rows (\"does not "
+            "provide...\", \"not mentioned in the...\") are all filtered out &mdash; see "
+            "stage2_chi_dpo_stats.json for exact drop counts by reason."
+            "<br/><br/><b>Why there's no DPO sibling despite the shared stats file name:</b> "
+            "this dataset's 1&ndash;3 score range gave no clean same-topic pairing for DPO "
+            "(score=1 rows are almost entirely \"Not Clear\" prompts, not genuine negatives), "
+            "so <code>stage2_chi_dpo_pairs.jsonl</code> is an intentional empty placeholder. "
+            "The verifier's real DPO data comes from Stage 7 instead, sourced independently."
+        ),
+        "before_fields": ["original_message", "message_response", "overall_score"],
+        "after_fields":  ["question", "answer", "topic", "entity", "score"],
+    },
     "stage2_chi_dpo_pairs.jsonl": {
         "label":   "Stage 1c — Chi-Metrics DPO Pairs",
         "purpose": "DPO Alignment",
         "day":     "Day 1",
         "description": (
-            "Preference pairs from Farmer.Chat interaction logs. "
-            "High-score (≥4) responses paired against low-score (≤2) responses per topic."
+            "<b>Currently an intentional empty placeholder</b> &mdash; not a bug. Was meant to "
+            "hold preference pairs from Farmer.Chat interaction logs (high-score vs low-score "
+            "responses per topic), but CGIAR/Chi-Metrics-2024's overall_score only ranges "
+            "1&ndash;3 and score=1 rows are almost entirely \"Not Clear\" prompts, leaving no "
+            "clean same-topic negative to pair against a good response. See "
+            "<code>stage2_chi_sft.jsonl</code> for what this source is actually used for "
+            "instead (plain SFT on the score=3 rows). This file stays empty unless a different "
+            "preference-pair source is found for general-model alignment &mdash; it is NOT "
+            "fixed by Stage 7, which sources DPO data for the verifier specifically, not "
+            "general response-quality alignment."
         ),
         "before_fields": ["original_message", "message_response", "overall_score"],
         "after_fields":  ["chosen_prompt", "chosen_response", "rejected_response",
@@ -76,14 +148,63 @@ STAGES = {
         "before_fields": ["question", "wrong_pred", "correct"],
         "after_fields":  ["messages"],
     },
+    "stage6_gardian_qa.jsonl": {
+        "label":   "Stage 2b — GARDIAN Q&A",
+        "purpose": "SFT Knowledge (RAG QA)",
+        "day":     "Day 2",
+        "description": (
+            "Plain question-answer pairs generated from GARDIAN document passages. "
+            "Teaches general agricultural knowledge — no verification/critique angle, "
+            "unlike Stage 5 or Stage 7."
+        ),
+        "before_fields": ["passage", "title"],
+        "after_fields":  ["question", "answer"],
+    },
+    "stage7_verifier_dpo_pairs.jsonl": {
+        "label":   "Stage 3b — Verifier DPO Pairs",
+        "purpose": "Verifier DPO Alignment",
+        "day":     "Day 3",
+        "description": (
+            "<b>What it's for:</b> DPO (Direct Preference Optimization) training of the "
+            "per-statement verifier model &mdash; run via "
+            "<code>training/stage2_dpo.py --data experiments/ag_finetune/outputs/"
+            "stage7_verifier_dpo_pairs.jsonl</code>. Each row is one (chosen, rejected) verdict "
+            "pair for the SAME statement + prompt, teaching the verifier to prefer catching "
+            "an error over rubber-stamping it."
+            "<br/><br/><b>Why DPO specifically (not just SFT):</b> Stage 5's data only shows "
+            "the verifier a single correct correction with nothing to contrast it against. DPO "
+            "needs a head-to-head pair on the exact same prompt, and this is the first stage "
+            "that produces one."
+            "<br/><br/><b>Why this data is grounded, not synthetic:</b> unlike Stage 5's hard "
+            "negatives (LLM-hallucinated wrong answers), the REJECTED side here is built from "
+            "the vision model's own real, verbatim output during CoT evaluation "
+            "(outputs/cot_step_analysis/swap_order/ckpt_swap_judged.csv), filtered to the two "
+            "failure modes verifier_findings.pdf identifies as highest-value: "
+            "<b>presupposition_confabulation</b> (CoT questions that presuppose disease "
+            "symptoms make the model invent them on healthy tissue &mdash; the report's single "
+            "largest, most fixable failure) and <b>confident_misdiagnosis</b> (assertive "
+            "language like 'clearly' / 'definitively' is anti-correlated with correctness, so "
+            "a confidently-wrong statement is a stronger training signal than a random wrong "
+            "one). The CHOSEN verdict is deterministically built from each row's real "
+            "ground-truth label &mdash; standard supervised-label construction, not a leak, "
+            "since the verifier never sees the ground truth at inference. See the "
+            "<code>failure_mode</code> field to filter by which finding a given row targets."
+        ),
+        "before_fields": ["step_question", "statement", "ground_truth", "failure_mode"],
+        "after_fields":  ["chosen_prompt", "chosen_response", "rejected_response"],
+    },
 }
 
 PURPOSE_COLORS = {
+    "SFT (Consolidated)":       "#a3d9a5",
+    "DPO (Consolidated)":       "#ffe08a",
     "SFT Seed (Q&A)":           "#d4edda",
     "DPO Alignment":             "#fff3cd",
     "RAG QA Corpus":             "#d1ecf1",
     "SFT Reasoning (STaR)":     "#e2d9f3",
     "Verifier / Critic Training":"#f8d7da",
+    "SFT Knowledge (RAG QA)":   "#d1ecf1",
+    "Verifier DPO Alignment":   "#ffe0b2",
 }
 
 

@@ -1,0 +1,254 @@
+"""
+Grep/keyword-based retrieval grounding against the GARDIAN passages corpus
+(experiments/ag_finetune/outputs/stage3_gardian_passages.jsonl) for
+experiments/verifier_cot/run_verifier_cot.py's --database flag.
+
+Purpose: cheap, no-training test of whether grounding the verifier's
+judgment in real literature passages (instead of relying purely on the
+model's own training-memory "knowledge check") changes verifier score
+quality. This is the retrieval prototype to try before committing to a
+fine-tuned query-generation model — see run_verifier_cot.py's module
+docstring for the broader verifier-in-the-loop context.
+
+Query construction happens ONLY from the VLM's own statement text — never
+from the image's ground-truth class — otherwise "verification" becomes
+circular (grounding on the answer key). Two term sources, combined:
+  1. Class-vocabulary mentions: the full label set for the item's OWN
+     dataset (not just the correct class) checked as substrings against the
+     statement — catches an explicit diagnosis claim like "early blight"
+     verbatim, and still contributes component words if only part of a
+     multi-word class name appears.
+  2. Generic keyword extraction: tokenize the statement and score by
+     inverse document frequency against the corpus at search time, so
+     generic captioning words ("leaf", "plant", "shows") don't drown out
+     specific ones ("chlorosis", "Fusarium") without needing a hand-curated
+     agricultural stopword list.
+
+Retrieval is a simple inverted-index keyword lookup (word -> passage
+indices), not embeddings — intentionally, to keep this a fast/cheap first
+pass. If this shows a real signal, the natural next step is fine-tuning a
+model to GENERATE better search queries/synonyms (a more supervisable
+target than the direct-confidence-score fine-tuning already tried and found
+to fail — see outputs/verifier_analysis/verifier_findings.pdf) rather than
+moving to embeddings.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections import defaultdict
+from pathlib import Path
+
+_WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z\-]{2,}")
+
+# Small, generic English stopword list only — deliberately NOT an
+# agricultural-domain list (no "leaf"/"plant"/"symptom" etc.), since those
+# get downweighted anyway by the IDF term in search_passages() once they're
+# indexed. A hand-curated domain stopword list would need constant upkeep as
+# vocabulary shifts across datasets; IDF doesn't.
+_STOPWORDS = {
+    "the", "and", "for", "are", "was", "were", "with", "this", "that",
+    "from", "has", "have", "had", "not", "but", "you", "your", "its",
+    "his", "her", "their", "our", "can", "could", "may", "might", "will",
+    "would", "should", "there", "here", "what", "which", "who", "whom",
+    "into", "onto", "than", "then", "them", "they", "these", "those",
+    "been", "being", "does", "did", "doing", "over", "under", "about",
+    "some", "any", "all", "each", "more", "most", "such", "only", "also",
+    "very", "just", "also", "when", "where", "how", "why", "image",
+    "photo", "picture",
+}
+
+# Round >=2 statements are the VLM responding to the VERIFIER's own feedback
+# (see run_verifier_loop's hist[i].append(... verifier response ...) before
+# the next round's generation), so they're full of self-referential
+# dialogue/critique language ("You are absolutely correct, my previous
+# response failed to..."). That register is rare in an academic-literature
+# corpus, so plain IDF weighting (which only discounts words that are common
+# in-corpus) actually boosts these words rather than filtering them —
+# nothing in the passage/title/keyword text looks like this, so document
+# frequency is low and idf is high, even though the words carry no
+# diagnostic content. Filtered explicitly instead of leaving it to IDF.
+_META_STOPWORDS = {
+    "absolutely", "agree", "agreed", "correct", "incorrect", "previous",
+    "response", "failed", "provide", "provided", "necessary", "excellent",
+    "critique", "challenge", "regarding", "particularly", "accurately",
+    "synthesizes", "synthesize", "coherent", "observation", "assessment",
+    "revise", "revised", "clarify", "clarification", "acknowledge",
+    "acknowledged", "noted", "additionally", "furthermore", "moreover",
+    "summary", "summarize", "reassess", "reassessment", "refine", "refined",
+}
+
+# Round-1 statements are near-universally templated description-openers
+# ("Based on the visual evidence in this image..., there are several
+# indicators of physiological stress...") that carry no diagnostic content
+# but aren't rare enough in the corpus for IDF to fully suppress them —
+# inspection of real retrieved passages showed these words dominating the
+# query and pulling in off-topic literature (see conversation record: a
+# rangeland-weed image's grounding pulled oat genetic-resources and
+# wheat-gender-systems papers). Filtered as a fallback layer underneath the
+# predicted_class mechanism in extract_query_terms — when a resolved
+# prediction is available it dominates via its much higher weight anyway;
+# this only matters when resolution fails and the statement-text fallback is
+# all that's left.
+_BOILERPLATE_STOPWORDS = {
+    "based", "visual", "evidence", "assessment", "indicators", "indicator",
+    "however", "exhibits", "exhibit", "characteristics", "several",
+    "distinct", "potential", "potentially", "issues", "issue", "signs",
+    "sign", "observed", "observation", "observations", "provided",
+    "specimen", "detailed", "breakdown", "categorize", "identify",
+    "description", "descriptive", "definitive", "makes", "difficult",
+    "primary", "showing", "shows", "show", "suggest", "suggests",
+    "suggesting", "present", "presence", "complex", "biotic", "abiotic",
+    "physiological", "pathological", "stressors", "stressor",
+}
+_STOPWORDS |= _META_STOPWORDS | _BOILERPLATE_STOPWORDS
+
+
+def _tokenize(text: str) -> list[str]:
+    return [w.lower() for w in _WORD_RE.findall(text or "") if w.lower() not in _STOPWORDS]
+
+
+class GardianIndex:
+    def __init__(self, records: list[dict], inverted: dict[str, list[int]]):
+        self.records = records
+        self.inverted = inverted
+
+
+def load_gardian_index(
+    path: str | Path, max_records: int | None = None, seed: int = 42,
+) -> GardianIndex:
+    """Loads the GARDIAN passages jsonl into memory and builds a word ->
+    [record_index, ...] inverted index over passage + title + keywords.
+
+    max_records caps how many records are kept, for fast prototyping on a
+    subset before committing to indexing the full 690k-chunk file. This is
+    NOT a prefix cutoff — the source file is written dataset-by-dataset
+    (e.g. all of gardian-ai-ready-docs' ~19k chunks, then all ~592k of
+    gardian-cigi-ai-documents', ...), so taking the first N lines silently
+    keeps only whichever sub-dataset(s) happen to come first and drops the
+    rest entirely, regardless of how relevant they are. Uses reservoir
+    sampling (Algorithm R) instead: a single pass that gives every valid
+    record an equal max_records/N chance of being kept, so a capped index's
+    sub-dataset composition mirrors the full corpus's."""
+    import random
+    records: list[dict] = []
+    rng = random.Random(seed)
+    n_seen = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if max_records is None or n_seen < max_records:
+                records.append(rec)
+            else:
+                j = rng.randint(0, n_seen)
+                if j < max_records:
+                    records[j] = rec
+            n_seen += 1
+
+    inverted: dict[str, list[int]] = defaultdict(list)
+    for idx, rec in enumerate(records):
+        words = set(_tokenize(rec.get("passage", "")))
+        words.update(_tokenize(rec.get("title", "")))
+        words.update(kw.lower() for kw in (rec.get("keywords") or []))
+        for w in words:
+            inverted[w].append(idx)
+
+    print(f"  [retrieval] loaded {len(records)} passages ({n_seen} seen in file), "
+          f"{len(inverted)} unique index terms from {path}")
+    return GardianIndex(records, dict(inverted))
+
+
+def extract_query_terms(
+    statement: str,
+    class_vocab: list[str] | None,
+    max_terms: int = 12,
+    predicted_class: str | None = None,
+) -> list[tuple[str, float]]:
+    """Query terms derived ONLY from the VLM's own output — never from ground
+    truth. Three tiers, highest-confidence first:
+
+    1. predicted_class (weight 5.0, its component words 3.5): an EXPLICIT
+       classification the VLM was directly asked to make this round (see
+       run_verifier_loop — a _cls_question pass now runs before verification
+       each round, not just at the end), fuzzy-resolved against class_vocab
+       via src.common.metrics.resolve_class (the same matching the judge
+       already uses elsewhere in this repo). This is the strongest signal:
+       an explicit claim, not an incidental word match.
+    2. class_vocab substring hits in `statement` (weight 3.0 / 2.0 for
+       component words) — catches a class name mentioned in passing even
+       when the explicit prediction didn't resolve.
+    3. Generic tokenized words from `statement` (weight 1.0) — the fallback
+       when neither of the above fires, e.g. a round-1 statement that's
+       still hedging without naming anything ("several indicators of
+       physiological stress"). Downweighted at search time by corpus IDF.
+
+    Returns [(term, weight), ...] sorted by weight desc."""
+    statement_l = (statement or "").lower()
+    terms: dict[str, float] = {}
+
+    if predicted_class:
+        pred_l = predicted_class.lower().strip()
+        if len(pred_l) >= 3:
+            terms[pred_l] = 5.0
+            for w in _tokenize(pred_l):
+                terms[w] = max(terms.get(w, 0.0), 3.5)
+
+    for cls in class_vocab or []:
+        cls_l = cls.lower().strip()
+        if len(cls_l) < 3:
+            continue
+        if cls_l in statement_l:
+            terms[cls_l] = max(terms.get(cls_l, 0.0), 3.0)
+        else:
+            for w in _tokenize(cls_l):
+                if w in statement_l:
+                    terms[w] = max(terms.get(w, 0.0), 2.0)
+
+    for w in _tokenize(statement):
+        terms.setdefault(w, 1.0)
+
+    ranked = sorted(terms.items(), key=lambda kv: -kv[1])
+    return ranked[:max_terms]
+
+
+def search_passages(
+    index: GardianIndex, query_terms: list[tuple[str, float]], top_k: int = 3,
+) -> list[dict]:
+    """Scores candidate passages by sum(term_weight * idf(term)) over terms
+    that actually hit the index, idf = log(1 + n_docs / (1 + doc_freq)) so
+    terms that appear in most of the corpus (generic words that slipped past
+    tokenization) contribute little regardless of query weight."""
+    if not query_terms or not index.records:
+        return []
+    n_docs = max(len(index.records), 1)
+    scores: dict[int, float] = defaultdict(float)
+    for term, weight in query_terms:
+        doc_ids = index.inverted.get(term)
+        if not doc_ids:
+            continue
+        idf = math.log(1 + n_docs / (1 + len(doc_ids)))
+        for doc_id in doc_ids:
+            scores[doc_id] += weight * idf
+
+    ranked = sorted(scores.items(), key=lambda kv: -kv[1])[:top_k]
+    return [{**index.records[doc_id], "_score": round(score, 3)} for doc_id, score in ranked]
+
+
+def format_passages_for_prompt(passages: list[dict], max_chars: int = 600) -> str:
+    if not passages:
+        return "(no relevant reference passages found)"
+    blocks = []
+    for i, p in enumerate(passages, 1):
+        text = (p.get("passage") or "")[:max_chars]
+        title = p.get("title") or "(untitled)"
+        source = p.get("source") or "unknown"
+        blocks.append(f"[{i}] ({source} — \"{title}\")\n{text}")
+    return "\n\n".join(blocks)

@@ -38,6 +38,8 @@ from _progress import Progress, fmt_duration, stage_banner, sub_banner
 
 OUT_DIR = Path(__file__).parent.parent / "outputs"
 
+THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
 CORRECTION_SYSTEM = (
     "You are an expert agricultural verifier. "
     "Given a question, the model's wrong prediction, and the correct answer, "
@@ -79,16 +81,27 @@ def _load_llm(args):
 
 def batch_generate(llm, SamplingParams, messages_list: list[list[dict]],
                    max_tokens: int, temperature: float = 0.3) -> list[str]:
-    """Run llm.chat on a list of message-lists, return list of text outputs."""
+    """Run llm.chat on a list of message-lists, return list of text outputs.
+
+    Disables reasoning-model "thinking" (e.g. Qwen3.5, enabled by default) and
+    strips any <think> block that leaks through anyway — otherwise it can eat
+    the whole max_tokens budget before the actual correction/JSON is emitted,
+    silently truncating or blanking every output (see 06_generate_gardian_qa.py
+    for the same fix applied to the JSON Q&A parsing path).
+    """
     if not messages_list:
         return []
     sampling = SamplingParams(max_tokens=max_tokens, temperature=temperature, top_p=0.9)
-    outputs = llm.chat(messages_list, sampling_params=sampling, use_tqdm=False)
-    return [o.outputs[0].text.strip() for o in outputs]
+    outputs = llm.chat(
+        messages_list, sampling_params=sampling, use_tqdm=False,
+        chat_template_kwargs={"enable_thinking": False},
+    )
+    return [THINK_RE.sub("", o.outputs[0].text).strip() for o in outputs]
 
 
 def parse_json_list(text: str) -> list[str]:
     """Extract a JSON list from model output, tolerating surrounding prose."""
+    text = THINK_RE.sub("", text).strip()
     m = re.search(r"\[.*?\]", text, re.DOTALL)
     if m:
         try:
@@ -183,7 +196,7 @@ def main() -> None:
                         for q, w, c in batch
                     ]
                     try:
-                        corrections = batch_generate(llm, SamplingParams, msgs, max_tokens=256)
+                        corrections = batch_generate(llm, SamplingParams, msgs, max_tokens=512)
                         for (q, w, c), corr in zip(batch, corrections):
                             f.write(json.dumps(format_verifier_entry(q, w, c, corr)) + "\n")
                             done += 1
@@ -216,7 +229,7 @@ def main() -> None:
                 ]
                 try:
                     results = batch_generate(llm, SamplingParams, msgs,
-                                             max_tokens=256, temperature=0.7)
+                                             max_tokens=512, temperature=0.7)
                     for row, text in zip(batch, results):
                         for wrong in parse_json_list(text)[: args.n_per_neg]:
                             neg_triples.append((row["question"], wrong, row["answer"]))
@@ -240,7 +253,7 @@ def main() -> None:
                     for q, w, c in batch
                 ]
                 try:
-                    corrections = batch_generate(llm, SamplingParams, msgs, max_tokens=256)
+                    corrections = batch_generate(llm, SamplingParams, msgs, max_tokens=512)
                     for (q, w, c), corr in zip(batch, corrections):
                         f.write(json.dumps(format_verifier_entry(q, w, c, corr)) + "\n")
                         done += 1

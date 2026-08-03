@@ -43,6 +43,21 @@ dependencies = [
     # LLM-as-a-Verifier (PPT tournament + logprob reward extraction)
     "llm-verifier>=0.1.0",
 
+    # LoRA fine-tuning (lora_setup/, ag_finetune/training/) — Linux/CUDA only,
+    # same as vllm above. Pinned to GitHub main via [tool.uv.sources] below —
+    # PyPI's unsloth/unsloth-zoo releases lagged their own fix for a
+    # transformers>=5.x import crash (NameError: 'auto_docstring' is not
+    # defined, from _utils.py's exec() of config source without that
+    # decorator in scope) that we hit on the farm even after `uv lock
+    # --upgrade-package unsloth --upgrade-package unsloth_zoo`.
+    "unsloth; sys_platform == 'linux'",
+    "unsloth-zoo; sys_platform == 'linux'",
+    "trl>=0.12.0; sys_platform == 'linux'",
+
+    # Training loss/metrics dashboard (report_to="trackio" in the fine-tuning
+    # scripts above) — local-first, no account needed, cross-platform
+    "trackio>=0.1.0",
+
     # Config, plotting, UI
     "pyyaml>=6.0",
     "matplotlib>=3.8.0",
@@ -56,3 +71,16 @@ environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'darwin'",
 ]
+# unsloth-zoo's transformers upper bound (<=5.5.0) doesn't overlap with
+# vllm==0.20.1's requirement (transformers>=4.56.0,<5.0.dev0 OR >5.5.0) —
+# the only overlap between them is entirely in the old 4.x line, which is
+# too old for Qwen3.5's model architecture. That looks like a stale/
+# conservative pin on unsloth-zoo's side rather than a real incompatibility,
+# so override it rather than downgrade transformers and lose Qwen3.5 support.
+override-dependencies = [
+    "transformers>=5.5.0",
+]
+
+[tool.uv.sources]
+unsloth = { git = "https://github.com/unslothai/unsloth.git" }
+unsloth-zoo = { git = "https://github.com/unslothai/unsloth-zoo.git" }
