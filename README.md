@@ -16,9 +16,9 @@ Run stages in this order.
 
 ### Stage 0a — Download & sample datasets (Project-AgML on HuggingFace)
 
-Image datasets are sourced from [huggingface.co/Project-AgML](https://huggingface.co/Project-AgML) (259 datasets, replacing the old `agml` pip package's implicit `~/.agml/datasets` auto-download). Only classification datasets are used — detection/segmentation datasets in the org are excluded.
+Image datasets are sourced from [huggingface.co/Project-AgML](https://huggingface.co/Project-AgML) Only classification datasets are used — detection/segmentation datasets in the org are excluded in this step.
 
-To (re)build the dataset registry from the current HF catalog:
+**`src/config/datasets.yaml` is committed pre-curated** — you don't need to run the two commands below to get started; `download-datasets` (next section) already works against it as-is. Only re-run them if the Project-AgML org's dataset list has changed since, or you want to bring a currently-inactive dataset online.
 
 ```bash
 # One-time / when the Project-AgML org's dataset list changes:
@@ -33,6 +33,10 @@ uv run python main.py migrate-datasets \
   --current src/config/datasets.yaml \
   --output  src/config/datasets.yaml.new
 ```
+
+**Manual review is required for any dataset new to this migration.** `migrate-datasets` can only auto-fill `crop`/`task_type`/`class_overrides` for datasets that already existed in the previous `datasets.yaml` (carried forward by name match); every genuinely new dataset gets written with `crop: null`, `task_type: null`, and `skip: true` — inert until a human fills those in and flips `skip: false`. This is why the committed file only has 26 of its 178 datasets active. When adding a new dataset by hand:
+- `task_type` must be one of `disease` / `pest_damage` / `weed_identification` / `crop_identification` (see the options block at the top of the YAML).
+- `class_overrides` reassigns individual classes to a different `task_type` than the dataset's default — e.g. a `disease` dataset with an incidental pest class. **The override key must match the class string exactly as it appears in that dataset's `classes:` list** (same underscores/casing) — a cosmetic-looking mismatch (e.g. `mites and trips` vs. the real `mites_and_trips`) silently no-ops instead of erroring, so double check with `DatasetConfig.effective_task_type()` after editing, not just by eye.
 
 To download all active datasets and take a class-balanced subsample (fixed cap per class, default 50, adjustable via `--n_per_class`), recording exactly which images were chosen for reproducibility:
 
