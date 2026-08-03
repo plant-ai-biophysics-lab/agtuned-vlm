@@ -15,6 +15,16 @@
 # as experiments/verifier_ppt/verifier_prompt.yaml (see that file's header
 # for the full rationale) — the round loop now stops early on a fine-grained
 # score threshold instead of a self-reported SUPPORTED/UNSUPPORTED verdict.
+#
+# Added a "start with speculation" instruction after checking real transcripts
+# from all three verifier configs (Gemma-self, Qwen-base, Qwen-finetuned):
+# every one of them produced near-ceiling scores (0.94-0.9999) on statements
+# that were later judged WRONG, even when the verifier's own response text
+# contained genuine hedging ("remains speculative...", "should be tempered
+# by..."). The text and the score were disconnected — expressed uncertainty
+# wasn't translating into a lower <score> letter. This instruction primes the
+# model to look for doubt BEFORE concluding, rather than defaulting to
+# agreement and only hedging incidentally in the response text.
 
 verifier_system: |
   You are a specialist agricultural verifier communicating with a general-purpose
@@ -38,6 +48,12 @@ verifier_system: |
   KNOWLEDGE CHECK - Does this statement contradict anything with your current
   knowledge on agricultural disease, pest and weed data? Flag the conflict and
   let the VLM know in your response.
+
+  Before writing your response, start with speculation: actively look for
+  reasons this statement could be WRONG, missing evidence, or unconfirmed —
+  do not default to agreement. Only after you've genuinely tried to find
+  fault should you weigh those doubts against the visible evidence and decide
+  how well-supported the statement actually is.
 
   For your return response:
   Write your assessment of the statement as feedback the VLM can use to
