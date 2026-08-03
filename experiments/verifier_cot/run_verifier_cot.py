@@ -27,6 +27,14 @@ documented in outputs/verifier_analysis/verifier_findings.pdf, that changes
 the cost/benefit case for the fine-tuned per-statement verifier
 (experiments/ag_finetune/). If it doesn't, that's useful negative evidence.
 
+Optional retrieval grounding (--database, see retrieval.py): grep/keyword
+search against a GARDIAN-style passages jsonl, queried only off the VLM's
+own statement text (class-vocab substring matches + IDF-weighted generic
+keywords) — never off ground truth. Top-k passages get injected into the
+verifier's user turn via {grounding}. Cheap first test of whether grounding
+in real literature changes verifier judgment quality, before considering a
+fine-tuned query-generation model.
+
 Reuses (not reimplements):
   - src/verifier_vision.py: select_datasets, load_items, load_existing_rows,
     _RUBRIC_DISEASE, _RUBRIC_WEED
@@ -58,6 +66,15 @@ Usage:
     --verifier_model Qwen/Qwen3.5-9B \\
     --condition_label "Verifier-CoT (Qwen-base)" \\
     --output_dir outputs/verifier_cot_qwen_base/ \\
+    --n_samples 50 --n_datasets 3 --max_rounds 5 --score_threshold 0.9
+
+  # Grounded in GARDIAN literature passages:
+  uv run python experiments/verifier_cot/run_verifier_cot.py \\
+    --model google/gemma-4-26B-A4B-it \\
+    --condition_label "Verifier-CoT (Gemma-self, grounded)" \\
+    --output_dir outputs/verifier_cot_gemma_self_grounded/ \\
+    --database experiments/ag_finetune/outputs/stage3_gardian_passages.jsonl \\
+    --grounding_top_k 3 \\
     --n_samples 50 --n_datasets 3 --max_rounds 5 --score_threshold 0.9
 
   # Resume from checkpoints:
@@ -156,11 +173,12 @@ def _verifier_system(rubric: str) -> str:
     return _VERIFIER_PROMPTS["verifier_system"].replace("{rubric}", rubric)
 
 
-def _verifier_user_turn(verified_history: str, statement: str) -> str:
+def _verifier_user_turn(verified_history: str, statement: str, grounding: str = "(grounding disabled — no --database passed)") -> str:
     return (
         _VERIFIER_PROMPTS["verifier_user_turn"]
         .replace("{verified_history}", verified_history or "(none yet)")
         .replace("{statement}", statement)
+        .replace("{grounding}", grounding)
     )
 
 
@@ -471,6 +489,9 @@ def run_verifier_loop(
     ckpt_path: Path | None = None,
     force_max_rounds: bool = False,
     condition_label: str = "Verifier-CoT",
+    gardian_index=None,
+    class_vocab_by_ds: dict[str, list[str]] | None = None,
+    grounding_top_k: int = 3,
 ) -> list[dict]:
     """Round-loop: VLM free-form statement -> verifier scores it on the
     fine-grained letter scale -> repeat (up to max_rounds, or until the score
@@ -483,10 +504,22 @@ def run_verifier_loop(
     Useful for isolating "what does round N look like" from "which images
     survive to round N", since early-stopping normally shrinks the active set
     fast and later rounds become too small a sample to read anything into.
+
+    gardian_index/class_vocab_by_ds/grounding_top_k: optional retrieval
+    grounding (see retrieval.py) — when gardian_index is not None, every
+    verify-phase round builds a keyword query from the VLM's OWN statement
+    text (never the ground-truth class) plus the item's dataset class
+    vocabulary, retrieves the top grounding_top_k GARDIAN passages, and
+    injects them into the verifier's user turn via {grounding}. When
+    gardian_index is None, grounding is left at its "disabled" placeholder
+    and behavior is identical to before retrieval was added.
     """
     from src.verifier_vision import _RUBRIC_DISEASE, _RUBRIC_WEED
 
     _sys_msg, _cls_question, _desc_question, _build_prompt, _clean = _import_helpers()
+
+    if gardian_index is not None:
+        from retrieval import extract_query_terms, search_passages, format_passages_for_prompt
 
     _VLM_P = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
     # Pass 1: response JSON only — no logprobs needed, matches verifier_ppt.py.
@@ -545,6 +578,7 @@ def run_verifier_loop(
         verifier_llm, verifier_tokenizer = switcher.get("verifier")
         sub_banner(f"Verifying round {rnd}/{max_rounds}: {len(active_idx)} active images")
         round_results: dict[int, dict] = {}
+        round_grounding: dict[int, dict] = {}
         prog = Progress(total=len(active_idx), label=f"Verify round {rnd}", every=max(batch_size, 1))
         for start in range(0, len(active_idx), batch_size):
             batch_idx = active_idx[start:start + batch_size]
@@ -554,7 +588,21 @@ def run_verifier_loop(
                 statement = hist[i][-1]["content"]
                 rubric = _RUBRIC_WEED if item["task_type"] == "weed_identification" else _RUBRIC_DISEASE
                 sys_p = _verifier_system(rubric)
-                user_p = _verifier_user_turn("(none yet)", statement)
+
+                if gardian_index is not None:
+                    vocab = (class_vocab_by_ds or {}).get(item["ds"], [])
+                    query_terms = extract_query_terms(statement, vocab)
+                    passages = search_passages(gardian_index, query_terms, top_k=grounding_top_k)
+                    grounding_text = format_passages_for_prompt(passages)
+                    round_grounding[i] = {
+                        "query_terms": [t for t, _ in query_terms],
+                        "passage_ids": [p.get("chunk_id") for p in passages],
+                        "passage_sources": [p.get("source") for p in passages],
+                    }
+                    user_p = _verifier_user_turn("(none yet)", statement, grounding_text)
+                else:
+                    user_p = _verifier_user_turn("(none yet)", statement)
+
                 msgs = [{"role": "system", "content": sys_p}, {"role": "user", "content": [
                     {"type": "image"}, {"type": "text", "text": user_p},
                 ]}]
@@ -621,6 +669,7 @@ def run_verifier_loop(
                                                           # back empty (JSON parse failure vs a
                                                           # genuinely empty "response" value),
                                                           # matching verifier_ppt.py's convention
+                **({"verifier_grounding": round_grounding[i]} if i in round_grounding else {}),
             })
             score_ok = fg is not None and fg >= score_threshold
             stop_here = rnd == max_rounds or (score_ok and not force_max_rounds)
@@ -796,6 +845,18 @@ def main() -> None:
                              "runs the full --max_rounds regardless. Useful for getting a full "
                              "sample size at every round instead of the active set shrinking "
                              "fast under normal early-stopping.")
+    parser.add_argument("--database", default=None,
+                        help="Path to a GARDIAN-style passages jsonl (see "
+                             "experiments/ag_finetune/outputs/stage3_gardian_passages.jsonl) to "
+                             "ground each verify round in retrieved literature passages (see "
+                             "retrieval.py). Query terms come only from the VLM's own statement "
+                             "text plus its dataset's class-name vocabulary — never from ground "
+                             "truth. Omit to keep the original ungrounded verifier behavior.")
+    parser.add_argument("--grounding_top_k", type=int, default=3,
+                        help="Passages retrieved per verify round when --database is set.")
+    parser.add_argument("--database_max_records", type=int, default=None,
+                        help="Cap how many lines of --database are indexed — for fast "
+                             "prototyping on a subset before indexing the full corpus.")
     parser.add_argument("--seed",        type=int, default=SEED)
     parser.add_argument("--batch_size",  type=int, default=64)
     parser.add_argument("--from_ckpt",   action="store_true",
@@ -886,6 +947,21 @@ def main() -> None:
                 print(f"  {ds} ({task}): {len(items)} items")
         print(f"Total items: {len(all_items)}")
 
+        # Class vocab per dataset (full label set, not just the correct
+        # class per image) used by retrieval.extract_query_terms to
+        # recognize explicit class-name claims in the VLM's OWN statement —
+        # see retrieval.py's module docstring for why this isn't leakage.
+        class_vocab_by_ds: dict[str, list[str]] = {}
+        for item in all_items:
+            class_vocab_by_ds.setdefault(item["ds"], set()).add(item["cls"])
+        class_vocab_by_ds = {ds: sorted(v) for ds, v in class_vocab_by_ds.items()}
+
+        gardian_index = None
+        if args.database:
+            from retrieval import load_gardian_index
+            print(f"\n[retrieval] loading --database {args.database} ...")
+            gardian_index = load_gardian_index(args.database, max_records=args.database_max_records)
+
         mode_label = "FORCED " if args.force_max_rounds else ""
         stage_banner(1, f"{mode_label}Verifier loop ({len(all_items)} images, max {args.max_rounds} rounds)",
                     total_stages=3)
@@ -900,6 +976,8 @@ def main() -> None:
             all_items, switcher, max_rounds=args.max_rounds, score_threshold=args.score_threshold,
             batch_size=args.batch_size, ckpt_path=ckpt_verifier_cot,
             force_max_rounds=args.force_max_rounds, condition_label=args.condition_label,
+            gardian_index=gardian_index, class_vocab_by_ds=class_vocab_by_ds,
+            grounding_top_k=args.grounding_top_k,
         )
         print(f"\nStage 1 done in {fmt_duration(time.perf_counter() - t_stage1)}")
 

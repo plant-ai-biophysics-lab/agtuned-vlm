@@ -25,6 +25,16 @@
 # wasn't translating into a lower <score> letter. This instruction primes the
 # model to look for doubt BEFORE concluding, rather than defaulting to
 # agreement and only hedging incidentally in the response text.
+#
+# {grounding}         - grep/keyword-retrieved passages from the GARDIAN
+#                        literature corpus (see retrieval.py), keyed only off
+#                        the VLM's own statement text — "(no relevant
+#                        reference passages found)" when nothing hits, or
+#                        "(grounding disabled...)" when run_verifier_cot.py
+#                        wasn't given --database. Prompt-only, no fine-tuning:
+#                        the cheap first test of whether grounding in real
+#                        literature changes verifier judgment quality before
+#                        committing to a fine-tuned query-generation model.
 
 verifier_system: |
   You are a specialist agricultural verifier communicating with a general-purpose
@@ -48,6 +58,12 @@ verifier_system: |
   KNOWLEDGE CHECK - Does this statement contradict anything with your current
   knowledge on agricultural disease, pest and weed data? Flag the conflict and
   let the VLM know in your response.
+  GROUNDING CHECK - If reference literature passages are provided below, treat
+  them as an additional evidence source: do they support or contradict the
+  statement? They were retrieved automatically by keyword search and may be
+  irrelevant or only tangentially related — use your judgement, do not assume
+  every passage applies, and do not penalize the statement just because a
+  passage doesn't mention it.
 
   Before writing your response, start with speculation: actively look for
   reasons this statement could be WRONG, missing evidence, or unconfirmed —
@@ -85,3 +101,7 @@ verifier_user_turn: |
   Here is the current chat history:
   Verified history: {verified_history}
   Statement to verify: {statement}
+
+  Reference literature passages (retrieved by keyword search, may or may not
+  be relevant):
+  {grounding}
