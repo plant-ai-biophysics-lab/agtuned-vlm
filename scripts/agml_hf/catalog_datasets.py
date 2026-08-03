@@ -112,15 +112,27 @@ def find_label_feature(features):
 
 
 def introspect_repo(repo_id: str) -> dict:
-    from datasets import load_dataset_builder
+    from datasets import get_dataset_config_names, load_dataset_builder
 
     name = repo_id.split("/", 1)[1]
-    builder = load_dataset_builder(repo_id, trust_remote_code=False)
-    config_names = list(builder.builder_configs.keys()) if builder.builder_configs else [None]
+    # trust_remote_code intentionally omitted: datasets>=4.0 no longer accepts
+    # it for these repos (auto-converted Parquet, no custom loading script to
+    # trust in the first place) — passing it raises "BuilderConfig ... doesn't
+    # have a 'trust_remote_code' key" / "unexpected keyword argument" on every
+    # single repo.
+    #
+    # get_dataset_config_names(), not load_dataset_builder(repo_id) with no
+    # config, to enumerate configs: a repo with multiple named configs and no
+    # default (e.g. EfficientMaize_classification -> ['augmented', 'raw'])
+    # raises "Config name is missing" from the no-arg builder call before we
+    # ever get to list its configs. This works uniformly for single-config
+    # repos too — they report back ['default'], which load_dataset_builder
+    # accepts explicitly just like any named config.
+    config_names = get_dataset_config_names(repo_id)
 
     config_entries = {}
     for cfg_name in config_names:
-        b = load_dataset_builder(repo_id, cfg_name, trust_remote_code=False) if cfg_name else builder
+        b = load_dataset_builder(repo_id, cfg_name)
         splits = {s: b.info.splits[s].num_examples for s in (b.info.splits or {})}
         features = b.info.features or {}
         label_feature = find_label_feature(features)
