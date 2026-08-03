@@ -960,7 +960,8 @@ def main() -> None:
         if args.database:
             from retrieval import load_gardian_index
             print(f"\n[retrieval] loading --database {args.database} ...")
-            gardian_index = load_gardian_index(args.database, max_records=args.database_max_records)
+            gardian_index = load_gardian_index(args.database, max_records=args.database_max_records,
+                                               seed=args.seed)
 
         mode_label = "FORCED " if args.force_max_rounds else ""
         stage_banner(1, f"{mode_label}Verifier loop ({len(all_items)} images, max {args.max_rounds} rounds)",

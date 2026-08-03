@@ -60,6 +60,27 @@ _STOPWORDS = {
     "photo", "picture",
 }
 
+# Round >=2 statements are the VLM responding to the VERIFIER's own feedback
+# (see run_verifier_loop's hist[i].append(... verifier response ...) before
+# the next round's generation), so they're full of self-referential
+# dialogue/critique language ("You are absolutely correct, my previous
+# response failed to..."). That register is rare in an academic-literature
+# corpus, so plain IDF weighting (which only discounts words that are common
+# in-corpus) actually boosts these words rather than filtering them —
+# nothing in the passage/title/keyword text looks like this, so document
+# frequency is low and idf is high, even though the words carry no
+# diagnostic content. Filtered explicitly instead of leaving it to IDF.
+_META_STOPWORDS = {
+    "absolutely", "agree", "agreed", "correct", "incorrect", "previous",
+    "response", "failed", "provide", "provided", "necessary", "excellent",
+    "critique", "challenge", "regarding", "particularly", "accurately",
+    "synthesizes", "synthesize", "coherent", "observation", "assessment",
+    "revise", "revised", "clarify", "clarification", "acknowledge",
+    "acknowledged", "noted", "additionally", "furthermore", "moreover",
+    "summary", "summarize", "reassess", "reassessment", "refine", "refined",
+}
+_STOPWORDS |= _META_STOPWORDS
+
 
 def _tokenize(text: str) -> list[str]:
     return [w.lower() for w in _WORD_RE.findall(text or "") if w.lower() not in _STOPWORDS]
@@ -71,17 +92,28 @@ class GardianIndex:
         self.inverted = inverted
 
 
-def load_gardian_index(path: str | Path, max_records: int | None = None) -> GardianIndex:
+def load_gardian_index(
+    path: str | Path, max_records: int | None = None, seed: int = 42,
+) -> GardianIndex:
     """Loads the GARDIAN passages jsonl into memory and builds a word ->
     [record_index, ...] inverted index over passage + title + keywords.
-    max_records caps how many lines are read (for fast prototyping on a
-    subset before committing to indexing the full 690k-chunk file)."""
+
+    max_records caps how many records are kept, for fast prototyping on a
+    subset before committing to indexing the full 690k-chunk file. This is
+    NOT a prefix cutoff — the source file is written dataset-by-dataset
+    (e.g. all of gardian-ai-ready-docs' ~19k chunks, then all ~592k of
+    gardian-cigi-ai-documents', ...), so taking the first N lines silently
+    keeps only whichever sub-dataset(s) happen to come first and drops the
+    rest entirely, regardless of how relevant they are. Uses reservoir
+    sampling (Algorithm R) instead: a single pass that gives every valid
+    record an equal max_records/N chance of being kept, so a capped index's
+    sub-dataset composition mirrors the full corpus's."""
+    import random
     records: list[dict] = []
-    inverted: dict[str, list[int]] = defaultdict(list)
+    rng = random.Random(seed)
+    n_seen = 0
     with open(path, encoding="utf-8") as f:
-        for line_no, line in enumerate(f):
-            if max_records is not None and line_no >= max_records:
-                break
+        for line in f:
             line = line.strip()
             if not line:
                 continue
@@ -89,15 +121,24 @@ def load_gardian_index(path: str | Path, max_records: int | None = None) -> Gard
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            idx = len(records)
-            records.append(rec)
-            words = set(_tokenize(rec.get("passage", "")))
-            words.update(_tokenize(rec.get("title", "")))
-            words.update(kw.lower() for kw in (rec.get("keywords") or []))
-            for w in words:
-                inverted[w].append(idx)
-    print(f"  [retrieval] loaded {len(records)} passages, {len(inverted)} unique index terms "
-          f"from {path}")
+            if max_records is None or n_seen < max_records:
+                records.append(rec)
+            else:
+                j = rng.randint(0, n_seen)
+                if j < max_records:
+                    records[j] = rec
+            n_seen += 1
+
+    inverted: dict[str, list[int]] = defaultdict(list)
+    for idx, rec in enumerate(records):
+        words = set(_tokenize(rec.get("passage", "")))
+        words.update(_tokenize(rec.get("title", "")))
+        words.update(kw.lower() for kw in (rec.get("keywords") or []))
+        for w in words:
+            inverted[w].append(idx)
+
+    print(f"  [retrieval] loaded {len(records)} passages ({n_seen} seen in file), "
+          f"{len(inverted)} unique index terms from {path}")
     return GardianIndex(records, dict(inverted))
 
 
