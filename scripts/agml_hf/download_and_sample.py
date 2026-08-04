@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from collections import Counter
@@ -248,6 +249,13 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--output", default="dataset/selected_images.json")
     ap.add_argument("--include_skipped", action="store_true")
+    ap.add_argument("--only", default=None,
+                     help="optional regex filter on agml_name — run against a single dataset "
+                          "(or a subset) instead of the full active list. Same convention as "
+                          "catalog_datasets.py's --only. Combine with --skip_existing so a "
+                          "one-dataset-at-a-time wrapper script (e.g. under an OS-level `timeout`, "
+                          "for hangs that never raise a catchable exception) still accumulates "
+                          "into the same manifest across separate invocations.")
     ap.add_argument("--from_manifest", default=None,
                      help="reproduce indices from an existing manifest instead of re-sampling")
     ap.add_argument("--skip_existing", action="store_true",
@@ -270,6 +278,13 @@ def main() -> None:
         datasets = load_datasets(Path(args.config))
     else:
         datasets = active_datasets(Path(args.config))
+
+    if args.only:
+        pattern = re.compile(args.only)
+        datasets = [d for d in datasets if pattern.search(d.agml_name)]
+        if not datasets:
+            print(f"ERROR: --only {args.only!r} matched no active datasets.")
+            sys.exit(1)
 
     if args.plot_only:
         out_path = Path(args.output)
