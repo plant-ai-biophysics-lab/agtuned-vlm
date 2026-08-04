@@ -267,6 +267,52 @@ def make_charts(rows: list[dict], output_dir: Path) -> dict:
     else:
         print("  [skip] n_rounds_distribution.png — no rows with a valid n_rounds")
 
+    # ── 4b. Accuracy vs rounds-to-final-answer ───────────────────────────────
+    # Every row in ckpt_judged.csv already reached a final answer (early-stop
+    # or forced at max_rounds), so this is accuracy over ALL completed
+    # conversations grouped by how many rounds they took — not a subset.
+    # Built directly from `rows` in one pass (not zipped against
+    # round_verdict_pairs, which collect_n_rounds() already filtered down —
+    # zipping two independently-filtered sequences would silently misalign
+    # judged_correct with the wrong row wherever either filter dropped one).
+    acc_pairs = []
+    for r in rows:
+        n = r.get("n_rounds", "")
+        if n is None or n == "" or r.get("judged_correct", "") == "":
+            continue
+        acc_pairs.append((int(n), int(r["judged_correct"])))
+    if acc_pairs:
+        round_range = list(range(1, max(n for n, _ in acc_pairs) + 1))
+        accs, ns = [], []
+        for r in round_range:
+            correct = [c for n, c in acc_pairs if n == r]
+            accs.append(float(np.mean(correct)) if correct else None)
+            ns.append(len(correct))
+        summary["accuracy_by_n_rounds"] = {
+            str(r): {"accuracy": a, "n": n} for r, a, n in zip(round_range, accs, ns)
+        }
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        plot_r = [r for r, a in zip(round_range, accs) if a is not None]
+        plot_a = [a for a in accs if a is not None]
+        plot_n = [n for n, a in zip(ns, accs) if a is not None]
+        ax.bar(plot_r, plot_a, color="#4C72B0", alpha=0.85, edgecolor="black", linewidth=0.5)
+        for r, a, n in zip(plot_r, plot_a, plot_n):
+            ax.annotate(f"{a:.2f}\n(n={n})", (r, a), ha="center", va="bottom", fontsize=8)
+        ax.set_xlabel("Rounds taken to reach final answer")
+        ax.set_ylabel("Judged accuracy")
+        ax.set_xticks(round_range)
+        ax.set_ylim(0, 1.05)
+        ax.set_title(f"Accuracy by rounds-to-final-answer (n={len(acc_pairs)})")
+        ax.yaxis.grid(True, alpha=0.3)
+        plt.tight_layout()
+        p = output_dir / "accuracy_by_n_rounds.png"
+        fig.savefig(p, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {p}")
+    else:
+        print("  [skip] accuracy_by_n_rounds.png — no rows with both n_rounds and judged_correct")
+
     # Overall calibration check: does the score correlate with correctness at all?
     paired = [(x, int(r["judged_correct"])) for r, x in
              ((r, _as_float(r.get("final_verifier_fine_grained_score"))) for r in rows)

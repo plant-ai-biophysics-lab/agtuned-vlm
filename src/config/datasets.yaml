@@ -781,9 +781,13 @@ datasets:
   - Tea_Mosquito_Bug
   hf_config: default
   location: []
-  skip: false
-  notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review
+  skip: true
+  notes: 'NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
+    review | SKIPPED - download-datasets hung for 3+ hours on this repo with zero
+    progress (n_images is 0 above because its metadata was never actually verified
+    against HF either - same repo hit "Cannot send a request, as the client has
+    been closed" in the original catalog run). Re-enable once investigated in
+    isolation.'
   class_overrides:
     Red_Spider_Mite: pest_damage
     Tea_Mosquito_Bug: pest_damage
