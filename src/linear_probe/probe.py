@@ -48,8 +48,10 @@ from src.common.dataset_config import (
 )
 from src.common.io import save_json, update_pipeline_results
 
-# Path to the layer selections config written by app/layer_explorer.py
-_LAYER_SELECTIONS_PATH = Path(__file__).parent.parent / "config" / "layer_selections.yaml"
+# Path to the layer selections config written by app/layer_explorer.py — lives
+# alongside probe_config.yaml in this folder so all linear-probe-specific
+# config is in one place, easy to find/edit.
+_LAYER_SELECTIONS_PATH = Path(__file__).parent / "layer_selections.yaml"
 
 
 # ── Early-exit sentinel ────────────────────────────────────────────────────────
@@ -312,14 +314,19 @@ def extract_vlm_embeddings_postproj(
     return np.stack(embeddings), labels
 
 
-def load_gemma4(model_id: str, device: str, quantize: str | None = None):
+def load_gemma4(model_id: str, device: str, quantize: str | None = None, trust_remote_code: bool = True):
+    """trust_remote_code defaults to True here so models that ship custom
+    modeling code on their HF repo (e.g. Kimi-VL, Nemotron) load without an
+    interactive prompt — this executes arbitrary Python from that repo, so
+    it's a deliberate default, not an oversight; pass False (--no-trust-
+    remote-code) to go back to transformers' normal opt-in-only behavior."""
     local = os.path.abspath(model_id)
     if os.path.exists(local):
         model_id = local
     print(f"Loading VLM: {model_id}" + (f" [{quantize}]" if quantize else ""))
-    processor = AutoProcessor.from_pretrained(model_id)
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
 
-    load_kwargs: dict = {"device_map": "auto"}
+    load_kwargs: dict = {"device_map": "auto", "trust_remote_code": trust_remote_code}
     if quantize == "4bit":
         from transformers import BitsAndBytesConfig
         load_kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -1445,7 +1452,10 @@ def main(args):
                             feature_dims[backbone_key]["post"] = int(X_post.shape[1])
                 continue
 
-        processor, vlm, mm_root = load_gemma4(model_id, device, quantize=args.quantize)
+        processor, vlm, mm_root = load_gemma4(
+            model_id, device, quantize=args.quantize,
+            trust_remote_code=getattr(args, "trust_remote_code", True),
+        )
 
         all_embeddings[backbone_key] = {}
         postproj_embeddings[postproj_key] = {}
@@ -2052,6 +2062,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
         help="Load VLMs in 4-bit or 8-bit quantization (requires bitsandbytes). Use 4bit for 48GB GPUs.",
+    )
+    parser.add_argument(
+        "--trust_remote_code", action=argparse.BooleanOptionalAction, default=True,
+        help="Allow loading models that ship custom modeling code on their HF repo "
+             "(e.g. Kimi-VL, Nemotron) — this executes arbitrary Python from that "
+             "repo. Default True; pass --no-trust_remote_code to require "
+             "transformers-native architectures only.",
     )
     parser.add_argument(
         "--fc_epochs", type=int, default=100,

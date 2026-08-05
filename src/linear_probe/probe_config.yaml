@@ -48,3 +48,8 @@ cache_dir: null          # defaults to <output_dir>/embedding_cache/ when null
 # ── Rarely-changed ───────────────────────────────────────────────────────────
 quantize: null          # "4bit" or "8bit" for large VLMs on smaller GPUs
 postproj_only: false
+trust_remote_code: true  # allow loading models that ship custom modeling code on
+                          # their HF repo (e.g. Kimi-VL, Nemotron) — this executes
+                          # arbitrary Python from that repo, so it's deliberate,
+                          # not an oversight; set false to require transformers-
+                          # native architectures only

@@ -1,6 +1,6 @@
 """
 Layer Explorer — browse a HuggingFace VLM's full module tree and save pre/post-projector
-layer selections to src/config/layer_selections.yaml for use by the linear probe.
+layer selections to src/linear_probe/layer_selections.yaml for use by the linear probe.
 
 Usage:
     streamlit run app/layer_explorer.py
@@ -25,7 +25,7 @@ import torch.nn as nn
 import yaml
 from transformers import AutoConfig, AutoModel, AutoModelForImageTextToText
 
-_CONFIG_PATH = Path(__file__).parent.parent / "src" / "config" / "layer_selections.yaml"
+_CONFIG_PATH = Path(__file__).parent.parent / "src" / "linear_probe" / "layer_selections.yaml"
 
 # Slot colours (consistent across both tabs)
 _SLOT_COLORS = {"pre": "#4C72B0", "post": "#DD8452"}  # blue / orange

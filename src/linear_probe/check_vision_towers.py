@@ -40,7 +40,8 @@ from src.linear_probe.probe import (
 )
 
 
-def check_model(model_id: str, device: str, quantize: str | None = None) -> dict:
+def check_model(model_id: str, device: str, quantize: str | None = None,
+                 trust_remote_code: bool = True) -> dict:
     """Load `model_id` for real, attempt to resolve its pre-/post-projector
     hook modules the same way probe.py's main pipeline does, then unload.
     Returns a result dict — never raises; any failure is captured in the
@@ -48,7 +49,20 @@ def check_model(model_id: str, device: str, quantize: str | None = None) -> dict
     result: dict = {"model_id": model_id}
     model = None
     try:
-        _processor, model, mm_root = load_gemma4(model_id, device, quantize=quantize)
+        # load_gemma4() calls resolve_mm_root() internally (it's part of what
+        # it returns), so any failure lands in this one try/except either
+        # way — but WHICH exception type distinguishes where it happened:
+        # resolve_mm_root() only ever raises AttributeError (its own
+        # explicit "Could not locate vision encoder" message); anything else
+        # (ValueError for an unrecognized architecture, missing
+        # trust_remote_code, network errors, ...) necessarily happened
+        # earlier, in from_pretrained() itself, before resolve_mm_root ever
+        # ran. Reported separately below — telling someone to go fix
+        # resolve_mm_root()'s vision_tower/visual check for a model that
+        # never even finished loading is actively misleading.
+        _processor, model, mm_root = load_gemma4(
+            model_id, device, quantize=quantize, trust_remote_code=trust_remote_code,
+        )
         result["ok"] = True
         result["vision_attr"] = "vision_tower" if hasattr(mm_root, "vision_tower") else "?"
         result["vision_tower_type"] = type(mm_root.vision_tower).__name__
@@ -59,8 +73,13 @@ def check_model(model_id: str, device: str, quantize: str | None = None) -> dict
 
         layer_selections = _load_layer_selections()
         result["has_manual_layer_selection"] = model_id in layer_selections
+    except AttributeError as e:
+        result["ok"] = False
+        result["stage"] = "resolve_mm_root"
+        result["error"] = str(e)
     except Exception as e:
         result["ok"] = False
+        result["stage"] = "load"
         result["error"] = str(e)
     finally:
         if model is not None:
@@ -79,17 +98,30 @@ def print_report(results: list[dict]) -> None:
             manual = "yes" if r["has_manual_layer_selection"] else "heuristic"
             print(f"{r['model_id']:<40} {pre:<10} {post:<12} {manual:<12}")
         else:
-            print(f"{r['model_id']:<40} FAILED: {r['error']}")
+            print(f"{r['model_id']:<40} FAILED ({r['stage']}): {r['error'][:60]}")
     print("=" * 78)
 
     ok = [r for r in results if r["ok"]]
-    failed = [r for r in results if not r["ok"]]
+    failed_resolve = [r for r in results if not r["ok"] and r["stage"] == "resolve_mm_root"]
+    failed_load = [r for r in results if not r["ok"] and r["stage"] == "load"]
     print(f"\n{len(ok)}/{len(results)} model(s) have a resolvable vision tower.")
-    if failed:
-        print(f"{len(failed)} FAILED — resolve_mm_root() in probe.py checks for a "
-              f"'vision_tower' or 'visual' top-level attribute; a different naming "
-              f"convention needs a one-line addition there. Failing models:")
-        for r in failed:
+
+    if failed_resolve:
+        print(f"\n{len(failed_resolve)} loaded fine but FAILED at vision-tower "
+              f"resolution — resolve_mm_root() in probe.py checks for a 'vision_tower' "
+              f"or 'visual' top-level attribute; this architecture uses neither, so it "
+              f"needs a one-line addition there:")
+        for r in failed_resolve:
+            print(f"  - {r['model_id']}: {r['error']}")
+
+    if failed_load:
+        print(f"\n{len(failed_load)} FAILED before loading even completed — NOT a "
+              f"vision_tower/visual naming issue, resolve_mm_root() never ran for "
+              f"these. Usually one of: transformers too old for this architecture "
+              f"(try `uv add -U transformers`), or the repo needs "
+              f"trust_remote_code=True (runs arbitrary code from that HF repo — only "
+              f"opt into this for repos/orgs you actually trust):")
+        for r in failed_load:
             print(f"  - {r['model_id']}: {r['error']}")
     no_postproj = [r for r in ok if not r["has_postproj"]]
     if no_postproj:
@@ -113,24 +145,36 @@ def main() -> None:
     ap.add_argument("--probe_config", default="src/linear_probe/probe_config.yaml")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--quantize", choices=["4bit", "8bit"], default=None)
+    ap.add_argument("--trust_remote_code", action=argparse.BooleanOptionalAction, default=None,
+                     help="Allow loading models with custom modeling code on their HF repo "
+                          "(executes arbitrary Python from that repo). Defaults to "
+                          "probe_config.yaml's 'trust_remote_code' (itself True by default) "
+                          "when not passed explicitly here.")
     args = ap.parse_args()
+
+    cfg: dict = {}
+    cfg_path = Path(args.probe_config)
+    if cfg_path.exists():
+        import yaml
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
 
     models = args.models
     if models is None:
-        import yaml
-        cfg_path = Path(args.probe_config)
-        if cfg_path.exists():
-            cfg = yaml.safe_load(cfg_path.read_text()) or {}
-            models = cfg.get("models")
+        models = cfg.get("models")
         if not models:
             print(f"ERROR: --models not given and no 'models' list found in {cfg_path}.")
             sys.exit(1)
         print(f"Using models from {cfg_path}: {models}")
 
+    trust_remote_code = args.trust_remote_code
+    if trust_remote_code is None:
+        trust_remote_code = cfg.get("trust_remote_code", True)
+
     results = []
     for i, model_id in enumerate(models, 1):
         print(f"\n[{i}/{len(models)}] Checking {model_id} ...")
-        results.append(check_model(model_id, args.device, quantize=args.quantize))
+        results.append(check_model(model_id, args.device, quantize=args.quantize,
+                                    trust_remote_code=trust_remote_code))
 
     print_report(results)
 
