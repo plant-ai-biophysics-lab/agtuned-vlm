@@ -140,7 +140,23 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     ds_by_name = {d.agml_name: d for d in datasets}
     task_type_by_name = {d.agml_name: d.task_type for d in datasets}
     ds_entries = manifest["datasets"]
-    failed = manifest.get("failed", {})
+
+    # NOT manifest.get("failed", {}) alone — that dict can only ever contain
+    # datasets that raised a catchable Python exception *inside* this
+    # process. A dataset killed by an external `timeout` wrapper (or any
+    # other SIGTERM/SIGKILL) never gets a chance to run its own except
+    # block, so it's invisible to manifest["failed"] even though it very
+    # much did not succeed. Comparing the full active dataset list (passed
+    # in as `datasets`) against what's actually in ds_entries catches every
+    # missing dataset regardless of why it's missing — timeout, exception,
+    # or simply not attempted yet in a partial run.
+    explicit_errors = manifest.get("failed", {})
+    missing_names = sorted(d.agml_name for d in datasets if d.agml_name not in ds_entries)
+    failed = {
+        name: explicit_errors.get(name, "no error captured — likely killed by an external "
+                                        "timeout/signal before it could raise a Python exception")
+        for name in missing_names
+    }
 
     if not ds_entries:
         print("  No datasets in manifest — skipping charts.")
