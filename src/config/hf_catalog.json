@@ -1,0 +1,5501 @@
+{
+  "ACHENY_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "AnaHau",
+          "AnaSet",
+          "AtrCan",
+          "AtrLen",
+          "AtrLeu",
+          "CerAre",
+          "CheAlb",
+          "CorMon",
+          "GirOpp",
+          "HalAmm",
+          "HalBel",
+          "HalPer",
+          "HalStr",
+          "HalSub",
+          "HamSal",
+          "KocSco",
+          "KocSte",
+          "SalAba",
+          "SalDen",
+          "SalInc",
+          "SalKal",
+          "SalKer",
+          "SalPra",
+          "SalTom",
+          "SalTur",
+          "SalYaz",
+          "SeiCin",
+          "SeiRos",
+          "SuaAcu",
+          "SuaAeg"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['AnaHau', 'AnaSet', 'AtrCan', 'AtrLen', 'AtrLeu', 'CerAre', 'CheAlb', 'CorMon', 'GirOpp', 'HalAmm', 'HalBel', 'HalPer', 'HalStr', 'HalSub', 'HamSal', 'KocSco', 'KocSte', 'SalAba', 'SalDen', 'SalInc', 'SalKal', 'SalKer', 'SalPra', 'SalTom', 'SalTur', 'SalYaz', 'SeiCin', 'SeiRos', 'SuaAcu', 'SuaAeg'])"
+        },
+        "splits": {
+          "train": 27030
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ACHENY_variety_classification"
+  },
+  "AFruitDB_fruit_grade_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "1st-grade",
+          "2nd-grade",
+          "3rd-grade"
+        ],
+        "features": {
+          "fruit_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['1st-grade', '2nd-grade', '3rd-grade'])"
+        },
+        "splits": {
+          "train": 3167
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/AFruitDB_fruit_grade_classification"
+  },
+  "AgriVision4_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Alternaria_Leaf_Blight",
+          "Angular_Leaf_Spot",
+          "Anthracnose",
+          "Bacterial_Blight",
+          "Carica_Insect_Hole",
+          "Curled_Yellow_Spot",
+          "Downy",
+          "Downy_Mildew",
+          "Dry_Leaf",
+          "Early_Alternaria_Leaf_Blight",
+          "Fungal_Damage_Leaf",
+          "Healthy",
+          "Healthy_leaf",
+          "Insect_Damage",
+          "Iron_Chlorosis_Damage",
+          "Mosaic",
+          "Mosaic_Virus",
+          "Pathogen_symptoms",
+          "Spot",
+          "White_spot",
+          "Xanthomonas_Leaf_Spot",
+          "Yellow_Mosaic_Virus",
+          "Yellow_Necrotic_Spots_Holes"
+        ],
+        "features": {
+          "crop": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria_Leaf_Blight', 'Angular_Leaf_Spot', 'Anthracnose', 'Bacterial_Blight', 'Carica_Insect_Hole', 'Curled_Yellow_Spot', 'Downy', 'Downy_Mildew', 'Dry_Leaf', 'Early_Alternaria_Leaf_Blight', 'Fungal_Damage_Leaf', 'Healthy', 'Healthy_leaf', 'Insect_Damage', 'Iron_Chlorosis_Damage', 'Mosaic', 'Mosaic_Virus', 'Pathogen_symptoms', 'Spot', 'White_spot', 'Xanthomonas_Leaf_Spot', 'Yellow_Mosaic_Virus', 'Yellow_Necrotic_Spots_Holes'])"
+        },
+        "splits": {
+          "train": 22875
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Alternaria_Leaf_Blight",
+          "Angular_Leaf_Spot",
+          "Anthracnose",
+          "Bacterial_Blight",
+          "Carica_Insect_Hole",
+          "Curled_Yellow_Spot",
+          "Downy_Mildew",
+          "Dry_Leaf",
+          "Early_Alternaria_Leaf_Blight",
+          "Fungal_Damage_Leaf",
+          "Healthy",
+          "Healthy_leaf",
+          "Insect_Damage",
+          "Iron_Chlorosis_Damage",
+          "Mosaic",
+          "Mosaic_Virus",
+          "Pathogen_symptoms",
+          "Spot",
+          "White_spot",
+          "Xanthomonas_Leaf_Spot",
+          "Yellow_Mosaic_Virus",
+          "Yellow_Necrotic_Spots_Holes"
+        ],
+        "features": {
+          "crop": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria_Leaf_Blight', 'Angular_Leaf_Spot', 'Anthracnose', 'Bacterial_Blight', 'Carica_Insect_Hole', 'Curled_Yellow_Spot', 'Downy_Mildew', 'Dry_Leaf', 'Early_Alternaria_Leaf_Blight', 'Fungal_Damage_Leaf', 'Healthy', 'Healthy_leaf', 'Insect_Damage', 'Iron_Chlorosis_Damage', 'Mosaic', 'Mosaic_Virus', 'Pathogen_symptoms', 'Spot', 'White_spot', 'Xanthomonas_Leaf_Spot', 'Yellow_Mosaic_Virus', 'Yellow_Necrotic_Spots_Holes'])"
+        },
+        "splits": {
+          "train": 5246
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/AgriVision4_disease_classification"
+  },
+  "BDHerbalPlants_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Datura (Datura stramonium)",
+          "Dhonya Pata ( Coriandrum Sativum)",
+          "Kalokeshi (Eclipta prostrata)",
+          "Neem (Azadirachta indica)",
+          "Pathor Kuchi (Kalanchoe pinnata)",
+          "Pudina (Mentha Arvensis)",
+          "Thankuni (Centella asiatica)",
+          "Tulsi (Ocimum tenuiflorum)"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Datura (Datura stramonium)', 'Dhonya Pata ( Coriandrum Sativum)', 'Kalokeshi (Eclipta prostrata)', 'Neem (Azadirachta indica)', 'Pathor Kuchi (Kalanchoe pinnata)', 'Pudina (Mentha Arvensis)', 'Thankuni (Centella asiatica)', 'Tulsi (Ocimum tenuiflorum)'])"
+        },
+        "splits": {
+          "train": 14336
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Datura (Datura stramonium)",
+          "Dhonya Pata ( Coriandrum Sativum)",
+          "Kalokeshi",
+          "Neem (Azadirachta indica)",
+          "Pathor Kuchi (Kalanchoe pinnata)",
+          "Pudina (Mentha Arvensis)",
+          "Thankuni (Centella asiatica)",
+          "Tulsi (Ocimum tenuiflorum)"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Datura (Datura stramonium)', 'Dhonya Pata ( Coriandrum Sativum)', 'Kalokeshi', 'Neem (Azadirachta indica)', 'Pathor Kuchi (Kalanchoe pinnata)', 'Pudina (Mentha Arvensis)', 'Thankuni (Centella asiatica)', 'Tulsi (Ocimum tenuiflorum)'])"
+        },
+        "splits": {
+          "train": 1792
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/BDHerbalPlants_variety_classification"
+  },
+  "BDMANGO_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Amrapali",
+          "Banana",
+          "Chaunsa",
+          "Fazli",
+          "Haribhanga",
+          "Himsagar"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Amrapali', 'Banana', 'Chaunsa', 'Fazli', 'Haribhanga', 'Himsagar'])"
+        },
+        "splits": {
+          "train": 5859
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Amrapali",
+          "Banana",
+          "Chaunsa",
+          "Fazli",
+          "Haribhanga",
+          "Himsagar"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Amrapali', 'Banana', 'Chaunsa', 'Fazli', 'Haribhanga', 'Himsagar'])"
+        },
+        "splits": {
+          "train": 837
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/BDMANGO_variety_classification"
+  },
+  "BDMediLeaves_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "azadirachta-indica",
+          "calotropis-gigantea",
+          "centella-asiatica",
+          "hibiscus-rosa-sinensis",
+          "justicia-adhatoda",
+          "kalanchoe-pinnata",
+          "mikania-micrantha",
+          "ocimum-tenuiflorum",
+          "phyllanthus-emblica",
+          "terminalia-arjuna"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['azadirachta-indica', 'calotropis-gigantea', 'centella-asiatica', 'hibiscus-rosa-sinensis', 'justicia-adhatoda', 'kalanchoe-pinnata', 'mikania-micrantha', 'ocimum-tenuiflorum', 'phyllanthus-emblica', 'terminalia-arjuna'])"
+        },
+        "splits": {
+          "train": 38606
+        }
+      },
+      "raw": {
+        "class_names": [
+          "azadirachta-indica",
+          "calotropis-gigantea",
+          "centella-asiatica",
+          "hibiscus-rosa-sinensis",
+          "justicia-adhatoda",
+          "kalanchoe-pinnata",
+          "mikania-micrantha",
+          "ocimum-tenuiflorum",
+          "phyllanthus-emblica",
+          "terminalia-arjuna"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['azadirachta-indica', 'calotropis-gigantea', 'centella-asiatica', 'hibiscus-rosa-sinensis', 'justicia-adhatoda', 'kalanchoe-pinnata', 'mikania-micrantha', 'ocimum-tenuiflorum', 'phyllanthus-emblica', 'terminalia-arjuna'])"
+        },
+        "splits": {
+          "train": 2048
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/BDMediLeaves_variety_classification"
+  },
+  "BPLD_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Healthy",
+          "Leaf Crinckle",
+          "Powdery Mildew",
+          "Yellow Mosaic"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Healthy', 'Leaf Crinckle', 'Powdery Mildew', 'Yellow Mosaic'])"
+        },
+        "splits": {
+          "train": 1007
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/BPLD_leaf_disease_classification"
+  },
+  "BananaImageBD_ripeness_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Green",
+          "Overripe",
+          "Ripe",
+          "Semi-ripe"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Green', 'Overripe', 'Ripe', 'Semi-ripe'])"
+        },
+        "splits": {
+          "train": 2457
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Green",
+          "Overripe",
+          "Ripe",
+          "Semi-ripe"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Green', 'Overripe', 'Ripe', 'Semi-ripe'])"
+        },
+        "splits": {
+          "train": 820
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/BananaImageBD_ripeness_classification"
+  },
+  "BananaImageBD_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bangla Kola",
+          "Champa Kola",
+          "Sabri Kola",
+          "Sagor Kola"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bangla Kola', 'Champa Kola', 'Sabri Kola', 'Sagor Kola'])"
+        },
+        "splits": {
+          "train": 7413
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Bangla Kola",
+          "Champa Kola",
+          "Sabri Kola",
+          "Sagor Kola"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bangla Kola', 'Champa Kola', 'Sabri Kola', 'Sagor Kola'])"
+        },
+        "splits": {
+          "train": 2471
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/BananaImageBD_variety_classification"
+  },
+  "BananaLSD_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "cordana",
+          "healthy",
+          "pestalotiopsis",
+          "sigatoka"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['cordana', 'healthy', 'pestalotiopsis', 'sigatoka'])"
+        },
+        "splits": {
+          "train": 1600
+        }
+      },
+      "raw": {
+        "class_names": [
+          "cordana",
+          "healthy",
+          "pestalotiopsis",
+          "sigatoka"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['cordana', 'healthy', 'pestalotiopsis', 'sigatoka'])"
+        },
+        "splits": {
+          "train": 937
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/BananaLSD_leaf_disease_classification"
+  },
+  "Basmati_rice_seed_varitey_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "1121",
+          "1509",
+          "1637",
+          "1718",
+          "1728",
+          "BAS_370",
+          "CSR_30",
+          "DHBT_3",
+          "PB1",
+          "PB_6",
+          "Unknown"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['1121', '1509', '1637', '1718', '1728', 'BAS_370', 'CSR_30', 'DHBT_3', 'PB1', 'PB_6', 'Unknown'])",
+          "split": "Value('string')"
+        },
+        "splits": {
+          "train": 3210
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/Basmati_rice_seed_varitey_classification"
+  },
+  "BrinjalFruitX_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Brinjal Fruit Creaking",
+          "Healty Brinjal",
+          "Phomopsis Bright",
+          "Shoot and Fruit Borer",
+          "Wet Rot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Brinjal Fruit Creaking', 'Healty Brinjal', 'Phomopsis Bright', 'Shoot and Fruit Borer', 'Wet Rot'])"
+        },
+        "splits": {
+          "train": 1823
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/BrinjalFruitX_disease_classification"
+  },
+  "COLD_chili_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "cercospora",
+          "healthy",
+          "mites_and_trips",
+          "nutritional",
+          "powdery mildew"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['cercospora', 'healthy', 'mites_and_trips', 'nutritional', 'powdery mildew'])"
+        },
+        "splits": {
+          "train": 10974
+        }
+      },
+      "raw": {
+        "class_names": [
+          "cercospora",
+          "healthy",
+          "mites_and_trips",
+          "nutritional",
+          "powdery mildew"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['cercospora', 'healthy', 'mites_and_trips', 'nutritional', 'powdery mildew'])"
+        },
+        "splits": {
+          "train": 532
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/COLD_chili_leaf_disease_classification"
+  },
+  "COLD_onion_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Iris yellow virus",
+          "Stemphylium leaf blight and collectrichum leaf blight",
+          "healthy",
+          "purple blotch"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Iris yellow virus', 'Stemphylium leaf blight and collectrichum leaf blight', 'healthy', 'purple blotch'])"
+        },
+        "splits": {
+          "train": 4502
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Iris yellow virus",
+          "Stemphylium leaf blight and collectrichum leaf blight",
+          "healthy",
+          "purple blotch"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Iris yellow virus', 'Stemphylium leaf blight and collectrichum leaf blight', 'healthy', 'purple blotch'])"
+        },
+        "splits": {
+          "train": 815
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/COLD_onion_leaf_disease_classification"
+  },
+  "CS-D_tea_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Blister_Blight",
+          "Brown_Blight",
+          "Healthy_leaves",
+          "Leaf_Red_Rust",
+          "Red_Spider_Mite",
+          "Tea_Mosquito_Bug"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Blister_Blight', 'Brown_Blight', 'Healthy_leaves', 'Leaf_Red_Rust', 'Red_Spider_Mite', 'Tea_Mosquito_Bug'])"
+        },
+        "splits": {}
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/CS-D_tea_leaf_disease_classification"
+  },
+  "CoLeaf_nutritional_deficiency_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "boron-B",
+          "calcium-Ca",
+          "healthy",
+          "iron-Fe",
+          "magnesium-Mg",
+          "manganese-Mn",
+          "nitrogen-N",
+          "phosphorus-P",
+          "potasium-K"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['boron-B', 'calcium-Ca', 'healthy', 'iron-Fe', 'magnesium-Mg', 'manganese-Mn', 'nitrogen-N', 'phosphorus-P', 'potasium-K'])"
+        },
+        "splits": {
+          "train": 902
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/CoLeaf_nutritional_deficiency_classification"
+  },
+  "DIMPSAR_medicinal_leaf_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Aloevera",
+          "Amla",
+          "Amruthaballi",
+          "Arali",
+          "Astma_weed",
+          "Badipala",
+          "Balloon_Vine",
+          "Bamboo",
+          "Beans",
+          "Betel",
+          "Bhrami",
+          "Bringaraja",
+          "Caricature",
+          "Castor",
+          "Catharanthus",
+          "Chakte",
+          "Chilly",
+          "Citron lime (herelikai)",
+          "Coffee",
+          "Common rue(naagdalli)",
+          "Coriender",
+          "Curry",
+          "Doddpathre",
+          "Drumstick",
+          "Ekka",
+          "Eucalyptus",
+          "Ganigale",
+          "Ganike",
+          "Gasagase",
+          "Ginger",
+          "Globe Amarnath",
+          "Guava",
+          "Henna",
+          "Hibiscus",
+          "Honge",
+          "Insulin",
+          "Jackfruit",
+          "Jasmine",
+          "Kambajala",
+          "Kasambruga",
+          "Kohlrabi",
+          "Lantana",
+          "Lemon",
+          "Lemongrass",
+          "Malabar_Nut",
+          "Malabar_Spinach",
+          "Mango",
+          "Marigold",
+          "Mint",
+          "Neem",
+          "Nelavembu",
+          "Nerale",
+          "Nooni",
+          "Onion",
+          "Padri",
+          "Palak(Spinach)",
+          "Papaya",
+          "Parijatha",
+          "Pea",
+          "Pepper",
+          "Pomoegranate",
+          "Pumpkin",
+          "Raddish",
+          "Rose",
+          "Sampige",
+          "Sapota",
+          "Seethaashoka",
+          "Seethapala",
+          "Spinach1",
+          "Tamarind",
+          "Taro",
+          "Tecoma",
+          "Thumbe",
+          "Tomato",
+          "Tulsi",
+          "Turmeric",
+          "ashoka",
+          "camphor",
+          "kamakasturi",
+          "kepala"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aloevera', 'Amla', 'Amruthaballi', 'Arali', 'Astma_weed', 'Badipala', 'Balloon_Vine', 'Bamboo', 'Beans', 'Betel', 'Bhrami', 'Bringaraja', 'Caricature', 'Castor', 'Catharanthus', 'Chakte', 'Chilly', 'Citron lime (herelikai)', 'Coffee', 'Common rue(naagdalli)', 'Coriender', 'Curry', 'Doddpathre', 'Drumstick', 'Ekka', 'Eucalyptus', 'Ganigale', 'Ganike', 'Gasagase', 'Ginger', 'Globe Amarnath', 'Guava', 'Henna', 'Hibiscus', 'Honge', 'Insulin', 'Jackfruit', 'Jasmine', 'Kambajala', 'Kasambruga', 'Kohlrabi', 'Lantana', 'Lemon', 'Lemongrass', 'Malabar_Nut', 'Malabar_Spinach', 'Mango', 'Marigold', 'Mint', 'Neem', 'Nelavembu', 'Nerale', 'Nooni', 'Onion', 'Padri', 'Palak(Spinach)', 'Papaya', 'Parijatha', 'Pea', 'Pepper', 'Pomoegranate', 'Pumpkin', 'Raddish', 'Rose', 'Sampige', 'Sapota', 'Seethaashoka', 'Seethapala', 'Spinach1', 'Tamarind', 'Taro', 'Tecoma', 'Thumbe', 'Tomato', 'Tulsi', 'Turmeric', 'ashoka', 'camphor', 'kamakasturi', 'kepala'])"
+        },
+        "splits": {
+          "train": 6900
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/DIMPSAR_medicinal_leaf_classification"
+  },
+  "DIMPSAR_medicinal_plant_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Aloevera",
+          "Amla",
+          "Amruta_Balli",
+          "Arali",
+          "Ashoka",
+          "Ashwagandha",
+          "Avacado",
+          "Bamboo",
+          "Basale",
+          "Betel",
+          "Betel_Nut",
+          "Brahmi",
+          "Castor",
+          "Curry_Leaf",
+          "Doddapatre",
+          "Ekka",
+          "Ganike",
+          "Gauva",
+          "Geranium",
+          "Henna",
+          "Hibiscus",
+          "Honge",
+          "Insulin",
+          "Jasmine",
+          "Lemon",
+          "Lemon_grass",
+          "Mango",
+          "Mint",
+          "Nagadali",
+          "Neem",
+          "Nithyapushpa",
+          "Nooni",
+          "Pappaya",
+          "Pepper",
+          "Pomegranate",
+          "Raktachandini",
+          "Rose",
+          "Sapota",
+          "Tulasi",
+          "Wood_sorel"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aloevera', 'Amla', 'Amruta_Balli', 'Arali', 'Ashoka', 'Ashwagandha', 'Avacado', 'Bamboo', 'Basale', 'Betel', 'Betel_Nut', 'Brahmi', 'Castor', 'Curry_Leaf', 'Doddapatre', 'Ekka', 'Ganike', 'Gauva', 'Geranium', 'Henna', 'Hibiscus', 'Honge', 'Insulin', 'Jasmine', 'Lemon', 'Lemon_grass', 'Mango', 'Mint', 'Nagadali', 'Neem', 'Nithyapushpa', 'Nooni', 'Pappaya', 'Pepper', 'Pomegranate', 'Raktachandini', 'Rose', 'Sapota', 'Tulasi', 'Wood_sorel'])"
+        },
+        "splits": {
+          "train": 5945
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/DIMPSAR_medicinal_plant_classification"
+  },
+  "EfficientMaize_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bad",
+          "Good"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bad', 'Good'])"
+        },
+        "splits": {}
+      },
+      "raw": {
+        "class_names": [
+          "Bad",
+          "Good"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bad', 'Good'])"
+        },
+        "splits": {
+          "train": 4846
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/EfficientMaize_classification"
+  },
+  "FruitVision_quality_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Formalin-mixed",
+          "Fresh",
+          "Rotten"
+        ],
+        "features": {
+          "fruit": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Formalin-mixed', 'Fresh', 'Rotten'])"
+        },
+        "splits": {
+          "train": 73389
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Formalin-mixed",
+          "Fresh",
+          "Rotten"
+        ],
+        "features": {
+          "fruit": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Formalin-mixed', 'Fresh', 'Rotten'])"
+        },
+        "splits": {
+          "train": 10154
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/FruitVision_quality_classification"
+  },
+  "Hibiscus_Tea_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Tea Algal Spotout",
+          "Tea Brown Blight",
+          "Hibiscus Citruspot",
+          "Hibiscus Early_Mild_Spotting",
+          "Hibiscus Fungal",
+          "Tea Grey Blight",
+          "Hibiscus Healthy",
+          "Hibiscus Mild_Edge__Damage",
+          "Tea Red Spot",
+          "Hibiscus Senescent",
+          "Hibiscus Slightly_Diseased",
+          "Hibiscus Wrinkled_Leaf"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Tea Algal Spotout', 'Tea Brown Blight', 'Hibiscus Citruspot', 'Hibiscus Early_Mild_Spotting', 'Hibiscus Fungal', 'Tea Grey Blight', 'Hibiscus Healthy', 'Hibiscus Mild_Edge__Damage', 'Tea Red Spot', 'Hibiscus Senescent', 'Hibiscus Slightly_Diseased', 'Hibiscus Wrinkled_Leaf'])"
+        },
+        "splits": {
+          "train": 12417
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Tea Algal Spot",
+          "Tea Brown Blight",
+          "Citruspot",
+          "Early_Mild_Spotting",
+          "Fungal_Infected",
+          "Tea Grey Blight",
+          "Healthy",
+          "Mild_Edge_Damage",
+          "Tea Red Spot",
+          "Senescent",
+          "Slightly_Diseased",
+          "Wrinkled_Leaf"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Tea Algal Spot', 'Tea Brown Blight', 'Citruspot', 'Early_Mild_Spotting', 'Fungal_Infected', 'Tea Grey Blight', 'Healthy', 'Mild_Edge_Damage', 'Tea Red Spot', 'Senescent', 'Slightly_Diseased', 'Wrinkled_Leaf'])"
+        },
+        "splits": {
+          "train": 1411
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/Hibiscus_Tea_disease_classification"
+  },
+  "ICPTC_pistachio_tree_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "J",
+          "L",
+          "R",
+          "S"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['J', 'L', 'R', 'S'])",
+          "split": "Value('string')"
+        },
+        "splits": {
+          "train": 526
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ICPTC_pistachio_tree_variety_classification"
+  },
+  "IDDMSLD_spinach_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Bacterial-Spot",
+          "Downy-Mildew",
+          "Healthy-Leaf",
+          "Pest-Damage"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Bacterial-Spot', 'Downy-Mildew', 'Healthy-Leaf', 'Pest-Damage'])"
+        },
+        "splits": {
+          "train": 3006
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/IDDMSLD_spinach_leaf_disease_classification"
+  },
+  "MH_SoyaHealthVision_disease_classification_leaf": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Caterpillar_Semilooper_Pest",
+          "Frog_Leaf_Eye",
+          "Healthy",
+          "Mosaic",
+          "Rust",
+          "Spectoria_Brown_Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Caterpillar_Semilooper_Pest', 'Frog_Leaf_Eye', 'Healthy', 'Mosaic', 'Rust', 'Spectoria_Brown_Spot'])"
+        },
+        "splits": {
+          "train": 2782
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MH_SoyaHealthVision_disease_classification_leaf"
+  },
+  "MH_SoyaHealthVision_disease_classification_uav": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Healthy",
+          "Mosaic",
+          "Rust",
+          "Semilooper_Pest"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy', 'Mosaic', 'Rust', 'Semilooper_Pest'])"
+        },
+        "splits": {
+          "train": 2842
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MH_SoyaHealthVision_disease_classification_uav"
+  },
+  "MH_Weed16_weed_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Asian_Pigeonwings_(Clitoria Ternatea)",
+          "Bilayat_(Mexicana_Argemone)",
+          "Choti_dudhi_(Euphorbia_hirta)",
+          "Digitaria_SP_(Digitaria Sanguinalis )",
+          "Dwarf_cassia_(Chamaecrista pumila)",
+          "Gajar_gavat_(Parthenium hysterophorus)",
+          "Graceful_Sandmart_(Euphorbia hypericifolia)",
+          "Harali_(Cynodon_dactylon)",
+          "Kena_(Commplina_benghalensio)",
+          "Lamber_Quarter_plant(Chenopodium )",
+          "Lavhala_(Cyperus_Rotundus)",
+          "Little_Mallow(Malva parviflora)",
+          "Moti_dudhi(Euphorbia_geneculata_L)",
+          "Obscure_morning _glory(Ipomoea obscura)",
+          "Punarnava _(Boerhaavia diffusa)",
+          "Sicklepod_(Senna obtusifolia)"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Asian_Pigeonwings_(Clitoria Ternatea)', 'Bilayat_(Mexicana_Argemone)', 'Choti_dudhi_(Euphorbia_hirta)', 'Digitaria_SP_(Digitaria Sanguinalis )', 'Dwarf_cassia_(Chamaecrista pumila)', 'Gajar_gavat_(Parthenium hysterophorus)', 'Graceful_Sandmart_(Euphorbia hypericifolia)', 'Harali_(Cynodon_dactylon)', 'Kena_(Commplina_benghalensio)', 'Lamber_Quarter_plant(Chenopodium )', 'Lavhala_(Cyperus_Rotundus)', 'Little_Mallow(Malva parviflora)', 'Moti_dudhi(Euphorbia_geneculata_L)', 'Obscure_morning _glory(Ipomoea obscura)', 'Punarnava _(Boerhaavia diffusa)', 'Sicklepod_(Senna obtusifolia)'])"
+        },
+        "splits": {
+          "train": 19141
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MH_Weed16_weed_variety_classification"
+  },
+  "MangoClassify-12_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Amrapali",
+          "Banana",
+          "Bari 4",
+          "Fazli",
+          "GobindoBhog",
+          "GopalBhog",
+          "Harivanga",
+          "Himsagar",
+          "Khrishapat",
+          "Langra",
+          "RaniBhog",
+          "Sundari"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Amrapali', 'Banana', 'Bari 4', 'Fazli', 'GobindoBhog', 'GopalBhog', 'Harivanga', 'Himsagar', 'Khrishapat', 'Langra', 'RaniBhog', 'Sundari'])"
+        },
+        "splits": {
+          "train": 3900
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MangoClassify-12_variety_classification"
+  },
+  "MangoLeafBD_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Bacterial Canker",
+          "Cutting Weevil",
+          "Die Back",
+          "Gall Midge",
+          "Healthy",
+          "Powdery Mildew",
+          "Sooty Mould"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Bacterial Canker', 'Cutting Weevil', 'Die Back', 'Gall Midge', 'Healthy', 'Powdery Mildew', 'Sooty Mould'])"
+        },
+        "splits": {
+          "train": 4000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MangoLeafBD_disease_classification"
+  },
+  "MedLeafX_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bacterial Spot",
+          "Healthy Leaf",
+          "Powdery Mildew",
+          "Shot Hole",
+          "Shot Hole Leaf",
+          "Yellow Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Spot', 'Healthy Leaf', 'Powdery Mildew', 'Shot Hole', 'Shot Hole Leaf', 'Yellow Leaf'])"
+        },
+        "splits": {}
+      },
+      "raw": {
+        "class_names": [
+          "Bacterial Spot",
+          "Healthy Leaf",
+          "Powdery Mildew",
+          "Shot Hole",
+          "Shot Hole Leaf",
+          "Yellow Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Spot', 'Healthy Leaf', 'Powdery Mildew', 'Shot Hole', 'Shot Hole Leaf', 'Yellow Leaf'])",
+          "species": "Value('string')"
+        },
+        "splits": {}
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/MedLeafX_disease_classification"
+  },
+  "MoringaLeafNet_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bacterial Leaf Spot",
+          "Cercospora Leaf Spot",
+          "Healthy",
+          "Yellow"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Leaf Spot', 'Cercospora Leaf Spot', 'Healthy', 'Yellow'])"
+        },
+        "splits": {
+          "train": 11268
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Bacterial Leaf Spot",
+          "Cercospora Leaf Spot",
+          "Healthy",
+          "Yellow"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Leaf Spot', 'Cercospora Leaf Spot', 'Healthy', 'Yellow'])"
+        },
+        "splits": {
+          "train": 2817
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/MoringaLeafNet_disease_classification"
+  },
+  "OkraDiseaseNet_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Alternaria Leaf Spot",
+          "Cercospora Leaf Spot",
+          "Downy Mildew",
+          "Healthy",
+          "Leaf curly virus",
+          "Phyllosticta leaf spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria Leaf Spot', 'Cercospora Leaf Spot', 'Downy Mildew', 'Healthy', 'Leaf curly virus', 'Phyllosticta leaf spot'])"
+        },
+        "splits": {
+          "train": 1495
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/OkraDiseaseNet_disease_classification"
+  },
+  "PFSD_Musa_banana_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "BACTERIAL SOFT ROT",
+          "BANANA APHIDS",
+          "BANANA FRUIT- SCARRING BEETLE",
+          "BLACK SIGATOKA",
+          "PANAMA DISEASE",
+          "POTASSIUM DEFICIENCY",
+          "PSEUDOSTEM WEEVIL",
+          "YELLOW SIGATOKA"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BACTERIAL SOFT ROT', 'BANANA APHIDS', 'BANANA FRUIT- SCARRING BEETLE', 'BLACK SIGATOKA', 'PANAMA DISEASE', 'POTASSIUM DEFICIENCY', 'PSEUDOSTEM WEEVIL', 'YELLOW SIGATOKA'])"
+        },
+        "splits": {
+          "train": 6700
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/PFSD_Musa_banana_disease_classification"
+  },
+  "PFSD_Musa_banana_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "BHIMKOL",
+          "JAHAJI FRUIT",
+          "JAHAJI LEAF",
+          "JAHAJI STEM",
+          "KACHKOL FRUIT",
+          "MALBHOG FRUIT",
+          "MALBHOG LEAF"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BHIMKOL', 'JAHAJI FRUIT', 'JAHAJI LEAF', 'JAHAJI STEM', 'KACHKOL FRUIT', 'MALBHOG FRUIT', 'MALBHOG LEAF'])"
+        },
+        "splits": {
+          "train": 2763
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/PFSD_Musa_banana_variety_classification"
+  },
+  "PaddyVarietyBD_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "BD70",
+          "Bd30",
+          "Bd33",
+          "Bd34",
+          "Bd49",
+          "Bd51",
+          "Bd52",
+          "Bd56",
+          "Bd57",
+          "Bd72",
+          "Bd75",
+          "Bd76",
+          "Bd79",
+          "Bd85",
+          "Bd87",
+          "Bd91",
+          "Bd93",
+          "Bd95",
+          "Binadhan07",
+          "Binadhan08",
+          "Binadhan10",
+          "Binadhan11",
+          "Binadhan12",
+          "Binadhan14",
+          "Binadhan16",
+          "Binadhan17",
+          "Binadhan19",
+          "Binadhan20",
+          "Binadhan21",
+          "Binadhan23",
+          "Binadhan24",
+          "Binadhan25",
+          "Binadhan26",
+          "Br22",
+          "Br23"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BD70', 'Bd30', 'Bd33', 'Bd34', 'Bd49', 'Bd51', 'Bd52', 'Bd56', 'Bd57', 'Bd72', 'Bd75', 'Bd76', 'Bd79', 'Bd85', 'Bd87', 'Bd91', 'Bd93', 'Bd95', 'Binadhan07', 'Binadhan08', 'Binadhan10', 'Binadhan11', 'Binadhan12', 'Binadhan14', 'Binadhan16', 'Binadhan17', 'Binadhan19', 'Binadhan20', 'Binadhan21', 'Binadhan23', 'Binadhan24', 'Binadhan25', 'Binadhan26', 'Br22', 'Br23'])"
+        },
+        "splits": {
+          "train": 56000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "BD70",
+          "Bd30",
+          "Bd33",
+          "Bd34",
+          "Bd49",
+          "Bd51",
+          "Bd52",
+          "Bd56",
+          "Bd57",
+          "Bd72",
+          "Bd75",
+          "Bd76",
+          "Bd79",
+          "Bd85",
+          "Bd87",
+          "Bd91",
+          "Bd93",
+          "Bd95",
+          "Binadhan07",
+          "Binadhan08",
+          "Binadhan10",
+          "Binadhan11",
+          "Binadhan12",
+          "Binadhan14",
+          "Binadhan16",
+          "Binadhan17",
+          "Binadhan19",
+          "Binadhan20",
+          "Binadhan21",
+          "Binadhan23",
+          "Binadhan24",
+          "Binadhan25",
+          "Binadhan26",
+          "Br22",
+          "Br23"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BD70', 'Bd30', 'Bd33', 'Bd34', 'Bd49', 'Bd51', 'Bd52', 'Bd56', 'Bd57', 'Bd72', 'Bd75', 'Bd76', 'Bd79', 'Bd85', 'Bd87', 'Bd91', 'Bd93', 'Bd95', 'Binadhan07', 'Binadhan08', 'Binadhan10', 'Binadhan11', 'Binadhan12', 'Binadhan14', 'Binadhan16', 'Binadhan17', 'Binadhan19', 'Binadhan20', 'Binadhan21', 'Binadhan23', 'Binadhan24', 'Binadhan25', 'Binadhan26', 'Br22', 'Br23'])"
+        },
+        "splits": {
+          "train": 14000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/PaddyVarietyBD_variety_classification"
+  },
+  "PriBel_betel_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Diseased",
+          "Dried",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Diseased', 'Dried', 'Healthy'])"
+        },
+        "splits": {
+          "train": 1800
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/PriBel_betel_leaf_disease_classification"
+  },
+  "REMP_plant_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "agnishika",
+          "anantamul",
+          "apang",
+          "ayapan",
+          "bamonhati",
+          "basok",
+          "betal",
+          "chapalish",
+          "gainura",
+          "kalochitra",
+          "kalodhutura",
+          "kalomegh",
+          "punarnava",
+          "ramtulsi",
+          "sarpagandha",
+          "shotomuli"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['agnishika', 'anantamul', 'apang', 'ayapan', 'bamonhati', 'basok', 'betal', 'chapalish', 'gainura', 'kalochitra', 'kalodhutura', 'kalomegh', 'punarnava', 'ramtulsi', 'sarpagandha', 'shotomuli'])"
+        },
+        "splits": {
+          "train": 3494
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/REMP_plant_classification"
+  },
+  "RoseNet_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Black Spot",
+          "Downy mildew",
+          "Fresh Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Black Spot', 'Downy mildew', 'Fresh Leaf'])"
+        },
+        "splits": {
+          "train": 4342
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Black Spot",
+          "Downy Mildew",
+          "Fresh Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Black Spot', 'Downy Mildew', 'Fresh Leaf'])"
+        },
+        "splits": {
+          "train": 917
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/RoseNet_leaf_disease_classification"
+  },
+  "SIMPDV1_plant_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Abutilon Indicum",
+          "Aloe barbadensis miller",
+          "Calotropis gigantea",
+          "Canna indica",
+          "Cissus quadrangularis",
+          "Curcuma longa",
+          "Eclipta prostrate",
+          "Eichhornia Crassipes",
+          "Hibiscus Rosasinensis",
+          "Ixora coccinea",
+          "Justica adhatoda",
+          "Murraya koenigii",
+          "Ocimum tenuiflorum",
+          "Ouretlanata",
+          "Phyllanthus amarus",
+          "Ricinus communis",
+          "Senna Atriculata",
+          "Sesbania grandiflora",
+          "Trifolium Repens",
+          "Ziziphus mauritiana"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Abutilon Indicum', 'Aloe barbadensis miller', 'Calotropis gigantea', 'Canna indica', 'Cissus quadrangularis', 'Curcuma longa', 'Eclipta prostrate', 'Eichhornia Crassipes', 'Hibiscus Rosasinensis', 'Ixora coccinea', 'Justica adhatoda', 'Murraya koenigii', 'Ocimum tenuiflorum', 'Ouretlanata', 'Phyllanthus amarus', 'Ricinus communis', 'Senna Atriculata', 'Sesbania grandiflora', 'Trifolium Repens', 'Ziziphus mauritiana'])"
+        },
+        "splits": {
+          "train": 2513
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/SIMPDV1_plant_classification"
+  },
+  "SapBark_64_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Akca Pear",
+          "Amasya Apple",
+          "Angeleno Plum",
+          "Austria Everbearing Mulberry",
+          "Avocado",
+          "Bardacik Fig",
+          "Bilecik Walnut",
+          "Black Diamond Plum",
+          "Black Fig",
+          "Black Mulberry",
+          "Black Splendor Plum",
+          "Carob",
+          "Chestnut",
+          "Chocolate Persimmon",
+          "Cornelian Cherry",
+          "Deveci Pear",
+          "Duke Blueberry",
+          "Egrisap Pear",
+          "Ekmek Quince",
+          "Esme Quince",
+          "Feijoa",
+          "Ferragnes Almond",
+          "Fortune Plum",
+          "Fuji Apple",
+          "Golden Apple",
+          "Granny Smith Apple",
+          "Hachiya Persimmon",
+          "Hale Peach",
+          "Hazelnut",
+          "Igdir Apricot",
+          "Jujube",
+          "Kagizman Long Apple",
+          "Kiwi",
+          "Kumquat",
+          "Kutahya Sour Cherry",
+          "Lemon",
+          "Loquat",
+          "Margarita Marilla Pear",
+          "Medlar",
+          "Murdum Plum",
+          "Napolyon Cherry",
+          "Nashi Pear",
+          "Orange",
+          "Papaz Plum",
+          "Patlican Fig",
+          "Pomegranate",
+          "Red Azarol",
+          "Red Haven Peach",
+          "Red Nectarine",
+          "Redlove Apple",
+          "Santa Maria Pear",
+          "Sebin Walnut",
+          "Sekerpare Apricot",
+          "Show Time Plum",
+          "Sour Cherry",
+          "Starking Apple",
+          "Strawberry Tree",
+          "White Mulberry",
+          "White Nectarine",
+          "Wild Strawberry",
+          "Wild Walnut",
+          "Yellow Cherry",
+          "Yellow Peach",
+          "Ziraat 0900 Cherry"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Akca Pear', 'Amasya Apple', 'Angeleno Plum', 'Austria Everbearing Mulberry', 'Avocado', 'Bardacik Fig', 'Bilecik Walnut', 'Black Diamond Plum', 'Black Fig', 'Black Mulberry', 'Black Splendor Plum', 'Carob', 'Chestnut', 'Chocolate Persimmon', 'Cornelian Cherry', 'Deveci Pear', 'Duke Blueberry', 'Egrisap Pear', 'Ekmek Quince', 'Esme Quince', 'Feijoa', 'Ferragnes Almond', 'Fortune Plum', 'Fuji Apple', 'Golden Apple', 'Granny Smith Apple', 'Hachiya Persimmon', 'Hale Peach', 'Hazelnut', 'Igdir Apricot', 'Jujube', 'Kagizman Long Apple', 'Kiwi', 'Kumquat', 'Kutahya Sour Cherry', 'Lemon', 'Loquat', 'Margarita Marilla Pear', 'Medlar', 'Murdum Plum', 'Napolyon Cherry', 'Nashi Pear', 'Orange', 'Papaz Plum', 'Patlican Fig', 'Pomegranate', 'Red Azarol', 'Red Haven Peach', 'Red Nectarine', 'Redlove Apple', 'Santa Maria Pear', 'Sebin Walnut', 'Sekerpare Apricot', 'Show Time Plum', 'Sour Cherry', 'Starking Apple', 'Strawberry Tree', 'White Mulberry', 'White Nectarine', 'Wild Strawberry', 'Wild Walnut', 'Yellow Cherry', 'Yellow Peach', 'Ziraat 0900 Cherry'])"
+        },
+        "splits": {
+          "train": 5815
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/SapBark_64_variety_classification"
+  },
+  "SoyNet_leaf_health_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Disease",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Disease', 'Healthy'])"
+        },
+        "splits": {
+          "train": 3655
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/SoyNet_leaf_health_classification"
+  },
+  "TOM2024_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "abiotics-disease-d",
+          "alternaria-d",
+          "alternaria-mite-d",
+          "aphids-p",
+          "bacterial-floundering-d",
+          "blossom-end-rot-d",
+          "bulb-blight-d",
+          "caterpillars-p",
+          "curvulariosis-d",
+          "excess-nitrogen-d",
+          "fusarium-d",
+          "healthy-fruit",
+          "healthy-leaf",
+          "helicoverpa-armigera-p",
+          "helminthosporiosis-d",
+          "mite-d",
+          "rust-d",
+          "spodoptera-frugiperda-a",
+          "spodoptera-frugiperda-p",
+          "stripe-d",
+          "sunburn-d",
+          "tomato-late-blight-d",
+          "tuta-absoluta-p",
+          "virosis-d"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['abiotics-disease-d', 'alternaria-d', 'alternaria-mite-d', 'aphids-p', 'bacterial-floundering-d', 'blossom-end-rot-d', 'bulb-blight-d', 'caterpillars-p', 'curvulariosis-d', 'excess-nitrogen-d', 'fusarium-d', 'healthy-fruit', 'healthy-leaf', 'helicoverpa-armigera-p', 'helminthosporiosis-d', 'mite-d', 'rust-d', 'spodoptera-frugiperda-a', 'spodoptera-frugiperda-p', 'stripe-d', 'sunburn-d', 'tomato-late-blight-d', 'tuta-absoluta-p', 'virosis-d'])"
+        },
+        "splits": {
+          "train": 79749
+        }
+      },
+      "raw": {
+        "class_names": [
+          "abiotic-disease-d",
+          "alternaria-d",
+          "alternaria-mite-d",
+          "aphids-p",
+          "bacterial-floundering-d",
+          "blossom-end-rot-d",
+          "bulb-blight-d",
+          "caterpillar-p",
+          "curvulariosis-d",
+          "excess-nitrogen-d",
+          "fusarium-d",
+          "healthy-fruit",
+          "healthy-leaf",
+          "helicoverpa-armigera-p",
+          "helminthosporiosis-d",
+          "mite-d",
+          "rust-d",
+          "spodoptera-frugiperda-a",
+          "spodoptera-frugiperda-p",
+          "stripe-d",
+          "sunburn-d",
+          "tomato-late-blight-d",
+          "tuta-absoluta-p",
+          "virosis-d"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['abiotic-disease-d', 'alternaria-d', 'alternaria-mite-d', 'aphids-p', 'bacterial-floundering-d', 'blossom-end-rot-d', 'bulb-blight-d', 'caterpillar-p', 'curvulariosis-d', 'excess-nitrogen-d', 'fusarium-d', 'healthy-fruit', 'healthy-leaf', 'helicoverpa-armigera-p', 'helminthosporiosis-d', 'mite-d', 'rust-d', 'spodoptera-frugiperda-a', 'spodoptera-frugiperda-p', 'stripe-d', 'sunburn-d', 'tomato-late-blight-d', 'tuta-absoluta-p', 'virosis-d'])"
+        },
+        "splits": {
+          "train": 12082
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/TOM2024_disease_classification"
+  },
+  "VegNet_cauliflower_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bacterial spot rot",
+          "Black Rot",
+          "Disease Free",
+          "Downy Mildew"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial spot rot', 'Black Rot', 'Disease Free', 'Downy Mildew'])"
+        },
+        "splits": {
+          "train": 7360
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Bacterial spot rot",
+          "Black Rot",
+          "Downy Mildew",
+          "No disease"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial spot rot', 'Black Rot', 'Downy Mildew', 'No disease'])"
+        },
+        "splits": {
+          "train": 656
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/VegNet_cauliflower_disease_classification"
+  },
+  "VegNet_quality_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Damaged",
+          "Dried",
+          "Old",
+          "Ripe",
+          "Unripe"
+        ],
+        "features": {
+          "crop_type": "ClassLabel(names=['Bell Pepper', 'Chile Pepper', 'New Mexico Green Chile', 'Tomato'])",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Damaged', 'Dried', 'Old', 'Ripe', 'Unripe'])"
+        },
+        "splits": {
+          "train": 6150
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/VegNet_quality_classification"
+  },
+  "WaterHyacinth_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Common Duckweeds (Lemna minor)",
+          "Common Water Hyacinth (Eichornia crassipes)",
+          "Heartleaf False Pickerelweed (Monochoria korsakowii)",
+          "Water Lettuce (Pistia stratiotes)"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Common Duckweeds (Lemna minor)', 'Common Water Hyacinth (Eichornia crassipes)', 'Heartleaf False Pickerelweed (Monochoria korsakowii)', 'Water Lettuce (Pistia stratiotes)'])"
+        },
+        "splits": {
+          "train": 4050
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Common Duckweeds (Lemna minor)",
+          "Common Water Hyacinth (Eichornia crassipes)",
+          "Heartleaf False Pickerelweed (Monochoria korsakowii)",
+          "Water Lettuce (Pistia stratiotes)"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Common Duckweeds (Lemna minor)', 'Common Water Hyacinth (Eichornia crassipes)', 'Heartleaf False Pickerelweed (Monochoria korsakowii)', 'Water Lettuce (Pistia stratiotes)'])"
+        },
+        "splits": {
+          "train": 1790
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/WaterHyacinth_variety_classification"
+  },
+  "african_plum_grading_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "bruised",
+          "cracked",
+          "rotten",
+          "spotted",
+          "unaffected",
+          "unripe"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['bruised', 'cracked', 'rotten', 'spotted', 'unaffected', 'unripe'])"
+        },
+        "splits": {
+          "train": 4507
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/african_plum_grading_classification"
+  },
+  "agarwood_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Black spots",
+          "Brown clumps",
+          "Brown spots",
+          "Downy mildew",
+          "Flea Beetles",
+          "Healthy",
+          "Mealy bugs",
+          "Mosaic Viruses",
+          "Powdery mildew",
+          "Scale insect",
+          "Sooty mold",
+          "Spiders",
+          "Translucent lesion"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Black spots', 'Brown clumps', 'Brown spots', 'Downy mildew', 'Flea Beetles', 'Healthy', 'Mealy bugs', 'Mosaic Viruses', 'Powdery mildew', 'Scale insect', 'Sooty mold', 'Spiders', 'Translucent lesion'])"
+        },
+        "splits": {
+          "train": 5472
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/agarwood_leaf_disease_classification"
+  },
+  "apple_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Alternaria",
+          "Apple_Mosaic",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria', 'Apple_Mosaic', 'Healthy'])"
+        },
+        "splits": {
+          "train": 5612
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/apple_leaf_disease_classification"
+  },
+  "arabica_coffee_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Cerscospora",
+          "Healthy",
+          "Leaf_rust",
+          "Miner",
+          "Phoma"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Cerscospora', 'Healthy', 'Leaf_rust', 'Miner', 'Phoma'])"
+        },
+        "splits": {
+          "train": 58549
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/arabica_coffee_leaf_disease_classification"
+  },
+  "ash_gourd_disease_classification": {
+    "configs": {
+      "raw": {
+        "class_names": [
+          "Aphid",
+          "Downy mildew",
+          "Healthy",
+          "Leaf curl",
+          "Leaf miner"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aphid', 'Downy mildew', 'Healthy', 'Leaf curl', 'Leaf miner'])"
+        },
+        "splits": {
+          "train": 2676
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/ash_gourd_disease_classification"
+  },
+  "bacterial_grain_rot_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Damaged",
+          "Healthy",
+          "Mild",
+          "Very Damage"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Damaged', 'Healthy', 'Mild', 'Very Damage'])"
+        },
+        "splits": {
+          "train": 566
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/bacterial_grain_rot_classification"
+  },
+  "banana_bunch_maturity_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Cut",
+          "Keep"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Cut', 'Keep'])"
+        },
+        "splits": {
+          "train": 2685
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/banana_bunch_maturity_classification"
+  },
+  "banana_grade_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "grade1",
+          "grade2",
+          "grade3"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['grade1', 'grade2', 'grade3'])",
+          "scale": "Value('string')",
+          "variety": "Value('string')"
+        },
+        "splits": {
+          "train": 31678
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/banana_grade_variety_classification"
+  },
+  "banana_guava_quality_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Class_A",
+          "Class_B",
+          "Defect"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Class_A', 'Class_B', 'Defect'])"
+        },
+        "splits": {
+          "train": 1748
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/banana_guava_quality_classification"
+  },
+  "banana_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "healthy",
+          "segatoka",
+          "xamthomonas"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['healthy', 'segatoka', 'xamthomonas'])"
+        },
+        "splits": {
+          "train": 1288
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/banana_leaf_disease_classification"
+  },
+  "banana_leaf_nutrient_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Boron",
+          "Calcium",
+          "Healthy",
+          "Iron",
+          "Magnesium",
+          "Manganese",
+          "Potassium",
+          "Sulphur",
+          "Zinc"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Boron', 'Calcium', 'Healthy', 'Iron', 'Magnesium', 'Manganese', 'Potassium', 'Sulphur', 'Zinc'])"
+        },
+        "splits": {
+          "train": 12747
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Boron",
+          "Calcium",
+          "Healthy",
+          "Iron",
+          "Magnesium",
+          "Manganese",
+          "Potassium",
+          "Sulphur",
+          "Zinc"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Boron', 'Calcium', 'Healthy', 'Iron', 'Magnesium', 'Manganese', 'Potassium', 'Sulphur', 'Zinc'])"
+        },
+        "splits": {
+          "train": 5348
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/banana_leaf_nutrient_classification"
+  },
+  "banana_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Anaji",
+          "Bichi",
+          "Champa",
+          "Deshi",
+          "Shagor",
+          "Shobri"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anaji', 'Bichi', 'Champa', 'Deshi', 'Shagor', 'Shobri'])"
+        },
+        "splits": {
+          "train": 6000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Anaji",
+          "Bichi",
+          "Champa",
+          "Deshi",
+          "Shagor",
+          "Shobri"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anaji', 'Bichi', 'Champa', 'Deshi', 'Shagor', 'Shobri'])"
+        },
+        "splits": {
+          "train": 1166
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/banana_variety_classification"
+  },
+  "bay_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Disease",
+          "Dry Leaf",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Disease', 'Dry Leaf', 'Healthy'])"
+        },
+        "splits": {
+          "train": 5696
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/bay_leaf_disease_classification"
+  },
+  "bean_cowpea_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial wilt",
+          "Blight",
+          "Fresh Leaf",
+          "Mosaic Virus",
+          "Rust",
+          "Septoria leaf spot"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial wilt', 'Blight', 'Fresh Leaf', 'Mosaic Virus', 'Rust', 'Septoria leaf spot'])"
+        },
+        "splits": {
+          "train": 4467
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/bean_cowpea_leaf_disease_classification"
+  },
+  "bean_disease_classification_tanzania": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "anthracnose",
+          "healthy",
+          "rust"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['anthracnose', 'healthy', 'rust'])"
+        },
+        "splits": {
+          "train": 59071
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/bean_disease_classification_tanzania"
+  },
+  "bean_disease_uganda": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "angular_leaf_spot",
+          "bean_rust",
+          "healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['angular_leaf_spot', 'bean_rust', 'healthy'])"
+        },
+        "splits": {
+          "test": 128,
+          "train": 1034,
+          "validation": 133
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/bean_disease_uganda"
+  },
+  "betel_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial_Leaf_Disease",
+          "Dried_Leaf",
+          "Fungal_Brown_Spot_Disease",
+          "Healthy_Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial_Leaf_Disease', 'Dried_Leaf', 'Fungal_Brown_Spot_Disease', 'Healthy_Leaf'])"
+        },
+        "splits": {
+          "train": 3589
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/betel_leaf_disease_classification"
+  },
+  "betel_leaf_disease_classification_2": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Healthy_Leaf",
+          "Leaf_Rot",
+          "Leaf_Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy_Leaf', 'Leaf_Rot', 'Leaf_Spot'])"
+        },
+        "splits": {
+          "train": 10185
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Healthy_Leaf",
+          "Leaf_Rot",
+          "Leaf_Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy_Leaf', 'Leaf_Rot', 'Leaf_Spot'])"
+        },
+        "splits": {
+          "train": 2037
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/betel_leaf_disease_classification_2"
+  },
+  "black_gram_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Cercospora leaf spot",
+          "Healthy",
+          "Insect",
+          "Leaf Crinkle",
+          "Yellow Mosaic"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Cercospora leaf spot', 'Healthy', 'Insect', 'Leaf Crinkle', 'Yellow Mosaic'])"
+        },
+        "splits": {
+          "train": 4038
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/black_gram_disease_classification"
+  },
+  "blackgram_plant_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "anthracnose",
+          "healthy",
+          "leaf_crinckle",
+          "powdery_mildew",
+          "yellow_mosaic"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['anthracnose', 'healthy', 'leaf_crinckle', 'powdery_mildew', 'yellow_mosaic'])"
+        },
+        "splits": {
+          "train": 1007
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/blackgram_plant_leaf_disease_classification"
+  },
+  "bruised_vegetable_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Damaged",
+          "Fresh",
+          "Severely Damaged"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Damaged', 'Fresh', 'Severely Damaged'])",
+          "plant_id": "Value('int64')"
+        },
+        "splits": {
+          "train": 4464
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/bruised_vegetable_classification"
+  },
+  "carambola_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Healthy Fruits",
+          "Healthy Leaves",
+          "Insect Hole leaves",
+          "Unhealthy Fruits",
+          "Yellow Leaves"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy Fruits', 'Healthy Leaves', 'Insect Hole leaves', 'Unhealthy Fruits', 'Yellow Leaves'])"
+        },
+        "splits": {
+          "train": 15000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Healthy Fruits",
+          "Healthy Leaves",
+          "Insect Hole leaves",
+          "Unhealthy Fruits",
+          "Yellow Leaves"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy Fruits', 'Healthy Leaves', 'Insect Hole leaves', 'Unhealthy Fruits', 'Yellow Leaves'])"
+        },
+        "splits": {
+          "train": 2618
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/carambola_disease_classification"
+  },
+  "cauliflower_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Black Rot",
+          "Healthy",
+          "Insect Hole"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Black Rot', 'Healthy', 'Insect Hole'])"
+        },
+        "splits": {
+          "train": 2661
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/cauliflower_leaf_disease_classification"
+  },
+  "centella_asiatica_leaves": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Dried",
+          "Healthy",
+          "Unhealthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dried', 'Healthy', 'Unhealthy'])"
+        },
+        "splits": {
+          "train": 9094
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/centella_asiatica_leaves"
+  },
+  "chitrak_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Dried",
+          "Healthy",
+          "Unhealthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dried', 'Healthy', 'Unhealthy'])",
+          "leaf_count": "Value('string')",
+          "leaf_side": "Value('string')"
+        },
+        "splits": {
+          "train": 10660
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/chitrak_leaf_disease_classification"
+  },
+  "citrus_fruit_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "black_spot",
+          "canker",
+          "greening",
+          "healthy",
+          "melanose",
+          "scab"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['black_spot', 'canker', 'greening', 'healthy', 'melanose', 'scab'])",
+          "plant_part": "ClassLabel(names=['fruit', 'leaf'])"
+        },
+        "splits": {
+          "train": 759
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/citrus_fruit_leaf_disease_classification"
+  },
+  "citrus_fruit_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "murcott",
+          "ponkan",
+          "tangerine",
+          "tankan"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['murcott', 'ponkan', 'tangerine', 'tankan'])",
+          "split": "Value('string')"
+        },
+        "splits": {
+          "train": 7584
+        }
+      },
+      "raw": {
+        "class_names": [
+          "murcott",
+          "ponkan",
+          "tangerine",
+          "tankan"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['murcott', 'ponkan', 'tangerine', 'tankan'])",
+          "split": "Value('string')"
+        },
+        "splits": {
+          "train": 1379
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/citrus_fruit_variety_classification"
+  },
+  "citrusuat_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Citrus_leafminer",
+          "Fe",
+          "Greasy_spot",
+          "HLB",
+          "Healthy",
+          "Mg",
+          "Mn",
+          "N",
+          "Red_scale",
+          "Red_scale_sequelae",
+          "Texas_mite",
+          "Zn"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Citrus_leafminer', 'Fe', 'Greasy_spot', 'HLB', 'Healthy', 'Mg', 'Mn', 'N', 'Red_scale', 'Red_scale_sequelae', 'Texas_mite', 'Zn'])"
+        },
+        "splits": {
+          "train": 953
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/citrusuat_disease_classification"
+  },
+  "coconut_tree_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bud_Root_Dropping",
+          "Bud_Rot",
+          "Gray_Leaf_Spot",
+          "Leaf_Rot",
+          "Stem_Bleeding"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bud_Root_Dropping', 'Bud_Rot', 'Gray_Leaf_Spot', 'Leaf_Rot', 'Stem_Bleeding'])"
+        },
+        "splits": {
+          "train": 5798
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/coconut_tree_disease_classification"
+  },
+  "coffee_bean_quality_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "A",
+          "AA",
+          "AAA",
+          "AB",
+          "Bits",
+          "Bulk",
+          "C",
+          "PB-I",
+          "PB-II"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['A', 'AA', 'AAA', 'AB', 'Bits', 'Bulk', 'C', 'PB-I', 'PB-II'])"
+        },
+        "splits": {
+          "train": 464
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/coffee_bean_quality_classification"
+  },
+  "corn_leaf_pest_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "healthy",
+          "helminthosporium_leaf_blight",
+          "spodoptera_frugiperda",
+          "zonocerus_variegatus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['healthy', 'helminthosporium_leaf_blight', 'spodoptera_frugiperda', 'zonocerus_variegatus'])"
+        },
+        "splits": {
+          "train": 11772
+        }
+      },
+      "raw": {
+        "class_names": [
+          "healthy",
+          "helminthosporium_leaf_blight",
+          "spodoptera_frugiperda",
+          "zonocerus_variegatus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['healthy', 'helminthosporium_leaf_blight', 'spodoptera_frugiperda', 'zonocerus_variegatus'])"
+        },
+        "splits": {
+          "train": 1308
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/corn_leaf_pest_classification"
+  },
+  "corn_maize_leaf_disease": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Blight",
+          "Common_Rust",
+          "Gray_Leaf_Spot",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Blight', 'Common_Rust', 'Gray_Leaf_Spot', 'Healthy'])"
+        },
+        "splits": {
+          "train": 4188
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/corn_maize_leaf_disease"
+  },
+  "cotton_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Alternaria_Leaf",
+          "Bacterial_Blight",
+          "Fusarium_Wilt",
+          "Healthy_Leaf",
+          "Verticillium_Wilt"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria_Leaf', 'Bacterial_Blight', 'Fusarium_Wilt', 'Healthy_Leaf', 'Verticillium_Wilt'])"
+        },
+        "splits": {
+          "train": 4963
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Alternaria_Leaf",
+          "Bacterial_Blight",
+          "Fusarium_Wilt",
+          "Healthy_Leaf",
+          "Verticillium_Wilt"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria_Leaf', 'Bacterial_Blight', 'Fusarium_Wilt', 'Healthy_Leaf', 'Verticillium_Wilt'])"
+        },
+        "splits": {
+          "train": 1373
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/cotton_leaf_disease_classification"
+  },
+  "cotton_leaf_disease_classification_bangladesh_2": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bacterial Blight",
+          "Curl Virus",
+          "Healthy Leaf",
+          "Herbicide Growth Damage",
+          "Leaf Hopper Jassids",
+          "Leaf Redding",
+          "Leaf Variegation"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Blight', 'Curl Virus', 'Healthy Leaf', 'Herbicide Growth Damage', 'Leaf Hopper Jassids', 'Leaf Redding', 'Leaf Variegation'])"
+        },
+        "splits": {
+          "train": 7000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Bacterial Blight",
+          "Curl Virus",
+          "Healthy Leaf",
+          "Herbicide Growth Damage",
+          "Leaf Hopper Jassids",
+          "Leaf Redding",
+          "Leaf Variegation"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Blight', 'Curl Virus', 'Healthy Leaf', 'Herbicide Growth Damage', 'Leaf Hopper Jassids', 'Leaf Redding', 'Leaf Variegation'])"
+        },
+        "splits": {
+          "train": 2137
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/cotton_leaf_disease_classification_bangladesh_2"
+  },
+  "crop_weeds_greece": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "black_nightshade",
+          "cotton",
+          "tomato",
+          "velvet_leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['black_nightshade', 'cotton', 'tomato', 'velvet_leaf'])"
+        },
+        "splits": {
+          "train": 508
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/crop_weeds_greece"
+  },
+  "cucumber_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Bacterial_Wilt",
+          "Belly_Rot",
+          "Downy_Mildew",
+          "Fresh_Cucumber",
+          "Fresh_Leaf",
+          "Gummy_Stem_Blight",
+          "Pythium_Fruit_Rot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Bacterial_Wilt', 'Belly_Rot', 'Downy_Mildew', 'Fresh_Cucumber', 'Fresh_Leaf', 'Gummy_Stem_Blight', 'Pythium_Fruit_Rot'])"
+        },
+        "splits": {
+          "train": 7689
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/cucumber_disease_classification"
+  },
+  "custard_apple_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Athracnose",
+          "Blank Canker",
+          "Diplodia Rot",
+          "Leaf spot on Leaves",
+          "Leaf spot on fruit",
+          "Mealy Bug"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Athracnose', 'Blank Canker', 'Diplodia Rot', 'Leaf spot on Leaves', 'Leaf spot on fruit', 'Mealy Bug'])"
+        },
+        "splits": {
+          "train": 8226
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/custard_apple_disease_classification"
+  },
+  "date_grade_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "grade-1",
+          "grade-2",
+          "grade-3"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['grade-1', 'grade-2', 'grade-3'])",
+          "size": "Value('string')",
+          "variety": "Value('string')"
+        },
+        "splits": {
+          "train": 19229
+        }
+      },
+      "raw": {
+        "class_names": [
+          "grade-1",
+          "grade-2",
+          "grade-3"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['grade-1', 'grade-2', 'grade-3'])",
+          "size": "Value('string')",
+          "variety": "Value('string')"
+        },
+        "splits": {
+          "train": 3004
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/date_grade_variety_classification"
+  },
+  "date_palm_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Black Scorch",
+          "Fusarium Wilt",
+          "Healthy sample",
+          "Leaf Spots",
+          "Magnesium Deficiency",
+          "Manganese Deficiency",
+          "Parlatoria Blanchardi",
+          "Potassium Deficiency",
+          "Rachis Blight"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Black Scorch', 'Fusarium Wilt', 'Healthy sample', 'Leaf Spots', 'Magnesium Deficiency', 'Manganese Deficiency', 'Parlatoria Blanchardi', 'Potassium Deficiency', 'Rachis Blight'])"
+        },
+        "splits": {
+          "train": 3089
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/date_palm_leaf_disease_classification"
+  },
+  "date_palm_leaf_disease_classification_iraq": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bug",
+          "Dubas",
+          "Healthy",
+          "Honey"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bug', 'Dubas', 'Healthy', 'Honey'])"
+        },
+        "splits": {
+          "train": 3000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/date_palm_leaf_disease_classification_iraq"
+  },
+  "dragonfruit_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bad fruit",
+          "Bad leaf",
+          "Good fruit",
+          "Good leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bad fruit', 'Bad leaf', 'Good fruit', 'Good leaf'])"
+        },
+        "splits": {
+          "train": 11024
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Bad fruit",
+          "Bad leaf",
+          "Good fruit",
+          "Good leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bad fruit', 'Bad leaf', 'Good fruit', 'Good leaf'])"
+        },
+        "splits": {
+          "train": 4497
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/dragonfruit_disease_classification"
+  },
+  "dragonfruit_maturity_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Immature Dragon Fruit",
+          "Mature Dragon Fruit"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Immature Dragon Fruit', 'Mature Dragon Fruit'])"
+        },
+        "splits": {
+          "train": 5010
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Immature Dragon Fruit",
+          "Mature Dragon Fruit"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Immature Dragon Fruit', 'Mature Dragon Fruit'])"
+        },
+        "splits": {
+          "train": 2127
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/dragonfruit_maturity_classification"
+  },
+  "dragonfruit_quality_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Defect Dragon Fruit",
+          "Fresh Dragon Fruit"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Defect Dragon Fruit', 'Fresh Dragon Fruit'])"
+        },
+        "splits": {
+          "train": 5000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Defect Dragon Fruit",
+          "Fresh Dragon Fruit"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Defect Dragon Fruit', 'Fresh Dragon Fruit'])"
+        },
+        "splits": {
+          "train": 1652
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/dragonfruit_quality_classification"
+  },
+  "durian_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "anthracnose_disease",
+          "canker_disease",
+          "fruit_rot",
+          "mealybug_infestation",
+          "pink_disease",
+          "sooty_mold",
+          "stem_blight",
+          "stem_cracking_ gummosis",
+          "thrips_disease",
+          "yellow_leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['anthracnose_disease', 'canker_disease', 'fruit_rot', 'mealybug_infestation', 'pink_disease', 'sooty_mold', 'stem_blight', 'stem_cracking_ gummosis', 'thrips_disease', 'yellow_leaf'])"
+        },
+        "splits": {
+          "train": 5451
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/durian_disease_classification"
+  },
+  "durian_disease_classification_vietnam": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Leaf_Algal",
+          "Leaf_Blight",
+          "Leaf_Colletotrichum",
+          "Leaf_Healthy",
+          "Leaf_Phomopsis",
+          "Leaf_Rhizoctonia"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Leaf_Algal', 'Leaf_Blight', 'Leaf_Colletotrichum', 'Leaf_Healthy', 'Leaf_Phomopsis', 'Leaf_Rhizoctonia'])"
+        },
+        "splits": {
+          "train": 2595
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/durian_disease_classification_vietnam"
+  },
+  "eggplant_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Healthy Leaf",
+          "Insect Pest Disease",
+          "Leaf Spot Disease",
+          "Mosaic Virus Disease",
+          "White Mold Disease",
+          "Wilt Disease"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy Leaf', 'Insect Pest Disease', 'Leaf Spot Disease', 'Mosaic Virus Disease', 'White Mold Disease', 'Wilt Disease'])"
+        },
+        "splits": {
+          "train": 20353
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Healthy Leaf",
+          "Insect Pest Disease",
+          "Leaf Spot Disease",
+          "Mosaic Virus Disease",
+          "White Mold Disease",
+          "Wilt Disease"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy Leaf', 'Insect Pest Disease', 'Leaf Spot Disease', 'Mosaic Virus Disease', 'White Mold Disease', 'Wilt Disease'])"
+        },
+        "splits": {
+          "train": 4089
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/eggplant_disease_classification"
+  },
+  "eggplant_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Aphids",
+          "Cercospora Leaf Spot",
+          "Defect Eggplant",
+          "Flea Beetles",
+          "Fresh Eggplant",
+          "Fresh Eggplant Leaf",
+          "Leaf Wilt",
+          "Phytophthora Blight",
+          "Powdery Mildew",
+          "Tobacco Mosaic Virus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aphids', 'Cercospora Leaf Spot', 'Defect Eggplant', 'Flea Beetles', 'Fresh Eggplant', 'Fresh Eggplant Leaf', 'Leaf Wilt', 'Phytophthora Blight', 'Powdery Mildew', 'Tobacco Mosaic Virus'])"
+        },
+        "splits": {
+          "train": 10000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Aphids",
+          "Cercospora Leaf Spot",
+          "Defect Eggplant",
+          "Flea Beetles",
+          "Fresh Eggplant",
+          "Fresh Eggplant Leaf",
+          "Leaf Wilt",
+          "Phytophthora Blight",
+          "Powdery Mildew",
+          "Tobacco Mosaic Virus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aphids', 'Cercospora Leaf Spot', 'Defect Eggplant', 'Flea Beetles', 'Fresh Eggplant', 'Fresh Eggplant Leaf', 'Leaf Wilt', 'Phytophthora Blight', 'Powdery Mildew', 'Tobacco Mosaic Virus'])"
+        },
+        "splits": {
+          "train": 3116
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/eggplant_leaf_disease_classification"
+  },
+  "fig_leaf_ficus_worm_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "healthy",
+          "infected"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['healthy', 'infected'])"
+        },
+        "splits": {
+          "train": 2321
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/fig_leaf_ficus_worm_classification"
+  },
+  "fresh_rotten_fruit_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "fresh",
+          "rotten"
+        ],
+        "features": {
+          "fruit_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['fresh', 'rotten'])"
+        },
+        "splits": {
+          "train": 12335
+        }
+      },
+      "raw": {
+        "class_names": [
+          "fresh",
+          "rotten"
+        ],
+        "features": {
+          "fruit_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['fresh', 'rotten'])"
+        },
+        "splits": {
+          "train": 3200
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/fresh_rotten_fruit_classification"
+  },
+  "fruit_leaf_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Aegle marmelos",
+          "Black plum",
+          "Custard Apple",
+          "Guava",
+          "Jackfruit",
+          "Lotkon",
+          "Lychee",
+          "Mango",
+          "Plum",
+          "Star Fruit"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aegle marmelos', 'Black plum', 'Custard Apple', 'Guava', 'Jackfruit', 'Lotkon', 'Lychee', 'Mango', 'Plum', 'Star Fruit'])"
+        },
+        "splits": {
+          "train": 3173
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/fruit_leaf_variety_classification"
+  },
+  "grape_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial Leaf Spot",
+          "Downy Mildew",
+          "Healthy Leaves",
+          "Powdery Mildew"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Leaf Spot', 'Downy Mildew', 'Healthy Leaves', 'Powdery Mildew'])"
+        },
+        "splits": {
+          "train": 2726
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grape_leaf_disease_classification"
+  },
+  "grape_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Aswud Balad",
+          "Deas Al-Annz",
+          "Frinsi",
+          "Halawani",
+          "Kamali",
+          "Riasi",
+          "Shdah",
+          "Thompson Seedless"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aswud Balad', 'Deas Al-Annz', 'Frinsi', 'Halawani', 'Kamali', 'Riasi', 'Shdah', 'Thompson Seedless'])"
+        },
+        "splits": {
+          "train": 8000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grape_variety_classification"
+  },
+  "grapevine_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "conf",
+          "conf+",
+          "esca",
+          "fd"
+        ],
+        "features": {
+          "grape_variety": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['conf', 'conf+', 'esca', 'fd'])"
+        },
+        "splits": {
+          "train": 611
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grapevine_disease_classification"
+  },
+  "grapevine_esca_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "esca",
+          "healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['esca', 'healthy'])"
+        },
+        "splits": {
+          "train": 1770
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grapevine_esca_classification"
+  },
+  "groundnut_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "ALTERNARIA LEAF SPOT",
+          "HEALTHY",
+          "LEAF SPOT",
+          "ROSETTE",
+          "RUST"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['ALTERNARIA LEAF SPOT', 'HEALTHY', 'LEAF SPOT', 'ROSETTE', 'RUST'])"
+        },
+        "splits": {
+          "train": 1720
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/groundnut_leaf_disease_classification"
+  },
+  "groundnut_leaf_disease_classification_2": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "early_leaf_spot",
+          "healthy leaf",
+          "late leaf spot",
+          "nutrition deficiency",
+          "rust"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['early_leaf_spot', 'healthy leaf', 'late leaf spot', 'nutrition deficiency', 'rust'])"
+        },
+        "splits": {
+          "train": 3058
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/groundnut_leaf_disease_classification_2"
+  },
+  "guava_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Anthracnose",
+          "Canker",
+          "Dot",
+          "Healthy",
+          "Rust",
+          "Scab",
+          "Styler end root"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Canker', 'Dot', 'Healthy', 'Rust', 'Scab', 'Styler end root'])",
+          "plant_part": "Value('string')"
+        },
+        "splits": {
+          "train": 20344
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Anthracnose",
+          "Canker",
+          "Dot",
+          "Healthy",
+          "Rust",
+          "Scab",
+          "Styler end root"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Canker', 'Dot', 'Healthy', 'Rust', 'Scab', 'Styler end root'])",
+          "plant_part": "Value('string')"
+        },
+        "splits": {
+          "train": 3049
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/guava_disease_classification"
+  },
+  "guava_disease_classification_bangladesh": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Disease Free",
+          "Phytopthora",
+          "Red rust",
+          "Scab",
+          "Styler and Root"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Disease Free', 'Phytopthora', 'Red rust', 'Scab', 'Styler and Root'])"
+        },
+        "splits": {
+          "train": 4899
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Disease Free",
+          "Phytopthora",
+          "Red rust",
+          "Scab",
+          "Styler and Root"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Disease Free', 'Phytopthora', 'Red rust', 'Scab', 'Styler and Root'])"
+        },
+        "splits": {
+          "train": 527
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/guava_disease_classification_bangladesh"
+  },
+  "guava_disease_pakistan": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Canker",
+          "Dot",
+          "Mummification",
+          "Rust"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Canker', 'Dot', 'Mummification', 'Rust'])"
+        },
+        "splits": {
+          "train": 306
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/guava_disease_pakistan"
+  },
+  "guava_maturity_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "green",
+          "mature-green",
+          "ripe"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['green', 'mature-green', 'ripe'])",
+          "variety": "Value('string')"
+        },
+        "splits": {
+          "train": 2309
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/guava_maturity_classification"
+  },
+  "hog_plum_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "healthy",
+          "not_healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['healthy', 'not_healthy'])"
+        },
+        "splits": {
+          "train": 20000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "healthy",
+          "not_healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['healthy', 'not_healthy'])"
+        },
+        "splits": {
+          "train": 3782
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/hog_plum_leaf_disease_classification"
+  },
+  "java_plum_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial_Spot",
+          "Brown_Blight",
+          "Dry",
+          "Healthy",
+          "Powdery_Mildew",
+          "Sooty_Mold"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial_Spot', 'Brown_Blight', 'Dry', 'Healthy', 'Powdery_Mildew', 'Sooty_Mold'])"
+        },
+        "splits": {
+          "train": 2400
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/java_plum_leaf_disease_classification"
+  },
+  "jujube_bruise_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "bruised",
+          "healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['bruised', 'healthy'])"
+        },
+        "splits": {
+          "train": 5856
+        }
+      },
+      "raw": {
+        "class_names": [
+          "bruised",
+          "healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['bruised', 'healthy'])"
+        },
+        "splits": {
+          "train": 1464
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/jujube_bruise_classification"
+  },
+  "jute_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Dieback",
+          "Fresh",
+          "Holed",
+          "Mosaic",
+          "Stem Soft Rot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dieback', 'Fresh', 'Holed', 'Mosaic', 'Stem Soft Rot'])"
+        },
+        "splits": {
+          "train": 1390
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/jute_disease_classification"
+  },
+  "leaf_counting_denmark": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9+"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['1', '2', '3', '4', '5', '6', '7', '8', '9+'])"
+        },
+        "splits": {
+          "train": 9372
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/leaf_counting_denmark"
+  },
+  "lemon_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Anthracnose",
+          "Bacterial Blight",
+          "Citrus Canker",
+          "Curl Virus",
+          "Deficiency Leaf",
+          "Dry Leaf",
+          "Healthy Leaf",
+          "Sooty Mould",
+          "Spider Mites"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Bacterial Blight', 'Citrus Canker', 'Curl Virus', 'Deficiency Leaf', 'Dry Leaf', 'Healthy Leaf', 'Sooty Mould', 'Spider Mites'])"
+        },
+        "splits": {
+          "train": 9000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Anthracnose",
+          "Bacterial Blight",
+          "Citrus Canker",
+          "Curl Virus",
+          "Deficiency Leaf",
+          "Dry Leaf",
+          "Healthy Leaf",
+          "Sooty Mould",
+          "Spider Mites"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Bacterial Blight', 'Citrus Canker', 'Curl Virus', 'Deficiency Leaf', 'Dry Leaf', 'Healthy Leaf', 'Sooty Mould', 'Spider Mites'])"
+        },
+        "splits": {
+          "train": 1354
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/lemon_leaf_disease_classification"
+  },
+  "lemongrass_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Dried",
+          "Healthy",
+          "Unhealthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dried', 'Healthy', 'Unhealthy'])"
+        },
+        "splits": {
+          "train": 10042
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/lemongrass_disease_classification"
+  },
+  "lentil_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Ascochyta blight",
+          "Lentil Rust",
+          "Normal",
+          "Powdery Mildew"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Ascochyta blight', 'Lentil Rust', 'Normal', 'Powdery Mildew'])"
+        },
+        "splits": {
+          "train": 5349
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/lentil_disease_classification"
+  },
+  "maize_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Healthy",
+          "MLN",
+          "MSV"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy', 'MLN', 'MSV'])"
+        },
+        "splits": {
+          "train": 9356
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/maize_disease_classification"
+  },
+  "maize_tomato_weed_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "atriplex",
+          "chenopodium",
+          "convolvulus",
+          "cyperus",
+          "datura",
+          "lolium",
+          "maize",
+          "portulaca",
+          "salsola",
+          "solanum",
+          "sorghum",
+          "tomato"
+        ],
+        "features": {
+          "crop": "Value('string')",
+          "growth_stage": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['atriplex', 'chenopodium', 'convolvulus', 'cyperus', 'datura', 'lolium', 'maize', 'portulaca', 'salsola', 'solanum', 'sorghum', 'tomato'])"
+        },
+        "splits": {
+          "train": 55828
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/maize_tomato_weed_classification"
+  },
+  "malabar_spinach_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "anthracnose_leaf_spot",
+          "healthy",
+          "straw_mite"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['anthracnose_leaf_spot', 'healthy', 'straw_mite'])"
+        },
+        "splits": {
+          "train": 5868
+        }
+      },
+      "raw": {
+        "class_names": [
+          "anthracnose_leaf_spot",
+          "healthy",
+          "straw_mite"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['anthracnose_leaf_spot', 'healthy', 'straw_mite'])"
+        },
+        "splits": {
+          "train": 603
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/malabar_spinach_disease_classification"
+  },
+  "mandarin_leaf_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "China Mishti",
+          "Darjeling",
+          "Mendaring",
+          "Nagpuri"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['China Mishti', 'Darjeling', 'Mendaring', 'Nagpuri'])"
+        },
+        "splits": {
+          "train": 8032
+        }
+      },
+      "raw": {
+        "class_names": [
+          "China Mishti",
+          "Darjeling",
+          "Mandaring",
+          "Nagpuri"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['China Mishti', 'Darjeling', 'Mandaring', 'Nagpuri'])"
+        },
+        "splits": {
+          "train": 1917
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/mandarin_leaf_variety_classification"
+  },
+  "mangifera2012_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Amrapali",
+          "Bari-4",
+          "Bari-7",
+          "Fazlee",
+          "Harivanga",
+          "Kanchon Langra",
+          "Katimon",
+          "Langra",
+          "Mollika",
+          "Nilambori"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Amrapali', 'Bari-4', 'Bari-7', 'Fazlee', 'Harivanga', 'Kanchon Langra', 'Katimon', 'Langra', 'Mollika', 'Nilambori'])"
+        },
+        "splits": {
+          "train": 2012
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/mangifera2012_variety_classification"
+  },
+  "mango_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Bacterial_Canker",
+          "Cutting_Weevil",
+          "Die_Back",
+          "Gall_Midge",
+          "Healthy",
+          "Powdery_Mildew",
+          "Sooty_Mold"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Bacterial_Canker', 'Cutting_Weevil', 'Die_Back', 'Gall_Midge', 'Healthy', 'Powdery_Mildew', 'Sooty_Mold'])"
+        },
+        "splits": {
+          "train": 4000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/mango_leaf_disease_classification"
+  },
+  "mint_leaf_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Dried",
+          "Fresh",
+          "Spoiled",
+          "Sunlight"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dried', 'Fresh', 'Spoiled', 'Sunlight'])"
+        },
+        "splits": {
+          "train": 5384
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/mint_leaf_classification"
+  },
+  "money_plant_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial wilt disease",
+          "Healthy",
+          "Manganese Toxicity"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial wilt disease', 'Healthy', 'Manganese Toxicity'])"
+        },
+        "splits": {
+          "train": 1872
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/money_plant_disease_classification"
+  },
+  "mulberry_leaf_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "BlackAustralia",
+          "BlackOodTurkey",
+          "Buriram60",
+          "ChiangMai60",
+          "ChiangMaiBuriram60",
+          "Kamphaengsaeng42",
+          "RedKing",
+          "TaiwanMeacho",
+          "TaiwanStraberry",
+          "WhiteKing"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BlackAustralia', 'BlackOodTurkey', 'Buriram60', 'ChiangMai60', 'ChiangMaiBuriram60', 'Kamphaengsaeng42', 'RedKing', 'TaiwanMeacho', 'TaiwanStraberry', 'WhiteKing'])"
+        },
+        "splits": {
+          "train": 5262
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/mulberry_leaf_variety_classification"
+  },
+  "oil_palm_fruit_ripeness_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Damaged",
+          "Empty",
+          "Overripe",
+          "Ripe",
+          "Unripe"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Damaged', 'Empty', 'Overripe', 'Ripe', 'Unripe'])"
+        },
+        "splits": {
+          "train": 466
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/oil_palm_fruit_ripeness_classification"
+  },
+  "okra_maturity_classification": {
+    "configs": {
+      "raw": {
+        "class_names": [
+          "Mature",
+          "Over-mature",
+          "Under-mature"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Mature', 'Over-mature', 'Under-mature'])"
+        },
+        "splits": {
+          "train": 364
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/okra_maturity_classification"
+  },
+  "okra_thermal_maturity_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "adequate_matured",
+          "over_matured"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['adequate_matured', 'over_matured'])"
+        },
+        "splits": {
+          "train": 501
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/okra_thermal_maturity_classification"
+  },
+  "orange_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "citrus_canker",
+          "citrus_greening",
+          "citrus_mealybugs",
+          "die_back",
+          "foliage_damaged",
+          "healthy_leaf",
+          "powdery_mildew",
+          "shot_hole",
+          "spiny_whitefly",
+          "yellow_dragon",
+          "yellow_leaves"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['citrus_canker', 'citrus_greening', 'citrus_mealybugs', 'die_back', 'foliage_damaged', 'healthy_leaf', 'powdery_mildew', 'shot_hole', 'spiny_whitefly', 'yellow_dragon', 'yellow_leaves'])"
+        },
+        "splits": {
+          "train": 5813
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/orange_leaf_disease_classification"
+  },
+  "paddy_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "bacterial_leaf_blight",
+          "bacterial_leaf_streak",
+          "bacterial_panicle_blight",
+          "blast",
+          "brown_spot",
+          "dead_heart",
+          "downy_mildew",
+          "hispa",
+          "normal",
+          "tungro"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['bacterial_leaf_blight', 'bacterial_leaf_streak', 'bacterial_panicle_blight', 'blast', 'brown_spot', 'dead_heart', 'downy_mildew', 'hispa', 'normal', 'tungro'])"
+        },
+        "splits": {
+          "train": 10407
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/paddy_disease_classification"
+  },
+  "papaya_leaf_disease_classification_bangladesh": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Healthy Leaf",
+          "Leaf Curl",
+          "Mealybug",
+          "Mite Disease",
+          "Mosaic",
+          "Ring Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy Leaf', 'Leaf Curl', 'Mealybug', 'Mite Disease', 'Mosaic', 'Ring Spot'])"
+        },
+        "splits": {
+          "train": 6618
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Healthy Leaf",
+          "Leaf Curl",
+          "Mealybug",
+          "Mite Disease",
+          "Mosaic",
+          "Ring Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy Leaf', 'Leaf Curl', 'Mealybug', 'Mite Disease', 'Mosaic', 'Ring Spot'])"
+        },
+        "splits": {
+          "train": 1400
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/papaya_leaf_disease_classification_bangladesh"
+  },
+  "papaya_leaf_disease_detection": {
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "Value('int64')",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 1050
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/papaya_leaf_disease_detection"
+  },
+  "plant_doc_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Apple Scab Leaf",
+          "Apple leaf",
+          "Apple rust leaf",
+          "Bell_pepper leaf",
+          "Bell_pepper leaf spot",
+          "Blueberry leaf",
+          "Cherry leaf",
+          "Corn Gray leaf spot",
+          "Corn leaf blight",
+          "Corn rust leaf",
+          "Peach leaf",
+          "Potato leaf early blight",
+          "Potato leaf late blight",
+          "Raspberry leaf",
+          "Soyabean leaf",
+          "Squash Powdery mildew leaf",
+          "Strawberry leaf",
+          "Tomato Early blight leaf",
+          "Tomato Septoria leaf spot",
+          "Tomato leaf",
+          "Tomato leaf bacterial spot",
+          "Tomato leaf late blight",
+          "Tomato leaf mosaic virus",
+          "Tomato leaf yellow virus",
+          "Tomato mold leaf",
+          "Tomato two spotted spider mites leaf",
+          "grape leaf",
+          "grape leaf black rot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Apple Scab Leaf', 'Apple leaf', 'Apple rust leaf', 'Bell_pepper leaf', 'Bell_pepper leaf spot', 'Blueberry leaf', 'Cherry leaf', 'Corn Gray leaf spot', 'Corn leaf blight', 'Corn rust leaf', 'Peach leaf', 'Potato leaf early blight', 'Potato leaf late blight', 'Raspberry leaf', 'Soyabean leaf', 'Squash Powdery mildew leaf', 'Strawberry leaf', 'Tomato Early blight leaf', 'Tomato Septoria leaf spot', 'Tomato leaf', 'Tomato leaf bacterial spot', 'Tomato leaf late blight', 'Tomato leaf mosaic virus', 'Tomato leaf yellow virus', 'Tomato mold leaf', 'Tomato two spotted spider mites leaf', 'grape leaf', 'grape leaf black rot'])"
+        },
+        "splits": {
+          "train": 2569
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/plant_doc_classification"
+  },
+  "plant_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anthracnose",
+          "Anthracnose lesions",
+          "Black Rot",
+          "Downey mildew",
+          "Downy mildew",
+          "Eggplant Cercopora leaf spot",
+          "Eggplant begomovirus",
+          "Eggplant fresh leaf",
+          "Eggplant verticillium wilt",
+          "Fresh leaf",
+          "Fusarium wilt",
+          "Mosaic virus",
+          "Tomato Bacterial spot",
+          "Tomato Fresh leaf",
+          "Tomato leaf curl virus",
+          "Tomato spotted wilt"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Anthracnose lesions', 'Black Rot', 'Downey mildew', 'Downy mildew', 'Eggplant Cercopora leaf spot', 'Eggplant begomovirus', 'Eggplant fresh leaf', 'Eggplant verticillium wilt', 'Fresh leaf', 'Fusarium wilt', 'Mosaic virus', 'Tomato Bacterial spot', 'Tomato Fresh leaf', 'Tomato leaf curl virus', 'Tomato spotted wilt'])",
+          "plant_type": "ClassLabel(names=['Bitter Gourd', 'Bottle gourd', 'Cauliflower', 'Cucumber', 'Eggplant', 'Tomato'])"
+        },
+        "splits": {
+          "train": 12786
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/plant_leaf_disease_classification"
+  },
+  "plant_seedlings_aarhus": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "black_grass",
+          "charlock",
+          "cleavers",
+          "common_chickweed",
+          "common_wheat",
+          "fat_hen",
+          "loose_silkybent",
+          "maize",
+          "scentless_mayweed",
+          "shepherds_purse",
+          "smallflowered_cranesbill",
+          "sugar_beet"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['black_grass', 'charlock', 'cleavers', 'common_chickweed', 'common_wheat', 'fat_hen', 'loose_silkybent', 'maize', 'scentless_mayweed', 'shepherds_purse', 'smallflowered_cranesbill', 'sugar_beet'])"
+        },
+        "splits": {
+          "train": 5539
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/plant_seedlings_aarhus"
+  },
+  "plant_village_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Apple___Apple_scab",
+          "Apple___Black_rot",
+          "Apple___Cedar_apple_rust",
+          "Apple___healthy",
+          "Background_without_leaves",
+          "Blueberry___healthy",
+          "Cherry___Powdery_mildew",
+          "Cherry___healthy",
+          "Corn___Cercospora_leaf_spot Gray_leaf_spot",
+          "Corn___Common_rust",
+          "Corn___Northern_Leaf_Blight",
+          "Corn___healthy",
+          "Grape___Black_rot",
+          "Grape___Esca_(Black_Measles)",
+          "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
+          "Grape___healthy",
+          "Orange___Haunglongbing_(Citrus_greening)",
+          "Peach___Bacterial_spot",
+          "Peach___healthy",
+          "Pepper,_bell___Bacterial_spot",
+          "Pepper,_bell___healthy",
+          "Potato___Early_blight",
+          "Potato___Late_blight",
+          "Potato___healthy",
+          "Raspberry___healthy",
+          "Soybean___healthy",
+          "Squash___Powdery_mildew",
+          "Strawberry___Leaf_scorch",
+          "Strawberry___healthy",
+          "Tomato___Bacterial_spot",
+          "Tomato___Early_blight",
+          "Tomato___Late_blight",
+          "Tomato___Leaf_Mold",
+          "Tomato___Septoria_leaf_spot",
+          "Tomato___Spider_mites Two-spotted_spider_mite",
+          "Tomato___Target_Spot",
+          "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+          "Tomato___Tomato_mosaic_virus",
+          "Tomato___healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy', 'Background_without_leaves', 'Blueberry___healthy', 'Cherry___Powdery_mildew', 'Cherry___healthy', 'Corn___Cercospora_leaf_spot Gray_leaf_spot', 'Corn___Common_rust', 'Corn___Northern_Leaf_Blight', 'Corn___healthy', 'Grape___Black_rot', 'Grape___Esca_(Black_Measles)', 'Grape___Leaf_blight_(Isariopsis_Leaf_Spot)', 'Grape___healthy', 'Orange___Haunglongbing_(Citrus_greening)', 'Peach___Bacterial_spot', 'Peach___healthy', 'Pepper,_bell___Bacterial_spot', 'Pepper,_bell___healthy', 'Potato___Early_blight', 'Potato___Late_blight', 'Potato___healthy', 'Raspberry___healthy', 'Soybean___healthy', 'Squash___Powdery_mildew', 'Strawberry___Leaf_scorch', 'Strawberry___healthy', 'Tomato___Bacterial_spot', 'Tomato___Early_blight', 'Tomato___Late_blight', 'Tomato___Leaf_Mold', 'Tomato___Septoria_leaf_spot', 'Tomato___Spider_mites Two-spotted_spider_mite', 'Tomato___Target_Spot', 'Tomato___Tomato_Yellow_Leaf_Curl_Virus', 'Tomato___Tomato_mosaic_virus', 'Tomato___healthy'])"
+        },
+        "splits": {
+          "train": 55448
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/plant_village_classification"
+  },
+  "plum_leaf_fruit_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Bacterial Spot",
+          "Healthy Fruit",
+          "Healthy Leaf",
+          "Shot Hole",
+          "Unhealthy Fruit",
+          "Wilted Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Spot', 'Healthy Fruit', 'Healthy Leaf', 'Shot Hole', 'Unhealthy Fruit', 'Wilted Leaf'])"
+        },
+        "splits": {
+          "train": 18000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Dead Leaf",
+          "Healthy Fruit",
+          "Healthy Leaf",
+          "Insect Hole",
+          "Unhealthy Fruit",
+          "Yellow"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dead Leaf', 'Healthy Fruit', 'Healthy Leaf', 'Insect Hole', 'Unhealthy Fruit', 'Yellow'])"
+        },
+        "splits": {
+          "train": 3554
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/plum_leaf_fruit_disease_classification"
+  },
+  "pomegranate_disease_classification": {
+    "configs": {
+      "raw": {
+        "class_names": [
+          "Colletotrichum spp",
+          "Ectomyelois ceratoniae",
+          "Healthy",
+          "Sunburn"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Colletotrichum spp', 'Ectomyelois ceratoniae', 'Healthy', 'Sunburn'])"
+        },
+        "splits": {
+          "train": 2178
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/pomegranate_disease_classification"
+  },
+  "pomegranate_disease_classification_india": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Alternaria",
+          "Anthracnose",
+          "Bacterial_Blight",
+          "Cercospora",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternaria', 'Anthracnose', 'Bacterial_Blight', 'Cercospora', 'Healthy'])"
+        },
+        "splits": {
+          "train": 5099
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/pomegranate_disease_classification_india"
+  },
+  "pomegranate_quality_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "grade-1",
+          "grade-2",
+          "grade-3"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['grade-1', 'grade-2', 'grade-3'])",
+          "quality": "ClassLabel(names=['quality-1', 'quality-2', 'quality-3', 'quality-4'])"
+        },
+        "splits": {
+          "train": 1080
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/pomegranate_quality_classification"
+  },
+  "pomegranate_thermal_defect_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Major Defect",
+          "Minor Defect",
+          "No Defect"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Major Defect', 'Minor Defect', 'No Defect'])"
+        },
+        "splits": {
+          "train": 982
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/pomegranate_thermal_defect_classification"
+  },
+  "potato_leaf_blight": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "earlyblt",
+          "healthy",
+          "lateblt"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['earlyblt', 'healthy', 'lateblt'])"
+        },
+        "splits": {
+          "train": 55453
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/potato_leaf_blight"
+  },
+  "potato_leaf_blight_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "earlyblt",
+          "healthy",
+          "lateblt"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['earlyblt', 'healthy', 'lateblt'])"
+        },
+        "splits": {}
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/potato_leaf_blight_classification"
+  },
+  "potato_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacteria",
+          "Fungi",
+          "Healthy",
+          "Nematode",
+          "Pest",
+          "Phytopthora",
+          "Virus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacteria', 'Fungi', 'Healthy', 'Nematode', 'Pest', 'Phytopthora', 'Virus'])"
+        },
+        "splits": {
+          "train": 3076
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/potato_leaf_disease_classification"
+  },
+  "radish_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Black leaf spot",
+          "Downey mildew",
+          "Fresh leaf",
+          "Mosaic virus",
+          "flea beetle"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Black leaf spot', 'Downey mildew', 'Fresh leaf', 'Mosaic virus', 'flea beetle'])"
+        },
+        "splits": {
+          "train": 2801
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/radish_leaf_disease_classification"
+  },
+  "rangeland_weeds_australia": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "chinee_apple",
+          "lantana",
+          "negative",
+          "parkinsonia",
+          "parthenium",
+          "prickly_acacia",
+          "rubber_vine",
+          "siam_weed",
+          "snake_weed"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['chinee_apple', 'lantana', 'negative', 'parkinsonia', 'parthenium', 'prickly_acacia', 'rubber_vine', 'siam_weed', 'snake_weed'])"
+        },
+        "splits": {
+          "train": 17509
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/rangeland_weeds_australia"
+  },
+  "rice_disease_classification_bangladesh": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Healthy",
+          "Insect",
+          "Leaf scald",
+          "Rice",
+          "Rice Blast",
+          "Rice Leaffolder",
+          "Rice Stripes",
+          "Rice Tungro"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy', 'Insect', 'Leaf scald', 'Rice', 'Rice Blast', 'Rice Leaffolder', 'Rice Stripes', 'Rice Tungro'])"
+        },
+        "splits": {
+          "train": 18536
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Healthy",
+          "Insect",
+          "Leaf Scald",
+          "Rice",
+          "Rice Blast",
+          "Rice Leaffolder",
+          "Rice Stripes",
+          "Rice Tungro"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy', 'Insect', 'Leaf Scald', 'Rice', 'Rice Blast', 'Rice Leaffolder', 'Rice Stripes', 'Rice Tungro'])"
+        },
+        "splits": {
+          "train": 2769
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/rice_disease_classification_bangladesh"
+  },
+  "rice_field_weed_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Alternanthera philoxeroide",
+          "Centella asiatica",
+          "Commelina benghalensis",
+          "Cyperus ochraceus",
+          "Fimbristylis littoralis",
+          "Ipomoea aquatic",
+          "Marsilea minuta",
+          "Panicum repens",
+          "Paspalum scrobiculatum",
+          "Pteris vittata",
+          "Synedrella nodiflora"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Alternanthera philoxeroide', 'Centella asiatica', 'Commelina benghalensis', 'Cyperus ochraceus', 'Fimbristylis littoralis', 'Ipomoea aquatic', 'Marsilea minuta', 'Panicum repens', 'Paspalum scrobiculatum', 'Pteris vittata', 'Synedrella nodiflora'])"
+        },
+        "splits": {
+          "train": 3632
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/rice_field_weed_classification"
+  },
+  "rice_grain_variety_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Amon",
+          "BR28",
+          "BR29",
+          "Bashful",
+          "Bashmoti",
+          "Chinigura_Polao",
+          "Ganjiya",
+          "Gutisharna",
+          "Jirashail",
+          "Katari_Polao",
+          "Katarivog",
+          "Lal_Aush",
+          "Lal_Binni",
+          "Lal_Biroi",
+          "Najirshail",
+          "Paijam",
+          "Red_Cargo",
+          "Shampakatari",
+          "Shorna5",
+          "Subol_Lota"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Amon', 'BR28', 'BR29', 'Bashful', 'Bashmoti', 'Chinigura_Polao', 'Ganjiya', 'Gutisharna', 'Jirashail', 'Katari_Polao', 'Katarivog', 'Lal_Aush', 'Lal_Binni', 'Lal_Biroi', 'Najirshail', 'Paijam', 'Red_Cargo', 'Shampakatari', 'Shorna5', 'Subol_Lota'])"
+        },
+        "splits": {
+          "train": 23650
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Amon",
+          "BR28",
+          "BR29",
+          "Bashful",
+          "Bashmoti",
+          "Chinigura_Polao",
+          "Ganjiya",
+          "Gutisharna",
+          "Jirashail",
+          "Katari_Polao",
+          "Katarivog",
+          "Lal_Aush",
+          "Lal_Binni",
+          "Lal_Biroi",
+          "Najirshail",
+          "Paijam",
+          "Red_Cargo",
+          "Shampakatari",
+          "Shorna5",
+          "Subol_Lota"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Amon', 'BR28', 'BR29', 'Bashful', 'Bashmoti', 'Chinigura_Polao', 'Ganjiya', 'Gutisharna', 'Jirashail', 'Katari_Polao', 'Katarivog', 'Lal_Aush', 'Lal_Binni', 'Lal_Biroi', 'Najirshail', 'Paijam', 'Red_Cargo', 'Shampakatari', 'Shorna5', 'Subol_Lota'])"
+        },
+        "splits": {
+          "train": 4730
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/rice_grain_variety_classification"
+  },
+  "rice_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial_Leaf_Blight",
+          "Brown_Spot",
+          "Healthy_Rice_Leaf",
+          "Leaf_Blast",
+          "Leaf_Scald",
+          "Sheath_Blight"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial_Leaf_Blight', 'Brown_Spot', 'Healthy_Rice_Leaf', 'Leaf_Blast', 'Leaf_Scald', 'Sheath_Blight'])"
+        },
+        "splits": {
+          "train": 3829
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/rice_leaf_disease_classification"
+  },
+  "rice_seedling_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "clustered",
+          "single",
+          "undefined"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['clustered', 'single', 'undefined'])"
+        },
+        "splits": {
+          "train": 5364
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/rice_seedling_classification"
+  },
+  "rice_variety_classification_bangladesh": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "BD30",
+          "BD33",
+          "BD39",
+          "BD49",
+          "BD51",
+          "BD52",
+          "BD56",
+          "BD57",
+          "BD70",
+          "BD72",
+          "BD75",
+          "BD76",
+          "BD79",
+          "BD85",
+          "BD87",
+          "BD91",
+          "BD93",
+          "BD95",
+          "BR22",
+          "BR23",
+          "BRRI102",
+          "BRRI67",
+          "BRRI74",
+          "Binadhan10",
+          "Binadhan11",
+          "Binadhan12",
+          "Binadhan14",
+          "Binadhan16",
+          "Binadhan17",
+          "Binadhan19",
+          "Binadhan20",
+          "Binadhan21",
+          "Binadhan23",
+          "Binadhan24",
+          "Binadhan25",
+          "Binadhan26",
+          "Binadhan7",
+          "Binadhan8"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BD30', 'BD33', 'BD39', 'BD49', 'BD51', 'BD52', 'BD56', 'BD57', 'BD70', 'BD72', 'BD75', 'BD76', 'BD79', 'BD85', 'BD87', 'BD91', 'BD93', 'BD95', 'BR22', 'BR23', 'BRRI102', 'BRRI67', 'BRRI74', 'Binadhan10', 'Binadhan11', 'Binadhan12', 'Binadhan14', 'Binadhan16', 'Binadhan17', 'Binadhan19', 'Binadhan20', 'Binadhan21', 'Binadhan23', 'Binadhan24', 'Binadhan25', 'Binadhan26', 'Binadhan7', 'Binadhan8'])"
+        },
+        "splits": {
+          "train": 76000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "BD30",
+          "BD33",
+          "BD39",
+          "BD49",
+          "BD51",
+          "BD52",
+          "BD56",
+          "BD57",
+          "BD70",
+          "BD72",
+          "BD75",
+          "BD76",
+          "BD79",
+          "BD85",
+          "BD87",
+          "BD91",
+          "BD93",
+          "BD95",
+          "BR22",
+          "BR23",
+          "BRRI102",
+          "BRRI67",
+          "BRRI74",
+          "Binadhan10",
+          "Binadhan11",
+          "Binadhan12",
+          "Binadhan14",
+          "Binadhan16",
+          "Binadhan17",
+          "Binadhan19",
+          "Binadhan20",
+          "Binadhan21",
+          "Binadhan23",
+          "Binadhan24",
+          "Binadhan25",
+          "Binadhan26",
+          "Binadhan7",
+          "Binadhan8"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BD30', 'BD33', 'BD39', 'BD49', 'BD51', 'BD52', 'BD56', 'BD57', 'BD70', 'BD72', 'BD75', 'BD76', 'BD79', 'BD85', 'BD87', 'BD91', 'BD93', 'BD95', 'BR22', 'BR23', 'BRRI102', 'BRRI67', 'BRRI74', 'Binadhan10', 'Binadhan11', 'Binadhan12', 'Binadhan14', 'Binadhan16', 'Binadhan17', 'Binadhan19', 'Binadhan20', 'Binadhan21', 'Binadhan23', 'Binadhan24', 'Binadhan25', 'Binadhan26', 'Binadhan7', 'Binadhan8'])"
+        },
+        "splits": {
+          "train": 19000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/rice_variety_classification_bangladesh"
+  },
+  "riseholme_strawberry_classification_2021": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "anomalous",
+          "occluded",
+          "ripe",
+          "unripe"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['anomalous', 'occluded', 'ripe', 'unripe'])"
+        },
+        "splits": {
+          "train": 3520
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/riseholme_strawberry_classification_2021"
+  },
+  "sapota_fruit_size_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Large",
+          "Medium",
+          "Small",
+          "Spoiled"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Large', 'Medium', 'Small', 'Spoiled'])"
+        },
+        "splits": {
+          "train": 6010
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/sapota_fruit_size_classification"
+  },
+  "seasveg_classification_bd": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Abelmoschus esculentus",
+          "Brassica oleracea",
+          "Carica Papaya",
+          "Lablab purpureus",
+          "Momordica charantia",
+          "Momordica dioica",
+          "Raphanus sativus ",
+          "Solanum Iycopersicum",
+          "Trichosanthes cucumerina",
+          "Trichosanthes dioica"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Abelmoschus esculentus', 'Brassica oleracea', 'Carica Papaya', 'Lablab purpureus', 'Momordica charantia', 'Momordica dioica', 'Raphanus sativus ', 'Solanum Iycopersicum', 'Trichosanthes cucumerina', 'Trichosanthes dioica'])"
+        },
+        "splits": {
+          "train": 3001
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Abelmoschus esculentus",
+          "Brassica oleracea",
+          "Carica Papaya",
+          "Lablab purpureus",
+          "Momordica charantia",
+          "Momordica dioica",
+          "Raphanus sativus",
+          "Solanum Iycopersicum",
+          "Trichosanthes cucumerina",
+          "Trichosanthes dioica"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Abelmoschus esculentus', 'Brassica oleracea', 'Carica Papaya', 'Lablab purpureus', 'Momordica charantia', 'Momordica dioica', 'Raphanus sativus', 'Solanum Iycopersicum', 'Trichosanthes cucumerina', 'Trichosanthes dioica'])"
+        },
+        "splits": {
+          "train": 1504
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/seasveg_classification_bd"
+  },
+  "sorghum_weed_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "BroadLeafWeed",
+          "Grass",
+          "Sorghum"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['BroadLeafWeed', 'Grass', 'Sorghum'])"
+        },
+        "splits": {
+          "train": 4312
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/sorghum_weed_classification"
+  },
+  "soybean_damage_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Broken",
+          "Immature",
+          "Intact",
+          "Skin-damaged",
+          "Spotted"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Broken', 'Immature', 'Intact', 'Skin-damaged', 'Spotted'])"
+        },
+        "splits": {
+          "train": 5513
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/soybean_damage_classification"
+  },
+  "soybean_insect_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Caterpillar",
+          "Diabrotica_speciosa",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Caterpillar', 'Diabrotica_speciosa', 'Healthy'])"
+        },
+        "splits": {
+          "train": 6410
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/soybean_insect_classification"
+  },
+  "soybean_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial leaf Blight",
+          "Dry_leaf",
+          "Healthy",
+          "Root_images",
+          "Septoria_Brown_Spot",
+          "Vein Necrosis"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial leaf Blight', 'Dry_leaf', 'Healthy', 'Root_images', 'Septoria_Brown_Spot', 'Vein Necrosis'])"
+        },
+        "splits": {
+          "train": 1176
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/soybean_leaf_disease_classification"
+  },
+  "soybean_leaf_disease_classification_brazil": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Caterpillar",
+          "Diabrotica speciosa",
+          "Healthy"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Caterpillar', 'Diabrotica speciosa', 'Healthy'])"
+        },
+        "splits": {
+          "train": 6410
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/soybean_leaf_disease_classification_brazil"
+  },
+  "soybean_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Anjasmoro",
+          "Dega",
+          "Grobogan"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anjasmoro', 'Dega', 'Grobogan'])"
+        },
+        "splits": {
+          "train": 12683
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/soybean_variety_classification"
+  },
+  "soybean_weed_uav_brazil": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "broadleaf",
+          "grass",
+          "soil",
+          "soybean"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['broadleaf', 'grass', 'soil', 'soybean'])"
+        },
+        "splits": {
+          "train": 15336
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/soybean_weed_uav_brazil"
+  },
+  "sugarcane_damage_usa": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "cracked",
+          "crushed",
+          "no_buds",
+          "no_damage",
+          "single_damaged_buds",
+          "two_buds"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['cracked', 'crushed', 'no_buds', 'no_damage', 'single_damaged_buds', 'two_buds'])"
+        },
+        "splits": {
+          "train": 153
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/sugarcane_damage_usa"
+  },
+  "sugarcane_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Banded Chlorosis",
+          "Brown Spot",
+          "BrownRust",
+          "Dried",
+          "Grassy shoot",
+          "Healthy",
+          "Pokkah Boeng",
+          "Sett Rot",
+          "Smut",
+          "Viral Disease",
+          "Yellow Leaf"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Banded Chlorosis', 'Brown Spot', 'BrownRust', 'Dried', 'Grassy shoot', 'Healthy', 'Pokkah Boeng', 'Sett Rot', 'Smut', 'Viral Disease', 'Yellow Leaf'])"
+        },
+        "splits": {
+          "train": 6748
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/sugarcane_leaf_disease_classification"
+  },
+  "sunflower_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Downy_mildew",
+          "Fresh_leaf",
+          "Gray_mold",
+          "Leaf_scars"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Downy_mildew', 'Fresh_leaf', 'Gray_mold', 'Leaf_scars'])"
+        },
+        "splits": {
+          "train": 2358
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/sunflower_disease_classification"
+  },
+  "taro_blight_stage_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Early_Blight",
+          "Healthy",
+          "Late_Blight",
+          "Mid_Blight"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Early_Blight', 'Healthy', 'Late_Blight', 'Mid_Blight'])"
+        },
+        "splits": {
+          "train": 18248
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/taro_blight_stage_classification"
+  },
+  "teaLeafBD_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Brown Blight",
+          "Gray Blight",
+          "Green mirid bug",
+          "Healthy leaf",
+          "Helopeltis",
+          "Red spider",
+          "Tea algal leaf spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Brown Blight', 'Gray Blight', 'Green mirid bug', 'Healthy leaf', 'Helopeltis', 'Red spider', 'Tea algal leaf spot'])"
+        },
+        "splits": {
+          "train": 5278
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/teaLeafBD_disease_classification"
+  },
+  "tea_leaf_disease_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "algal_spot",
+          "brown_blight",
+          "gray_blight",
+          "healthy",
+          "helopeltis",
+          "red_spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['algal_spot', 'brown_blight', 'gray_blight', 'healthy', 'helopeltis', 'red_spot'])"
+        },
+        "splits": {
+          "train": 5867
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tea_leaf_disease_classification"
+  },
+  "tea_leaf_disease_classification_bangladesh": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Healthy",
+          "Tea leaf blight",
+          "Tea red leaf spot",
+          "Tea red scab"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Healthy', 'Tea leaf blight', 'Tea red leaf spot', 'Tea red scab'])"
+        },
+        "splits": {
+          "train": 3960
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tea_leaf_disease_classification_bangladesh"
+  },
+  "three_plant_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Anthracnose",
+          "Caterpillars_Infestation",
+          "Cercospora_Leaf",
+          "Citrus",
+          "Healthy",
+          "Healthy_Leaf",
+          "Leaf_Curl",
+          "Leaf_Spot",
+          "Sooty_Mold"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Caterpillars_Infestation', 'Cercospora_Leaf', 'Citrus', 'Healthy', 'Healthy_Leaf', 'Leaf_Curl', 'Leaf_Spot', 'Sooty_Mold'])"
+        },
+        "splits": {
+          "train": 12295
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Anthracnose",
+          "Caterpillars_Infestation",
+          "Cercospora_Leaf",
+          "Citrus",
+          "Healthy_Leaf",
+          "Heathy_Leaf",
+          "Leaf_Curl",
+          "Leaf_Spot",
+          "Sooty_Mold"
+        ],
+        "features": {
+          "crop_type": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Caterpillars_Infestation', 'Cercospora_Leaf', 'Citrus', 'Healthy_Leaf', 'Heathy_Leaf', 'Leaf_Curl', 'Leaf_Spot', 'Sooty_Mold'])"
+        },
+        "splits": {
+          "train": 3941
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/three_plant_leaf_disease_classification"
+  },
+  "tomato_leaf_disease": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bacterial Spot",
+          "Early Blight",
+          "Healthy",
+          "Late Blight",
+          "Leaf Mold",
+          "Septoria Leaf Spot",
+          "Spider Mites Two-spotted Spider Mite",
+          "Target Spot",
+          "Tomato Mosaic Virus",
+          "Tomato Yellow Leaf Curl Virus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bacterial Spot', 'Early Blight', 'Healthy', 'Late Blight', 'Leaf Mold', 'Septoria Leaf Spot', 'Spider Mites Two-spotted Spider Mite', 'Target Spot', 'Tomato Mosaic Virus', 'Tomato Yellow Leaf Curl Virus'])"
+        },
+        "splits": {
+          "train": 11000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tomato_leaf_disease"
+  },
+  "tomato_maturity_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Immature",
+          "Mature"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Immature', 'Mature'])"
+        },
+        "splits": {
+          "train": 4000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Immature",
+          "Mature"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Immature', 'Mature'])"
+        },
+        "splits": {
+          "train": 1000
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/tomato_maturity_classification"
+  },
+  "tomato_quality_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Fresh",
+          "Rotten"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Fresh', 'Rotten'])"
+        },
+        "splits": {
+          "train": 6000
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Fresh",
+          "Rotten"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Fresh', 'Rotten'])"
+        },
+        "splits": {
+          "train": 1986
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/tomato_quality_classification"
+  },
+  "tropical_flower_variety_classification": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bougainvillea",
+          "Crown of thorns",
+          "Hibiscus",
+          "Jungle geranium",
+          "Madagascar periwinkle",
+          "Marigold",
+          "Rose"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bougainvillea', 'Crown of thorns', 'Hibiscus', 'Jungle geranium', 'Madagascar periwinkle', 'Marigold', 'Rose'])"
+        },
+        "splits": {
+          "train": 4319
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tropical_flower_variety_classification"
+  },
+  "turmeric_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Dry Leaf",
+          "Healthy Leaf",
+          "Leaf Blotch",
+          "Rhizome Disease Root",
+          "Rhizome Healthy Root"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dry Leaf', 'Healthy Leaf', 'Leaf Blotch', 'Rhizome Disease Root', 'Rhizome Healthy Root'])"
+        },
+        "splits": {
+          "train": 4548
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Dry Leaf",
+          "Healthy Leaf",
+          "Leaf Blotch",
+          "Rhizome Disease Root",
+          "Rhizome Healthy Root"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Dry Leaf', 'Healthy Leaf', 'Leaf Blotch', 'Rhizome Disease Root', 'Rhizome Healthy Root'])"
+        },
+        "splits": {
+          "train": 1063
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/turmeric_disease_classification"
+  },
+  "turmeric_leaf_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Aphids_Disease",
+          "Blotch",
+          "Healthy_Leaf",
+          "Leaf_Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aphids_Disease', 'Blotch', 'Healthy_Leaf', 'Leaf_Spot'])"
+        },
+        "splits": {
+          "train": 3496
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Aphids_Disease",
+          "Blotch",
+          "Healthy_Leaf",
+          "Leaf_Spot"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Aphids_Disease', 'Blotch', 'Healthy_Leaf', 'Leaf_Spot'])"
+        },
+        "splits": {
+          "train": 865
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/turmeric_leaf_disease_classification"
+  },
+  "vegetable_classification_bangladesh": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Bean",
+          "Bitter melon",
+          "Brinjal",
+          "Cucumber",
+          "Garlic",
+          "Green Chili",
+          "Ladies finger",
+          "Onion",
+          "Pointed gourd",
+          "Potato",
+          "Radish",
+          "Tomato"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Bean', 'Bitter melon', 'Brinjal', 'Cucumber', 'Garlic', 'Green Chili', 'Ladies finger', 'Onion', 'Pointed gourd', 'Potato', 'Radish', 'Tomato'])"
+        },
+        "splits": {
+          "train": 4319
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/vegetable_classification_bangladesh"
+  },
+  "vine_virus_photo_dataset": {
+    "configs": {
+      "default": {
+        "class_names": [
+          "Leafroll 3",
+          "No Virus",
+          "Other Red",
+          "Red Blotch"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Leafroll 3', 'No Virus', 'Other Red', 'Red Blotch'])"
+        },
+        "splits": {
+          "train": 3866
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/vine_virus_photo_dataset"
+  },
+  "watermelon_disease_classification": {
+    "configs": {
+      "augmented": {
+        "class_names": [
+          "Anthracnose",
+          "Downy_Mildew",
+          "Healthy",
+          "Mosaic_Virus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Downy_Mildew', 'Healthy', 'Mosaic_Virus'])"
+        },
+        "splits": {
+          "train": 5775
+        }
+      },
+      "raw": {
+        "class_names": [
+          "Anthracnose",
+          "Downy_Mildew",
+          "Healthy",
+          "Mosaic_Virus"
+        ],
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "label": "ClassLabel(names=['Anthracnose', 'Downy_Mildew', 'Healthy', 'Mosaic_Virus'])"
+        },
+        "splits": {
+          "train": 1155
+        }
+      }
+    },
+    "dataset_type": "classification",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/watermelon_disease_classification"
+  }
+}
