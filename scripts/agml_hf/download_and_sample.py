@@ -52,6 +52,7 @@ import json
 import re
 import sys
 import time
+import traceback
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,8 +137,10 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     import matplotlib.pyplot as plt
 
     chart_dir.mkdir(parents=True, exist_ok=True)
+    ds_by_name = {d.agml_name: d for d in datasets}
     task_type_by_name = {d.agml_name: d.task_type for d in datasets}
     ds_entries = manifest["datasets"]
+    failed = manifest.get("failed", {})
 
     if not ds_entries:
         print("  No datasets in manifest — skipping charts.")
@@ -155,7 +158,10 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
                 str(task_counts[t]), ha="center", va="bottom", fontsize=9)
     ax.set_ylabel("Number of datasets")
-    ax.set_title(f"Datasets by task type (n={len(ds_entries)} datasets)")
+    title = f"Datasets by task type (n={len(ds_entries)} datasets)"
+    if failed:
+        title += f"  —  {len(failed)} datasets FAILED, not shown (see summary.txt)"
+    ax.set_title(title)
     ax.yaxis.grid(True, alpha=0.3)
     plt.tight_layout()
     path = chart_dir / "datasets_per_task_type.png"
@@ -226,16 +232,66 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     plt.close(fig)
     print(f"  Saved: {path}")
 
+    # ── 5. Task-type split: datasets vs classes (after class_overrides) ─────
+    # Both pies count ONLY successfully-downloaded data (ds_entries, i.e.
+    # manifest["datasets"]) — failed/timed-out datasets contribute to neither,
+    # by construction, same as every other chart in this function.
+    #
+    # These two pies are deliberately different views, not duplicates:
+    #   left  = each SUCCESSFUL DATASET counted once under its own task_type.
+    #   right = each individual CLASS actually selected, counted under its
+    #           EFFECTIVE task_type via DatasetConfig.effective_task_type() —
+    #           i.e. class_overrides applied, so a pest/damage class nested
+    #           inside an otherwise-"disease" dataset counts under
+    #           pest_damage on the right, even though its dataset counts
+    #           under disease on the left. See effective_task_type() in
+    #           src/common/dataset_config.py for the override-resolution logic.
+    class_task_counts = Counter()
+    for name, entry in ds_entries.items():
+        cfg = ds_by_name.get(name)
+        for cls in entry["classes"]:
+            eff = cfg.effective_task_type(cls) if cfg else task_type_by_name.get(name, "unknown")
+            class_task_counts[eff] += 1
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    for ax, counts, title in (
+        (axes[0], task_counts, f"Datasets by task type (n={len(ds_entries)})"),
+        (axes[1], class_task_counts, f"Classes by EFFECTIVE task type, overrides applied (n={sum(class_task_counts.values())})"),
+    ):
+        types = sorted(counts, key=lambda t: -counts[t])
+        vals = [counts[t] for t in types]
+        cols = [TASK_COLOR.get(t, "#888888") for t in types]
+        ax.pie(vals, labels=types, colors=cols, autopct=lambda p: f"{p:.0f}%\n({round(p * sum(vals) / 100)})",
+               startangle=90, wedgeprops={"edgecolor": "black", "linewidth": 0.5})
+        ax.set_title(title, fontsize=10)
+    fig.suptitle("Only successfully-downloaded datasets/classes counted"
+                 + (f" — {len(failed)} failed dataset(s) excluded" if failed else ""), fontsize=9, y=0.02)
+    plt.tight_layout()
+    path = chart_dir / "task_type_split_pie.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
     # ── Summary ──────────────────────────────────────────────────────────
     total_classes = sum(n_classes.values())
     total_images = sum(n_images.values())
     summary = (
-        f"Datasets: {len(ds_entries)}\n"
+        f"Datasets: {len(ds_entries)} succeeded, {len(failed)} failed\n"
         f"Classes:  {total_classes}\n"
         f"Images:   {total_images:,}\n"
         f"n_per_class cap: {cap}\n"
-        f"By task type: {dict(task_counts)}\n"
+        f"By task type (datasets): {dict(task_counts)}\n"
+        f"By task type (classes, overrides applied): {dict(class_task_counts)}\n"
     )
+    if failed:
+        summary += f"\nFailed datasets ({len(failed)}) — re-run with --skip_existing to retry:\n"
+        for name in sorted(failed):
+            err = failed[name]
+            msg = err.get("error", err) if isinstance(err, dict) else err  # dict since the
+                                                                            # traceback-capture
+                                                                            # change; str for
+                                                                            # any older manifest
+            summary += f"  - {name}: {msg}\n"
     (chart_dir / "summary.txt").write_text(summary)
     print(f"  Saved: {chart_dir / 'summary.txt'}")
     print(summary)
@@ -345,8 +401,13 @@ def main() -> None:
             print(f"ok ({len(selected)} classes, {n_total} images)")
             n_ok += 1
         except Exception as e:
+            tb = traceback.format_exc()
             print(f"ERROR: {e}")
-            manifest["failed"][d.agml_name] = str(e)
+            print(tb)  # full traceback in the job log, not just str(e) — a bug like
+                       # "bad operand type for abs(): 'str'" is unlocatable from the
+                       # message alone; str/dict-shape kept backward compatible below,
+                       # existing readers only ever do sorted(manifest["failed"]) (keys)
+            manifest["failed"][d.agml_name] = {"error": str(e), "traceback": tb}
             n_err += 1
 
         if i % 5 == 0 or i == len(datasets):
