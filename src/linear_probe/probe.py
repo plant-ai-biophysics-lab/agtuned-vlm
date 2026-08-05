@@ -40,13 +40,37 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
-from transformers import AutoImageProcessor, AutoModel, AutoModelForImageTextToText, AutoProcessor
+from transformers import (
+    AutoImageProcessor,
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoProcessor,
+)
 
 from src.common.dataset_config import (
     active_datasets, DatasetConfig, subsample_class_balanced,
     load_manifest, load_hf_samples, missing_from_manifest,
 )
 from src.common.io import save_json, update_pipeline_results
+
+# This module (and check_vision_towers.py, which imports load_gemma4 from
+# here) loads several backbones one after another in the same process —
+# same repeated-reload pattern that hits a real bug on farm compute nodes
+# without reliable outbound internet: transformers/huggingface_hub still
+# issues a HEAD request on every from_pretrained call to check cache
+# freshness, even when every needed file is already local. That request
+# fails ("Network is unreachable"), and the retry path leaves the underlying
+# httpx client closed, crashing the NEXT load attempt with "Cannot send a
+# request, as the client has been closed" (see run_verifier_cot.py for the
+# same fix applied to the same bug). HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE
+# skip that check and trust the local cache — safe for any model that has
+# already been loaded successfully once (by this script or a prior run);
+# a genuinely never-downloaded model instead gets a clear "not in cache"
+# error rather than this confusing crash. setdefault() so an operator's own
+# explicit choice isn't silently overridden.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # Path to the layer selections config written by app/layer_explorer.py — lives
 # alongside probe_config.yaml in this folder so all linear-probe-specific
@@ -338,25 +362,34 @@ def load_gemma4(model_id: str, device: str, quantize: str | None = None, trust_r
     else:
         load_kwargs["dtype"] = torch.bfloat16
 
-    try:
-        model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
-    except ValueError as e:
-        # Some custom-code VLM repos (observed with Kimi-VL, Nemotron-Omni)
-        # register their model class under the generic AutoModel mapping
-        # only, not the task-specific AutoModelForImageTextToText one — the
-        # checkpoint and its custom config load fine, this auto-class just
-        # doesn't recognize that config type. Retry with plain AutoModel
-        # before giving up; re-raise the ORIGINAL error if that also fails,
-        # since it's more informative than whatever AutoModel produces for a
-        # genuinely incompatible checkpoint.
-        if "Unrecognized configuration class" not in str(e):
-            raise
-        print(f"  [note] AutoModelForImageTextToText doesn't recognize this config; "
-              f"retrying with generic AutoModel...")
+    # Some custom-code VLM repos (observed with Kimi-VL, Nemotron-Omni) don't
+    # register their model class under AutoModelForImageTextToText at all —
+    # the checkpoint and its custom config load fine, this auto-class just
+    # doesn't recognize that config type. Different repos land under
+    # different fallback auto-classes (generic AutoModel, or — same pattern
+    # DeepSeek-VL2 uses — AutoModelForCausalLM), so try each in turn and
+    # re-raise the FIRST (most informative) "Unrecognized configuration
+    # class" error if every tier fails, rather than whatever the last
+    # attempted auto-class produced for a genuinely incompatible checkpoint.
+    _AUTO_CLASSES = (AutoModelForImageTextToText, AutoModel, AutoModelForCausalLM)
+    model = None
+    first_error: ValueError | None = None
+    for _auto_cls in _AUTO_CLASSES:
         try:
-            model = AutoModel.from_pretrained(model_id, **load_kwargs)
-        except Exception:
-            raise e from None
+            model = _auto_cls.from_pretrained(model_id, **load_kwargs)
+            if _auto_cls is not _AUTO_CLASSES[0]:
+                print(f"  [note] loaded via {_auto_cls.__name__} "
+                      f"(AutoModelForImageTextToText didn't recognize this config)")
+            break
+        except ValueError as e:
+            if "Unrecognized configuration class" not in str(e):
+                raise
+            if first_error is None:
+                first_error = e
+            continue
+    if model is None:
+        assert first_error is not None
+        raise first_error
     model.eval()
     mm_root = resolve_mm_root(model)
     vision_device = next(mm_root.vision_tower.parameters()).device
