@@ -10,9 +10,9 @@ visual_classification_weed: "What plant or weed is exhibited in this image?"
 desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: {question}\n\nAnswer in one to two sentences. Clearly state the class name in your response."
 
 # Assessment wrappers — applied to all classification and description questions
-classification_suffix: " Answer in one to two sentences. Clearly state the class name in your response."
+classification_suffix: "Answer in one to two sentences. Clearly state your answer (general or scientific name) in your response."
 assessment_descriptive: "Answer the following question in exactly one to two concise sentences describing only the visual appearance. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the sentences.\n\nQuestion: {question}\n\nAnswer:"
-assessment_classification: "Answer the following question in one to two sentences. Clearly state the class name in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
+assessment_classification: "Answer the following question in one to two sentences. Clearly state your answer (general or scientific name) in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
 
 # System prompt applied to all models during assessment
 assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."
