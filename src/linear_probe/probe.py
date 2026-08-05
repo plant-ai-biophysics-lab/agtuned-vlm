@@ -23,7 +23,6 @@ import argparse
 import gc
 import os
 from collections import Counter, defaultdict
-from typing import Any, Dict, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -43,7 +42,10 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoImageProcessor, AutoModel, AutoModelForImageTextToText, AutoProcessor
 
-from src.common.dataset_config import active_datasets, DatasetConfig, prefetch_agml_datasets, subsample_class_balanced
+from src.common.dataset_config import (
+    active_datasets, DatasetConfig, subsample_class_balanced,
+    load_manifest, load_hf_samples, missing_from_manifest,
+)
 from src.common.io import save_json, update_pipeline_results
 
 # Path to the layer selections config written by app/layer_explorer.py
@@ -111,26 +113,22 @@ def _load_layer_selections() -> dict:
 
 
 # ── Dataset loading ────────────────────────────────────────────────────────────
-
-def load_agml_samples(dataset_name: str) -> list[dict]:
-    import agml
-    loader = agml.data.AgMLDataLoader(dataset_name)
-    contents = cast(Dict[str, Any], loader.export_contents())
-    class_names = cast(list[str], loader.classes)
-
-    samples = []
-    for path, label_idx in contents.items():
-        label_text = class_names[int(label_idx)]
-        cleaned_label = label_text.replace("___", " ").replace("_", " ")
-        samples.append({"path": str(path), "label": cleaned_label})
-    return samples
+# load_hf_samples / load_manifest / missing_from_manifest now live in
+# src/common/dataset_config.py — shared across every stage that needs to
+# materialize images from a scripts/agml_hf/download_and_sample.py manifest,
+# not reimplemented per-script. The old agml-pip-package-based loader that
+# used to live here is gone; it had no knowledge of datasets.yaml's
+# HF-sourced crop/task_type/class_overrides or dataset/selected_images.json
+# at all, so it was silently loading different (or no longer available) data
+# than the rest of this pipeline uses.
 
 
 def load_dg_samples(images_dir: Path, dg_descriptions_jsonl: Path) -> list[dict]:
     """Load Digital Green samples from local image directory + JSONL metadata.
 
     Each JSONL description record maps image_names → class_label (diagnosis).
-    Returns same format as load_agml_samples: [{"path": str, "label": str}, ...]
+    Returns the same [{"path": str, "label": str}, ...] shape as
+    src.common.dataset_config.load_hf_samples().
     """
     import json
     filename_to_label: dict[str, str] = {}
@@ -1215,8 +1213,16 @@ def main(args):
     n_datasets = len(datasets)
     print(f"\nActive datasets: {n_datasets}")
 
+    manifest = None
     if not use_dg:
-        prefetch_agml_datasets(datasets)
+        manifest_path = Path(getattr(args, "manifest", None) or "dataset/selected_images.json")
+        images_root = Path(getattr(args, "images_root", None) or "dataset/images")
+        manifest = load_manifest(manifest_path)
+        gaps = missing_from_manifest(datasets, manifest)
+        if gaps:
+            print(f"  [warn] {len(gaps)}/{n_datasets} active dataset(s) not in {manifest_path} "
+                  f"(never downloaded, or download failed — see that manifest's summary.txt): "
+                  f"{gaps}")
 
     # Phase 1: load each backbone once, extract embeddings for all datasets, unload
     # all_embeddings[backbone_key][agml_name] = (X, labels, train_idx, test_idx, le)
@@ -1229,7 +1235,7 @@ def main(args):
             if use_dg:
                 samples = load_dg_samples(images_dir, Path(dg_jsonl))
             else:
-                samples = load_agml_samples(agml_name)
+                samples = load_hf_samples(agml_name, manifest, images_root)
         except Exception as e:
             print(f"  [error] {e}")
             continue
@@ -1971,8 +1977,22 @@ def main(args):
 
 
 if __name__ == "__main__":
+    # Pre-parse just --probe_config so its values can seed argparse's own
+    # defaults below, before the real parse happens — CLI flags a user
+    # actually types still win, since parser.set_defaults() only changes
+    # what "not passed" resolves to, not what an explicit flag resolves to.
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--probe_config", default="src/linear_probe/probe_config.yaml")
+    _pre_args, _ = _pre.parse_known_args()
+
     parser = argparse.ArgumentParser(
         description="Linear probe across all active AgML datasets."
+    )
+    parser.add_argument(
+        "--probe_config", default=_pre_args.probe_config,
+        help="YAML file of defaults (hyperparameters, backbones, paths) — edit it "
+             "directly for routine changes instead of passing flags every time. "
+             "Any flag also passed on the command line overrides this file.",
     )
     parser.add_argument(
         "--dataset_source", default="agml", choices=["agml", "digital_green"],
@@ -1995,6 +2015,16 @@ if __name__ == "__main__":
         help="Path to datasets.yaml",
     )
     parser.add_argument(
+        "--manifest", default="dataset/selected_images.json",
+        help="scripts/agml_hf/download_and_sample.py manifest to materialize images "
+             "from (used when --dataset_source agml, i.e. not digital_green).",
+    )
+    parser.add_argument(
+        "--images_root", default="dataset/images",
+        help="Local cache directory for images materialized from --manifest — "
+             "images/<dataset>/<label>/<row_idx>.jpg, reused across runs.",
+    )
+    parser.add_argument(
         "--models", type=str, nargs="+", default=None,
         help="One or more VLM models (HF ID or local path). Each is loaded, evaluated, then unloaded.",
     )
@@ -2015,8 +2045,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n_samples", type=int, default=None,
-        help="Max images per class for training in per-dataset split (default: 10). "
-             "Test uses all remaining images. Ignored by combined probe (always 80/20 stratified).",
+        help="Images per class used for training, in BOTH the per-dataset split and the "
+             "combined (all datasets merged) split — default 10 either way. Test uses all "
+             "remaining images in each class.",
     )
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
@@ -2041,16 +2072,21 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--all_experiments", action="store_true",
-        help="Run all 4 probe variants (LR per-dataset, LR combined, FC per-dataset, FC combined). "
-             "Default runs LR combined only.",
+        help="Also run FC probe per-dataset (one probe per dataset), plus its plots. "
+             "Default (no flags at all) runs FC combined only. Combine with --per_dataset "
+             "and --lr_combined to get all 4 variants (LR per-dataset, LR combined, "
+             "FC per-dataset, FC combined) — these three flags are independent, not "
+             "one 'run everything' switch.",
     )
     parser.add_argument(
         "--per_dataset", action="store_true",
-        help="Also run LR probe per-dataset (one probe per dataset). Default: combined FC only.",
+        help="Also run LR probe per-dataset (one probe per dataset). Default (no flags "
+             "at all): FC combined only.",
     )
     parser.add_argument(
         "--lr_combined", action="store_true",
-        help="Also run LR probe on combined embeddings (slower, CPU-bound). Default: FC combined only.",
+        help="Also run LR probe on combined embeddings (slower, CPU-bound). Default (no "
+             "flags at all): FC combined only.",
     )
     parser.add_argument(
         "--replot", action="store_true",
@@ -2070,6 +2106,17 @@ if __name__ == "__main__":
         help="Regenerate plots from a previous run without re-extracting embeddings or retraining. "
              "Requires linear_probe_results.json, fc_comb_preds.json, and fc_comb_embeds/ in --output_dir.",
     )
+
+    if _pre_args.probe_config and Path(_pre_args.probe_config).exists():
+        import yaml as _yaml
+        with open(_pre_args.probe_config) as f:
+            _cfg = _yaml.safe_load(f) or {}
+        _valid_dests = {a.dest for a in parser._actions}
+        _unknown = set(_cfg) - _valid_dests
+        if _unknown:
+            print(f"[warn] {_pre_args.probe_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
+        parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
+
     args = parser.parse_args()
 
     if args.yolo_model and args.yolo_model.lower() == "none":

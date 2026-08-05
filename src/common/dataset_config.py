@@ -150,3 +150,111 @@ def prefetch_hf_datasets(datasets: list[DatasetConfig], hf_catalog_path: Path) -
         except Exception as e:
             print(f"ERROR: {e}")
     print()
+
+
+# ── Shared HF-manifest-based sample loading ─────────────────────────────────
+#
+# The single loader every downstream stage (linear_probe, cot_vision,
+# vision_assessment, ...) should use to actually materialize images once
+# scripts/agml_hf/download_and_sample.py has produced a manifest — one
+# implementation instead of each stage separately reimplementing "look up
+# this dataset's HF repo/config, open it, index into it by row, cache to
+# disk." Returns the same [{"path": str, "label": str}, ...] shape the old
+# agml-pip-package-based loaders used, so it's a drop-in replacement at
+# every call site that previously called an agml-based sample loader.
+
+def load_manifest(manifest_path: Path) -> dict:
+    """Load a scripts/agml_hf/download_and_sample.py manifest
+    (dataset/selected_images.json) once, to be passed into load_hf_samples()
+    per-dataset rather than re-read from disk every call."""
+    import json
+    return json.loads(Path(manifest_path).read_text())
+
+
+def missing_from_manifest(datasets: list[DatasetConfig], manifest: dict) -> list[str]:
+    """Active dataset names with no successful entry in the manifest — same
+    diff-based accounting scripts/agml_hf/download_and_sample.py's
+    make_charts() uses (catches anything not downloaded yet, regardless of
+    whether it failed with a caught exception or was silently killed by an
+    external timeout — see that function's comment for why the diff, not
+    manifest["failed"] alone, is the reliable source of truth)."""
+    done = set(manifest.get("datasets", {}).keys())
+    return [d.agml_name for d in datasets if d.agml_name not in done]
+
+
+def find_image_column(features) -> str:
+    """Image-feature analog of scripts/agml_hf/download_and_sample.py's
+    find_label_column — needed here because load_hf_samples() opens the raw
+    HF dataset to materialize pixels for a manifest-selected row index."""
+    from datasets import Image as HFImage
+    for key, feat in features.items():
+        if isinstance(feat, HFImage):
+            return key
+    for key in ("image", "img", "picture", "photo"):
+        if key in features:
+            return key
+    raise KeyError(f"No recognizable image column in features: {list(features)}")
+
+
+_UNSAFE_LABEL_CHARS = None  # lazily-compiled regex, see _safe_label_dir
+
+
+def _safe_label_dir(label: str) -> str:
+    """Sanitize a class label for use as a filesystem directory name — labels
+    can contain spaces, slashes, or other characters that are valid class
+    names but not valid path components."""
+    global _UNSAFE_LABEL_CHARS
+    if _UNSAFE_LABEL_CHARS is None:
+        import re
+        _UNSAFE_LABEL_CHARS = re.compile(r"[^a-zA-Z0-9_.-]+")
+    return _UNSAFE_LABEL_CHARS.sub("_", label).strip("_") or "unlabeled"
+
+
+def load_hf_samples(agml_name: str, manifest: dict, images_root: Path) -> list[dict]:
+    """Materialize the images a download_and_sample.py manifest selected for
+    one dataset into local JPEG files, returning [{"path": str, "label": str}, ...]
+    — the exact shape every embedding/inference consumer already expects.
+
+    Caches to images_root/<agml_name>/<label>/<row_idx>.jpg: a file already
+    on disk is reused, never re-fetched. The underlying HF dataset (a full
+    `datasets.load_dataset` call) is only opened if at least one image for
+    this dataset is actually missing — repeat runs after the first are pure
+    local-disk reads, no network/HF Hub involvement at all.
+
+    Raises KeyError if `agml_name` has no entry in manifest["datasets"] —
+    i.e. it was never downloaded, or download failed/was skipped. Callers
+    iterating multiple datasets should catch this per-dataset (same pattern
+    the old agml-based loaders' call sites already used for a missing/broken
+    dataset) rather than let one bad dataset abort an entire run.
+    """
+    entry = manifest.get("datasets", {}).get(agml_name)
+    if entry is None:
+        raise KeyError(
+            f"{agml_name!r} not found in manifest's \"datasets\" — it was never "
+            f"successfully downloaded (see summary.txt, or the manifest's "
+            f"\"failed\" key, for why)."
+        )
+
+    repo_id = entry["hf_repo_id"]
+    config = entry["hf_config"]
+    classes: dict[str, list[int]] = entry["classes"]
+
+    out_dir = Path(images_root) / agml_name
+    samples: list[dict] = []
+    ds = None
+    image_col = None
+
+    for label, indices in classes.items():
+        label_dir = out_dir / _safe_label_dir(label)
+        for idx in indices:
+            path = label_dir / f"{idx}.jpg"
+            if not path.exists():
+                if ds is None:
+                    from datasets import load_dataset
+                    ds = load_dataset(repo_id, config, split="train")
+                    image_col = find_image_column(ds.features)
+                label_dir.mkdir(parents=True, exist_ok=True)
+                ds[idx][image_col].convert("RGB").save(path, format="JPEG")
+            samples.append({"path": str(path), "label": label})
+
+    return samples

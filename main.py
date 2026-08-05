@@ -8,6 +8,7 @@ STAGES = {
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
     "data-gen":           "src.legacy.data_generation.generate",
+    "check-vision-towers": "src.linear_probe.check_vision_towers",
     "probe":         "src.linear_probe.probe",
     "cluster":       "src.clustering_eval.eval",
     "cluster-viz":   "src.clustering_eval.sample_viz",
@@ -34,6 +35,8 @@ Stages:
     migrate-datasets   Stage 0a — regenerate src/config/datasets.yaml from the HF catalog
     download-datasets  Stage 0a — download + class-balanced sample datasets, write selection manifest
     data-gen           Stage 0  — regenerate agml_descriptions.jsonl / agml_classification.jsonl
+    check-vision-towers      — pre-check: do candidate models expose a resolvable vision
+                               tower before running the full probe pipeline on them
     probe           Stage 1 — linear probe: frozen-embedding separability across backbones
     cluster                 — unsupervised clustering eval of frozen embeddings (NMI, ARI, Silhouette)
     cluster-viz             — visualise easiest/hardest datasets per task with sample class images
