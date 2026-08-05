@@ -338,7 +338,25 @@ def load_gemma4(model_id: str, device: str, quantize: str | None = None, trust_r
     else:
         load_kwargs["dtype"] = torch.bfloat16
 
-    model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
+    try:
+        model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
+    except ValueError as e:
+        # Some custom-code VLM repos (observed with Kimi-VL, Nemotron-Omni)
+        # register their model class under the generic AutoModel mapping
+        # only, not the task-specific AutoModelForImageTextToText one — the
+        # checkpoint and its custom config load fine, this auto-class just
+        # doesn't recognize that config type. Retry with plain AutoModel
+        # before giving up; re-raise the ORIGINAL error if that also fails,
+        # since it's more informative than whatever AutoModel produces for a
+        # genuinely incompatible checkpoint.
+        if "Unrecognized configuration class" not in str(e):
+            raise
+        print(f"  [note] AutoModelForImageTextToText doesn't recognize this config; "
+              f"retrying with generic AutoModel...")
+        try:
+            model = AutoModel.from_pretrained(model_id, **load_kwargs)
+        except Exception:
+            raise e from None
     model.eval()
     mm_root = resolve_mm_root(model)
     vision_device = next(mm_root.vision_tower.parameters()).device
