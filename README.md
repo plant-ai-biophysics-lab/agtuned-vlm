@@ -8,9 +8,7 @@ Evaluation framework for vision-language models on agricultural image understand
 uv sync
 ```
 
-## Pipeline
-
-Run stages in this order. Each links to its own doc under `docs/` — this file stays a table of contents, not a growing wall of instructions.
+## Experiments Pipeline
 
 | Stage | Doc | What it does |
 |---|---|---|
