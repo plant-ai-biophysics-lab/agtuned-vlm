@@ -67,6 +67,7 @@ from src.common.dataset_config import (
     load_manifest, load_hf_samples, missing_from_manifest,
 )
 from src.common.io import save_json, update_pipeline_results
+from src.common.progress import ProgressBar
 
 # This module (and check_vision_towers.py, which imports load_gemma4 from
 # here) loads several backbones one after another in the same process —
@@ -228,12 +229,10 @@ def extract_vlm_embeddings(
     hook_module is resolved by the caller — either from layer_selections.yaml via
     model.get_submodule(path), or from the heuristic resolve_mm_root fallback.
     """
-    from tqdm import tqdm
-
     model_device = next(model.parameters()).device
     embeddings, labels = [], []
 
-    for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc=f"  {desc}"):
         image = PILImage.open(sample["path"]).convert("RGB")
 
         messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
@@ -306,12 +305,10 @@ def extract_vlm_embeddings_postproj(
     hook_module is resolved by the caller — either from layer_selections.yaml via
     model.get_submodule(path), or from the heuristic resolve_projector fallback.
     """
-    from tqdm import tqdm
-
     model_device = next(model.parameters()).device
     embeddings, labels = [], []
 
-    for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc=f"  {desc}"):
         image = PILImage.open(sample["path"]).convert("RGB")
 
         messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
@@ -414,7 +411,6 @@ def load_gemma4(model_id: str, device: str, quantize: str | None = None, trust_r
 # ── YOLO backbone ──────────────────────────────────────────────────────────────
 
 def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.ndarray:
-    from tqdm import tqdm
     from ultralytics import YOLO
     import torchvision.transforms as T
 
@@ -439,7 +435,7 @@ def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.nd
 
     embeddings = []
     with torch.no_grad():
-        for sample in tqdm(samples, desc="  YOLO embeddings", unit="img", leave=False):
+        for sample in ProgressBar(samples, desc="  YOLO embeddings"):
             captured.clear()
             image = PILImage.open(sample["path"]).convert("RGB")
             x = transform(image).unsqueeze(0).to(device)
@@ -465,9 +461,8 @@ def load_dino(model_id: str, device: str):
 
 @torch.no_grad()
 def extract_dino_embeddings(samples, processor, model, device) -> tuple[np.ndarray, list[str]]:
-    from tqdm import tqdm
     embeddings, labels = [], []
-    for sample in tqdm(samples, desc="  DINOv3 embeddings", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc="  DINOv3 embeddings"):
         image = PILImage.open(sample["path"]).convert("RGB")
         inputs = processor(images=image, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -488,9 +483,8 @@ def load_bioclip(model_id: str, device: str):
 
 @torch.no_grad()
 def extract_bioclip_embeddings(samples, model, preprocess, device) -> tuple[np.ndarray, list[str]]:
-    from tqdm import tqdm
     embeddings, labels = [], []
-    for sample in tqdm(samples, desc="  BioCLIP embeddings", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc="  BioCLIP embeddings"):
         image = PILImage.open(sample["path"]).convert("RGB")
         tensor = preprocess(image).unsqueeze(0).to(device)
         features = model.encode_image(tensor)
@@ -1374,7 +1368,6 @@ def main(args):
 
     # DINOv3 pass
     if args.dino_model:
-        from tqdm import tqdm
         backbone_idx += 1
         print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] DINOv3: {args.dino_model}\n{'='*60}")
         dino_key = args.dino_model.split("/")[-1].replace(".pt", "")
@@ -1391,7 +1384,7 @@ def main(args):
                 all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
         else:
             dino_processor, dino_model = load_dino(args.dino_model, device)
-            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="DINOv3 datasets"):
                 cached = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
@@ -1406,7 +1399,6 @@ def main(args):
 
     # YOLO pass
     if args.yolo_model:
-        from tqdm import tqdm
         backbone_idx += 1
         print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] YOLO: {args.yolo_model}\n{'='*60}")
         yolo_key = args.yolo_model.replace(".pt", "")
@@ -1422,7 +1414,7 @@ def main(args):
                 X, cached_labels = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb")
                 all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
         else:
-            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="YOLO datasets"):
                 cached = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
@@ -1436,7 +1428,6 @@ def main(args):
 
     # BioCLIP pass
     if args.bioclip_model:
-        from tqdm import tqdm
         backbone_idx += 1
         print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] BioCLIP: {args.bioclip_model}\n{'='*60}")
         bioclip_key = args.bioclip_model.split("/")[-1]
@@ -1453,7 +1444,7 @@ def main(args):
                 all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
         else:
             bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
-            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="BioCLIP datasets", unit="ds"):
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="BioCLIP datasets"):
                 cached = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
@@ -1472,7 +1463,6 @@ def main(args):
     feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
     postproj_only_outer = getattr(args, "postproj_only", False)
     for model_id in (args.models or []):
-        from tqdm import tqdm
         backbone_idx += 1
         backbone_key = model_id.split("/")[-1]
         postproj_key = f"{backbone_key}_postproj"
@@ -1563,7 +1553,7 @@ def main(args):
                 print(f"  [warn] No post-projector found for {backbone_key}. Available: {avail}")
 
         postproj_only = getattr(args, "postproj_only", False)
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc=f"{backbone_key} datasets"):
             if not postproj_only:
                 cached = load_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", pre_layer_path) if use_embedding_cache else None
                 if cached is not None:
