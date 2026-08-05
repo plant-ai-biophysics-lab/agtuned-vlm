@@ -34,7 +34,7 @@ images_root: dataset/images
 # ── Backbones ────────────────────────────────────────────────────────────────
 # models: null means no VLM backbone — set explicitly to probe one, e.g.:
 # models: [google/gemma-4-26B-A4B-it]
-models: [Qwen/Qwen3.5-9B, Qwen/Qwen3.5-27B, google/gemma-4-12B-it, google/gemma-4-26B-A4B-it]
+models: [Qwen/Qwen3.5-9B, Qwen/Qwen3.5-27B, google/gemma-4-E4B-it, google/gemma-4-26B-A4B-it]
 dino_model: facebook/dinov3-vitb16-pretrain-lvd1689m  # pass "none" (string) to skip
 bioclip_model: null    # e.g. imageomics/bioclip — null skips it
 yolo_model: yolo11x-cls.pt  # pass "none" (string) to skip
