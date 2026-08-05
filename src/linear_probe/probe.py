@@ -40,6 +40,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder
+import transformers
 from transformers import (
     AutoImageProcessor,
     AutoModel,
@@ -47,6 +48,19 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoProcessor,
 )
+
+# Kimi-VL's custom modeling code (pulled in via trust_remote_code) still does
+# `from transformers.utils.import_utils import is_torch_fx_available`, a name
+# newer transformers removed — torch.fx has been unconditionally importable
+# for a while now, so the availability check itself became dead weight and
+# was deleted upstream. Shim it back as a trivial True (matches reality: the
+# import always succeeds) rather than pinning an older transformers, which
+# would risk breaking the other, newer-architecture backbones this script
+# also loads (Qwen3.5, Gemma4). No-op for any repo that doesn't need it.
+if not hasattr(transformers.utils.import_utils, "is_torch_fx_available"):
+    import torch.fx  # noqa: F401  (import succeeding IS the check)
+    transformers.utils.import_utils.is_torch_fx_available = lambda: True
+    transformers.utils.is_torch_fx_available = lambda: True
 
 from src.common.dataset_config import (
     active_datasets, DatasetConfig, subsample_class_balanced,
