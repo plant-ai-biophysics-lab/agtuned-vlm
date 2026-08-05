@@ -169,6 +169,40 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     plt.close(fig)
     print(f"  Saved: {path}")
 
+    # ── 1b. Classes per EFFECTIVE task type (class_overrides applied) ───────
+    # Same idea as chart 1, but counting individual classes rather than whole
+    # datasets — a pest/damage class nested inside an otherwise-"disease"
+    # dataset counts under pest_damage here, via
+    # DatasetConfig.effective_task_type() (src/common/dataset_config.py).
+    # Only successfully-downloaded classes counted, same as every other chart.
+    class_task_counts = Counter()
+    for name, entry in ds_entries.items():
+        cfg = ds_by_name.get(name)
+        for cls in entry["classes"]:
+            eff = cfg.effective_task_type(cls) if cfg else task_type_by_name.get(name, "unknown")
+            class_task_counts[eff] += 1
+
+    class_task_types = sorted(class_task_counts, key=lambda t: -class_task_counts[t])
+    class_colors = [TASK_COLOR.get(t, "#888888") for t in class_task_types]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(class_task_types) * 1.5), 5))
+    bars = ax.bar(class_task_types, [class_task_counts[t] for t in class_task_types],
+                   color=class_colors, alpha=0.85, edgecolor="black", linewidth=0.5)
+    for bar, t in zip(bars, class_task_types):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                str(class_task_counts[t]), ha="center", va="bottom", fontsize=9)
+    ax.set_ylabel("Number of classes")
+    title = f"Classes by effective task type, overrides applied (n={sum(class_task_counts.values())} classes)"
+    if failed:
+        title += f"  —  {len(failed)} datasets FAILED, not shown"
+    ax.set_title(title)
+    ax.yaxis.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = chart_dir / "classes_per_task_type.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
     # ── 2. Classes per dataset (sorted, long-tail style) ────────────────────
     n_classes = {name: len(entry["classes"]) for name, entry in ds_entries.items()}
     names = sorted(n_classes, key=lambda n: -n_classes[n])
@@ -233,26 +267,9 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     print(f"  Saved: {path}")
 
     # ── 5. Task-type split: datasets vs classes (after class_overrides) ─────
-    # Both pies count ONLY successfully-downloaded data (ds_entries, i.e.
-    # manifest["datasets"]) — failed/timed-out datasets contribute to neither,
-    # by construction, same as every other chart in this function.
-    #
-    # These two pies are deliberately different views, not duplicates:
-    #   left  = each SUCCESSFUL DATASET counted once under its own task_type.
-    #   right = each individual CLASS actually selected, counted under its
-    #           EFFECTIVE task_type via DatasetConfig.effective_task_type() —
-    #           i.e. class_overrides applied, so a pest/damage class nested
-    #           inside an otherwise-"disease" dataset counts under
-    #           pest_damage on the right, even though its dataset counts
-    #           under disease on the left. See effective_task_type() in
-    #           src/common/dataset_config.py for the override-resolution logic.
-    class_task_counts = Counter()
-    for name, entry in ds_entries.items():
-        cfg = ds_by_name.get(name)
-        for cls in entry["classes"]:
-            eff = cfg.effective_task_type(cls) if cfg else task_type_by_name.get(name, "unknown")
-            class_task_counts[eff] += 1
-
+    # Same underlying counts as charts 1/1b, just as a side-by-side pie
+    # comparison instead of two separate bar charts. class_task_counts
+    # computed once, up in chart 1b, and reused here.
     fig, axes = plt.subplots(1, 2, figsize=(13, 6))
     for ax, counts, title in (
         (axes[0], task_counts, f"Datasets by task type (n={len(ds_entries)})"),
