@@ -3,17 +3,27 @@
 # outputs/migration/datasets_migration_review.md for the review log of this run.
 #
 # task_type options:
-#   disease            - leaf/plant disease classification
-#   pest_damage        - insect/pest classification or physical/abiotic damage
-#   weed_identification - weed or mixed crop/weed species classification
-#   crop_identification - crop ripeness or growth-stage classification
+#   disease                 - leaf/plant disease classification
+#   pest_damage             - insect/pest classification or physical/abiotic damage
+#   species_identification  - weed/plant/variety/cultivar species-or-variety ID
+#                             (formerly split across weed_identification and the
+#                             variety-ID portion of crop_identification)
+#   quality_identification  - ripeness/grade/quality/maturity/defect assessment
+#                             of an already-known crop (formerly the
+#                             quality/ripeness portion of crop_identification)
+#
+# NOTE: weed_identification/crop_identification were retired in favor of the
+# species_identification/quality_identification split above — some downstream
+# scripts outside src/linear_probe/ still hardcode the old names (verifier
+# rubrics, CoT question branching, plotting palettes) and have NOT been
+# updated yet; they'll break or silently mis-group until they're migrated.
 #
 # skip: true          - exclude dataset entirely from generation
 # hf_config            - which HF dataset config/split-group to load (e.g. "raw" vs "augmented")
 #
 # Q3/Q4 (description questions) are only generated for
 # task_type: disease | pest_damage.
-# Datasets with task_type: weed_identification | crop_identification
+# Datasets with task_type: species_identification | quality_identification
 # get Q1/Q2 only.
 
 datasets:
@@ -157,7 +167,7 @@ datasets:
   notes: ''
 - agml_name: crop_weeds_greece
   crop: null
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 508
   classes:
   - black_nightshade
@@ -314,7 +324,7 @@ datasets:
     Re-enable and investigate individually if needed.
 - agml_name: plant_seedlings_aarhus
   crop: null
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 5539
   classes:
   - black_grass
@@ -338,7 +348,7 @@ datasets:
   notes: Mix of crop seedlings and weed species at early growth stage
 - agml_name: rangeland_weeds_australia
   crop: null
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 17509
   classes:
   - chinee_apple
@@ -392,7 +402,7 @@ datasets:
   notes: ''
 - agml_name: soybean_weed_uav_brazil
   crop: soybean
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 15336
   classes:
   - broadleaf
@@ -502,7 +512,7 @@ datasets:
   notes: ''
 - agml_name: ACHENY_variety_classification
   crop: mixed
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 27030
   classes:
   - AnaHau
@@ -544,7 +554,7 @@ datasets:
     species ID set, not a single crop's cultivars
 - agml_name: AFruitDB_fruit_grade_classification
   crop: fruit
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 3167
   classes:
   - 1st-grade
@@ -594,7 +604,7 @@ datasets:
     Iron_Chlorosis_Damage: pest_damage
 - agml_name: BDHerbalPlants_variety_classification
   crop: medicinal_plant
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 1792
   classes:
   - Datura (Datura stramonium)
@@ -612,7 +622,7 @@ datasets:
     review | multi-species medicinal-herb identification, not disease/pest-relevant
 - agml_name: BDMANGO_variety_classification
   crop: mango
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 837
   classes:
   - Amrapali
@@ -628,7 +638,7 @@ datasets:
     review
 - agml_name: BDMediLeaves_variety_classification
   crop: medicinal_plant
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 2048
   classes:
   - azadirachta-indica
@@ -663,7 +673,7 @@ datasets:
     review | crop not identifiable from repo name or class list
 - agml_name: BananaImageBD_ripeness_classification
   crop: banana
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 820
   classes:
   - Green
@@ -677,7 +687,7 @@ datasets:
     review
 - agml_name: BananaImageBD_variety_classification
   crop: banana
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 2471
   classes:
   - Bangla Kola
@@ -705,7 +715,7 @@ datasets:
     review | sigatoka/cordana/pestalotiopsis are classic banana leaf-spot diseases
 - agml_name: Basmati_rice_seed_varitey_classification
   crop: rice
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 3210
   classes:
   - '1121'
@@ -818,7 +828,7 @@ datasets:
     is the primary type here, not disease
 - agml_name: DIMPSAR_medicinal_leaf_classification
   crop: medicinal_plant
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 6900
   classes:
   - Aloevera
@@ -908,7 +918,7 @@ datasets:
     review | 80-species medicinal-leaf identification
 - agml_name: DIMPSAR_medicinal_plant_classification
   crop: medicinal_plant
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 5945
   classes:
   - Aloevera
@@ -958,7 +968,7 @@ datasets:
     review | 40-species medicinal-plant identification
 - agml_name: EfficientMaize_classification
   crop: maize
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 4846
   classes:
   - Bad
@@ -970,7 +980,7 @@ datasets:
     review | Bad/Good quality grading
 - agml_name: FruitVision_quality_classification
   crop: fruit
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 10154
   classes:
   - Formalin-mixed
@@ -1006,7 +1016,7 @@ datasets:
     with class evidence
 - agml_name: ICPTC_pistachio_tree_variety_classification
   crop: pistachio
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 526
   classes:
   - J
@@ -1071,7 +1081,7 @@ datasets:
     Semilooper_Pest: pest_damage
 - agml_name: MH_Weed16_weed_variety_classification
   crop: mixed
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 19141
   classes:
   - Asian_Pigeonwings_(Clitoria Ternatea)
@@ -1097,7 +1107,7 @@ datasets:
     review
 - agml_name: MangoClassify-12_variety_classification
   crop: mango
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 3900
   classes:
   - Amrapali
@@ -1209,7 +1219,7 @@ datasets:
     POTASSIUM DEFICIENCY: pest_damage
 - agml_name: PFSD_Musa_banana_variety_classification
   crop: banana
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 2763
   classes:
   - BHIMKOL
@@ -1226,7 +1236,7 @@ datasets:
     review
 - agml_name: PaddyVarietyBD_variety_classification
   crop: rice
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 14000
   classes:
   - BD70
@@ -1284,7 +1294,7 @@ datasets:
     review
 - agml_name: REMP_plant_classification
   crop: medicinal_plant
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 3494
   classes:
   - agnishika
@@ -1323,7 +1333,7 @@ datasets:
     review
 - agml_name: SIMPDV1_plant_classification
   crop: medicinal_plant
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 2513
   classes:
   - Abutilon Indicum
@@ -1353,7 +1363,7 @@ datasets:
     review | multi-species medicinal/ornamental plant identification
 - agml_name: SapBark_64_variety_classification
   crop: fruit
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 5815
   classes:
   - Akca Pear
@@ -1498,7 +1508,7 @@ datasets:
     review
 - agml_name: VegNet_quality_classification
   crop: vegetable
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 6150
   classes:
   - Damaged
@@ -1513,7 +1523,7 @@ datasets:
     review
 - agml_name: WaterHyacinth_variety_classification
   crop: mixed
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 1790
   classes:
   - Common Duckweeds (Lemna minor)
@@ -1527,7 +1537,7 @@ datasets:
     review | water hyacinth + other invasive aquatic weed species
 - agml_name: african_plum_grading_classification
   crop: plum
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 4507
   classes:
   - bruised
@@ -1619,7 +1629,7 @@ datasets:
     review | bacterial grain rot is a named rice disease
 - agml_name: banana_bunch_maturity_classification
   crop: banana
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 2685
   classes:
   - Cut
@@ -1631,7 +1641,7 @@ datasets:
     review
 - agml_name: banana_grade_variety_classification
   crop: banana
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 31678
   classes:
   - grade1
@@ -1644,7 +1654,7 @@ datasets:
     review
 - agml_name: banana_guava_quality_classification
   crop: mixed
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 1748
   classes:
   - Class_A
@@ -1677,7 +1687,7 @@ datasets:
     primary type
 - agml_name: banana_variety_classification
   crop: banana
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 1166
   classes:
   - Anaji
@@ -1773,7 +1783,7 @@ datasets:
     Insect: pest_damage
 - agml_name: bruised_vegetable_classification
   crop: vegetable
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 4464
   classes:
   - Damaged
@@ -1869,7 +1879,7 @@ datasets:
     review
 - agml_name: citrus_fruit_variety_classification
   crop: citrus
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 1379
   classes:
   - murcott
@@ -1915,7 +1925,7 @@ datasets:
     Zn: pest_damage
 - agml_name: coffee_bean_quality_classification
   crop: coffee
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 464
   classes:
   - A
@@ -2006,7 +2016,7 @@ datasets:
     Mealy Bug: pest_damage
 - agml_name: date_grade_variety_classification
   crop: date
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 3004
   classes:
   - grade-1
@@ -2081,7 +2091,7 @@ datasets:
     needed.
 - agml_name: dragonfruit_maturity_classification
   crop: dragonfruit
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 2127
   classes:
   - Immature Dragon Fruit
@@ -2093,7 +2103,7 @@ datasets:
     review
 - agml_name: dragonfruit_quality_classification
   crop: dragonfruit
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 1652
   classes:
   - Defect Dragon Fruit
@@ -2201,7 +2211,7 @@ datasets:
     review | explicitly about a worm pest — pest_damage is the primary type
 - agml_name: fresh_rotten_fruit_classification
   crop: fruit
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 3200
   classes:
   - fresh
@@ -2215,7 +2225,7 @@ datasets:
     and investigate individually if needed.
 - agml_name: fruit_leaf_variety_classification
   crop: fruit
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 3173
   classes:
   - Aegle marmelos
@@ -2252,7 +2262,7 @@ datasets:
     review
 - agml_name: grape_variety_classification
   crop: grape
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 8000
   classes:
   - Aswud Balad
@@ -2373,7 +2383,7 @@ datasets:
     review
 - agml_name: guava_maturity_classification
   crop: guava
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 2309
   classes:
   - green
@@ -2515,7 +2525,7 @@ datasets:
     needed.
 - agml_name: maize_tomato_weed_classification
   crop: mixed
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 55828
   classes:
   - atriplex
@@ -2554,7 +2564,7 @@ datasets:
     straw_mite: pest_damage
 - agml_name: mandarin_leaf_variety_classification
   crop: mandarin
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 1917
   classes:
   - China Mishti
@@ -2570,7 +2580,7 @@ datasets:
     and investigate individually if needed.
 - agml_name: mangifera2012_variety_classification
   crop: mango
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 2012
   classes:
   - Amrapali
@@ -2613,7 +2623,7 @@ datasets:
     Gall_Midge: pest_damage
 - agml_name: mint_leaf_classification
   crop: mint
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 5384
   classes:
   - Dried
@@ -2642,7 +2652,7 @@ datasets:
     Manganese Toxicity: pest_damage
 - agml_name: mulberry_leaf_variety_classification
   crop: mulberry
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 5262
   classes:
   - BlackAustralia
@@ -2662,7 +2672,7 @@ datasets:
     review
 - agml_name: oil_palm_fruit_ripeness_classification
   crop: oil_palm
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 466
   classes:
   - Damaged
@@ -2679,7 +2689,7 @@ datasets:
     and investigate individually if needed.
 - agml_name: okra_maturity_classification
   crop: okra
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 364
   classes:
   - Mature
@@ -2692,7 +2702,7 @@ datasets:
     review
 - agml_name: okra_thermal_maturity_classification
   crop: okra
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 501
   classes:
   - adequate_matured
@@ -2911,7 +2921,7 @@ datasets:
     and investigate individually if needed.
 - agml_name: pomegranate_quality_classification
   crop: pomegranate
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 1080
   classes:
   - grade-1
@@ -2924,7 +2934,7 @@ datasets:
     review
 - agml_name: pomegranate_thermal_defect_classification
   crop: pomegranate
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 982
   classes:
   - Major Defect
@@ -3032,7 +3042,7 @@ datasets:
     Rice Leaffolder: pest_damage
 - agml_name: rice_field_weed_classification
   crop: rice
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 3632
   classes:
   - Alternanthera philoxeroide
@@ -3053,7 +3063,7 @@ datasets:
     review
 - agml_name: rice_grain_variety_classification
   crop: rice
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 4730
   classes:
   - Amon
@@ -3083,7 +3093,7 @@ datasets:
     review
 - agml_name: rice_seedling_classification
   crop: rice
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 5364
   classes:
   - clustered
@@ -3096,7 +3106,7 @@ datasets:
     review | seedling clustering/spacing classification, growth-stage-adjacent
 - agml_name: rice_variety_classification_bangladesh
   crop: rice
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 19000
   classes:
   - BD30
@@ -3144,7 +3154,7 @@ datasets:
     review
 - agml_name: riseholme_strawberry_classification_2021
   crop: strawberry
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 3520
   classes:
   - anomalous
@@ -3158,7 +3168,7 @@ datasets:
     review
 - agml_name: sapota_fruit_size_classification
   crop: sapota
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 6010
   classes:
   - Large
@@ -3172,7 +3182,7 @@ datasets:
     review
 - agml_name: seasveg_classification_bd
   crop: vegetable
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 1504
   classes:
   - Abelmoschus esculentus
@@ -3195,7 +3205,7 @@ datasets:
     needed.
 - agml_name: sorghum_weed_classification
   crop: sorghum
-  task_type: weed_identification
+  task_type: species_identification
   n_images: 4312
   classes:
   - BroadLeafWeed
@@ -3259,7 +3269,7 @@ datasets:
     Diabrotica speciosa: pest_damage
 - agml_name: soybean_variety_classification
   crop: soybean
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 12683
   classes:
   - Anjasmoro
@@ -3369,7 +3379,7 @@ datasets:
     Caterpillars_Infestation: pest_damage
 - agml_name: tomato_maturity_classification
   crop: tomato
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 1000
   classes:
   - Immature
@@ -3381,7 +3391,7 @@ datasets:
     review
 - agml_name: tomato_quality_classification
   crop: tomato
-  task_type: crop_identification
+  task_type: quality_identification
   n_images: 1986
   classes:
   - Fresh
@@ -3393,7 +3403,7 @@ datasets:
     review
 - agml_name: tropical_flower_variety_classification
   crop: flower
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 4319
   classes:
   - Bougainvillea
@@ -3448,7 +3458,7 @@ datasets:
     Aphids_Disease: pest_damage
 - agml_name: vegetable_classification_bangladesh
   crop: vegetable
-  task_type: crop_identification
+  task_type: species_identification
   n_images: 4319
   classes:
   - Bean

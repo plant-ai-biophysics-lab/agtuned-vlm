@@ -64,8 +64,8 @@ from src.common.dataset_config import active_datasets, DatasetConfig, subsample_
 TASK_COLOR = {
     "disease": "#4C72B0",
     "pest_damage": "#DD8452",
-    "weed_identification": "#55A868",
-    "crop_identification": "#C44E52",
+    "species_identification": "#55A868",
+    "quality_identification": "#C44E52",
 }
 
 RETRYABLE_STATUS = {429, 503}
