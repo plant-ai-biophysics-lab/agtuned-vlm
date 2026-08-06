@@ -43,6 +43,7 @@ from vllm import LLM, SamplingParams
 
 from src.common.dataset_config import load_manifest, load_hf_samples
 from src.common.io import append_jsonl, load_prompts
+from src.common.progress import ProgressBar
 
 SYNTHESIS_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.05)
 
@@ -283,7 +284,7 @@ def main(args: argparse.Namespace) -> None:
     total_written = 0
     t_start = time.perf_counter()
 
-    for agml_name, class_entries in entries_by_dataset.items():
+    for agml_name, class_entries in ProgressBar(list(entries_by_dataset.items()), desc="Datasets"):
         print(f"\n=== {agml_name} ===")
         try:
             images_by_class = load_hf_images_by_class(
@@ -295,7 +296,7 @@ def main(args: argparse.Namespace) -> None:
 
         checkpoint.setdefault(agml_name, {})
 
-        for key, meta in class_entries:
+        for key, meta in ProgressBar(class_entries, desc=f"  {agml_name}"):
             crop = meta["crop"]
             clean_cls = meta["class_label"]
             task_type = meta["task_type"]

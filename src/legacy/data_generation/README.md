@@ -1,58 +1,8 @@
-# Data Generation
+# Data Generation (legacy)
 
-Generates two complementary VQA datasets from AgML image classification benchmarks, then validates each class label against authoritative agricultural references.
+`generate.py` and `build_reference_db.py` moved to `src/data_generation/` and were rewritten — see [docs/stage0_data_generation.md](../../../docs/stage0_data_generation.md) for the current pipeline. They no longer produce `agml_descriptions.jsonl`.
 
-## What this stage produces
-
-| File | Description |
-|------|-------------|
-| `agml_descriptions.jsonl` | Open-ended visual description Q&A — scored with ROUGE-SS |
-| `agml_classification.jsonl` | Short-answer classification Q&A — scored with F1-macro |
-| `checkpoint.json` | Per-class progress state — enables safe resume |
-| `reference_db.json` | Wikipedia / IDtools / CGIAR excerpts per class label |
-
----
-
-## Stage 1a — Generate (`generate.py`)
-
-A 3-pass VLM pipeline applied per dataset × class:
-
-1. **Vision pass** — N images → N raw per-image captions (vision model, temperature=0.2)
-2. **Synthesis pass** — N captions → 2-3 sentence consensus description (text-only, temperature=0)
-3. **Compression pass** — synthesized description → 1 concise sentence (text-only, temperature=0)
-
-All prompt templates are loaded from `src/config/prompts.yaml` — no strings are hardcoded.
-
-```bash
-uv run python src/data_generation/generate.py \
-  --config     src/config/datasets.yaml \
-  --prompts    src/config/prompts.yaml \
-  --model      Qwen/Qwen3.6-35B-A3B \
-  --output_dir outputs/data_generation/
-```
-
-### Checkpointing
-
-Progress is saved to `checkpoint.json` after each class. Re-running the command skips already-completed classes. Use `--force` to regenerate all.
-
----
-
-## Stage 1b — Build Reference DB (`build_reference_db.py`)
-
-Fetches authoritative descriptions for each class from three sources:
-
-1. **Wikipedia** — introductory encyclopedia excerpts via the MediaWiki API
-2. **USDA APHIS IDtools** — pest and disease fact sheets (requires `scrape_idtools.py` discovery pass)
-3. **CGIAR GARDIAN** — ~219K research publication chunks via cosine similarity retrieval (cached after first run)
-
-```bash
-uv run python src/data_generation/build_reference_db.py \
-  --descriptions_csv outputs/data_generation/descriptions_export.csv \
-  --output_db        outputs/data_generation/reference_db.json \
-  --skip_existing
-```
-
-Use `--skip_existing` to avoid re-fetching already-processed entries.
+The tools below are specific to that older, description-focused pipeline (`agml_descriptions.jsonl`, CGIAR/IDtools sourcing, description verification/correction) and stay here.
 
 ---
 
@@ -61,7 +11,7 @@ Use `--skip_existing` to avoid re-fetching already-processed entries.
 Browse generated descriptions and reference sources side by side.
 
 ```bash
-streamlit run src/data_generation/app.py -- --output_dir outputs/data_generation/
+streamlit run src/legacy/data_generation/app.py -- --output_dir outputs/data_generation/
 ```
 
 Tabs:

@@ -40,6 +40,7 @@ from ddgs import DDGS
 
 from src.common.dataset_config import active_datasets, parse_class_label
 from src.common.io import save_json
+from src.common.progress import ProgressBar
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -204,16 +205,15 @@ def main(args: argparse.Namespace) -> None:
     existing_db = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else {}
     existing_entries = existing_db.get("entries", {})
     entries = dict(existing_entries)
-    total = len(seen)
 
-    for n, (key, meta) in enumerate(seen.items(), 1):
+    for key, meta in ProgressBar(list(seen.items()), desc="Building reference DB"):
         if args.skip_existing and key in existing_entries:
-            print(f"  {n}/{total} [skip] {meta['class_label']} ({meta['crop']})")
+            print(f"  [skip] {meta['class_label']} ({meta['crop']})")
             continue
 
         if _is_healthy(meta["class_label"]):
             entries[key] = {**meta, "status": "healthy_skip", "sources": []}
-            print(f"  {n}/{total} [healthy] {meta['class_label']} ({meta['crop']}) — skipped")
+            print(f"  [healthy] {meta['class_label']} ({meta['crop']}) — skipped")
             save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
             continue
 
@@ -224,8 +224,7 @@ def main(args: argparse.Namespace) -> None:
         status = "found" if sources else "no_source_found"
 
         entries[key] = {**meta, "status": status, "sources": sources}
-        print(f"  {n}/{total} {meta['class_label']} ({meta['crop']}) — {status} "
-              f"[{len(sources)} sources]")
+        print(f"  {meta['class_label']} ({meta['crop']}) — {status} [{len(sources)} sources]")
 
         save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
 
