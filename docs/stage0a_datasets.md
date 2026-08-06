@@ -56,7 +56,8 @@ uv run python main.py download-datasets \
 |------|-------|
 | `datasets_per_task_type.png` | Number of active datasets per `task_type` (disease / pest_damage / weed_identification / crop_identification) |
 | `classes_per_task_type.png` | Same, but counting individual classes at their **effective** task type — i.e. `class_overrides` applied, so a pest class nested in a `disease` dataset counts under `pest_damage` here |
-| `task_type_split_pie.png` | Both of the above as a side-by-side pie comparison |
+| `datasets_by_task_type_pie.png` | Pie: number of active datasets per `task_type` |
+| `classes_by_task_type_pie.png` | Pie: number of classes per **effective** task type (`class_overrides` applied) |
 | `classes_per_dataset.png` | Number of classes in each dataset, sorted, color-coded by task type |
 | `images_selected_per_dataset.png` | Total images selected per dataset after capping |
 | `images_per_class_distribution.png` | Histogram of images-per-class, with a line at the `--n_per_class` cap so you can see how many classes actually hit it |

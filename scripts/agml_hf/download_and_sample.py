@@ -283,27 +283,25 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     print(f"  Saved: {path}")
 
     # ── 5. Task-type split: datasets vs classes (after class_overrides) ─────
-    # Same underlying counts as charts 1/1b, just as a side-by-side pie
-    # comparison instead of two separate bar charts. class_task_counts
-    # computed once, up in chart 1b, and reused here.
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
-    for ax, counts, title in (
-        (axes[0], task_counts, f"Datasets by task type (n={len(ds_entries)})"),
-        (axes[1], class_task_counts, f"Classes by EFFECTIVE task type, overrides applied (n={sum(class_task_counts.values())})"),
+    # Two separate pies (no titles, no bottom caption) rather than one
+    # side-by-side figure — easier to drop individually into a paper/slide
+    # without cropping out the other one's chart. class_task_counts computed
+    # once, up in chart 1b, and reused here.
+    for counts, fname in (
+        (task_counts, "datasets_by_task_type_pie.png"),
+        (class_task_counts, "classes_by_task_type_pie.png"),
     ):
         types = sorted(counts, key=lambda t: -counts[t])
         vals = [counts[t] for t in types]
         cols = [TASK_COLOR.get(t, "#888888") for t in types]
+        fig, ax = plt.subplots(figsize=(6.5, 6))
         ax.pie(vals, labels=types, colors=cols, autopct=lambda p: f"{p:.0f}%\n({round(p * sum(vals) / 100)})",
                startangle=90, wedgeprops={"edgecolor": "black", "linewidth": 0.5})
-        ax.set_title(title, fontsize=10)
-    fig.suptitle("Only successfully-downloaded datasets/classes counted"
-                 + (f" — {len(failed)} failed dataset(s) excluded" if failed else ""), fontsize=9, y=0.02)
-    plt.tight_layout()
-    path = chart_dir / "task_type_split_pie.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {path}")
+        plt.tight_layout()
+        path = chart_dir / fname
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
 
     # ── Summary ──────────────────────────────────────────────────────────
     total_classes = sum(n_classes.values())
