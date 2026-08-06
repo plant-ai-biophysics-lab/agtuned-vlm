@@ -141,10 +141,10 @@ def run_synthesis_from_sources_pass(
         f"{i + 1}. [{s.get('organization', 'source')}] {s['excerpt']}"
         for i, s in enumerate(sources)
     )
-    context = f"{cls} on {crop}" if crop != "plant" else cls
     synthesis_prompt = prompts["synthesis_from_sources"].format(
         n=len(sources),
-        context=context,
+        crop=crop,
+        class_label=cls,
         numbered_sources=numbered,
     )
     prompt = _apply_chat_template(tokenizer, synthesis_prompt)

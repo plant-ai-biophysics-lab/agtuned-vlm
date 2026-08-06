@@ -139,12 +139,20 @@ class ProgressBar:
 
     def __iter__(self) -> Iterator[T]:
         assert self.iterable is not None, "ProgressBar built with total= only has no __iter__"
+        completed = False
         try:
             for item in self.iterable:
                 yield item
                 self.update()
+            completed = True
         finally:
-            self.finish()
+            # completed=False on a Ctrl-C / break / exception inside the
+            # consumer's loop body — Python still runs this finally (the
+            # generator gets closed on abandonment), so without this flag
+            # finish() would claim 100% for a run that was actually
+            # interrupted partway through. Only a genuinely exhausted
+            # iterable gets the "jump to total" treatment.
+            self.finish(completed=completed)
 
     def update(self, n: int = 1) -> None:
         if self._done:
@@ -152,11 +160,11 @@ class ProgressBar:
         self.n += n
         self._draw()
 
-    def finish(self) -> None:
+    def finish(self, completed: bool = True) -> None:
         if self._done:
             return
         already_at_final = self.total is not None and self.n >= self.total
-        if self.total is not None:
+        if completed and self.total is not None:
             self.n = self.total
         self._done = True
         # Skip the redundant redraw if the last update() already landed
@@ -166,6 +174,10 @@ class ProgressBar:
             self._draw(force=True)
         if self.is_tty:
             self.stream.write("\n")
+            self.stream.flush()
+        elif not completed:
+            self.stream.write(f"  [interrupted at {self.n}"
+                               f"{f'/{self.total}' if self.total is not None else ''}]\n")
             self.stream.flush()
 
     def _draw(self, force: bool = False) -> None:

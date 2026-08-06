@@ -2,10 +2,15 @@
 Stage 1a: Build a JSON reference database of grounding sources per class.
 
 For every class across the active datasets in datasets.yaml, fetches:
-  1. Wikipedia — introductory encyclopedia excerpts
-  2. Live web search (DuckDuckGo via `ddgs`, no API key) — top candidate
-     pages fetched fresh and cleaned to plain article text with
-     `trafilatura`, kept only if the page actually mentions the class label
+  1. Wikipedia (always) — full article text, not just the intro, for the
+     top 3 matching pages.
+  2. Live web search (DuckDuckGo via `ddgs`, no API key) — only as a
+     FALLBACK when Wikipedia comes back empty or too thin. `ddgs` fans a
+     single query out across several search engines' HTML (Yandex, Google,
+     Brave, Mojeek, Grokipedia, none of them official APIs), so it's the
+     part of this script most likely to get rate-limited/blocked at scale;
+     restricting it to a fallback keeps that risk to only the classes that
+     actually need it, since Wikipedia alone resolves most of them.
 
 No pre-chunked corpus (CGIAR GARDIAN) and no local scraper DB (USDA APHIS
 IDtools) — both retired in favor of live per-class search: neither
@@ -49,9 +54,12 @@ EXCERPT_MAX = 800
 TIMEOUT = 15
 WIKI_SLEEP = 2.0
 WIKI_RETRY_DELAYS = [5, 15, 30]
+WIKI_MAX_PAGES = 3           # top matching Wikipedia pages to pull full text from
 WEB_SEARCH_MAX_RESULTS = 5   # candidate URLs pulled per class
 WEB_SEARCH_KEEP = 3          # how many relevant ones to keep as sources
 WEB_FETCH_SLEEP = 1.0
+WIKI_THIN_CHARS = 400        # combined Wikipedia excerpt length below this
+                              # triggers the web-search fallback
 
 _HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected"}
 _HEADERS = {"User-Agent": "AgMLResearch/1.0 (research; academic non-commercial use)"}
@@ -61,6 +69,19 @@ def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
     def _slug(s):
         return s.strip().lower().replace(" ", "_")
     return f"{_slug(agml_dataset)}__{_slug(class_label)}__{_slug(crop)}"
+
+
+def _excerpt_around_match(text: str, term: str, max_len: int) -> str:
+    """First max_len chars starting a bit before term's first occurrence, so
+    the relevance match that got this source accepted is actually inside the
+    saved excerpt — the source's full text can be much longer than max_len,
+    and a match late in it would otherwise fall outside a naive text[:max_len]
+    slice."""
+    idx = text.lower().find(term.lower())
+    if idx == -1:
+        return text[:max_len]
+    start = max(0, idx - max_len // 4)
+    return text[start:start + max_len]
 
 
 def _is_healthy(class_label: str) -> bool:
@@ -100,27 +121,29 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
         )
         if resp.status_code != 200:
             return sources
-        for hit in resp.json().get("query", {}).get("search", [])[:2]:
+        for hit in resp.json().get("query", {}).get("search", [])[:WIKI_MAX_PAGES]:
             title = hit["title"]
             try:
                 ex = _wiki_get(
                     "https://en.wikipedia.org/w/api.php",
                     {"action": "query", "titles": title, "prop": "extracts",
-                     "exintro": True, "format": "json", "explaintext": True},
+                     "format": "json", "explaintext": True},
                 )
                 if ex.status_code != 200:
                     continue
                 pages = ex.json().get("query", {}).get("pages", {})
                 extract = next(iter(pages.values())).get("extract", "").strip()
-                if not extract:
-                    continue
+                if not extract or class_label.lower() not in extract.lower():
+                    continue  # relevance gate — same rule as _fetch_web_search:
+                              # a page ranking well for the query doesn't mean
+                              # it's actually about this specific class
                 sources.append({
                     "organization": "Wikipedia",
                     "title": title,
                     "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
                     "type": "encyclopedia",
                     "accessed_date": str(date.today()),
-                    "excerpt": extract[:EXCERPT_MAX],
+                    "excerpt": _excerpt_around_match(extract, class_label, EXCERPT_MAX),
                     "search_query": query,
                 })
             except Exception as e:
@@ -165,7 +188,7 @@ def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]
                 "url": url,
                 "type": "web_page",
                 "accessed_date": str(date.today()),
-                "excerpt": text[:EXCERPT_MAX],
+                "excerpt": _excerpt_around_match(text, class_label, EXCERPT_MAX),
                 "search_query": query,
             })
         except Exception as e:
@@ -217,14 +240,18 @@ def main(args: argparse.Namespace) -> None:
             save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
             continue
 
-        sources = (
-            _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
-            + _fetch_web_search(meta["class_label"], meta["crop"], meta["task_type"])
-        )
+        sources = _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
+        wiki_chars = sum(len(s["excerpt"]) for s in sources)
+        used_fallback = False
+        if wiki_chars < WIKI_THIN_CHARS:
+            sources = sources + _fetch_web_search(meta["class_label"], meta["crop"], meta["task_type"])
+            used_fallback = True
         status = "found" if sources else "no_source_found"
 
         entries[key] = {**meta, "status": status, "sources": sources}
-        print(f"  {meta['class_label']} ({meta['crop']}) — {status} [{len(sources)} sources]")
+        fallback_note = " [web-search fallback]" if used_fallback else ""
+        print(f"  {meta['class_label']} ({meta['crop']}) — {status} "
+              f"[{len(sources)} sources]{fallback_note}")
 
         save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
 
