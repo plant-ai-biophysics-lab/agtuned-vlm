@@ -53,3 +53,11 @@ uv run python main.py data-gen \
 Each record's `metadata.grounding_status` is one of `grounded` / `no_source_found` / `healthy_skip` / `insufficient_visual_detail` — use it to find classes with an empty description that need a manual fill.
 
 Add `--force` to regenerate all classes from scratch. Progress is checkpointed (`checkpoint.json` in `--output_dir`) so re-runs skip completed classes.
+
+## Browsing the output
+
+```bash
+streamlit run app/classification_viewer.py -- --output_dir outputs/data_generation/
+```
+
+Shows each class's dataset/crop/label, the sources that were fetched for it, and the final synthesized description — see [app/README.md](../app/README.md).
