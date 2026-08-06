@@ -1,9 +1,13 @@
 """
-Stage 1b: Synthesize grounded VQA datasets from build_reference_db.py's fetched sources.
+Stage 1b: Synthesize grounded classification VQA from build_reference_db.py's fetched sources.
 
-Produces two complementary files:
-  agml_descriptions.jsonl   — visual description Q&A (open-ended, ROUGE-scored)
-  agml_classification.jsonl — visual classification Q&A (short label, exact-match)
+Produces agml_classification.jsonl — visual classification Q&A (short label,
+exact-match), where the question embeds a grounded, synthesized description
+of the class. There is no separate agml_descriptions.jsonl / open-ended
+description-writing output — that task and its consumers
+(desc_augmented_vision.py, the description half of language/vision
+assessment) are being revisited separately; this script only produces what
+the classification task needs.
 
 No vision-captioning pass — this reads ONLY reference_db.json (Wikipedia +
 live web search excerpts fetched by build_reference_db.py, which must be run
@@ -105,21 +109,6 @@ def load_hf_images_by_class(
     }
 
 
-def build_questions(task_type: str, crop: str, cls: str, prompts: dict[str, str]) -> dict[str, str]:
-    """Build question strings for all prompt roles from the prompts dict."""
-    if task_type in DISEASE_TASK_TYPES:
-        return {
-            "visual_desc": prompts["visual_description_disease"].format(cls=cls, crop=crop),
-            "text_desc": prompts["text_description_disease"].format(cls=cls, crop=crop),
-            "visual_cls": prompts["visual_classification_disease"].format(crop=crop),
-        }
-    return {
-        "visual_desc": prompts["visual_description_weed"].format(species=cls),
-        "text_desc": prompts["text_description_weed"].format(species=cls),
-        "visual_cls": prompts["visual_classification_weed"],
-    }
-
-
 def build_text_cls_question(task_type: str, crop: str, description: str, prompts: dict[str, str]) -> str:
     """Build the text-only classification question from prompts dict."""
     if task_type in DISEASE_TASK_TYPES:
@@ -171,42 +160,6 @@ def save_checkpoint(output_dir: Path, checkpoint: dict) -> None:
     (output_dir / "checkpoint.json").write_text(json.dumps(checkpoint, indent=2))
 
 
-def make_description_record(
-    text_desc_q: str,
-    visual_desc_q: str,
-    visual_cls_q: str,
-    synthesized: str,
-    sources: list[dict],
-    grounding_status: str,
-    image_paths: list[str],
-    agml_name: str,
-    crop: str,
-    clean_cls: str,
-    task_type: str,
-    model_id: str,
-) -> dict:
-    return {
-        "messages": [
-            {"role": "user", "content": text_desc_q},
-            {"role": "assistant", "content": synthesized},
-        ],
-        "metadata": {
-            "record_type": "description",
-            "agml_dataset": agml_name,
-            "crop": crop,
-            "class_label": clean_cls,
-            "task_type": task_type,
-            "visual_question": visual_desc_q,
-            "visual_cls_question": visual_cls_q,
-            "synthesized_description": synthesized,
-            "grounding_status": grounding_status,
-            "source_urls": [s["url"] for s in sources],
-            "image_names": [Path(p).name for p in image_paths],
-            "generator_model": model_id,
-        },
-    }
-
-
 def make_classification_record(
     text_cls_q: str,
     clean_cls: str,
@@ -216,6 +169,8 @@ def make_classification_record(
     model_id: str,
     synthesized_description: str,
     grounding_status: str,
+    sources: list[dict],
+    image_paths: list[str],
 ) -> dict:
     return {
         "messages": [
@@ -230,6 +185,8 @@ def make_classification_record(
             "task_type": task_type,
             "synthesized_description": synthesized_description,
             "grounding_status": grounding_status,
+            "source_urls": [s["url"] for s in sources],
+            "image_names": [Path(p).name for p in image_paths],
             "generator_model": model_id,
         },
     }
@@ -302,7 +259,6 @@ def main(args: argparse.Namespace) -> None:
         backfill_images(output_dir)
         return
 
-    desc_path = output_dir / "agml_descriptions.jsonl"
     cls_path = output_dir / "agml_classification.jsonl"
 
     prompts = load_prompts(Path(args.prompts))
@@ -377,23 +333,8 @@ def main(args: argparse.Namespace) -> None:
 
             print(f"  {clean_cls}  [{grounding_status}]  ({len(sources)} sources)")
 
-            questions = build_questions(task_type, crop, clean_cls, prompts)
             text_cls_q = build_text_cls_question(task_type, crop, synthesized, prompts)
 
-            append_jsonl(desc_path, make_description_record(
-                text_desc_q=questions["text_desc"],
-                visual_desc_q=questions["visual_desc"],
-                visual_cls_q=questions["visual_cls"],
-                synthesized=synthesized,
-                sources=sources,
-                grounding_status=grounding_status,
-                image_paths=image_paths,
-                agml_name=agml_name,
-                crop=crop,
-                clean_cls=clean_cls,
-                task_type=task_type,
-                model_id=args.model,
-            ))
             append_jsonl(cls_path, make_classification_record(
                 text_cls_q=text_cls_q,
                 clean_cls=clean_cls,
@@ -403,6 +344,8 @@ def main(args: argparse.Namespace) -> None:
                 model_id=args.model,
                 synthesized_description=synthesized,
                 grounding_status=grounding_status,
+                sources=sources,
+                image_paths=image_paths,
             ))
 
             checkpoint[agml_name][key] = {
@@ -413,9 +356,6 @@ def main(args: argparse.Namespace) -> None:
                 "grounding_status": grounding_status,
                 "synthesized_description": synthesized,
                 "image_paths": image_paths,
-                "visual_desc_question": questions["visual_desc"],
-                "visual_cls_question": questions["visual_cls"],
-                "text_desc_question": questions["text_desc"],
                 "text_cls_question": text_cls_q,
             }
             save_checkpoint(output_dir, checkpoint)
@@ -433,12 +373,7 @@ def main(args: argparse.Namespace) -> None:
     print(f"\n{'='*60}")
     print(f"Done: {total_written} classes written in {elapsed:.1f}s ({grounded} grounded, "
           f"{total_written - grounded} need manual description)")
-    print(f"  Descriptions:   {desc_path}")
     print(f"  Classification: {cls_path}")
-
-    if args.hub_repo_descriptions:
-        print(f"\nPushing text descriptions → {args.hub_repo_descriptions}")
-        push_to_hub(desc_path, args.hub_repo_descriptions)
 
     if args.hub_repo_classification:
         print(f"\nPushing text classification → {args.hub_repo_classification}")
@@ -472,10 +407,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_dir", default="outputs/data_generation/",
         help="Directory for JSONL outputs, checkpoint, and logs",
-    )
-    parser.add_argument(
-        "--hub_repo_descriptions", default=None,
-        help="HuggingFace repo for description dataset (e.g. user/agml-descriptions)",
     )
     parser.add_argument(
         "--hub_repo_classification", default=None,

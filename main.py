@@ -36,8 +36,8 @@ Stages:
     migrate-datasets   Stage 0a — regenerate src/config/datasets.yaml from the HF catalog
     download-datasets  Stage 0a — download + class-balanced sample datasets, write selection manifest
     build-reference-db Stage 0  — fetch Wikipedia + live web-search sources per class (run this first)
-    data-gen           Stage 0  — synthesize agml_descriptions.jsonl / agml_classification.jsonl
-                                   from build-reference-db's fetched sources (no vision pass)
+    data-gen           Stage 0  — synthesize agml_classification.jsonl from build-reference-db's
+                                   fetched sources (no vision pass)
     check-vision-towers      — pre-check: do candidate models expose a resolvable vision
                                tower before running the full probe pipeline on them
     probe           Stage 1 — linear probe: frozen-embedding separability across backbones
