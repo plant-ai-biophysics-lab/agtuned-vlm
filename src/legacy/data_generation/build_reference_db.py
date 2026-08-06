@@ -1,11 +1,24 @@
 """
-Stage 1b: Build a JSON reference database from Wikipedia, USDA APHIS IDtools, and CGIAR HuggingFace.
+Stage 1a: Build a JSON reference database of grounding sources per class.
 
-Reads descriptions_export.csv produced by generate.py and fetches reference material
-for each class label from three sources:
+For every class across the active datasets in datasets.yaml, fetches:
   1. Wikipedia — introductory encyclopedia excerpts
-  2. USDA APHIS IDtools — pest and disease fact sheets
-  3. CGIAR GARDIAN — research publication chunks via semantic search
+  2. Live web search (DuckDuckGo via `ddgs`, no API key) — top candidate
+     pages fetched fresh and cleaned to plain article text with
+     `trafilatura`, kept only if the page actually mentions the class label
+
+No pre-chunked corpus (CGIAR GARDIAN) and no local scraper DB (USDA APHIS
+IDtools) — both retired in favor of live per-class search: neither
+guaranteed a source that actually discussed the *specific* class, and a
+fresh, per-class web search plus a relevance gate (the page must mention the
+class label, not just rank well for the query) gets closer to that than a
+static pre-built corpus can.
+
+Runs BEFORE generate.py now, not after: this reads directly from
+datasets.yaml rather than from a descriptions JSONL generate.py already
+produced, and generate.py's synthesis pass now reads THIS file as its only
+input material (no vision-captioning pass — descriptions are synthesized
+purely from what's fetched here).
 
 Results are written incrementally to reference_db.json so runs are safely resumable.
 """
@@ -15,15 +28,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
-import csv
 import json
 import logging
+import re
 import time
 from datetime import date
 
 import requests
-from bs4 import BeautifulSoup
+import trafilatura
+from ddgs import DDGS
 
+from src.common.dataset_config import active_datasets, parse_class_label
 from src.common.io import save_json
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -31,15 +46,14 @@ log = logging.getLogger(__name__)
 
 EXCERPT_MAX = 800
 TIMEOUT = 15
-SLEEP = 0.5
 WIKI_SLEEP = 2.0
 WIKI_RETRY_DELAYS = [5, 15, 30]
+WEB_SEARCH_MAX_RESULTS = 5   # candidate URLs pulled per class
+WEB_SEARCH_KEEP = 3          # how many relevant ones to keep as sources
+WEB_FETCH_SLEEP = 1.0
 
 _HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected"}
 _HEADERS = {"User-Agent": "AgMLResearch/1.0 (research; academic non-commercial use)"}
-
-_WEB_SCRAPER_DIR = Path(__file__).parent.parent.parent / "experiments" / "web_scraper"
-_IDTOOLS_DB = _WEB_SCRAPER_DIR / "idtools_scraper.db"
 
 
 def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
@@ -53,8 +67,8 @@ def _is_healthy(class_label: str) -> bool:
 
 
 def _search_query(class_label: str, crop: str, task_type: str) -> str:
-    if task_type in ("weed_identification", "crop_identification"):
-        return f"{class_label} plant weed visual"
+    if task_type in ("species_identification", "quality_identification"):
+        return f"{class_label} plant visual identification"
     return f"{class_label} {crop} plant disease symptoms"
 
 
@@ -115,281 +129,80 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
     return sources
 
 
-def _load_idtools_index() -> dict[str, dict]:
-    """
-    Build {subject_lower: {url, subject}} map using scrape_idtools.py infrastructure.
-
-    If idtools_scraper.db already exists: read subjects from SQLite instantly.
-    If not: run URL discovery (same crawler as scrape_idtools.py) and save to DB.
-    """
-    import sys
-    sys.path.insert(0, str(_WEB_SCRAPER_DIR))
+def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]:
+    """Live web search, no pre-built corpus: search DuckDuckGo for the class,
+    fetch each candidate page fresh, extract clean article text with
+    trafilatura, and keep only pages that actually mention the class label —
+    a relevance gate on top of the search engine's own ranking, since a page
+    ranking well for the query doesn't guarantee it's actually about this
+    specific class."""
+    query = _search_query(class_label, crop, task_type)
+    sources: list[dict] = []
     try:
-        from scrape_idtools import init_db
-    except ImportError as e:
-        log.warning("Cannot import scrape_idtools — IDtools disabled: %s", e)
-        return {}
-
-    conn = init_db(str(_IDTOOLS_DB))
-    known = conn.execute("SELECT COUNT(*) FROM urls").fetchone()[0]
-
-    if known < 50:
-        log.warning(
-            "IDtools DB is empty. Run discovery first:\n"
-            "  cd experiments/web_scraper && uv run python scrape_idtools.py --discover-only\n"
-            "Skipping IDtools source for this run."
-        )
-        conn.close()
-        return {}
-
-    log.info("IDtools DB: %d URLs discovered", known)
-    rows = conn.execute(
-        "SELECT url, subject FROM urls WHERE subject IS NOT NULL AND subject != ''"
-    ).fetchall()
-    conn.close()
-
-    index = {
-        row[1].lower(): {"url": row[0], "subject": row[1]}
-        for row in rows if row[1] and 3 < len(row[1]) < 100
-    }
-    log.info("IDtools index ready: %d subjects", len(index))
-    return index
-
-
-def _search_idtools(class_label: str, crop: str, idtools_index: dict[str, dict]) -> list[dict]:
-    """Match class label against IDtools subjects; scrape visual section of best match."""
-    if not idtools_index:
-        return []
-
-    import sys
-    sys.path.insert(0, str(_WEB_SCRAPER_DIR))
-    try:
-        from scrape_idtools import scrape_factsheet
-    except ImportError:
-        return []
-
-    terms = [t.lower() for t in (class_label + " " + crop).split() if len(t) > 3]
-    if not terms:
-        return []
-
-    scored = sorted(
-        ((sum(t in subj for t in terms), entry)
-         for subj, entry in idtools_index.items()
-         if any(t in subj for t in terms)),
-        key=lambda x: x[0], reverse=True,
-    )
-    if not scored:
-        return []
-
-    sources = []
-    for _score, match in scored[:2]:
-        result = scrape_factsheet(match["url"])
-        if result is None:
-            continue
-        _subject, content = result
-        sources.append({
-            "organization": "USDA APHIS IDtools",
-            "title": match["subject"],
-            "url": match["url"],
-            "type": "fact_sheet",
-            "accessed_date": str(date.today()),
-            "excerpt": content[:EXCERPT_MAX],
-            "search_query": f"{class_label} {crop}",
-        })
-        time.sleep(SLEEP)
-
-    return sources
-
-
-_CGIAR_DATASETS = [
-    "CGIAR/ragas_gardian_evaluation_non_overlapping",
-    "CGIAR/ragas_gardian_evaluation_overlapping",
-]
-_CGIAR_EMB_MODEL = "BAAI/bge-small-en-v1.5"
-_CGIAR_EMB_CACHE = "cgiar_embeddings.npy"
-_CGIAR_TEXT_CACHE = "cgiar_chunks.json"
-
-
-def _fetch_cgiar_chunks() -> list[str]:
-    try:
-        import pyarrow.ipc as pa_ipc
-        from huggingface_hub import hf_hub_download
-    except ImportError as e:
-        log.warning("CGIAR disabled — missing dependency: %s", e)
-        return []
-
-    chunks: list[str] = []
-    for ds_id in _CGIAR_DATASETS:
-        try:
-            path = hf_hub_download(
-                repo_id=ds_id, filename="data-00000-of-00001.arrow", repo_type="dataset"
-            )
-            import pyarrow.ipc as pa_ipc
-            reader = pa_ipc.open_stream(path)
-            table = reader.read_all()
-            ctx_col = table.column("contexts").to_pylist()
-            before = len(chunks)
-            for cell in ctx_col:
-                if isinstance(cell, list):
-                    chunks.extend(c for c in cell if c)
-                elif cell:
-                    chunks.append(cell)
-            log.info("CGIAR %s: %d rows → %d chunks", ds_id, len(ctx_col), len(chunks) - before)
-        except Exception as e:
-            log.warning("CGIAR load '%s': %s", ds_id, e)
-    return chunks
-
-
-def _load_cgiar_index(cache_dir: Path) -> tuple | None:
-    """
-    Returns (model, embeddings, chunks) for RAG retrieval.
-
-    First run: downloads chunks, encodes with bge-small-en-v1.5, saves to cache_dir.
-    Subsequent runs: loads from cache in seconds.
-    """
-    import numpy as np
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError:
-        log.warning("sentence-transformers not installed — CGIAR RAG disabled")
-        return None
-
-    emb_path = cache_dir / _CGIAR_EMB_CACHE
-    text_path = cache_dir / _CGIAR_TEXT_CACHE
-
-    if emb_path.exists() and text_path.exists():
-        log.info("Loading CGIAR embeddings from cache...")
-        embeddings = np.load(str(emb_path))
-        chunks = json.loads(text_path.read_text(encoding="utf-8"))
-        log.info("CGIAR index ready: %d chunks, dim=%d", len(chunks), embeddings.shape[1])
-        model = SentenceTransformer(_CGIAR_EMB_MODEL)
-        return model, embeddings, chunks
-
-    chunks = _fetch_cgiar_chunks()
-    if not chunks:
-        return None
-
-    log.info("Encoding %d CGIAR chunks with %s (cached after this)...", len(chunks), _CGIAR_EMB_MODEL)
-    model = SentenceTransformer(_CGIAR_EMB_MODEL)
-    embeddings = model.encode(
-        chunks, batch_size=512, show_progress_bar=True, normalize_embeddings=True
-    )
-
-    np.save(str(emb_path), embeddings)
-    text_path.write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
-    log.info("CGIAR index saved → %s", cache_dir)
-
-    return model, embeddings, chunks
-
-
-def _search_cgiar(
-    class_label: str, crop: str, task_type: str,
-    compressed_description: str,
-    cgiar_index: tuple | None, top_k: int = 3,
-) -> list[dict]:
-    """
-    Grep-then-rank: keep only chunks that contain the class label as a substring
-    (and the crop, unless crop is the generic 'plant'), then re-rank survivors by
-    cosine similarity and return the top-k.
-    """
-    if cgiar_index is None:
-        return []
-
-    import numpy as np
-    model, embeddings, chunks = cgiar_index
+        hits = DDGS().text(query, max_results=WEB_SEARCH_MAX_RESULTS)
+    except Exception as e:
+        log.debug("Web search '%s': %s", query, e)
+        return sources
 
     label_lower = class_label.lower()
-    crop_lower  = crop.lower() if crop else ""
-    require_crop = crop_lower and crop_lower != "plant"
-
-    # ── grep filter ────────────────────────────────────────────────────────────
-    candidate_idx = [
-        i for i, chunk in enumerate(chunks)
-        if label_lower in chunk.lower()
-        and (not require_crop or crop_lower in chunk.lower())
-    ]
-
-    if not candidate_idx:
-        return []
-
-    # ── cosine re-rank among candidates ───────────────────────────────────────
-    if task_type in ("weed_identification", "crop_identification"):
-        query = f"{compressed_description} visual appearance {class_label} plant identification"
-    else:
-        query = f"{compressed_description} visual symptoms {class_label} {crop} disease"
-
-    q_emb       = model.encode([query], normalize_embeddings=True)
-    cand_embs   = embeddings[candidate_idx]
-    scores      = (cand_embs @ q_emb.T).flatten()
-    top_local   = np.argsort(scores)[-top_k:][::-1]
-
-    return [
-        {
-            "organization": "CGIAR GARDIAN",
-            "title": "CGIAR GARDIAN Research Corpus",
-            "url": "https://huggingface.co/datasets/CGIAR/ragas_gardian_evaluation_non_overlapping",
-            "type": "research_document",
-            "accessed_date": str(date.today()),
-            "excerpt": chunks[candidate_idx[j]][:EXCERPT_MAX],
-            "search_query": query,
-            "score": round(float(scores[j]), 4),
-        }
-        for j in top_local
-        if scores[j] > 0.0
-    ]
-
-
-def _export_csv(jsonl_path: Path, csv_path: Path) -> list[dict]:
-    """Read descriptions JSONL and write a flat CSV. Returns the rows."""
-    rows: list[dict] = []
-    with open(jsonl_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+    for hit in hits:
+        if len(sources) >= WEB_SEARCH_KEEP:
+            break
+        url = hit.get("href")
+        if not url:
+            continue
+        try:
+            downloaded = trafilatura.fetch_url(url)
+            if not downloaded:
                 continue
-            record = json.loads(line)
-            meta = record.get("metadata", {})
-            rows.append({
-                "agml_dataset":           meta.get("agml_dataset", ""),
-                "crop":                   meta.get("crop", ""),
-                "class_label":            meta.get("class_label", ""),
-                "task_type":              meta.get("task_type", ""),
-                "compressed_description": record["messages"][1]["content"],
+            text = trafilatura.extract(downloaded)
+            if not text or label_lower not in text.lower():
+                continue  # relevance gate — page must actually mention the class
+            sources.append({
+                "organization": "Web search",
+                "title": hit.get("title") or url,
+                "url": url,
+                "type": "web_page",
+                "accessed_date": str(date.today()),
+                "excerpt": text[:EXCERPT_MAX],
+                "search_query": query,
             })
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=["agml_dataset", "crop", "class_label", "task_type", "compressed_description"]
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Exported {len(rows)} records → {csv_path}")
-    return rows
+        except Exception as e:
+            log.debug("Fetch '%s': %s", url, e)
+        time.sleep(WEB_FETCH_SLEEP)
+    return sources
 
 
 def main(args: argparse.Namespace) -> None:
     dst = Path(args.output_db)
     dst.parent.mkdir(parents=True, exist_ok=True)
 
-    csv_path = dst.parent / "descriptions_export.csv"
-    rows = _export_csv(Path(args.descriptions_jsonl), csv_path)
+    datasets_cfg = active_datasets(Path(args.config))
+    if args.only:
+        pattern = re.compile(args.only)
+        datasets_cfg = [d for d in datasets_cfg if pattern.search(d.agml_name)]
+        if not datasets_cfg:
+            print(f"ERROR: --only {args.only!r} matched no active datasets.")
+            sys.exit(1)
+
+    seen: dict[str, dict] = {}
+    for ds in datasets_cfg:
+        for raw_label in ds.classes:
+            crop, clean_cls = parse_class_label(raw_label, ds.crop)
+            task_type = ds.effective_task_type(raw_label)
+            key = _make_key(ds.agml_name, clean_cls, crop)
+            if key not in seen:
+                seen[key] = {
+                    "agml_dataset": ds.agml_name,
+                    "crop": crop,
+                    "class_label": clean_cls,
+                    "raw_label": raw_label,  # manifest's per-class key, needed to sample an
+                                              # image back for this class (see generate.py)
+                    "task_type": task_type,
+                }
 
     existing_db = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else {}
     existing_entries = existing_db.get("entries", {})
-
-    seen: dict[str, dict] = {}
-    for row in rows:
-        key = _make_key(row["agml_dataset"], row["class_label"], row["crop"])
-        if key not in seen:
-            seen[key] = {k: row[k] for k in
-                         ("agml_dataset", "crop", "class_label", "task_type", "compressed_description")}
-
-    print("Loading USDA APHIS IDtools index...")
-    idtools_index = _load_idtools_index()
-
-    print("Loading CGIAR GARDIAN index (encoding on first run, cached after)...")
-    cgiar_index = _load_cgiar_index(dst.parent)
-
     entries = dict(existing_entries)
     total = len(seen)
 
@@ -401,24 +214,20 @@ def main(args: argparse.Namespace) -> None:
         if _is_healthy(meta["class_label"]):
             entries[key] = {**meta, "status": "healthy_skip", "sources": []}
             print(f"  {n}/{total} [healthy] {meta['class_label']} ({meta['crop']}) — skipped")
-            save_json(dst, {"schema_version": "1.2", "built_date": str(date.today()), "entries": entries})
+            save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
             continue
 
         sources = (
             _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
-            + _search_idtools(meta["class_label"], meta["crop"], idtools_index)
-            + _search_cgiar(
-                meta["class_label"], meta["crop"], meta["task_type"],
-                meta["compressed_description"], cgiar_index,
-            )
+            + _fetch_web_search(meta["class_label"], meta["crop"], meta["task_type"])
         )
-        status = "found" if any(s.get("excerpt") for s in sources) else "no_source_found"
+        status = "found" if sources else "no_source_found"
 
         entries[key] = {**meta, "status": status, "sources": sources}
         print(f"  {n}/{total} {meta['class_label']} ({meta['crop']}) — {status} "
               f"[{len(sources)} sources]")
 
-        save_json(dst, {"schema_version": "1.2", "built_date": str(date.today()), "entries": entries})
+        save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
 
     found = sum(1 for e in entries.values() if e.get("status") == "found")
     print(f"\nDone. {found}/{len(entries)} entries have at least one source → {dst}")
@@ -426,14 +235,20 @@ def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Build reference DB from Wikipedia, USDA APHIS IDtools, and CGIAR HuggingFace."
+        description="Build a class-level reference DB from Wikipedia and live web search."
     )
     parser.add_argument(
-        "--descriptions_jsonl", default="outputs/data_generation/agml_descriptions.jsonl",
-        help="Path to agml_descriptions.jsonl produced by generate.py",
+        "--config", default="src/config/datasets.yaml",
+        help="Path to datasets.yaml registry",
     )
     parser.add_argument(
         "--output_db", default="outputs/data_generation/reference_db.json",
+    )
+    parser.add_argument(
+        "--only", default=None,
+        help="optional regex filter on agml_name — build for a single dataset "
+             "(or a subset) instead of the full active list. Same convention as "
+             "download_and_sample.py's --only.",
     )
     parser.add_argument(
         "--skip_existing", action="store_true",

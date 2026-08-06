@@ -7,6 +7,7 @@ STAGES = {
     "catalog-datasets":   "scripts.agml_hf.catalog_datasets",
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
+    "build-reference-db": "src.legacy.data_generation.build_reference_db",
     "data-gen":           "src.legacy.data_generation.generate",
     "check-vision-towers": "src.linear_probe.check_vision_towers",
     "probe":         "src.linear_probe.probe",
@@ -34,7 +35,9 @@ Stages:
     catalog-datasets   Stage 0a — catalog all Project-AgML datasets on HuggingFace
     migrate-datasets   Stage 0a — regenerate src/config/datasets.yaml from the HF catalog
     download-datasets  Stage 0a — download + class-balanced sample datasets, write selection manifest
-    data-gen           Stage 0  — regenerate agml_descriptions.jsonl / agml_classification.jsonl
+    build-reference-db Stage 0  — fetch Wikipedia + live web-search sources per class (run this first)
+    data-gen           Stage 0  — synthesize agml_descriptions.jsonl / agml_classification.jsonl
+                                   from build-reference-db's fetched sources (no vision pass)
     check-vision-towers      — pre-check: do candidate models expose a resolvable vision
                                tower before running the full probe pipeline on them
     probe           Stage 1 — linear probe: frozen-embedding separability across backbones

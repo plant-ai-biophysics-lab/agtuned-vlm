@@ -7,7 +7,7 @@ import numpy as np
 import yaml
 
 DISEASE_TASK_TYPES = {"disease", "pest_damage"}
-IDENTIFICATION_TASK_TYPES = {"weed_identification", "crop_identification"}
+IDENTIFICATION_TASK_TYPES = {"species_identification", "quality_identification"}
 
 
 @dataclass

@@ -41,3 +41,4 @@ experiments/**/**/*.npy
 >>>>>>> Stashed changes
 /legacy/outputs/verifier_lmv
 /experiments/ag_finetune/.DS_Store
+/dataset/images

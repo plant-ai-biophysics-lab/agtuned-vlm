@@ -1,14 +1,24 @@
 """
-Stage 1a: Generate synthetic VQA datasets from AgML image classification benchmarks.
+Stage 1b: Synthesize grounded VQA datasets from build_reference_db.py's fetched sources.
 
 Produces two complementary files:
   agml_descriptions.jsonl   — visual description Q&A (open-ended, ROUGE-scored)
   agml_classification.jsonl — visual classification Q&A (short label, exact-match)
 
-A 3-pass pipeline is applied per class:
-  Pass 1 — vision: N images → raw per-image captions
-  Pass 2 — synthesis: N captions → 2-3 sentence consensus description
-  Pass 3 — compression: synthesized description → 1 concise sentence
+No vision-captioning pass — this reads ONLY reference_db.json (Wikipedia +
+live web search excerpts fetched by build_reference_db.py, which must be run
+first) and synthesizes each class's description purely from that fetched
+text, in a single LLM pass per class (no separate compression pass).
+
+A class with no usable source (build_reference_db.py's status is
+no_source_found or healthy_skip, or the synthesis pass reports
+NOT_ENOUGH_VISUAL_DETAIL) still gets a record, but with an empty
+description and that status recorded — meant to be filled in by hand later,
+not silently dropped or backfilled with a model-generated guess.
+
+One representative image per class is still sampled from the HF manifest for
+the record's image_names/sample image, but it plays no role in generating
+the description text.
 
 Checkpointing is done per dataset/class so runs are safely resumable.
 """
@@ -20,22 +30,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import argparse
 import json
 import random
+import re
 import time
 from collections import defaultdict
 
 from PIL import Image as PILImage
 from vllm import LLM, SamplingParams
 
-from src.common.dataset_config import active_datasets, parse_class_label
+from src.common.dataset_config import load_manifest, load_hf_samples
 from src.common.io import append_jsonl, load_prompts
 
-CAPTION_PARAMS = SamplingParams(temperature=0.2, max_tokens=256, repetition_penalty=1.1)
 SYNTHESIS_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.05)
-COMPRESSION_PARAMS = SamplingParams(temperature=0.0, max_tokens=96, repetition_penalty=1.05)
 
 DISEASE_TASK_TYPES = {"disease", "pest_damage"}
+NOT_ENOUGH_DETAIL_SENTINEL = "NOT_ENOUGH_VISUAL_DETAIL"
 
-import re
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -79,37 +88,21 @@ def _apply_chat_template(tokenizer, prompt: str) -> str:
         )
 
 
-def load_agml_images(agml_name: str, n_samples: int, seed: int = 42) -> dict[str, list[str]]:
-    import agml
-    loader = agml.data.AgMLDataLoader(agml_name)
-    contents = loader.export_contents()
-    classes = loader.classes
-
+def load_hf_images_by_class(
+    agml_name: str, manifest: dict, images_root: Path, n_samples: int, seed: int = 42,
+) -> dict[str, list[str]]:
+    """Grouped by class (raw manifest label), capped at n_samples/class with a
+    fixed seed, sourced from the HF-based manifest."""
+    samples = load_hf_samples(agml_name, manifest, images_root)
     by_class: dict[str, list[str]] = defaultdict(list)
-    for path, label_idx in contents.items():
-        by_class[classes[int(label_idx)]].append(str(path))
+    for s in samples:
+        by_class[s["label"]].append(s["path"])
 
     rng = random.Random(seed)
     return {
         cls: rng.sample(paths, min(n_samples, len(paths)))
         for cls, paths in by_class.items()
     }
-
-
-def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> dict:
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": question},
-            ],
-        }
-    ]
-    text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    return {"prompt": text, "multi_modal_data": {"image": image}}
 
 
 def build_questions(task_type: str, crop: str, cls: str, prompts: dict[str, str]) -> dict[str, str]:
@@ -141,56 +134,31 @@ def load_llm(model_id: str) -> tuple[LLM, object]:
         max_model_len=16384,
         gpu_memory_utilization=0.9,
         max_num_seqs=64,
-        limit_mm_per_prompt={"image": 1},
     )
     tokenizer = llm.get_tokenizer()
     return llm, tokenizer
 
 
-def run_vision_pass(
+def run_synthesis_from_sources_pass(
     llm: LLM,
     tokenizer,
-    images: list[PILImage.Image],
-    question: str,
-    no_label_suffix: str,
-) -> list[str]:
-    prompts = [
-        build_multimodal_prompt(tokenizer, img, question + no_label_suffix)
-        for img in images
-    ]
-    outputs = llm.generate(prompts, sampling_params=CAPTION_PARAMS)
-    return [_clean_response(o.outputs[0].text) for o in outputs]
-
-
-def run_synthesis_pass(
-    llm: LLM,
-    tokenizer,
-    raw_captions: list[str],
+    sources: list[dict],
     cls: str,
     crop: str,
     prompts: dict[str, str],
 ) -> str:
-    numbered = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(raw_captions))
+    numbered = "\n".join(
+        f"{i + 1}. [{s.get('organization', 'source')}] {s['excerpt']}"
+        for i, s in enumerate(sources)
+    )
     context = f"{cls} on {crop}" if crop != "plant" else cls
-    synthesis_prompt = prompts["synthesis"].format(
-        n=len(raw_captions),
+    synthesis_prompt = prompts["synthesis_from_sources"].format(
+        n=len(sources),
         context=context,
-        numbered_list=numbered,
+        numbered_sources=numbered,
     )
     prompt = _apply_chat_template(tokenizer, synthesis_prompt)
     outputs = llm.generate([prompt], sampling_params=SYNTHESIS_PARAMS)
-    return _clean_response(outputs[0].outputs[0].text)
-
-
-def run_compression_pass(
-    llm: LLM,
-    tokenizer,
-    synthesized: str,
-    prompts: dict[str, str],
-) -> str:
-    compression_prompt = prompts["compression"].format(description=synthesized)
-    prompt = _apply_chat_template(tokenizer, compression_prompt)
-    outputs = llm.generate([prompt], sampling_params=COMPRESSION_PARAMS)
     return _clean_response(outputs[0].outputs[0].text)
 
 
@@ -208,8 +176,8 @@ def make_description_record(
     visual_desc_q: str,
     visual_cls_q: str,
     synthesized: str,
-    compressed: str,
-    raw_captions: list[str],
+    sources: list[dict],
+    grounding_status: str,
     image_paths: list[str],
     agml_name: str,
     crop: str,
@@ -220,7 +188,7 @@ def make_description_record(
     return {
         "messages": [
             {"role": "user", "content": text_desc_q},
-            {"role": "assistant", "content": compressed},
+            {"role": "assistant", "content": synthesized},
         ],
         "metadata": {
             "record_type": "description",
@@ -231,10 +199,9 @@ def make_description_record(
             "visual_question": visual_desc_q,
             "visual_cls_question": visual_cls_q,
             "synthesized_description": synthesized,
-            "compressed_description": compressed,
-            "raw_captions": raw_captions,
+            "grounding_status": grounding_status,
+            "source_urls": [s["url"] for s in sources],
             "image_names": [Path(p).name for p in image_paths],
-            "n_images_used": len(image_paths),
             "generator_model": model_id,
         },
     }
@@ -248,7 +215,7 @@ def make_classification_record(
     task_type: str,
     model_id: str,
     synthesized_description: str,
-    compressed_description: str,
+    grounding_status: str,
 ) -> dict:
     return {
         "messages": [
@@ -262,7 +229,7 @@ def make_classification_record(
             "class_label": clean_cls,
             "task_type": task_type,
             "synthesized_description": synthesized_description,
-            "compressed_description": compressed_description,
+            "grounding_status": grounding_status,
             "generator_model": model_id,
         },
     }
@@ -287,6 +254,7 @@ def push_to_hub(jsonl_path: Path, hub_repo: str) -> None:
                 "class_label": meta.get("class_label"),
                 "task_type": meta.get("task_type"),
                 "record_type": meta.get("record_type"),
+                "grounding_status": meta.get("grounding_status"),
                 "generator_model": meta.get("generator_model"),
             })
 
@@ -339,59 +307,77 @@ def main(args: argparse.Namespace) -> None:
 
     prompts = load_prompts(Path(args.prompts))
     checkpoint = load_checkpoint(output_dir)
-    datasets_cfg = active_datasets(Path(args.config))
+    manifest = load_manifest(Path(args.manifest))
+    images_root = Path(args.images_root)
 
-    print(f"Datasets: {len(datasets_cfg)} active entries from {args.config}")
-    print(f"Model:    {args.model}")
-    print(f"Samples:  {args.n_samples_per_class} per class\n")
+    reference_db = json.loads(Path(args.reference_db).read_text(encoding="utf-8"))
+    entries = reference_db.get("entries", {})
+
+    entries_by_dataset: dict[str, list[tuple[str, dict]]] = defaultdict(list)
+    for key, meta in entries.items():
+        entries_by_dataset[meta["agml_dataset"]].append((key, meta))
+
+    n_classes = sum(len(v) for v in entries_by_dataset.values())
+    print(f"Reference DB: {args.reference_db}  ({n_classes} classes across "
+          f"{len(entries_by_dataset)} datasets)")
+    print(f"Model: {args.model}\n")
 
     llm, tokenizer = load_llm(args.model)
 
     total_written = 0
     t_start = time.perf_counter()
 
-    for ds_cfg in datasets_cfg:
-        agml_name = ds_cfg.agml_name
-        task_type = ds_cfg.task_type
-        dataset_crop = ds_cfg.crop
-
-        print(f"\n=== {agml_name} [{task_type}] ===")
+    for agml_name, class_entries in entries_by_dataset.items():
+        print(f"\n=== {agml_name} ===")
         try:
-            sampled = load_agml_images(agml_name, args.n_samples_per_class, args.seed)
+            images_by_class = load_hf_images_by_class(
+                agml_name, manifest, images_root, n_samples=1, seed=args.seed
+            )
         except Exception as e:
-            print(f"  [error] Could not load {agml_name}: {e}")
-            continue
+            print(f"  [error] Could not load images for {agml_name}: {e}")
+            images_by_class = {}
 
         checkpoint.setdefault(agml_name, {})
 
-        for raw_label, image_paths in sampled.items():
-            crop, clean_cls = parse_class_label(raw_label, dataset_crop)
-            class_key = (
-                f"{clean_cls} ({crop})"
-                if ("___" in raw_label or dataset_crop == "multiple")
-                else clean_cls
-            )
+        for key, meta in class_entries:
+            crop = meta["crop"]
+            clean_cls = meta["class_label"]
+            task_type = meta["task_type"]
+            raw_label = meta.get("raw_label", clean_cls)
+            ref_status = meta.get("status", "no_source_found")
+            sources = meta.get("sources", [])
 
-            if not args.force and checkpoint[agml_name].get(class_key, {}).get("status") == "done":
-                print(f"  [skip] {class_key}")
+            if not args.force and checkpoint[agml_name].get(key, {}).get("status") == "done":
+                print(f"  [skip] {clean_cls}")
                 continue
 
-            print(f"  {class_key}  ({len(image_paths)} images)")
+            image_paths = images_by_class.get(raw_label, [])
+            if image_paths:
+                sample_dir = output_dir / "sample_images" / agml_name
+                sample_dir.mkdir(parents=True, exist_ok=True)
+                sample_path = sample_dir / f"{_class_slug(clean_cls)}.jpg"
+                if not sample_path.exists():
+                    try:
+                        PILImage.open(image_paths[0]).convert("RGB").save(sample_path, "JPEG", quality=85)
+                    except Exception as e:
+                        print(f"  [warn] Could not save sample image for {clean_cls}: {e}")
+
+            if ref_status == "found" and sources:
+                synthesized = run_synthesis_from_sources_pass(
+                    llm, tokenizer, sources, clean_cls, crop, prompts
+                )
+                if synthesized.strip() == NOT_ENOUGH_DETAIL_SENTINEL:
+                    synthesized = ""
+                    grounding_status = "insufficient_visual_detail"
+                else:
+                    grounding_status = "grounded"
+            else:
+                synthesized = ""
+                grounding_status = ref_status  # "no_source_found" or "healthy_skip"
+
+            print(f"  {clean_cls}  [{grounding_status}]  ({len(sources)} sources)")
 
             questions = build_questions(task_type, crop, clean_cls, prompts)
-            images = [PILImage.open(p).convert("RGB") for p in image_paths]
-
-            sample_dir = output_dir / "sample_images" / agml_name
-            sample_dir.mkdir(parents=True, exist_ok=True)
-            sample_path = sample_dir / f"{_class_slug(clean_cls)}.jpg"
-            if not sample_path.exists():
-                images[0].save(sample_path, "JPEG", quality=85)
-
-            raw_captions = run_vision_pass(
-                llm, tokenizer, images, questions["visual_desc"], prompts["no_label_suffix"]
-            )
-            synthesized = run_synthesis_pass(llm, tokenizer, raw_captions, clean_cls, crop, prompts)
-            compressed = run_compression_pass(llm, tokenizer, synthesized, prompts)
             text_cls_q = build_text_cls_question(task_type, crop, synthesized, prompts)
 
             append_jsonl(desc_path, make_description_record(
@@ -399,8 +385,8 @@ def main(args: argparse.Namespace) -> None:
                 visual_desc_q=questions["visual_desc"],
                 visual_cls_q=questions["visual_cls"],
                 synthesized=synthesized,
-                compressed=compressed,
-                raw_captions=raw_captions,
+                sources=sources,
+                grounding_status=grounding_status,
                 image_paths=image_paths,
                 agml_name=agml_name,
                 crop=crop,
@@ -416,17 +402,16 @@ def main(args: argparse.Namespace) -> None:
                 task_type=task_type,
                 model_id=args.model,
                 synthesized_description=synthesized,
-                compressed_description=compressed,
+                grounding_status=grounding_status,
             ))
 
-            checkpoint[agml_name][class_key] = {
+            checkpoint[agml_name][key] = {
                 "status": "done",
                 "crop": crop,
                 "clean_cls": clean_cls,
                 "task_type": task_type,
+                "grounding_status": grounding_status,
                 "synthesized_description": synthesized,
-                "compressed_description": compressed,
-                "raw_captions": raw_captions,
                 "image_paths": image_paths,
                 "visual_desc_question": questions["visual_desc"],
                 "visual_cls_question": questions["visual_cls"],
@@ -435,12 +420,19 @@ def main(args: argparse.Namespace) -> None:
             }
             save_checkpoint(output_dir, checkpoint)
             total_written += 1
-            print(f"    → {synthesized[:80]}...")
-            print(f"    ↓ {compressed}")
+            if synthesized:
+                print(f"    → {synthesized[:80]}...")
+            else:
+                print(f"    → (empty — needs manual fill)")
 
     elapsed = time.perf_counter() - t_start
+    grounded = sum(
+        1 for classes in checkpoint.values() for m in classes.values()
+        if m.get("grounding_status") == "grounded"
+    )
     print(f"\n{'='*60}")
-    print(f"Done: {total_written} classes written in {elapsed:.1f}s")
+    print(f"Done: {total_written} classes written in {elapsed:.1f}s ({grounded} grounded, "
+          f"{total_written - grounded} need manual description)")
     print(f"  Descriptions:   {desc_path}")
     print(f"  Classification: {cls_path}")
 
@@ -455,23 +447,27 @@ def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate synthetic VQA datasets from AgML image classification benchmarks."
+        description="Synthesize grounded VQA datasets from build_reference_db.py's fetched sources."
     )
     parser.add_argument(
         "--model", default="Qwen/Qwen3.6-35B-A3B",
-        help="vLLM-compatible VLM (HuggingFace ID or local path)",
+        help="vLLM-compatible text LLM (HuggingFace ID or local path) — text-only synthesis, no vision needed",
     )
     parser.add_argument(
-        "--config", default="src/config/datasets.yaml",
-        help="Path to datasets.yaml registry",
+        "--reference_db", default="outputs/data_generation/reference_db.json",
+        help="Path to reference_db.json produced by build_reference_db.py (run that first)",
     )
     parser.add_argument(
         "--prompts", default="src/config/prompts.yaml",
         help="Path to prompts.yaml",
     )
     parser.add_argument(
-        "--n_samples_per_class", type=int, default=10,
-        help="Number of images to sample per class (default: 10)",
+        "--manifest", default="dataset/selected_images.json",
+        help="Path to the HF download manifest (from download-datasets)",
+    )
+    parser.add_argument(
+        "--images_root", default="dataset/images",
+        help="Local cache directory for materialized images from the manifest",
     )
     parser.add_argument(
         "--output_dir", default="outputs/data_generation/",

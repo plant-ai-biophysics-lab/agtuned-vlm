@@ -6,6 +6,23 @@ visual_description_weed: "Can you describe visually the plant or weed exhibited 
 visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 visual_classification_weed: "What plant or weed is exhibited in this image?"
 
+# ── Stage 0 data generation (src/legacy/data_generation) ────────────────────
+# Text-only question templates for agml_descriptions.jsonl / agml_classification.jsonl
+text_description_disease: "Can you describe visually the {cls} of a {crop}?"
+text_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this description of a {crop}?\n\nDescription: {description}"
+text_description_weed: "Can you describe visually the {species}?"
+text_classification_weed: "What plant or weed is exhibited in this description?\n\nDescription: {description}"
+
+# Synthesis is grounded ONLY in fetched reference sources (Wikipedia + live
+# web search, see build_reference_db.py) — no vision-captioning pass, so
+# there's no photograph-consensus step to synthesize across; this instead
+# synthesizes across however many source excerpts were found for the class.
+# The NOT_ENOUGH_VISUAL_DETAIL sentinel lets the pipeline tell "a source
+# exists but says nothing about visual appearance" apart from "no source
+# found at all" — both end up as an empty description to fill in manually,
+# but for different reasons worth distinguishing in the data.
+synthesis_from_sources: "You are given {n} excerpts about {context}, gathered from external reference sources (encyclopedia entries and web pages). Using ONLY the visual, observable details mentioned in these excerpts, write one clear 2-3 sentence description of its visual appearance (color, texture, shape, pattern, size, location on the plant). Ignore any information that is not about visual appearance, such as treatment, management, causal organism, geographic distribution, or economic impact. Do not name or repeat the disease, pest, species, or class label — describe only what can be visually observed. If the excerpts do not contain enough visual detail to write a description, respond with exactly: NOT_ENOUGH_VISUAL_DETAIL\n\nExcerpts:\n{numbered_sources}"
+
 # Description-augmented classification — prepends a reference description to the image question
 desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: {question}\n\nAnswer in one to two sentences. Clearly state the class name in your response."
 
