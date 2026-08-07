@@ -220,6 +220,43 @@ def resolve_mm_root(model):
     raise AttributeError(f"Could not locate vision encoder. Top-level: {available}")
 
 
+def resolve_heuristic_pre_module(mm_root) -> tuple[torch.nn.Module, str | None, str]:
+    """Pick the heuristic (no layer_selections.yaml entry) pre-projector hook
+    module for a resolved mm_root. Returns (module, cache_layer_path, description).
+
+    Default is mm_root.vision_tower's own output — correct for architectures
+    like Gemma4, whose vision_tower ends on genuine vision features with a
+    separate top-level projector afterward. cache_layer_path is None here,
+    same as before this function existed, so existing Gemma-style embedding
+    caches stay valid.
+
+    Qwen-style towers are different: root.visual (aliased to vision_tower by
+    resolve_mm_root) has both a `.blocks` (the actual transformer stack) and
+    a `.merger` (projects into the LM's embedding space) as attributes on the
+    SAME module — so hooking vision_tower's own output means hooking
+    whatever ran last inside it, which for Qwen is the merger's own final
+    Linear layer, not pre-projector vision features at all (confirmed via
+    check_vision_towers.py: both Qwen3.5-9B/27B's heuristic hook landed on
+    `merger.linear_fc2`, a raw unnormalized Linear). Auto-detected structurally
+    (has both `.blocks` and `.merger`) rather than by matching "qwen" in the
+    model name, so this also covers any future/other model sharing the same
+    tower shape without needing a name-based special case. cache_layer_path is
+    a real, distinct string here — deliberately, so any embeddings already
+    cached under the old (wrong) merger-based heuristic get invalidated
+    instead of silently reused.
+
+    A manual layer_selections.yaml entry always overrides this — this
+    function only runs when there isn't one."""
+    vision_tower = mm_root.vision_tower
+    if hasattr(vision_tower, "blocks") and hasattr(vision_tower, "merger"):
+        blocks = vision_tower.blocks
+        idx = len(blocks) - 1
+        path = f"vision_tower.blocks.{idx}"
+        desc = f"{path} (auto: Qwen-style merger detected in vision_tower — using the last pre-merger transformer block instead of the merger's own output)"
+        return blocks[idx], path, desc
+    return vision_tower, None, "vision_tower"
+
+
 def extract_vlm_embeddings(
     samples, processor, model, hook_module: torch.nn.Module, desc: str = "VLM embeddings"
 ) -> tuple[np.ndarray, list[str]]:
@@ -1523,11 +1560,10 @@ def main(args):
             pre_module = vlm.get_submodule(pre_layer_path)
             print(f"  Pre-projector (from layer_selections.yaml): {pre_layer_path}")
         else:
-            pre_layer_path = None
-            pre_module = mm_root.vision_tower
-            print(f"  Pre-projector (heuristic fallback): vision_tower")
+            pre_module, pre_layer_path, pre_desc = resolve_heuristic_pre_module(mm_root)
+            print(f"  Pre-projector (heuristic fallback): {pre_desc}")
             if not layer_selections:
-                print(f"  Tip: run 'streamlit run app/layer_explorer.py' to pick exact layers.")
+                print(f"  Tip: add an entry to {_LAYER_SELECTIONS_PATH} to pick exact layers.")
 
         # Resolve post-projector hook module
         has_postproj = False

@@ -37,7 +37,7 @@ import argparse
 import torch.nn as nn
 
 from src.linear_probe.probe import (
-    load_gemma4, resolve_mm_root, resolve_projector, unload,
+    load_gemma4, resolve_mm_root, resolve_projector, resolve_heuristic_pre_module, unload,
     _load_layer_selections, _LAYER_SELECTIONS_PATH,
 )
 
@@ -107,6 +107,12 @@ def check_model(model_id: str, device: str, quantize: str | None = None,
         result["last_leaf_type"] = leaf_type
         result["last_leaf_out"] = leaf_out
 
+        vision_tower = mm_root.vision_tower
+        if hasattr(vision_tower, "blocks"):
+            result["n_blocks"] = len(vision_tower.blocks)
+        _, _, heuristic_desc = resolve_heuristic_pre_module(mm_root)
+        result["heuristic_pre_desc"] = heuristic_desc
+
         proj, proj_name = resolve_projector(mm_root)
         result["has_postproj"] = proj is not None
         result["postproj_name"] = proj_name
@@ -174,9 +180,13 @@ def print_report(results: list[dict]) -> None:
     no_manual = [r for r in ok if not r["has_manual_layer_selection"]]
     if no_manual:
         print(f"\n{len(no_manual)} model(s) have no entry in {_LAYER_SELECTIONS_PATH} — "
-              f"they'll use the heuristic fallback (vision_tower's own final output), "
-              f"which is what the paper's setup describes, so this is expected/fine "
-              f"unless you specifically want a non-final layer for one of them.")
+              f"they'll use the heuristic fallback described per-model below "
+              f"(vision_tower's own final output for most architectures, or an "
+              f"auto-selected pre-merger block for Qwen-style towers) unless you "
+              f"want a specific different layer for one of them.")
+        for r in no_manual:
+            print(f"  - {r['model_id']}: {r['heuristic_pre_desc']}"
+                  + (f"  [{r['n_blocks']} blocks total]" if "n_blocks" in r else ""))
 
 
 def main() -> None:
