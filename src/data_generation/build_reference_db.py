@@ -71,6 +71,41 @@ def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
     return f"{_slug(agml_dataset)}__{_slug(class_label)}__{_slug(crop)}"
 
 
+_PAREN_RE = re.compile(r"^(.*?)\s*\(([^)]+)\)\s*$")
+
+
+def _match_terms(class_label: str) -> list[str]:
+    """Terms to try matching against fetched text, in priority order.
+
+    Most labels are used as-is. But a label like "Datura (Datura stramonium)"
+    or "Neem (Azadirachta indica)" — common name plus scientific name in
+    parens — almost never appears verbatim in real text; a page about neem is
+    overwhelmingly likely to say "Neem" or "Azadirachta indica" on its own,
+    not the exact combined string. Splitting into candidates and accepting a
+    match on either recovers those without weakening the gate for ordinary
+    single-part labels (still an exact-ish substring match, just tried
+    against more candidate strings)."""
+    m = _PAREN_RE.match(class_label)
+    if not m:
+        return [class_label]
+    common, scientific = m.group(1).strip(), m.group(2).strip()
+    terms = [class_label]
+    if common:
+        terms.append(common)
+    if scientific:
+        terms.append(scientific)
+    return terms
+
+
+def _find_match(text: str, terms: list[str]) -> str | None:
+    """First term (in priority order) that appears in text, or None."""
+    text_lower = text.lower()
+    for term in terms:
+        if term.lower() in text_lower:
+            return term
+    return None
+
+
 def _excerpt_around_match(text: str, term: str, max_len: int) -> str:
     """First max_len chars starting a bit before term's first occurrence, so
     the relevance match that got this source accepted is actually inside the
@@ -112,6 +147,7 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
     if _is_healthy(class_label):
         return []
     query = _search_query(class_label, crop, task_type)
+    terms = _match_terms(class_label)
     sources = []
     try:
         resp = _wiki_get(
@@ -133,7 +169,10 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
                     continue
                 pages = ex.json().get("query", {}).get("pages", {})
                 extract = next(iter(pages.values())).get("extract", "").strip()
-                if not extract or class_label.lower() not in extract.lower():
+                if not extract:
+                    continue
+                matched = _find_match(extract, terms)
+                if matched is None:
                     continue  # relevance gate — same rule as _fetch_web_search:
                               # a page ranking well for the query doesn't mean
                               # it's actually about this specific class
@@ -143,7 +182,7 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
                     "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
                     "type": "encyclopedia",
                     "accessed_date": str(date.today()),
-                    "excerpt": _excerpt_around_match(extract, class_label, EXCERPT_MAX),
+                    "excerpt": _excerpt_around_match(extract, matched, EXCERPT_MAX),
                     "search_query": query,
                 })
             except Exception as e:
@@ -161,6 +200,7 @@ def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]
     ranking well for the query doesn't guarantee it's actually about this
     specific class."""
     query = _search_query(class_label, crop, task_type)
+    terms = _match_terms(class_label)
     sources: list[dict] = []
     try:
         hits = DDGS().text(query, max_results=WEB_SEARCH_MAX_RESULTS)
@@ -168,7 +208,6 @@ def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]
         log.debug("Web search '%s': %s", query, e)
         return sources
 
-    label_lower = class_label.lower()
     for hit in hits:
         if len(sources) >= WEB_SEARCH_KEEP:
             break
@@ -180,7 +219,10 @@ def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]
             if not downloaded:
                 continue
             text = trafilatura.extract(downloaded)
-            if not text or label_lower not in text.lower():
+            if not text:
+                continue
+            matched = _find_match(text, terms)
+            if matched is None:
                 continue  # relevance gate — page must actually mention the class
             sources.append({
                 "organization": "Web search",
@@ -188,7 +230,7 @@ def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]
                 "url": url,
                 "type": "web_page",
                 "accessed_date": str(date.today()),
-                "excerpt": _excerpt_around_match(text, class_label, EXCERPT_MAX),
+                "excerpt": _excerpt_around_match(text, matched, EXCERPT_MAX),
                 "search_query": query,
             })
         except Exception as e:
@@ -230,7 +272,8 @@ def main(args: argparse.Namespace) -> None:
     entries = dict(existing_entries)
 
     for key, meta in ProgressBar(list(seen.items()), desc="Building reference DB"):
-        if args.skip_existing and key in existing_entries:
+        prior_status = existing_entries.get(key, {}).get("status")
+        if args.skip_existing and key in existing_entries and prior_status != "no_source_found":
             print(f"  [skip] {meta['class_label']} ({meta['crop']})")
             continue
 
@@ -278,6 +321,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--skip_existing", action="store_true",
-        help="Skip entries already present in an existing reference_db.json",
+        help="Skip entries already present in an existing reference_db.json — "
+             "except ones with status no_source_found, which are always "
+             "retried (a rerun is how you recover from a matching-logic fix "
+             "or a search that failed transiently, not just fill in gaps).",
     )
     main(parser.parse_args())

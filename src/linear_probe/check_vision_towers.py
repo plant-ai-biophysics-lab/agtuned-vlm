@@ -34,10 +34,46 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
 
+import torch.nn as nn
+
 from src.linear_probe.probe import (
     load_gemma4, resolve_mm_root, resolve_projector, unload,
     _load_layer_selections, _LAYER_SELECTIONS_PATH,
 )
+
+
+def _out_shape(module: nn.Module) -> str:
+    """Static output shape from weight attributes — no forward pass needed,
+    same approach the (now-removed) layer_explorer.py app used."""
+    if isinstance(module, nn.Linear):
+        return str(module.out_features)
+    if isinstance(module, nn.Conv2d):
+        return f"C={module.out_channels}"
+    if isinstance(module, nn.Embedding):
+        return str(module.embedding_dim)
+    if isinstance(module, nn.LayerNorm):
+        return str(tuple(module.normalized_shape))
+    if isinstance(module, (nn.GroupNorm, nn.BatchNorm1d, nn.BatchNorm2d)):
+        return f"C={module.num_features if hasattr(module, 'num_features') else module.num_channels}"
+    if isinstance(module, nn.MultiheadAttention):
+        return str(module.embed_dim)
+    return "—"
+
+
+def _last_leaf(vision_tower: nn.Module) -> tuple[str, str, str]:
+    """(name, type, out_shape) of the last leaf submodule (no children) inside
+    vision_tower, via depth-first traversal — an approximation, without a real
+    forward pass, of what a forward hook on vision_tower itself is actually
+    capturing. Useful for spot-checking whether two same-family models (e.g.
+    a 9B and 27B variant) end their vision tower on comparably-shaped,
+    comparably-normalized output, or something structurally different."""
+    last_name, last_mod = None, None
+    for name, sub in vision_tower.named_modules():
+        if name and next(sub.children(), None) is None:
+            last_name, last_mod = name, sub
+    if last_mod is None:
+        return "(no leaf found)", type(vision_tower).__name__, "—"
+    return last_name, type(last_mod).__name__, _out_shape(last_mod)
 
 
 def check_model(model_id: str, device: str, quantize: str | None = None,
@@ -66,6 +102,10 @@ def check_model(model_id: str, device: str, quantize: str | None = None,
         result["ok"] = True
         result["vision_attr"] = "vision_tower" if hasattr(mm_root, "vision_tower") else "?"
         result["vision_tower_type"] = type(mm_root.vision_tower).__name__
+        leaf_name, leaf_type, leaf_out = _last_leaf(mm_root.vision_tower)
+        result["last_leaf_name"] = leaf_name
+        result["last_leaf_type"] = leaf_type
+        result["last_leaf_out"] = leaf_out
 
         proj, proj_name = resolve_projector(mm_root)
         result["has_postproj"] = proj is not None
@@ -88,18 +128,19 @@ def check_model(model_id: str, device: str, quantize: str | None = None,
 
 
 def print_report(results: list[dict]) -> None:
-    print(f"\n{'='*78}")
-    print(f"{'Model':<40} {'Pre-proj':<10} {'Post-proj':<12} {'Manual sel.':<12}")
-    print("-" * 78)
+    print(f"\n{'='*110}")
+    print(f"{'Model':<40} {'Pre-proj':<10} {'Post-proj':<12} {'Manual sel.':<12} {'Last leaf (type, out)':<30}")
+    print("-" * 110)
     for r in results:
         if r["ok"]:
             pre = f"OK ({r['vision_tower_type']})"
             post = r["postproj_name"] if r["has_postproj"] else "not found"
             manual = "yes" if r["has_manual_layer_selection"] else "heuristic"
-            print(f"{r['model_id']:<40} {pre:<10} {post:<12} {manual:<12}")
+            leaf = f"{r['last_leaf_name']}: {r['last_leaf_type']} ({r['last_leaf_out']})"
+            print(f"{r['model_id']:<40} {pre:<10} {post:<12} {manual:<12} {leaf:<30}")
         else:
             print(f"{r['model_id']:<40} FAILED ({r['stage']}): {r['error'][:60]}")
-    print("=" * 78)
+    print("=" * 110)
 
     ok = [r for r in results if r["ok"]]
     failed_resolve = [r for r in results if not r["ok"] and r["stage"] == "resolve_mm_root"]
