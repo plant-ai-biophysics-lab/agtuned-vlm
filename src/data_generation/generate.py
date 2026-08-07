@@ -9,20 +9,24 @@ description-writing output — that task and its consumers
 assessment) are being revisited separately; this script only produces what
 the classification task needs.
 
-No vision-captioning pass — this reads ONLY reference_db.json (Wikipedia +
-live web search excerpts fetched by build_reference_db.py, which must be run
-first) and synthesizes each class's description purely from that fetched
-text, in a single LLM pass per class (no separate compression pass).
+Two grounding sources per class, combined:
+  1. Web-source synthesis — reads reference_db.json (Wikipedia + live web
+     search excerpts fetched by build_reference_db.py, which must be run
+     first) and synthesizes a description purely from that fetched text.
+  2. Vision-based synthesis — samples up to --n_vision_samples images for
+     the class from the HF manifest, runs the same multimodal model as a
+     captioner (one caption per image, then a consensus pass across them).
 
-A class with no usable source (build_reference_db.py's status is
-no_source_found or healthy_skip, or the synthesis pass reports
-NOT_ENOUGH_VISUAL_DETAIL) still gets a record, but with an empty
-description and that status recorded — meant to be filled in by hand later,
-not silently dropped or backfilled with a model-generated guess.
+If both exist, a final pass merges them into one description. If only one
+exists (most commonly: web source came up empty and vision fills in behind
+it), that one is used as-is, no merge pass needed. Every stage's output is
+kept in the record's metadata (web_description / vision_description /
+synthesized_description) — not just the final merged text — so you can see
+which source actually produced what.
 
-One representative image per class is still sampled from the HF manifest for
-the record's image_names/sample image, but it plays no role in generating
-the description text.
+A class with nothing from either source still gets a record, but with an
+empty description and grounding_status="no_source_found" — meant to be
+filled in by hand later, not silently dropped or backfilled with a guess.
 
 Checkpointing is done per dataset/class so runs are safely resumable.
 """
@@ -45,7 +49,9 @@ from src.common.dataset_config import load_manifest, load_hf_samples
 from src.common.io import append_jsonl, load_prompts
 from src.common.progress import ProgressBar
 
+CAPTION_PARAMS = SamplingParams(temperature=0.2, max_tokens=256, repetition_penalty=1.1)
 SYNTHESIS_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.05)
+MERGE_PARAMS = SamplingParams(temperature=0.0, max_tokens=384, repetition_penalty=1.05)
 
 DISEASE_TASK_TYPES = {"disease", "pest_damage"}
 NOT_ENOUGH_DETAIL_SENTINEL = "NOT_ENOUGH_VISUAL_DETAIL"
@@ -93,6 +99,22 @@ def _apply_chat_template(tokenizer, prompt: str) -> str:
         )
 
 
+def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str) -> dict:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": question},
+            ],
+        }
+    ]
+    text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    return {"prompt": text, "multi_modal_data": {"image": image}}
+
+
 def load_hf_images_by_class(
     agml_name: str, manifest: dict, images_root: Path, n_samples: int, seed: int = 42,
 ) -> dict[str, list[str]]:
@@ -124,6 +146,12 @@ def load_llm(model_id: str) -> tuple[LLM, object]:
         max_model_len=16384,
         gpu_memory_utilization=0.9,
         max_num_seqs=64,
+        limit_mm_per_prompt={"image": 1},  # this model doubles as the vision
+                                            # captioner (see run_vision_caption_pass)
+                                            # — text-only prompts elsewhere in
+                                            # this file are unaffected, vLLM only
+                                            # engages the image path when a
+                                            # prompt actually carries multi_modal_data
     )
     tokenizer = llm.get_tokenizer()
     return llm, tokenizer
@@ -152,6 +180,62 @@ def run_synthesis_from_sources_pass(
     return _clean_response(outputs[0].outputs[0].text)
 
 
+def run_vision_caption_pass(
+    llm: LLM,
+    tokenizer,
+    images: list[PILImage.Image],
+    cls: str,
+    crop: str,
+    prompts: dict[str, str],
+) -> list[str]:
+    """One caption per image, batched in a single llm.generate() call."""
+    question = prompts["vision_caption_question"].format(cls=cls, crop=crop)
+    question += prompts["vision_caption_no_label_suffix"]
+    mm_prompts = [build_multimodal_prompt(tokenizer, img, question) for img in images]
+    outputs = llm.generate(mm_prompts, sampling_params=CAPTION_PARAMS)
+    return [_clean_response(o.outputs[0].text) for o in outputs]
+
+
+def run_vision_synthesis_pass(
+    llm: LLM,
+    tokenizer,
+    raw_captions: list[str],
+    cls: str,
+    crop: str,
+    prompts: dict[str, str],
+) -> str:
+    numbered = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(raw_captions))
+    synthesis_prompt = prompts["vision_synthesis_from_captions"].format(
+        n=len(raw_captions),
+        crop=crop,
+        class_label=cls,
+        numbered_captions=numbered,
+    )
+    prompt = _apply_chat_template(tokenizer, synthesis_prompt)
+    outputs = llm.generate([prompt], sampling_params=SYNTHESIS_PARAMS)
+    return _clean_response(outputs[0].outputs[0].text)
+
+
+def run_merge_pass(
+    llm: LLM,
+    tokenizer,
+    web_description: str,
+    vision_description: str,
+    cls: str,
+    crop: str,
+    prompts: dict[str, str],
+) -> str:
+    merge_prompt = prompts["merge_web_and_vision_description"].format(
+        crop=crop,
+        class_label=cls,
+        web_description=web_description,
+        vision_description=vision_description,
+    )
+    prompt = _apply_chat_template(tokenizer, merge_prompt)
+    outputs = llm.generate([prompt], sampling_params=MERGE_PARAMS)
+    return _clean_response(outputs[0].outputs[0].text)
+
+
 def load_checkpoint(output_dir: Path) -> dict:
     path = output_dir / "checkpoint.json"
     return json.loads(path.read_text()) if path.exists() else {}
@@ -168,7 +252,9 @@ def make_classification_record(
     crop: str,
     task_type: str,
     model_id: str,
-    synthesized_description: str,
+    final_description: str,
+    web_description: str,
+    vision_description: str,
     grounding_status: str,
     sources: list[dict],
     image_paths: list[str],
@@ -184,7 +270,9 @@ def make_classification_record(
             "crop": crop,
             "class_label": clean_cls,
             "task_type": task_type,
-            "synthesized_description": synthesized_description,
+            "synthesized_description": final_description,
+            "web_description": web_description,
+            "vision_description": vision_description,
             "grounding_status": grounding_status,
             "source_urls": [s["url"] for s in sources],
             "image_names": [Path(p).name for p in image_paths],
@@ -277,7 +365,8 @@ def main(args: argparse.Namespace) -> None:
     n_classes = sum(len(v) for v in entries_by_dataset.values())
     print(f"Reference DB: {args.reference_db}  ({n_classes} classes across "
           f"{len(entries_by_dataset)} datasets)")
-    print(f"Model: {args.model}\n")
+    print(f"Model: {args.model}  (also used as the vision captioner)")
+    print(f"Vision samples/class: {args.n_vision_samples}\n")
 
     llm, tokenizer = load_llm(args.model)
 
@@ -288,7 +377,7 @@ def main(args: argparse.Namespace) -> None:
         print(f"\n=== {agml_name} ===")
         try:
             images_by_class = load_hf_images_by_class(
-                agml_name, manifest, images_root, n_samples=1, seed=args.seed
+                agml_name, manifest, images_root, n_samples=args.n_vision_samples, seed=args.seed
             )
         except Exception as e:
             print(f"  [error] Could not load images for {agml_name}: {e}")
@@ -303,6 +392,7 @@ def main(args: argparse.Namespace) -> None:
             raw_label = meta.get("raw_label", clean_cls)
             ref_status = meta.get("status", "no_source_found")
             sources = meta.get("sources", [])
+            is_healthy_class = ref_status == "healthy_skip"
 
             if not args.force and checkpoint[agml_name].get(key, {}).get("status") == "done":
                 print(f"  [skip] {clean_cls}")
@@ -319,22 +409,50 @@ def main(args: argparse.Namespace) -> None:
                     except Exception as e:
                         print(f"  [warn] Could not save sample image for {clean_cls}: {e}")
 
-            if ref_status == "found" and sources:
-                synthesized = run_synthesis_from_sources_pass(
+            # ── Stage A: web-source synthesis ───────────────────────────────
+            web_description = ""
+            if not is_healthy_class and ref_status == "found" and sources:
+                web_description = run_synthesis_from_sources_pass(
                     llm, tokenizer, sources, clean_cls, crop, prompts
                 )
-                if synthesized.strip() == NOT_ENOUGH_DETAIL_SENTINEL:
-                    synthesized = ""
-                    grounding_status = "insufficient_visual_detail"
-                else:
-                    grounding_status = "grounded"
+                if web_description.strip() == NOT_ENOUGH_DETAIL_SENTINEL:
+                    web_description = ""
+
+            # ── Stage B: vision-based synthesis (fallback / supplement) ─────
+            vision_description = ""
+            if not is_healthy_class and image_paths:
+                try:
+                    images = [PILImage.open(p).convert("RGB") for p in image_paths]
+                    raw_captions = run_vision_caption_pass(llm, tokenizer, images, clean_cls, crop, prompts)
+                    vision_description = run_vision_synthesis_pass(
+                        llm, tokenizer, raw_captions, clean_cls, crop, prompts
+                    )
+                except Exception as e:
+                    print(f"  [warn] Vision captioning failed for {clean_cls}: {e}")
+
+            # ── Stage C: merge (only when both stages produced something) ───
+            if is_healthy_class:
+                final_description = ""
+                grounding_status = "healthy_skip"
+            elif web_description and vision_description:
+                final_description = run_merge_pass(
+                    llm, tokenizer, web_description, vision_description, clean_cls, crop, prompts
+                )
+                grounding_status = "grounded_web_and_vision"
+            elif vision_description:
+                final_description = vision_description
+                grounding_status = "grounded_vision_only"
+            elif web_description:
+                final_description = web_description
+                grounding_status = "grounded_web_only"
             else:
-                synthesized = ""
-                grounding_status = ref_status  # "no_source_found" or "healthy_skip"
+                final_description = ""
+                grounding_status = "no_source_found"
 
-            print(f"  {clean_cls}  [{grounding_status}]  ({len(sources)} sources)")
+            print(f"  {clean_cls}  [{grounding_status}]  "
+                  f"({len(sources)} sources, {len(image_paths)} images)")
 
-            text_cls_q = build_text_cls_question(task_type, crop, synthesized, prompts)
+            text_cls_q = build_text_cls_question(task_type, crop, final_description, prompts)
 
             append_jsonl(cls_path, make_classification_record(
                 text_cls_q=text_cls_q,
@@ -343,7 +461,9 @@ def main(args: argparse.Namespace) -> None:
                 crop=crop,
                 task_type=task_type,
                 model_id=args.model,
-                synthesized_description=synthesized,
+                final_description=final_description,
+                web_description=web_description,
+                vision_description=vision_description,
                 grounding_status=grounding_status,
                 sources=sources,
                 image_paths=image_paths,
@@ -355,25 +475,28 @@ def main(args: argparse.Namespace) -> None:
                 "clean_cls": clean_cls,
                 "task_type": task_type,
                 "grounding_status": grounding_status,
-                "synthesized_description": synthesized,
+                "synthesized_description": final_description,
+                "web_description": web_description,
+                "vision_description": vision_description,
                 "image_paths": image_paths,
                 "text_cls_question": text_cls_q,
             }
             save_checkpoint(output_dir, checkpoint)
             total_written += 1
-            if synthesized:
-                print(f"    → {synthesized[:80]}...")
+            if final_description:
+                print(f"    → {final_description[:80]}...")
             else:
                 print(f"    → (empty — needs manual fill)")
 
     elapsed = time.perf_counter() - t_start
-    grounded = sum(
-        1 for classes in checkpoint.values() for m in classes.values()
-        if m.get("grounding_status") == "grounded"
-    )
+    by_status: dict[str, int] = defaultdict(int)
+    for classes in checkpoint.values():
+        for m in classes.values():
+            by_status[m.get("grounding_status", "unknown")] += 1
     print(f"\n{'='*60}")
-    print(f"Done: {total_written} classes written in {elapsed:.1f}s ({grounded} grounded, "
-          f"{total_written - grounded} need manual description)")
+    print(f"Done: {total_written} classes written in {elapsed:.1f}s")
+    for status, n in sorted(by_status.items(), key=lambda x: -x[1]):
+        print(f"  {status}: {n}")
     print(f"  Classification: {cls_path}")
 
     if args.hub_repo_classification:
@@ -383,11 +506,13 @@ def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Synthesize grounded VQA datasets from build_reference_db.py's fetched sources."
+        description="Synthesize grounded VQA datasets from build_reference_db.py's fetched "
+                     "sources, backed up by vision-based captioning when web sources are thin."
     )
     parser.add_argument(
-        "--model", default="Qwen/Qwen3.6-35B-A3B",
-        help="vLLM-compatible text LLM (HuggingFace ID or local path) — text-only synthesis, no vision needed",
+        "--model", default="google/gemma-4-26B-A4B-it",
+        help="vLLM-compatible multimodal model (HuggingFace ID or local path) — used for "
+             "both the text-only synthesis/merge passes and the vision captioning pass",
     )
     parser.add_argument(
         "--reference_db", default="outputs/data_generation/reference_db.json",
@@ -404,6 +529,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--images_root", default="dataset/images",
         help="Local cache directory for materialized images from the manifest",
+    )
+    parser.add_argument(
+        "--n_vision_samples", type=int, default=5,
+        help="Images per class to run through the vision captioning pass (default: 5)",
     )
     parser.add_argument(
         "--output_dir", default="outputs/data_generation/",

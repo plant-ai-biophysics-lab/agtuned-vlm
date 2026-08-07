@@ -50,9 +50,19 @@ uv run python main.py data-gen \
   --output_dir   outputs/data_generation/
 ```
 
-Each record's `metadata.grounding_status` is one of `grounded` / `no_source_found` / `healthy_skip` / `insufficient_visual_detail` — use it to find classes with an empty description that need a manual fill.
+Descriptions are grounded in up to two sources per class, combined: the web sources from Step 1, and a vision pass that samples `--n_vision_samples` images (default 5) per class and captions them with the same model. Each record's `metadata.grounding_status` says which: `grounded_web_and_vision` (both, merged) / `grounded_vision_only` / `grounded_web_only` / `healthy_skip` / `no_source_found` (neither — empty description, needs a manual fill). The record also keeps `web_description` and `vision_description` separately, not just the final merged one.
 
 Add `--force` to regenerate all classes from scratch. Progress is checkpointed (`checkpoint.json` in `--output_dir`) so re-runs skip completed classes.
+
+## Committing the result
+
+`--output_dir` defaults to `outputs/data_generation/`, which is gitignored (`/outputs`). `dataset/agml_classification.jsonl` is the committed copy everyone else actually uses — after a real run, copy the fresh file over and commit it:
+
+```bash
+cp outputs/data_generation/agml_classification.jsonl dataset/agml_classification.jsonl
+git add dataset/agml_classification.jsonl
+git commit -m "Regenerate agml_classification.jsonl"
+```
 
 ## Browsing the output
 

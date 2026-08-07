@@ -22,6 +22,12 @@ class DatasetConfig:
     skip_description: bool = False
     notes: str = ""
     class_overrides: dict = None  # {clean_class_label: task_type}
+    class_aliases: dict = None  # {clean_class_label: [alt_name, ...]} — alternate
+                                 # names (common/scientific/standard spelling) for
+                                 # classes whose raw label is a poor search term
+                                 # (regional/vernacular name, dataset-internal code,
+                                 # etc.). Opt-in, empty by default; see
+                                 # effective_search_terms().
     hf_config: Optional[str] = None  # Project-AgML HF dataset config/split-group, e.g. "raw" vs "augmented"
 
     @property
@@ -38,6 +44,19 @@ class DatasetConfig:
             if class_label in self.class_overrides:
                 return self.class_overrides[class_label]
         return self.task_type
+
+    def effective_search_terms(self, class_label: str) -> list[str]:
+        """class_label plus any curated alternate names for it, in priority
+        order (class_label first, then aliases as configured). Aliases are
+        opt-in per class via class_aliases in datasets.yaml — most classes
+        have none and this just returns [class_label]."""
+        terms = [class_label]
+        if self.class_aliases and class_label in self.class_aliases:
+            aliases = self.class_aliases[class_label]
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            terms.extend(a for a in aliases if a and a not in terms)
+        return terms
 
 
 def load_datasets(config_path: Path) -> list[DatasetConfig]:
@@ -56,6 +75,7 @@ def load_datasets(config_path: Path) -> list[DatasetConfig]:
             skip_description=d.get("skip_description", False),
             notes=d.get("notes", ""),
             class_overrides=d.get("class_overrides", {}),
+            class_aliases=d.get("class_aliases", {}),
             hf_config=d.get("hf_config"),
         ))
     return result

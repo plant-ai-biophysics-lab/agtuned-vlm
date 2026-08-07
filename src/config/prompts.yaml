@@ -13,15 +13,27 @@ text_classification_disease: "What disease, pest, damage type, or other stress, 
 text_description_weed: "Can you describe visually the {species}?"
 text_classification_weed: "What plant or weed is exhibited in this description?\n\nDescription: {description}"
 
-# Synthesis is grounded ONLY in fetched reference sources (Wikipedia + live
-# web search, see build_reference_db.py) — no vision-captioning pass, so
-# there's no photograph-consensus step to synthesize across; this instead
-# synthesizes across however many source excerpts were found for the class.
-# The NOT_ENOUGH_VISUAL_DETAIL sentinel lets the pipeline tell "a source
-# exists but says nothing about visual appearance" apart from "no source
-# found at all" — both end up as an empty description to fill in manually,
-# but for different reasons worth distinguishing in the data.
+# Web-source synthesis: grounded ONLY in fetched reference sources (Wikipedia
+# + live web search, see build_reference_db.py) — synthesizes across however
+# many source excerpts were found for the class. The NOT_ENOUGH_VISUAL_DETAIL
+# sentinel lets the pipeline tell "a source exists but says nothing about
+# visual appearance" apart from "no source found at all" — both fall through
+# to the vision-based description below rather than being left empty.
 synthesis_from_sources: "You are writing a visual description for crop: {crop}, ground-truth class: {class_label}. This description will later be shown to a separate model, without the class label, which must identify the class from the description alone — so your job is to supplement that assessment prompt with visual detail, not answer it. Do not name or repeat the class label ({class_label}), or any synonym, causal organism, or scientific name that would give the answer away.\n\nYou are given {n} excerpts about {class_label}, gathered from external reference sources (encyclopedia entries and web pages). Using ONLY the visual, observable details mentioned in these excerpts, write one clear 2-3 sentence description of its visual appearance (color, texture, shape, pattern, size, location on the plant). Ignore any information that is not about visual appearance, such as treatment, management, causal organism, geographic distribution, or economic impact. If the excerpts do not contain enough visual detail to write a description, respond with exactly: NOT_ENOUGH_VISUAL_DETAIL\n\nExcerpts:\n{numbered_sources}"
+
+# Vision-based fallback/supplement — used when web sources are thin or
+# missing (and merged with the web description when both exist). Per-image
+# captioning question + a no-label suffix (same "don't leak the answer"
+# principle as synthesis_from_sources), then a consensus pass across however
+# many images actually loaded for the class.
+vision_caption_question: "Can you describe visually the {cls} of a {crop}?"
+vision_caption_no_label_suffix: " Focus only on visual characteristics you can observe (color, texture, shape, pattern, size, location on plant). Do not name or repeat the disease, pest, species, or class label in your response."
+vision_synthesis_from_captions: "You are given {n} visual descriptions of {class_label} on {crop}, each written from a separate photograph. Synthesize these into one clear, representative 2-3 sentence description that captures the consensus visual features (color, texture, shape, pattern, size, location on plant). Ignore noise or one-off observations. Do not name or repeat the disease, pest, species, or class label ({class_label}) — describe only what can be visually observed.\n\nDescriptions:\n{numbered_captions}"
+
+# Merge step — only runs when BOTH a web-source description and a
+# vision-based description exist for the class; combines them into one
+# final description, same label-leakage constraint as the other two passes.
+merge_web_and_vision_description: "You are given two independently written visual descriptions of the same thing — crop: {crop}, ground-truth class: {class_label}. One is grounded in external reference sources (encyclopedia/web text); the other is grounded in actual photographs of it. Combine them into a single clear 2-3 sentence description that keeps only the visual details both sources support or that are directly observable in the photograph-based description — if the two disagree on a visual detail, prefer what the photograph-based description says. Do not name or repeat the class label ({class_label}), or any synonym, causal organism, or scientific name that would give the answer away.\n\nSource-grounded description:\n{web_description}\n\nPhotograph-grounded description:\n{vision_description}"
 
 # Description-augmented classification — prepends a reference description to the image question
 desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: {question}\n\nAnswer in one to two sentences. Clearly state the class name in your response."

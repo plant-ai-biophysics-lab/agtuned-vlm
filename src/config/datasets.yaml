@@ -552,6 +552,39 @@ datasets:
     review | classes are genus-species codes for rangeland/weed plants (e.g. SalKal=Salsola
     kali/Russian thistle, CheAlb=Chenopodium album/lambsquarters) — an achene/seed
     species ID set, not a single crop's cultivars
+  class_aliases:
+    # Full code -> species legend from the ACHENY source paper (Table 1,
+    # PMC8529081) — not a guess, taken directly from the dataset's own docs.
+    AnaHau: "Anabasis haussknechtii"
+    AnaSet: "Anabasis setifera"
+    AtrCan: "Atriplex canescens"
+    AtrLen: "Atriplex lentiformis"
+    AtrLeu: "Atriplex leucoclada"
+    CerAre: "Ceratocarpus arenarius"
+    CheAlb: "Chenopodium album"
+    CorMon: "Cornulaca monacantha"
+    GirOpp: "Girginsonia oppositiflora"
+    HalAmm: "Haloxylon ammodendron"
+    HalBel: "Halostachys belangeriana"
+    HalPer: "Haloxylon persicum"
+    HalStr: "Halocnemum strobiloceum"
+    HalSub: "Halothamnus subaphyllus"
+    HamSal: "Hammada salicornica"
+    KocSco: "Kochia scoparia"
+    KocSte: "Kochia stellaris"
+    SalAba: "Salsola abarghuensis"
+    SalDen: "Salsola dendroides"
+    SalInc: "Salsola incanescens"
+    SalKal: "Salsola kali"
+    SalKer: "Salsola kerneri"
+    SalPra: "Salsola praecox"
+    SalTom: "Salsola tomentosa"
+    SalTur: "Salsola turcomanica"
+    SalYaz: "Salsola yazdiana"
+    SeiCin: "Seidlitzia cinerea"
+    SeiRos: "Seidlitzia rosmarinus"
+    SuaAcu: "Suaeda cuminata"
+    SuaAeg: "Suaeda aegyptiaca"
 - agml_name: AFruitDB_fruit_grade_classification
   crop: fruit
   task_type: quality_identification
@@ -636,6 +669,8 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "Fazli": "Fazli mango"
 - agml_name: BDMediLeaves_variety_classification
   crop: medicinal_plant
   task_type: species_identification
@@ -656,6 +691,17 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal-leaf identification
+  class_aliases:
+    "azadirachta-indica": "azadirachta indica"
+    "calotropis-gigantea": "calotropis gigantea"
+    "centella-asiatica": "centella asiatica"
+    "hibiscus-rosa-sinensis": "hibiscus rosa sinensis"
+    "justicia-adhatoda": "justicia adhatoda"
+    "kalanchoe-pinnata": "kalanchoe pinnata"
+    "mikania-micrantha": "mikania micrantha"
+    "ocimum-tenuiflorum": "ocimum tenuiflorum"
+    "phyllanthus-emblica": "phyllanthus emblica"
+    "terminalia-arjuna": "terminalia arjuna"
 - agml_name: BPLD_leaf_disease_classification
   crop: null
   task_type: disease
@@ -699,6 +745,11 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "Bangla Kola": "Bangla banana"
+    "Champa Kola": "Champa banana"
+    "Sabri Kola": "Sabri banana"
+    "Sagor Kola": "Sagor banana"
 - agml_name: BananaLSD_leaf_disease_classification
   crop: banana
   task_type: disease
@@ -734,6 +785,14 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "1121": "Pusa Basmati 1121"
+    "1509": "Pusa Basmati 1509"
+    "1728": "Pusa Basmati 1728"
+    "BAS_370": "Basmati 370"
+    "CSR_30": "CSR-30"
+    "PB1": "Pusa Basmati 1"
+    "PB_6": "Pusa Basmati 6"
 - agml_name: BrinjalFruitX_disease_classification
   crop: eggplant
   task_type: disease
@@ -826,6 +885,15 @@ datasets:
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | every non-healthy class is a nutrient deficiency (abiotic) — pest_damage
     is the primary type here, not disease
+  class_aliases:
+    "boron-B": "boron"
+    "calcium-Ca": "calcium"
+    "iron-Fe": "iron"
+    "magnesium-Mg": "magnesium"
+    "manganese-Mn": "manganese"
+    "nitrogen-N": "nitrogen"
+    "phosphorus-P": "phosphorus"
+    "potasium-K": "potassium"
 - agml_name: DIMPSAR_medicinal_leaf_classification
   crop: medicinal_plant
   task_type: species_identification
@@ -916,6 +984,22 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 80-species medicinal-leaf identification
+  class_aliases:
+    Aloevera: "Aloe vera"
+    Bhrami: ["Brahmi", "Brahmi (Bacopa monnieri)"]
+    Bringaraja: "Eclipta alba"
+    Coriender: "Coriander"
+    Ganike: "Solanum nigrum"
+    Globe Amarnath: "Globe Amaranth"
+    Honge: "Pongamia pinnata"
+    Nelavembu: "Andrographis paniculata"
+    Nerale: "Jamun"
+    Nooni: "Morinda citrifolia"
+    Pomoegranate: "Pomegranate"
+    Raddish: "Radish"
+    Sampige: "Magnolia champaca"
+    Seethapala: "Sitaphal custard apple"
+    Spinach1: "Spinach"
 - agml_name: DIMPSAR_medicinal_plant_classification
   crop: medicinal_plant
   task_type: species_identification
@@ -966,6 +1050,18 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 40-species medicinal-plant identification
+  class_aliases:
+    Aloevera: "Aloe vera"
+    Amruta_Balli: "Tinospora cordifolia"
+    Avacado: "Avocado"
+    Basale: "Basella alba"
+    Gauva: "Guava"
+    Honge: "Pongamia pinnata"
+    Nagadali: "Ruta graveolens"
+    Nithyapushpa: "Catharanthus roseus"
+    Nooni: "Morinda citrifolia"
+    Pappaya: "Papaya"
+    Wood_sorel: "Wood sorrel"
 - agml_name: EfficientMaize_classification
   crop: maize
   task_type: quality_identification
@@ -1127,6 +1223,12 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "Bari 4": "BARI Aam-4"
+    "Fazli": "Fazli mango"
+    "GopalBhog": "Gopalbhog"
+    "Khrishapat": ["Khirsapat", "Himsagar"]
+    "RaniBhog": "Ranibhog"
 - agml_name: MangoLeafBD_disease_classification
   crop: mango
   task_type: disease
@@ -1234,6 +1336,14 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "BHIMKOL": "Bhimkol"
+    "JAHAJI FRUIT": "Jahaji"
+    "JAHAJI LEAF": "Jahaji"
+    "JAHAJI STEM": "Jahaji"
+    "KACHKOL FRUIT": "Kachkol"
+    "MALBHOG FRUIT": "Malbhog"
+    "MALBHOG LEAF": "Malbhog"
 - agml_name: PaddyVarietyBD_variety_classification
   crop: rice
   task_type: species_identification
@@ -1279,6 +1389,42 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "BD70": "BRRI dhan70"
+    "Bd30": "BRRI dhan30"
+    "Bd33": "BRRI dhan33"
+    "Bd34": "BRRI dhan34"
+    "Bd49": "BRRI dhan49"
+    "Bd51": "BRRI dhan51"
+    "Bd52": "BRRI dhan52"
+    "Bd56": "BRRI dhan56"
+    "Bd57": "BRRI dhan57"
+    "Bd72": "BRRI dhan72"
+    "Bd75": "BRRI dhan75"
+    "Bd76": "BRRI dhan76"
+    "Bd79": "BRRI dhan79"
+    "Bd85": "BRRI dhan85"
+    "Bd87": "BRRI dhan87"
+    "Bd91": "BRRI dhan91"
+    "Bd93": "BRRI dhan93"
+    "Bd95": "BRRI dhan95"
+    "Binadhan07": "Binadhan-7"
+    "Binadhan08": "Binadhan-8"
+    "Binadhan10": "Binadhan-10"
+    "Binadhan11": "Binadhan-11"
+    "Binadhan12": "Binadhan-12"
+    "Binadhan14": "Binadhan-14"
+    "Binadhan16": "Binadhan-16"
+    "Binadhan17": "Binadhan-17"
+    "Binadhan19": "Binadhan-19"
+    "Binadhan20": "Binadhan-20"
+    "Binadhan21": "Binadhan-21"
+    "Binadhan23": "Binadhan-23"
+    "Binadhan24": "Binadhan-24"
+    "Binadhan25": "Binadhan-25"
+    "Binadhan26": "Binadhan-26"
+    "Br22": ["BR-22", "BR 22"]
+    "Br23": ["BR-23", "BR 23"]
 - agml_name: PriBel_betel_leaf_disease_classification
   crop: betel_leaf
   task_type: disease
@@ -1318,6 +1464,11 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal-plant identification (Bengali common names)
+  class_aliases:
+    betal: "Betel"
+    gainura: "Gynura procumbens"
+    kalochitra: "Alternanthera brasiliana"
+    ramtulsi: "Rama Tulsi"
 - agml_name: RoseNet_leaf_disease_classification
   crop: rose
   task_type: disease
@@ -1361,6 +1512,9 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal/ornamental plant identification
+  class_aliases:
+    Hibiscus Rosasinensis: "Hibiscus rosa-sinensis"
+    Justica adhatoda: "Justicia adhatoda"
 - agml_name: SapBark_64_variety_classification
   crop: fruit
   task_type: species_identification
@@ -1435,6 +1589,10 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 64-species fruit-tree identification, not one crop's cultivars
+  class_aliases:
+    Akca Pear: "Akça pear"
+    Bardacik Fig: "Bardacık fig"
+    Kutahya Sour Cherry: "Kütahya cherry"
 - agml_name: SoyNet_leaf_health_classification
   crop: soybean
   task_type: disease
@@ -1492,6 +1650,29 @@ datasets:
     mite-d: pest_damage
     alternaria-mite-d: pest_damage
     abiotic-disease-d: pest_damage
+  class_aliases:
+    "abiotic-disease-d": "abiotic disease"
+    "alternaria-d": "alternaria"
+    "alternaria-mite-d": "alternaria mite"
+    "aphids-p": "aphids"
+    "bacterial-floundering-d": "bacterial floundering"
+    "blossom-end-rot-d": "blossom end rot"
+    "bulb-blight-d": "bulb blight"
+    "caterpillar-p": "caterpillar"
+    "curvulariosis-d": "curvulariosis"
+    "excess-nitrogen-d": "excess nitrogen"
+    "fusarium-d": "fusarium"
+    "helicoverpa-armigera-p": "helicoverpa armigera"
+    "helminthosporiosis-d": "helminthosporiosis"
+    "mite-d": "mite"
+    "rust-d": "rust"
+    "spodoptera-frugiperda-a": "spodoptera frugiperda"
+    "spodoptera-frugiperda-p": "spodoptera frugiperda"
+    "stripe-d": "stripe"
+    "sunburn-d": "sunburn"
+    "tomato-late-blight-d": "tomato late blight"
+    "tuta-absoluta-p": "tuta absoluta"
+    "virosis-d": "virosis"
 - agml_name: VegNet_cauliflower_disease_classification
   crop: cauliflower
   task_type: disease
@@ -1701,6 +1882,11 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "Anaji": "Anaji Kola"
+    "Bichi": "Bichi Kola"
+    "Shagor": "Sagor banana"
+    "Shobri": "Sabri banana"
 - agml_name: bay_leaf_disease_classification
   crop: bay_leaf
   task_type: disease
@@ -3152,6 +3338,45 @@ datasets:
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
+  class_aliases:
+    "BD30": "BRRI dhan30"
+    "BD33": "BRRI dhan33"
+    "BD39": "BRRI dhan39"
+    "BD49": "BRRI dhan49"
+    "BD51": "BRRI dhan51"
+    "BD52": "BRRI dhan52"
+    "BD56": "BRRI dhan56"
+    "BD57": "BRRI dhan57"
+    "BD70": "BRRI dhan70"
+    "BD72": "BRRI dhan72"
+    "BD75": "BRRI dhan75"
+    "BD76": "BRRI dhan76"
+    "BD79": "BRRI dhan79"
+    "BD85": "BRRI dhan85"
+    "BD87": "BRRI dhan87"
+    "BD91": "BRRI dhan91"
+    "BD93": "BRRI dhan93"
+    "BD95": "BRRI dhan95"
+    "BR22": ["BR-22", "BR 22"]
+    "BR23": ["BR-23", "BR 23"]
+    "BRRI102": "BRRI dhan102"
+    "BRRI67": "BRRI dhan67"
+    "BRRI74": "BRRI dhan74"
+    "Binadhan10": "Binadhan-10"
+    "Binadhan11": "Binadhan-11"
+    "Binadhan12": "Binadhan-12"
+    "Binadhan14": "Binadhan-14"
+    "Binadhan16": "Binadhan-16"
+    "Binadhan17": "Binadhan-17"
+    "Binadhan19": "Binadhan-19"
+    "Binadhan20": "Binadhan-20"
+    "Binadhan21": "Binadhan-21"
+    "Binadhan23": "Binadhan-23"
+    "Binadhan24": "Binadhan-24"
+    "Binadhan25": "Binadhan-25"
+    "Binadhan26": "Binadhan-26"
+    "Binadhan7": "Binadhan-7"
+    "Binadhan8": "Binadhan-8"
 - agml_name: riseholme_strawberry_classification_2021
   crop: strawberry
   task_type: quality_identification

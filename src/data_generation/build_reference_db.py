@@ -61,7 +61,15 @@ WEB_FETCH_SLEEP = 1.0
 WIKI_THIN_CHARS = 400        # combined Wikipedia excerpt length below this
                               # triggers the web-search fallback
 
-_HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected"}
+_HEALTHY_LABELS = {"healthy", "normal", "no disease", "no stress", "unaffected",
+                    "disease free", "disease-free", "no virus", "no defect"}
+_HEALTHY_WORDS = {"healthy", "heathy", "healty", "normal", "unaffected"}  # incl.
+                  # common dataset-label typos actually observed (heathy, healty)
+_QUALIFIER_WORDS = {  # crop/plant-part words that appear alongside a healthy
+    # label but don't change its meaning — "Healthy Rice Leaf" is exactly as
+    # groundless as "Healthy"
+    "leaf", "leaves", "plant", "fruit", "sample", "rice", "brinjal",
+}
 _HEADERS = {"User-Agent": "AgMLResearch/1.0 (research; academic non-commercial use)"}
 
 
@@ -74,7 +82,22 @@ def _make_key(agml_dataset: str, class_label: str, crop: str) -> str:
 _PAREN_RE = re.compile(r"^(.*?)\s*\(([^)]+)\)\s*$")
 
 
-def _match_terms(class_label: str) -> list[str]:
+def _split_parens(term: str) -> list[str]:
+    """[term] normally, or [term, common, scientific] if term looks like
+    "Common (Scientific)" — see _match_terms."""
+    m = _PAREN_RE.match(term)
+    if not m:
+        return [term]
+    common, scientific = m.group(1).strip(), m.group(2).strip()
+    parts = [term]
+    if common:
+        parts.append(common)
+    if scientific:
+        parts.append(scientific)
+    return parts
+
+
+def _match_terms(class_label: str, aliases: list[str] | None = None) -> list[str]:
     """Terms to try matching against fetched text, in priority order.
 
     Most labels are used as-is. But a label like "Datura (Datura stramonium)"
@@ -84,16 +107,17 @@ def _match_terms(class_label: str) -> list[str]:
     not the exact combined string. Splitting into candidates and accepting a
     match on either recovers those without weakening the gate for ordinary
     single-part labels (still an exact-ish substring match, just tried
-    against more candidate strings)."""
-    m = _PAREN_RE.match(class_label)
-    if not m:
-        return [class_label]
-    common, scientific = m.group(1).strip(), m.group(2).strip()
-    terms = [class_label]
-    if common:
-        terms.append(common)
-    if scientific:
-        terms.append(scientific)
+    against more candidate strings).
+
+    aliases (from datasets.yaml's class_aliases, see effective_search_terms)
+    are folded in too, parenthetical-split the same way — a source found via
+    an alias query should still count as a match if it mentions the raw
+    class_label, and vice versa."""
+    terms = list(_split_parens(class_label))
+    for alias in (aliases or []):
+        for t in _split_parens(alias):
+            if t not in terms:
+                terms.append(t)
     return terms
 
 
@@ -120,12 +144,22 @@ def _excerpt_around_match(text: str, term: str, max_len: int) -> str:
 
 
 def _is_healthy(class_label: str) -> bool:
-    return class_label.strip().lower() in _HEALTHY_LABELS
+    label = class_label.strip().lower()
+    if label in _HEALTHY_LABELS:
+        return True
+    # Tokenized fallback: "Healthy Rice Leaf" / "Healty Brinjal" / "Heathy
+    # Leaf" all mean exactly what "Healthy" alone does — once the
+    # crop/plant-part qualifier words are stripped, what's left should be
+    # nothing but a healthy word (possibly repeated/typo'd), not a mix of a
+    # healthy word and something else that would actually need grounding.
+    tokens = [t for t in re.split(r"[\s\-]+", label) if t]
+    core = [t for t in tokens if t not in _QUALIFIER_WORDS]
+    return bool(core) and all(t in _HEALTHY_WORDS for t in core)
 
 
 def _search_query(class_label: str, crop: str, task_type: str) -> str:
     if task_type in ("species_identification", "quality_identification"):
-        return f"{class_label} plant visual identification"
+        return f"{class_label} {crop} plant visual identification"
     return f"{class_label} {crop} plant disease symptoms"
 
 
@@ -143,11 +177,13 @@ def _wiki_get(url: str, params: dict) -> requests.Response:
     return r
 
 
-def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
-    if _is_healthy(class_label):
-        return []
-    query = _search_query(class_label, crop, task_type)
-    terms = _match_terms(class_label)
+def _fetch_wikipedia(search_term: str, crop: str, task_type: str, match_terms: list[str]) -> list[dict]:
+    """search_term is what's actually queried; match_terms (from _match_terms,
+    already includes search_term itself) is what counts as a relevant hit —
+    kept separate so an alias query can still credit a match against the
+    original raw class_label, or another alias, not just itself."""
+    query = _search_query(search_term, crop, task_type)
+    terms = match_terms
     sources = []
     try:
         resp = _wiki_get(
@@ -192,15 +228,15 @@ def _fetch_wikipedia(class_label: str, crop: str, task_type: str) -> list[dict]:
     return sources
 
 
-def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]:
-    """Live web search, no pre-built corpus: search DuckDuckGo for the class,
+def _fetch_web_search(search_term: str, crop: str, task_type: str, match_terms: list[str]) -> list[dict]:
+    """Live web search, no pre-built corpus: search DuckDuckGo for search_term,
     fetch each candidate page fresh, extract clean article text with
-    trafilatura, and keep only pages that actually mention the class label —
-    a relevance gate on top of the search engine's own ranking, since a page
+    trafilatura, and keep only pages that match one of match_terms — a
+    relevance gate on top of the search engine's own ranking, since a page
     ranking well for the query doesn't guarantee it's actually about this
     specific class."""
-    query = _search_query(class_label, crop, task_type)
-    terms = _match_terms(class_label)
+    query = _search_query(search_term, crop, task_type)
+    terms = match_terms
     sources: list[dict] = []
     try:
         hits = DDGS().text(query, max_results=WEB_SEARCH_MAX_RESULTS)
@@ -239,6 +275,36 @@ def _fetch_web_search(class_label: str, crop: str, task_type: str) -> list[dict]
     return sources
 
 
+def fetch_sources_for_class(
+    class_label: str, crop: str, task_type: str, search_terms: list[str],
+) -> tuple[list[dict], str]:
+    """Try each term in search_terms (class_label first, then any
+    datasets.yaml class_aliases, in order) as the actual search query —
+    Wikipedia, then web-search fallback if thin — stopping at the first term
+    that finds anything. match_terms (what counts as a relevant hit) is the
+    same regardless of which term is being queried: the raw class_label plus
+    every alias, parenthetical-split — a source found via an alias query
+    should still count as a match if it mentions the original raw label.
+
+    Returns (sources, term_used) — term_used is "" if nothing was found with
+    any term, otherwise whichever one succeeded (useful for the [alias: ...]
+    note in the per-class print line)."""
+    match_terms: list[str] = []
+    for t in search_terms:
+        for part in _split_parens(t):
+            if part not in match_terms:
+                match_terms.append(part)
+
+    for term in search_terms:
+        sources = _fetch_wikipedia(term, crop, task_type, match_terms)
+        wiki_chars = sum(len(s["excerpt"]) for s in sources)
+        if wiki_chars < WIKI_THIN_CHARS:
+            sources = sources + _fetch_web_search(term, crop, task_type, match_terms)
+        if sources:
+            return sources, term
+    return [], ""
+
+
 def main(args: argparse.Namespace) -> None:
     dst = Path(args.output_db)
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -265,6 +331,12 @@ def main(args: argparse.Namespace) -> None:
                     "raw_label": raw_label,  # manifest's per-class key, needed to sample an
                                               # image back for this class (see generate.py)
                     "task_type": task_type,
+                    # clean_cls first, then any datasets.yaml class_aliases
+                    # (keyed by raw_label, same convention as class_overrides;
+                    # effective_search_terms puts raw_label itself first,
+                    # which we don't want as the primary term — drop it,
+                    # keep just the aliases behind it)
+                    "search_terms": [clean_cls] + ds.effective_search_terms(raw_label)[1:],
                 }
 
     existing_db = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else {}
@@ -283,18 +355,18 @@ def main(args: argparse.Namespace) -> None:
             save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
             continue
 
-        sources = _fetch_wikipedia(meta["class_label"], meta["crop"], meta["task_type"])
-        wiki_chars = sum(len(s["excerpt"]) for s in sources)
-        used_fallback = False
-        if wiki_chars < WIKI_THIN_CHARS:
-            sources = sources + _fetch_web_search(meta["class_label"], meta["crop"], meta["task_type"])
-            used_fallback = True
+        search_terms = meta.get("search_terms") or [meta["class_label"]]
+        sources, term_used = fetch_sources_for_class(
+            meta["class_label"], meta["crop"], meta["task_type"], search_terms
+        )
         status = "found" if sources else "no_source_found"
 
         entries[key] = {**meta, "status": status, "sources": sources}
+        used_fallback = any(s.get("organization") == "Web search" for s in sources)
         fallback_note = " [web-search fallback]" if used_fallback else ""
+        alias_note = f" [via alias: {term_used}]" if term_used and term_used != meta["class_label"] else ""
         print(f"  {meta['class_label']} ({meta['crop']}) — {status} "
-              f"[{len(sources)} sources]{fallback_note}")
+              f"[{len(sources)} sources]{fallback_note}{alias_note}")
 
         save_json(dst, {"schema_version": "2.0", "built_date": str(date.today()), "entries": entries})
 
