@@ -153,6 +153,33 @@ def _load_layer_selections() -> dict:
     return {}
 
 
+def _persist_heuristic_pre_selection(model_id: str, pre_layer_path: str) -> None:
+    """Write an auto-detected (non-default) heuristic pre-projector path back
+    to layer_selections.yaml so it becomes an explicit entry.
+
+    Needed for correctness, not just convenience: the pre-flight "is
+    everything already cached, can we skip loading this model" check (below,
+    in main()) has to decide BEFORE loading the model what cache tag to look
+    for — it does that by reading layer_selections.yaml, since resolving the
+    heuristic path (resolve_heuristic_pre_module) requires the model to
+    already be loaded. Without this persisted entry, a model whose heuristic
+    resolves to something other than the plain "default" tag (e.g. Qwen's
+    auto-detected vision_tower.blocks.N) would have its real cache tag
+    invisible to that pre-flight check forever — it would reload the model
+    on every single run despite having valid, complete cached embeddings,
+    since the check keeps looking under the wrong ("default") tag."""
+    selections = _load_layer_selections()
+    entry = selections.get(model_id, {})
+    if entry.get("pre") == pre_layer_path:
+        return  # already persisted, nothing to do
+    entry["pre"] = pre_layer_path
+    selections[model_id] = entry
+    _LAYER_SELECTIONS_PATH.write_text(
+        yaml.safe_dump(selections, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    )
+    print(f"  [layer_selections] Persisted auto-detected pre path for {model_id}: {pre_layer_path}")
+
+
 # ── Dataset loading ────────────────────────────────────────────────────────────
 # load_hf_samples / load_manifest / missing_from_manifest now live in
 # src/common/dataset_config.py — shared across every stage that needs to
@@ -1562,6 +1589,9 @@ def main(args):
         else:
             pre_module, pre_layer_path, pre_desc = resolve_heuristic_pre_module(mm_root)
             print(f"  Pre-projector (heuristic fallback): {pre_desc}")
+            if pre_layer_path is not None:
+                _persist_heuristic_pre_selection(model_id, pre_layer_path)
+                layer_selections = _load_layer_selections()  # pick up what we just wrote
             if not layer_selections:
                 print(f"  Tip: add an entry to {_LAYER_SELECTIONS_PATH} to pick exact layers.")
 
