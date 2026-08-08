@@ -247,9 +247,17 @@ def resolve_mm_root(model):
     raise AttributeError(f"Could not locate vision encoder. Top-level: {available}")
 
 
-def resolve_heuristic_pre_module(mm_root) -> tuple[torch.nn.Module, str | None, str]:
+def resolve_heuristic_pre_module(vlm, mm_root) -> tuple[torch.nn.Module, str | None, str]:
     """Pick the heuristic (no layer_selections.yaml entry) pre-projector hook
     module for a resolved mm_root. Returns (module, cache_layer_path, description).
+
+    cache_layer_path (when not None) is relative to vlm, not mm_root — same
+    convention as layer_selections.yaml's manual "pre" entries (e.g. Qwen's
+    "model.visual.blocks.26"), because a path returned here can end up
+    persisted into that same file (see _persist_heuristic_pre_selection) and
+    then read back and resolved via vlm.get_submodule(); mm_root is often
+    vlm.model, not vlm itself, so an mm_root-relative path would resolve
+    against the wrong object on that later read.
 
     Default is mm_root.vision_tower's own output — correct for architectures
     like Gemma4, whose vision_tower ends on genuine vision features with a
@@ -274,11 +282,12 @@ def resolve_heuristic_pre_module(mm_root) -> tuple[torch.nn.Module, str | None, 
 
     A manual layer_selections.yaml entry always overrides this — this
     function only runs when there isn't one."""
+    prefix = "" if mm_root is vlm else "model."
     vision_tower = mm_root.vision_tower
     if hasattr(vision_tower, "blocks") and hasattr(vision_tower, "merger"):
         blocks = vision_tower.blocks
         idx = len(blocks) - 1
-        path = f"vision_tower.blocks.{idx}"
+        path = f"{prefix}vision_tower.blocks.{idx}"
         desc = f"{path} (auto: Qwen-style merger detected in vision_tower — using the last pre-merger transformer block instead of the merger's own output)"
         return blocks[idx], path, desc
     return vision_tower, None, "vision_tower"
@@ -1587,7 +1596,7 @@ def main(args):
             pre_module = vlm.get_submodule(pre_layer_path)
             print(f"  Pre-projector (from layer_selections.yaml): {pre_layer_path}")
         else:
-            pre_module, pre_layer_path, pre_desc = resolve_heuristic_pre_module(mm_root)
+            pre_module, pre_layer_path, pre_desc = resolve_heuristic_pre_module(vlm, mm_root)
             print(f"  Pre-projector (heuristic fallback): {pre_desc}")
             if pre_layer_path is not None:
                 _persist_heuristic_pre_selection(model_id, pre_layer_path)

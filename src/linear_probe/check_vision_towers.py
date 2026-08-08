@@ -110,7 +110,7 @@ def check_model(model_id: str, device: str, quantize: str | None = None,
         vision_tower = mm_root.vision_tower
         if hasattr(vision_tower, "blocks"):
             result["n_blocks"] = len(vision_tower.blocks)
-        _, _, heuristic_desc = resolve_heuristic_pre_module(mm_root)
+        _, _, heuristic_desc = resolve_heuristic_pre_module(model, mm_root)
         result["heuristic_pre_desc"] = heuristic_desc
 
         proj, proj_name = resolve_projector(mm_root)
