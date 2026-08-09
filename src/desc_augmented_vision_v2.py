@@ -221,6 +221,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             pbar.set_postfix_str(f"{ds.agml_name} / {clean_label}", refresh=False)
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             base_question = raw_cls_question(task_type, crop_val, prompts)
+            base_question = base_question[0].lower() + base_question[1:] if base_question else base_question
             aug_question = prompts["desc_augmented_classification"].format(
                 description=description, question=base_question,
             )
