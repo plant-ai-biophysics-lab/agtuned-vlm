@@ -1237,7 +1237,7 @@ def plot_task_summary(results: dict, output_dir: Path):
     ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("F1 Macro")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(backbones), 4))
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(backbones), 3))
     plt.tight_layout()
 
     path = output_dir / "summary_by_task.png"
