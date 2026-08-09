@@ -24,6 +24,7 @@ STAGES = {
     "aug-vision-plot": "src.desc_augmented_vision_plot",
     "vision-baseline": "src.vision_baseline",
     "desc-aug-v2":   "src.desc_augmented_vision_v2",
+    "vision-baseline-collate": "src.vision_baseline_collate",
     "collate":       "src.collate_results",
 }
 
@@ -57,6 +58,8 @@ Stages:
                                classification-only (F1 + ROUGE-SS), per-sample resumable
     desc-aug-v2     Stage 2b — vision upper bound: image + reference description +
                                classification question, same resumable per-model setup
+    vision-baseline-collate  Stage 2c — combine vision-baseline + desc-aug-v2 across all
+                               models into one summary + bar chart (95% CI over classes)
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
@@ -81,9 +84,8 @@ Examples:
 
     python main.py vision-baseline --model google/gemma-4-26B-A4B-it
     python main.py desc-aug-v2     --model google/gemma-4-26B-A4B-it
-    # ... repeat --model per model, then once all are done:
-    python main.py vision-baseline --collate
-    python main.py desc-aug-v2     --collate
+    # ... repeat --model per model, then once ALL models/both scripts are done:
+    python main.py vision-baseline-collate
 
 Pass --help after the stage name for all available options:
     python main.py probe --help
