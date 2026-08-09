@@ -114,12 +114,18 @@ def clean_class_list(raw_classes: list[str]) -> list[str]:
     return cleaned
 
 
+_AMBIGUOUS_CROPS = {"multiple", "mixed"}  # not a real crop name — falls back to
+                                           # the generic "plant" instead of leaking
+                                           # the literal word into prompts like
+                                           # "...in this description of a {crop}?"
+
+
 def parse_class_label(raw_label: str, dataset_crop: Optional[str]) -> tuple[str, str]:
     """Returns (crop, clean_class_label). Splits on ___ for multi-crop datasets."""
     if "___" in raw_label:
         parts = raw_label.split("___", 1)
         return parts[0].replace("_", " ").strip(), parts[1].replace("_", " ").strip()
-    crop = dataset_crop if dataset_crop and dataset_crop != "multiple" else "plant"
+    crop = dataset_crop if dataset_crop and dataset_crop not in _AMBIGUOUS_CROPS else "plant"
     return crop, raw_label.replace("_", " ").strip()
 
 

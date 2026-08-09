@@ -20,10 +20,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
+import colorsys
 import gc
 import os
+import re
 from collections import Counter, defaultdict
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -1193,6 +1196,56 @@ def plot_master_comparison(results: dict, output_dir: Path):
     print(f"  Saved: {path}")
 
 
+_FAMILY_BASE_COLORS = {
+    "dinov3": "#1f77b4",
+    "yolo": "#ff7f0e",
+    "qwen": "#2ca02c",
+    "gemma": "#9467bd",
+}
+_DEFAULT_FAMILY_COLOR = "#7f7f7f"
+
+
+def _backbone_family(name: str) -> str:
+    """Group a backbone label into a model family so same-family variants
+    (e.g. Qwen3.5-9B / Qwen3.5-27B) get shades of the same base color."""
+    n = name.lower()
+    for family in _FAMILY_BASE_COLORS:
+        if family in n:
+            return family
+    return n
+
+
+def _param_count_b(name: str) -> float:
+    """Extract the largest '<number>B' parameter count in a backbone label
+    (e.g. "gemma-4-26B-A4B-it" -> 26.0), 0.0 if none found. Used to rank
+    same-family variants from smallest to largest for shading."""
+    matches = re.findall(r"(\d+(?:\.\d+)?)b", name.lower())
+    return max((float(m) for m in matches), default=0.0)
+
+
+def _family_shaded_colors(backbones: list[str]) -> dict[str, tuple]:
+    """Assign each backbone a color: same base hue per family, with more
+    parameters -> darker shade. Single-member families get a mid shade."""
+    families: dict[str, list[str]] = defaultdict(list)
+    for b in backbones:
+        families[_backbone_family(b)].append(b)
+
+    colors: dict[str, tuple] = {}
+    for family, members in families.items():
+        base_hex = _FAMILY_BASE_COLORS.get(family, _DEFAULT_FAMILY_COLOR)
+        h, l, s = colorsys.rgb_to_hls(*mcolors.to_rgb(base_hex))
+        params = {b: _param_count_b(b) for b in members}
+        lo, hi = min(params.values()), max(params.values())
+        for b in members:
+            if hi > lo:
+                frac = (params[b] - lo) / (hi - lo)  # 0 = smallest, 1 = largest
+            else:
+                frac = 0.5  # single member (or tied params) -> mid shade
+            lightness = 0.68 - frac * 0.38  # smallest ~0.68 (light) -> largest ~0.30 (dark)
+            colors[b] = colorsys.hls_to_rgb(h, lightness, s)
+    return colors
+
+
 def plot_task_summary(results: dict, output_dir: Path):
     """Bar chart comparing backbone F1 per task type; LR combined preferred, FC combined fallback."""
     by_task = (
@@ -1221,11 +1274,14 @@ def plot_task_summary(results: dict, output_dir: Path):
         name = backbone.lower()
         return any(marker in name for marker in _VISION_ONLY_MARKERS)
 
+    backbone_colors = _family_shaded_colors(backbones)
+
     fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
     for i, backbone in enumerate(backbones):
         vals = [_f1(by_task[tt].get(backbone, 0.0)) for tt in task_types]
         offset = (i - (len(backbones) - 1) / 2) * width
         bars = ax.bar(x + offset, vals, width, label=backbone.split("/")[-1],
+                       color=backbone_colors[backbone],
                        hatch="//" if _is_vision_only(backbone) else None,
                        edgecolor="white" if _is_vision_only(backbone) else None)
         for bar in bars:
