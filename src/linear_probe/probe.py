@@ -1534,6 +1534,10 @@ def main(args):
     layer_selections = _load_layer_selections()
     postproj_embeddings: dict[str, dict] = {}   # {backbone_postproj: {agml_name: (X, labels, ...)}}
     feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
+    resolved_layers: dict[str, dict] = {}       # {backbone: {"pre": path, "pre_source": "manual"|"heuristic",
+                                                 #             "post": path, "post_source": ...}} — persisted
+                                                 # into linear_probe_results.json so it's auditable after the
+                                                 # fact, not just visible in that run's console/job log.
     postproj_only_outer = getattr(args, "postproj_only", False)
     for model_id in (args.models or []):
         backbone_idx += 1
@@ -1565,6 +1569,13 @@ def main(args):
             fully_cached = all_pre_cached and (all_post_cached or not post_path_known)
             if fully_cached:
                 print(f"  [cache] All embeddings cached — skipping model load for {backbone_key}")
+                resolved_layers[backbone_key] = {
+                    "pre": check_pre_path or "vision_tower (default)",
+                    "pre_source": "manual" if check_pre_path else "heuristic (assumed — model not "
+                                                                    "loaded this run, cache hit)",
+                    "post": check_post_path,
+                    "post_source": "manual" if check_post_path else None,
+                }
                 all_embeddings[backbone_key] = {}
                 postproj_embeddings[postproj_key] = {}
                 for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
@@ -1591,11 +1602,13 @@ def main(args):
 
         # Resolve pre-projector hook module
         model_sels = layer_selections.get(model_id, {})
+        pre_source = "manual"
         if "pre" in model_sels:
             pre_layer_path: str | None = model_sels["pre"]
             pre_module = vlm.get_submodule(pre_layer_path)
             print(f"  Pre-projector (from layer_selections.yaml): {pre_layer_path}")
         else:
+            pre_source = "heuristic"
             pre_module, pre_layer_path, pre_desc = resolve_heuristic_pre_module(vlm, mm_root)
             print(f"  Pre-projector (heuristic fallback): {pre_desc}")
             if pre_layer_path is not None:
@@ -1608,11 +1621,13 @@ def main(args):
         has_postproj = False
         post_module: torch.nn.Module | None = None
         post_layer_path: str | None = None
+        post_source: str | None = None
         if "post" in model_sels:
             try:
                 post_layer_path = model_sels["post"]
                 post_module = vlm.get_submodule(post_layer_path)
                 has_postproj = True
+                post_source = "manual"
                 print(f"  Post-projector (from layer_selections.yaml): {post_layer_path}")
             except Exception as exc:
                 print(f"  [warn] Could not resolve post-projector path '{model_sels['post']}': {exc}")
@@ -1622,10 +1637,18 @@ def main(args):
                 post_module = proj
                 post_layer_path = proj_name
                 has_postproj = True
+                post_source = "heuristic"
                 print(f"  Post-projector (heuristic fallback): {proj_name}")
             else:
                 avail = [n for n, _ in mm_root.named_children()]
                 print(f"  [warn] No post-projector found for {backbone_key}. Available: {avail}")
+
+        resolved_layers[backbone_key] = {
+            "pre": pre_layer_path or "vision_tower (default)",
+            "pre_source": pre_source,
+            "post": post_layer_path,
+            "post_source": post_source,
+        }
 
         postproj_only = getattr(args, "postproj_only", False)
         for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc=f"{backbone_key} datasets"):
