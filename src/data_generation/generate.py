@@ -505,9 +505,24 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    # Pre-parse just --data_gen_config so its values can seed argparse's own
+    # defaults below, before the real parse happens — CLI flags a user
+    # actually types still win, since parser.set_defaults() only changes
+    # what "not passed" resolves to, not what an explicit flag resolves to.
+    # Same pattern as src/linear_probe/probe.py's --probe_config.
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--data_gen_config", default="src/data_generation/data_gen_config.yaml")
+    _pre_args, _ = _pre.parse_known_args()
+
     parser = argparse.ArgumentParser(
         description="Synthesize grounded VQA datasets from build_reference_db.py's fetched "
                      "sources, backed up by vision-based captioning when web sources are thin."
+    )
+    parser.add_argument(
+        "--data_gen_config", default=_pre_args.data_gen_config,
+        help="YAML file of defaults (model, sample counts, paths) — edit it directly for "
+             "routine changes instead of passing flags every time. Any flag also passed on "
+             "the command line overrides this file.",
     )
     parser.add_argument(
         "--model", default="google/gemma-4-26B-A4B-it",
@@ -554,5 +569,16 @@ if __name__ == "__main__":
         "--backfill_images", action="store_true",
         help="Save sample images from checkpoint without rerunning inference",
     )
+
+    if _pre_args.data_gen_config and Path(_pre_args.data_gen_config).exists():
+        import yaml as _yaml
+        with open(_pre_args.data_gen_config) as f:
+            _cfg = _yaml.safe_load(f) or {}
+        _valid_dests = {a.dest for a in parser._actions}
+        _unknown = set(_cfg) - _valid_dests
+        if _unknown:
+            print(f"[warn] {_pre_args.data_gen_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
+        parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
+
     args = parser.parse_args()
     main(args)
