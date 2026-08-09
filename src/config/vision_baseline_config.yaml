@@ -1,0 +1,32 @@
+# Stage 2 (vision_baseline.py / desc_augmented_vision_v2.py) shared defaults —
+# edit these directly instead of remembering CLI flags. Loaded automatically by
+# both scripts (default --vision_baseline_config path is this file). Any flag
+# you DO pass on the command line still overrides whatever is set here.
+#
+# You run this per model (--model overrides "model" below), one invocation per
+# model per script. output_dir is intentionally NOT set here — each script has
+# its own default (outputs_final/vision_baseline/, outputs_final/desc_augmented_vision_v2/)
+# so the same config file can't accidentally point both scripts at one folder.
+
+# ── Model ────────────────────────────────────────────────────────────────────
+# Set here for convenience, or pass --model on the command line per run —
+# whichever you pass on the CLI wins.
+model: google/gemma-4-26B-A4B-it
+
+# ── Data sources ─────────────────────────────────────────────────────────────
+config: src/config/datasets.yaml
+prompts: src/config/prompts.yaml
+classification_jsonl: dataset/agml_classification.jsonl  # ground truth + reference
+                                                            # descriptions (desc-aug only)
+manifest: dataset/selected_images.json
+images_root: dataset/images
+
+# ── Sampling ─────────────────────────────────────────────────────────────────
+n_samples: 10  # images/class to evaluate
+
+# ── vLLM ─────────────────────────────────────────────────────────────────────
+quantize: null  # "4bit", "8bit", "awq", "gptq"
+gpu_memory_utilization: 0.9
+max_model_len: 8192
+max_num_seqs: 64
+enforce_eager: false

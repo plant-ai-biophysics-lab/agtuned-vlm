@@ -5,6 +5,7 @@ visual_description_weed: "Can you describe visually the plant or weed exhibited 
 # Visual classification questions — OEQ, no class list
 visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 visual_classification_weed: "What plant or weed is exhibited in this image?"
+visual_classification_quality: "What quality, ripeness, or condition is exhibited in this image of a {crop}?"
 
 # ── Stage 0 data generation (src/legacy/data_generation) ────────────────────
 # Text-only question templates for agml_descriptions.jsonl / agml_classification.jsonl

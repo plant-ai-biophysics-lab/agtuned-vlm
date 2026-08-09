@@ -2971,7 +2971,7 @@ datasets:
   notes: 28 classes across multiple crops; description ground truth is too heterogeneous
     for meaningful Q3/Q4 evaluation
 - agml_name: plant_leaf_disease_classification
-  crop: mixed
+  crop: [eggplant, tomato]
   task_type: disease
   n_images: 12786
   classes:

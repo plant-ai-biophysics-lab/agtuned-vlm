@@ -15,7 +15,9 @@ class DatasetConfig:
     agml_name: str
     task_type: str
     classes: list[str]
-    crop: Optional[str] = None
+    crop: Optional[str | list[str]] = None  # list when the dataset spans a small,
+                                             # explicitly known set of crops (see
+                                             # crop_display()); str otherwise
     n_images: int = 0
     location: list = None
     skip: bool = False
@@ -120,13 +122,24 @@ _AMBIGUOUS_CROPS = {"multiple", "mixed"}  # not a real crop name — falls back 
                                            # "...in this description of a {crop}?"
 
 
-def parse_class_label(raw_label: str, dataset_crop: Optional[str]) -> tuple[str, str]:
+def crop_display(crop: Optional[str | list[str]]) -> str:
+    """Render a DatasetConfig.crop value for use in a prompt's {crop} slot.
+    A list (dataset spans a small, explicitly known set of crops — see
+    datasets.yaml) becomes "eggplant or tomato"; None/"multiple"/"mixed"
+    (crop unknown or too broad to enumerate) falls back to generic "plant"."""
+    if isinstance(crop, list):
+        return " or ".join(c.replace("_", " ").strip() for c in crop)
+    if crop and crop not in _AMBIGUOUS_CROPS:
+        return crop.replace("_", " ").strip()
+    return "plant"
+
+
+def parse_class_label(raw_label: str, dataset_crop: Optional[str | list[str]]) -> tuple[str, str]:
     """Returns (crop, clean_class_label). Splits on ___ for multi-crop datasets."""
     if "___" in raw_label:
         parts = raw_label.split("___", 1)
         return parts[0].replace("_", " ").strip(), parts[1].replace("_", " ").strip()
-    crop = dataset_crop if dataset_crop and dataset_crop not in _AMBIGUOUS_CROPS else "plant"
-    return crop, raw_label.replace("_", " ").strip()
+    return crop_display(dataset_crop), raw_label.replace("_", " ").strip()
 
 
 def subsample_class_balanced(

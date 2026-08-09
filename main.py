@@ -22,6 +22,8 @@ STAGES = {
     "vision-plot":   "src.vision_assessment.plot",
     "aug-vision":    "src.desc_augmented_vision",
     "aug-vision-plot": "src.desc_augmented_vision_plot",
+    "vision-baseline": "src.vision_baseline",
+    "desc-aug-v2":   "src.desc_augmented_vision_v2",
     "collate":       "src.collate_results",
 }
 
@@ -51,6 +53,10 @@ Stages:
     aug-vision-plot         — regenerate aug-vision charts from saved CSVs
     cot             Stage 4b — chain-of-thought vision assessment (self-cot + cot-yaml)
     cot-step-analysis        — per-step CoT accuracy/anchoring analysis
+    vision-baseline Stage 2a — vision lower bound: image + classification question only,
+                               classification-only (F1 + ROUGE-SS), per-sample resumable
+    desc-aug-v2     Stage 2b — vision upper bound: image + reference description +
+                               classification question, same resumable per-model setup
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
@@ -72,6 +78,12 @@ Examples:
         --prompts src/config/prompts.yaml \\
         --models google/gemma-4-26B-A4B-it Qwen/Qwen3.6-27B \\
         --output_dir outputs/vision_assessment/
+
+    python main.py vision-baseline --model google/gemma-4-26B-A4B-it
+    python main.py desc-aug-v2     --model google/gemma-4-26B-A4B-it
+    # ... repeat --model per model, then once all are done:
+    python main.py vision-baseline --collate
+    python main.py desc-aug-v2     --collate
 
 Pass --help after the stage name for all available options:
     python main.py probe --help
