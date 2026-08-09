@@ -41,7 +41,6 @@ import re
 import time
 
 from PIL import Image as PILImage
-from tqdm import tqdm
 
 from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
@@ -49,6 +48,7 @@ from src.common.dataset_config import (
 )
 from src.common.io import load_prompts
 from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
+from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     append_ckpt_row, collate_models, compute_model_metrics, load_ckpt,
     safe_model_name, write_collated, write_model_metrics,
@@ -194,9 +194,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         )
 
         t_start = time.perf_counter()
-        pbar = tqdm(groups, desc="  Classes", unit="class", dynamic_ncols=True)
-        for ds, clean_label, crop_val, task_type, names, path_by_name in pbar:
-            pbar.set_postfix_str(f"{ds.agml_name} / {clean_label}", refresh=False)
+        pbar = ProgressBar(total=len(groups), desc="Classes")
+        for ds, clean_label, crop_val, task_type, names, path_by_name in groups:
+            pbar.desc = f"Classes ({ds.agml_name} / {clean_label})"
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             question = cls_question(task_type, crop_val, prompts)
 
@@ -218,6 +218,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 }
                 append_ckpt_row(ckpt_path, row)
                 rows.append(row)
+            pbar.update()
+        pbar.finish()
 
         elapsed = time.perf_counter() - t_start
         print(f"\n  Inference time: {elapsed:.1f}s")
