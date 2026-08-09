@@ -183,10 +183,45 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--vision_baseline_config", default="src/config/vision_baseline_config.yaml")
+    _pre_args, _ = _pre.parse_known_args()
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--vision_baseline_config", default=_pre_args.vision_baseline_config,
+        help="YAML file of defaults, shared with vision_baseline.py / desc_augmented_vision_v2.py "
+             "— edit it directly for routine changes instead of passing flags every time. Any "
+             "flag also passed on the command line overrides this file.",
+    )
     parser.add_argument("--baseline_dir", default="outputs_final/vision_baseline/")
     parser.add_argument("--aug_dir", default="outputs_final/desc_augmented_vision_v2/")
     parser.add_argument("--output_dir", default="outputs_final/vision_baseline_collated/")
     parser.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CI.")
     parser.add_argument("--seed", type=int, default=42)
+
+    # Keys this script doesn't use but the shared config file also carries
+    # for vision_baseline.py / desc_augmented_vision_v2.py.
+    _FOREIGN_KEYS = {
+        "model", "config", "prompts", "classification_jsonl", "manifest", "images_root",
+        "n_samples", "quantize", "gpu_memory_utilization", "max_model_len", "max_num_seqs",
+        "enforce_eager",
+    }
+
+    if _pre_args.vision_baseline_config and Path(_pre_args.vision_baseline_config).exists():
+        import yaml as _yaml
+        with open(_pre_args.vision_baseline_config) as f:
+            _cfg = _yaml.safe_load(f) or {}
+        if "baseline_output_dir" in _cfg:
+            _cfg["baseline_dir"] = _cfg.pop("baseline_output_dir")
+        if "aug_output_dir" in _cfg:
+            _cfg["aug_dir"] = _cfg.pop("aug_output_dir")
+        if "collated_output_dir" in _cfg:
+            _cfg["output_dir"] = _cfg.pop("collated_output_dir")
+        _valid_dests = {a.dest for a in parser._actions}
+        _unknown = set(_cfg) - _valid_dests - _FOREIGN_KEYS
+        if _unknown:
+            print(f"[warn] {_pre_args.vision_baseline_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
+        parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
+
     main(parser.parse_args())

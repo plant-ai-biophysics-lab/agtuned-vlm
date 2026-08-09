@@ -277,12 +277,18 @@ if __name__ == "__main__":
                          help="Skip inference — combine every <output_dir>/<model>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")
 
+    # Keys this script doesn't use but the shared config file also carries
+    # for desc_augmented_vision_v2.py / vision_baseline_collate.py.
+    _FOREIGN_KEYS = {"aug_output_dir", "collated_output_dir", "n_boot", "seed"}
+
     if _pre_args.vision_baseline_config and Path(_pre_args.vision_baseline_config).exists():
         import yaml as _yaml
         with open(_pre_args.vision_baseline_config) as f:
             _cfg = _yaml.safe_load(f) or {}
+        if "baseline_output_dir" in _cfg:
+            _cfg["output_dir"] = _cfg.pop("baseline_output_dir")
         _valid_dests = {a.dest for a in parser._actions}
-        _unknown = set(_cfg) - _valid_dests
+        _unknown = set(_cfg) - _valid_dests - _FOREIGN_KEYS
         if _unknown:
             print(f"[warn] {_pre_args.vision_baseline_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
         parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})

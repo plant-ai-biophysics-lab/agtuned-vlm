@@ -1,12 +1,11 @@
-# Stage 2 (vision_baseline.py / desc_augmented_vision_v2.py) shared defaults —
-# edit these directly instead of remembering CLI flags. Loaded automatically by
-# both scripts (default --vision_baseline_config path is this file). Any flag
-# you DO pass on the command line still overrides whatever is set here.
+# Stage 2 (vision_baseline.py / desc_augmented_vision_v2.py / vision_baseline_collate.py)
+# shared defaults — edit these directly instead of remembering CLI flags.
+# Loaded automatically by all three scripts (default --vision_baseline_config
+# path is this file). Any flag you DO pass on the command line still
+# overrides whatever is set here.
 #
-# You run this per model (--model overrides "model" below), one invocation per
-# model per script. output_dir is intentionally NOT set here — each script has
-# its own default (outputs_final/vision_baseline/, outputs_final/desc_augmented_vision_v2/)
-# so the same config file can't accidentally point both scripts at one folder.
+# You run vision_baseline.py / desc_augmented_vision_v2.py per model
+# (--model overrides "model" below), one invocation per model per script.
 
 # ── Model ────────────────────────────────────────────────────────────────────
 # Set here for convenience, or pass --model on the command line per run —
@@ -22,7 +21,10 @@ manifest: dataset/selected_images.json
 images_root: dataset/images
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-n_samples: 10  # images/class to evaluate
+# null = use every image the manifest has for that class (it was built with
+# an n_per_class=50 cap, so this means "all ~50/class", not literally
+# unbounded). Set an int here to sub-cap further for a faster/cheaper run.
+n_samples: null
 
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"
@@ -30,3 +32,17 @@ gpu_memory_utilization: 0.9
 max_model_len: 8192
 max_num_seqs: 64
 enforce_eager: false
+
+# ── Output directories ───────────────────────────────────────────────────────
+# Kept as three separate keys (not one shared "output_dir") since the three
+# scripts each need a different folder — one shared key would make them
+# collide. Each script only actually uses its own key; the other two are
+# accepted-but-ignored so all three can share this one file without
+# "unrecognized key" warnings.
+baseline_output_dir: outputs_final/vision_baseline/
+aug_output_dir: outputs_final/desc_augmented_vision/
+collated_output_dir: outputs_final/vision_baseline_collated/
+
+# ── Collation (vision_baseline_collate.py only) ─────────────────────────────
+n_boot: 2000  # bootstrap resamples for the 95% CI
+seed: 42
