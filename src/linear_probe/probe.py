@@ -1200,11 +1200,6 @@ def plot_task_summary(results: dict, output_dir: Path):
         or results.get("by_task_fc_combined")
         or results.get("by_task", {})
     )
-    probe_label = (
-        "LR combined" if results.get("by_task_lr_combined")
-        else "FC combined" if results.get("by_task_fc_combined")
-        else "per-dataset mean"
-    )
     task_types = list(by_task.keys())
     if not task_types:
         return
@@ -1217,11 +1212,22 @@ def plot_task_summary(results: dict, output_dir: Path):
     x = np.arange(len(task_types))
     width = 0.8 / len(backbones)
 
+    # Vision-only backbones (no language model, frozen classifier/self-supervised
+    # towers like YOLO/DINO) get a hatch pattern so they read as a visually
+    # distinct group from the VLM backbones at a glance, not just by color.
+    _VISION_ONLY_MARKERS = ("yolo", "dino")
+
+    def _is_vision_only(backbone: str) -> bool:
+        name = backbone.lower()
+        return any(marker in name for marker in _VISION_ONLY_MARKERS)
+
     fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
     for i, backbone in enumerate(backbones):
         vals = [_f1(by_task[tt].get(backbone, 0.0)) for tt in task_types]
         offset = (i - (len(backbones) - 1) / 2) * width
-        bars = ax.bar(x + offset, vals, width, label=backbone.split("/")[-1])
+        bars = ax.bar(x + offset, vals, width, label=backbone.split("/")[-1],
+                       hatch="//" if _is_vision_only(backbone) else None,
+                       edgecolor="white" if _is_vision_only(backbone) else None)
         for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
@@ -1231,8 +1237,7 @@ def plot_task_summary(results: dict, output_dir: Path):
     ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("F1 Macro")
-    ax.set_title(f"Linear Probe — F1 by Task Type ({probe_label})")
-    ax.legend()
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(backbones), 4))
     plt.tight_layout()
 
     path = output_dir / "summary_by_task.png"
