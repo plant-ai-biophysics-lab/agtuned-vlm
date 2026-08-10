@@ -20,13 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
-import colorsys
 import gc
 import os
-import re
 from collections import Counter, defaultdict
 
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -70,6 +67,7 @@ from src.common.dataset_config import (
     load_manifest, load_hf_samples, missing_from_manifest,
 )
 from src.common.io import save_json, update_pipeline_results
+from src.common.plot_style import family_shaded_colors as _family_shaded_colors, is_vision_only as _is_vision_only
 from src.common.progress import ProgressBar
 
 # This module (and check_vision_towers.py, which imports load_gemma4 from
@@ -689,17 +687,21 @@ def get_combined_class_counts(all_embeddings: dict, backbone: str) -> Counter:
 
 
 def _split_from_labels(
-    X: np.ndarray, labels_all: list[str], n_samples: int | None = None
+    X: np.ndarray, labels_all: list[str], n_samples: int | None = None, seed: int = 42
 ) -> tuple:
     """Rebuild y_enc / train_idx / test_idx / le from X and labels_all.
 
     Used when loading embeddings from cache so that X and labels_all are
     always aligned (cache may have a different row count than _samples on a
-    different machine).
+    different machine). `seed` controls which n_samples images of each
+    class's cached pool land in train vs test — the embedding cache itself
+    is seed-independent (it holds every loaded image's embedding, not just
+    the currently-sampled subset), so varying seed here to get a different
+    train/test split never invalidates the cache or triggers re-extraction.
     """
     le = LabelEncoder()
     y_enc = le.fit_transform(labels_all)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     by_class: dict[str, list[int]] = {}
     for i, lbl in enumerate(labels_all):
         by_class.setdefault(lbl, []).append(i)
@@ -717,12 +719,14 @@ def _split_from_labels(
 
 
 def build_combined_split(
-    all_embeddings: dict, backbone: str, n_samples: int = 10,
+    all_embeddings: dict, backbone: str, n_samples: int = 10, seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder, list[str]] | None:
     """Concatenate embeddings from all datasets for one backbone into a single split.
 
     Uses n_samples per class for training (default 10), rest goes to test —
-    consistent with the per-dataset split logic.
+    consistent with the per-dataset split logic. `seed` behaves the same way
+    as in _split_from_labels — varying it changes which images land in
+    train/test without touching the (seed-independent) embedding cache.
     """
     X_parts, label_parts = [], []
     for agml_name, (X, labels_all, *_) in all_embeddings.get(backbone, {}).items():
@@ -741,7 +745,7 @@ def build_combined_split(
     label_parts = [label_parts[i] for i in range(len(label_parts)) if keep[i]]
 
     # Per-class split: n_samples → train, rest → test
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     by_class: dict[str, list[int]] = {}
     for i, lbl in enumerate(label_parts):
         by_class.setdefault(lbl, []).append(i)
@@ -1196,54 +1200,11 @@ def plot_master_comparison(results: dict, output_dir: Path):
     print(f"  Saved: {path}")
 
 
-_FAMILY_BASE_COLORS = {
-    "dinov3": "#1f77b4",
-    "yolo": "#ff7f0e",
-    "qwen": "#2ca02c",
-    "gemma": "#9467bd",
-}
-_DEFAULT_FAMILY_COLOR = "#7f7f7f"
-
-
-def _backbone_family(name: str) -> str:
-    """Group a backbone label into a model family so same-family variants
-    (e.g. Qwen3.5-9B / Qwen3.5-27B) get shades of the same base color."""
-    n = name.lower()
-    for family in _FAMILY_BASE_COLORS:
-        if family in n:
-            return family
-    return n
-
-
-def _param_count_b(name: str) -> float:
-    """Extract the largest '<number>B' parameter count in a backbone label
-    (e.g. "gemma-4-26B-A4B-it" -> 26.0), 0.0 if none found. Used to rank
-    same-family variants from smallest to largest for shading."""
-    matches = re.findall(r"(\d+(?:\.\d+)?)b", name.lower())
-    return max((float(m) for m in matches), default=0.0)
-
-
-def _family_shaded_colors(backbones: list[str]) -> dict[str, tuple]:
-    """Assign each backbone a color: same base hue per family, with more
-    parameters -> darker shade. Single-member families get a mid shade."""
-    families: dict[str, list[str]] = defaultdict(list)
-    for b in backbones:
-        families[_backbone_family(b)].append(b)
-
-    colors: dict[str, tuple] = {}
-    for family, members in families.items():
-        base_hex = _FAMILY_BASE_COLORS.get(family, _DEFAULT_FAMILY_COLOR)
-        h, l, s = colorsys.rgb_to_hls(*mcolors.to_rgb(base_hex))
-        params = {b: _param_count_b(b) for b in members}
-        lo, hi = min(params.values()), max(params.values())
-        for b in members:
-            if hi > lo:
-                frac = (params[b] - lo) / (hi - lo)  # 0 = smallest, 1 = largest
-            else:
-                frac = 0.5  # single member (or tied params) -> mid shade
-            lightness = 0.68 - frac * 0.38  # smallest ~0.68 (light) -> largest ~0.30 (dark)
-            colors[b] = colorsys.hls_to_rgb(h, lightness, s)
-    return colors
+# Family-shaded backbone colors + vision-only hatching now live in
+# src/common/plot_style.py — shared with vision_baseline_collate.py and
+# collate_seeds.py so the same backbone reads as the same color on every
+# chart in the pipeline. Imported at the top of this file as
+# _family_shaded_colors / _is_vision_only.
 
 
 def plot_task_summary(results: dict, output_dir: Path):
@@ -1264,15 +1225,6 @@ def plot_task_summary(results: dict, output_dir: Path):
     backbones = list(next(iter(by_task.values())).keys())
     x = np.arange(len(task_types))
     width = 0.8 / len(backbones)
-
-    # Vision-only backbones (no language model, frozen classifier/self-supervised
-    # towers like YOLO/DINO) get a hatch pattern so they read as a visually
-    # distinct group from the VLM backbones at a glance, not just by color.
-    _VISION_ONLY_MARKERS = ("yolo", "dino")
-
-    def _is_vision_only(backbone: str) -> bool:
-        name = backbone.lower()
-        return any(marker in name for marker in _VISION_ONLY_MARKERS)
 
     backbone_colors = _family_shaded_colors(backbones)
 
@@ -1454,7 +1406,7 @@ def main(args):
         # Default is 10 per class; pass --n_samples to override.
         # Combined probe always uses 80/20 stratified split regardless of this value.
         _n_samples_per_class = args.n_samples if args.n_samples is not None else 10
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(args.seed)
         by_class: dict[str, list[int]] = {}
         for i, s in enumerate(samples):
             by_class.setdefault(s["label"], []).append(i)
@@ -1515,7 +1467,7 @@ def main(args):
             print(f"  [cache] All DINOv3 embeddings cached — skipping model load")
             for agml_name, _ in ds_items:
                 X, cached_labels = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb")
-                all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
         else:
             dino_processor, dino_model = load_dino(args.dino_model, device)
             for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="DINOv3 datasets"):
@@ -1523,7 +1475,7 @@ def main(args):
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {dino_key} / {agml_name}")
-                    all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
                     if use_embedding_cache:
@@ -1546,14 +1498,14 @@ def main(args):
             print(f"  [cache] All YOLO embeddings cached — skipping model load")
             for agml_name, _ in ds_items:
                 X, cached_labels = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb")
-                all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
         else:
             for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="YOLO datasets"):
                 cached = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {yolo_key} / {agml_name}")
-                    all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X = extract_yolo_embeddings(samples, args.yolo_model, device)
                     if use_embedding_cache:
@@ -1575,7 +1527,7 @@ def main(args):
             print(f"  [cache] All BioCLIP embeddings cached — skipping model load")
             for agml_name, _ in ds_items:
                 X, cached_labels = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb")
-                all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
         else:
             bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
             for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="BioCLIP datasets"):
@@ -1583,7 +1535,7 @@ def main(args):
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {bioclip_key} / {agml_name}")
-                    all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X, _ = extract_bioclip_embeddings(samples, bioclip_model, bioclip_preprocess, device)
                     if use_embedding_cache:
@@ -1718,7 +1670,7 @@ def main(args):
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {backbone_key} / {agml_name} pre")
-                    all_embeddings[backbone_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[backbone_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X, _ = extract_vlm_embeddings(samples, processor, vlm, pre_module, desc=backbone_key)
                     if use_embedding_cache:
@@ -1732,7 +1684,7 @@ def main(args):
                 if cached_post is not None:
                     X_post, cached_labels_post = cached_post
                     print(f"  [cache hit] {postproj_key} / {agml_name} post")
-                    postproj_embeddings[postproj_key][agml_name] = _split_from_labels(X_post, cached_labels_post, args.n_samples)
+                    postproj_embeddings[postproj_key][agml_name] = _split_from_labels(X_post, cached_labels_post, args.n_samples, seed=args.seed)
                 else:
                     X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, post_module, desc=postproj_key)
                     if use_embedding_cache:
@@ -1831,7 +1783,7 @@ def main(args):
     fc_comb_embed_store:  dict[str, tuple] = {}  # {backbone: (X_te_np, y_test_labels)}
 
     for backbone in available_backbones:
-        split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
+        split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined, seed=args.seed)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
@@ -1871,7 +1823,7 @@ def main(args):
 
     if getattr(args, "lr_combined", False):
         for backbone in available_backbones:
-            split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
+            split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined, seed=args.seed)
             if split is None:
                 continue
             X_tr, X_te, y_tr, y_te, le_comb, label_parts = split
@@ -1891,7 +1843,7 @@ def main(args):
     postproj_lr_comb_report_store: dict[str, dict] = {} # {backbone_postproj: per_class_report}
     postproj_lr_comb_embed_store:  dict[str, tuple] = {} # {backbone_postproj: (X_all, y_all_labels)}
     for postproj_key in postproj_embeddings:
-        split = build_combined_split(postproj_embeddings, postproj_key)
+        split = build_combined_split(postproj_embeddings, postproj_key, seed=args.seed)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
@@ -1907,7 +1859,7 @@ def main(args):
     postproj_fc_combined: dict[str, dict] = {}
     postproj_fc_comb_report_store: dict[str, dict] = {}
     for postproj_key in postproj_embeddings:
-        split = build_combined_split(postproj_embeddings, postproj_key, n_samples=_n_combined)
+        split = build_combined_split(postproj_embeddings, postproj_key, n_samples=_n_combined, seed=args.seed)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
@@ -2272,6 +2224,15 @@ if __name__ == "__main__":
         help="Images per class used for training, in BOTH the per-dataset split and the "
              "combined (all datasets merged) split — default 10 either way. Test uses all "
              "remaining images in each class.",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Seed for which n_samples images of each class's pool land in train vs test. "
+             "Vary this across reruns to check probe results aren't an artifact of one "
+             "particular 10-image draw — the embedding cache is seed-independent (it holds "
+             "every loaded image's embedding, not just one sampled subset), so a different "
+             "seed re-trains the fast linear probe only, no re-extraction. Use a different "
+             "--output_dir per seed so results don't overwrite each other.",
     )
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,

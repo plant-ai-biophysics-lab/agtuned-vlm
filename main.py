@@ -11,6 +11,7 @@ STAGES = {
     "data-gen":           "src.data_generation.generate",
     "check-vision-towers": "src.linear_probe.check_vision_towers",
     "probe":         "src.linear_probe.probe",
+    "probe-collate-seeds": "src.linear_probe.collate_seeds",
     "cluster":       "src.clustering_eval.eval",
     "cluster-viz":   "src.clustering_eval.sample_viz",
     "majority-vote": "src.majority_vote",
@@ -46,6 +47,8 @@ Stages:
     check-vision-towers      — pre-check: do candidate models expose a resolvable vision
                                tower before running the full probe pipeline on them
     probe           Stage 1 — linear probe: frozen-embedding separability across backbones
+    probe-collate-seeds     — combine multiple probe.py --seed runs into one summary_by_task
+                               chart with 95% CI error bars (Student's t across seeds)
     cluster                 — unsupervised clustering eval of frozen embeddings (NMI, ARI, Silhouette)
     cluster-viz             — visualise easiest/hardest datasets per task with sample class images
     language        Stage 2 — language assessment: text-only agricultural VQA (ROUGE-SS + F1)
