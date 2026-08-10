@@ -8,11 +8,19 @@ bound) side by side for every model, with 95% confidence intervals
 bootstrap-resampled over classes (see bootstrap_f1_ci in
 src/common/vision_eval.py) — both overall and per task type.
 
+Also produces a supplementary per-class consistency plot: a box plot of each
+model/condition's raw per-class F1 distribution (no resampling) — the CI bar
+chart tells you how confident we are in the average; this tells you how
+consistent the model is across classes (tight box = uniform performance,
+wide box/long whiskers = some classes much harder than others).
+
 Outputs (into --output_dir):
-  stage2_summary.csv        — model, condition, scope, key, f1_macro, ci_low, ci_high, n_classes, n
-  stage2_summary.json       — same, structured
-  stage2_f1_by_task.png     — grouped bar chart: task types (+ overall), bars
-                               per (model, condition), with 95% CI error bars
+  stage2_summary.csv          — model, condition, scope, key, f1_macro, ci_low, ci_high, n_classes, n
+  stage2_summary.json         — same, structured
+  stage2_f1_by_task.png       — grouped bar chart: task types (+ overall), bars
+                                 per (model, condition), with 95% CI error bars
+  stage2_f1_percentiles.png   — supplementary: box plot of each model/condition's
+                                 raw per-class F1 scores, one panel per task type + overall
 
 Usage (run once after all --model runs of BOTH scripts have finished):
     uv run python main.py vision-baseline-collate \\
@@ -27,61 +35,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
-import colorsys
 import csv
 import json
-import re
 from collections import defaultdict
 
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.common.vision_eval import compute_condition_stats, load_all_rows
+from src.common.plot_style import family_shaded_colors as _family_shaded_colors
+from src.common.vision_eval import compute_condition_stats, load_all_rows, per_class_f1_values
 
 _CONDITIONS = [("baseline", "Vision Baseline"), ("desc_aug", "Desc-Augmented")]
-
-# Same family-shading scheme as src/linear_probe/probe.py's summary_by_task.png
-# (same-family variants get shades of the same hue, more parameters = darker)
-# — duplicated locally rather than imported, since probe.py pulls in the full
-# torch/transformers stack at module load and this script has no need for it.
-_FAMILY_BASE_COLORS = {
-    "dinov3": "#1f77b4",
-    "yolo": "#ff7f0e",
-    "qwen": "#2ca02c",
-    "gemma": "#9467bd",
-}
-_DEFAULT_FAMILY_COLOR = "#7f7f7f"
-
-
-def _backbone_family(name: str) -> str:
-    n = name.lower()
-    for family in _FAMILY_BASE_COLORS:
-        if family in n:
-            return family
-    return n
-
-
-def _param_count_b(name: str) -> float:
-    matches = re.findall(r"(\d+(?:\.\d+)?)b", name.lower())
-    return max((float(m) for m in matches), default=0.0)
-
-
-def _family_shaded_colors(models: list[str]) -> dict[str, tuple]:
-    families: dict[str, list[str]] = defaultdict(list)
-    for m in models:
-        families[_backbone_family(m)].append(m)
-    colors: dict[str, tuple] = {}
-    for family, members in families.items():
-        base_hex = _FAMILY_BASE_COLORS.get(family, _DEFAULT_FAMILY_COLOR)
-        h, l, s = colorsys.rgb_to_hls(*mcolors.to_rgb(base_hex))
-        params = {m: _param_count_b(m) for m in members}
-        lo, hi = min(params.values()), max(params.values())
-        for m in members:
-            frac = (params[m] - lo) / (hi - lo) if hi > lo else 0.5
-            lightness = 0.68 - frac * 0.38
-            colors[m] = colorsys.hls_to_rgb(h, lightness, s)
-    return colors
 
 
 def collate(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[str, dict[str, dict]]:
@@ -98,6 +62,36 @@ def collate(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[s
         if model in aug_rows:
             combined[model]["desc_aug"] = compute_condition_stats(aug_rows[model], n_boot, seed)
     return combined
+
+
+def collect_per_class_f1(baseline_dir: Path, aug_dir: Path) -> dict[str, dict[str, dict[str, list[float]]]]:
+    """{model: {"baseline"/"desc_aug": {scope: [per-class F1, ...]}}} — the
+    raw (unresampled) per-class F1 array behind bootstrap_f1_ci's mean/CI,
+    scoped the same way (overall + each task type) so it lines up 1:1 with
+    plot_f1_by_task's bars."""
+    baseline_rows = load_all_rows(baseline_dir)
+    aug_rows = load_all_rows(aug_dir)
+    models = sorted(set(baseline_rows) | set(aug_rows))
+
+    def _scoped_arrays(rows: list[dict]) -> dict[str, list[float]]:
+        by_task: dict[str, list[dict]] = defaultdict(list)
+        for r in rows:
+            by_task[r["task_type"]].append(r)
+        _, overall_arr = per_class_f1_values(rows)
+        scoped = {"overall": overall_arr.tolist()}
+        for tt, trows in by_task.items():
+            _, arr = per_class_f1_values(trows)
+            scoped[tt] = arr.tolist()
+        return scoped
+
+    result: dict[str, dict[str, dict[str, list[float]]]] = {}
+    for model in models:
+        result[model] = {}
+        if model in baseline_rows:
+            result[model]["baseline"] = _scoped_arrays(baseline_rows[model])
+        if model in aug_rows:
+            result[model]["desc_aug"] = _scoped_arrays(aug_rows[model])
+    return result
 
 
 def write_summary(output_dir: Path, combined: dict[str, dict[str, dict]]) -> None:
@@ -172,6 +166,80 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
     print(f"  Saved: {path}")
 
 
+def plot_f1_percentiles(output_dir: Path, per_class_arrays: dict[str, dict[str, dict[str, list[float]]]]) -> None:
+    """Supplementary: box plot of each model/condition's RAW per-class F1
+    scores (no resampling) — one panel per task type + overall. Shows
+    consistency across classes (tight box = uniform performance, long
+    whiskers/wide IQR = some classes much harder than others), which the CI
+    bar chart doesn't — that chart's error bars describe uncertainty in the
+    mean, not the spread of the underlying per-class scores."""
+    models = sorted(per_class_arrays.keys())
+    if not models:
+        print("  No models to plot.")
+        return
+
+    task_types = sorted({
+        scope for by_cond in per_class_arrays.values() for by_scope in by_cond.values()
+        for scope in by_scope if scope != "overall"
+    })
+    scopes = task_types + ["overall"]
+
+    model_colors = _family_shaded_colors(models)
+    n_boxes = len(models) * len(_CONDITIONS)
+
+    fig, axes = plt.subplots(1, len(scopes), figsize=(max(4.5, n_boxes * 0.7) * len(scopes), 5.5), sharey=True)
+    if len(scopes) == 1:
+        axes = [axes]
+
+    for ax, scope in zip(axes, scopes):
+        positions, data, colors, hatches = [], [], [], []
+        pos = 0
+        for model in models:
+            for cond_key, _ in _CONDITIONS:
+                arr = per_class_arrays.get(model, {}).get(cond_key, {}).get(scope, [])
+                pos += 1
+                if not arr:
+                    continue
+                data.append(arr)
+                positions.append(pos)
+                colors.append(model_colors[model])
+                hatches.append(cond_key == "desc_aug")
+
+        if not data:
+            ax.set_visible(False)
+            continue
+
+        bp = ax.boxplot(data, positions=positions, widths=0.6, patch_artist=True,
+                         showfliers=True, medianprops={"color": "black"}, flierprops={"markersize": 3})
+        for patch, color, hatch in zip(bp["boxes"], colors, hatches):
+            patch.set_facecolor(color)
+            patch.set_edgecolor("white" if hatch else "black")
+            if hatch:
+                patch.set_hatch("//")
+
+        ax.set_xticks([])
+        ax.set_title(scope.replace("_", " "), fontsize=9)
+        ax.set_ylim(-0.05, 1.05)
+
+    axes[0].set_ylabel("Per-class F1")
+
+    legend_handles = [
+        plt.Rectangle((0, 0), 1, 1, facecolor=model_colors[model],
+                       hatch="//" if cond_key == "desc_aug" else None,
+                       edgecolor="white" if cond_key == "desc_aug" else "black",
+                       label=f"{model.split('/')[-1]} ({cond_label})")
+        for model in models for cond_key, cond_label in _CONDITIONS
+    ]
+    fig.legend(handles=legend_handles, loc="lower center", bbox_to_anchor=(0.5, -0.1),
+               ncol=min(len(models), 4), fontsize=7)
+    fig.suptitle("Per-class F1 distribution — consistency across classes", fontsize=10)
+    plt.tight_layout(rect=[0, 0.1, 1, 0.95])
+
+    path = output_dir / "stage2_f1_percentiles.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path}")
+
+
 def main(args: argparse.Namespace) -> None:
     combined = collate(Path(args.baseline_dir), Path(args.aug_dir), args.n_boot, args.seed)
     if not combined:
@@ -180,6 +248,9 @@ def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     write_summary(output_dir, combined)
     plot_f1_by_task(output_dir, combined)
+
+    per_class_arrays = collect_per_class_f1(Path(args.baseline_dir), Path(args.aug_dir))
+    plot_f1_percentiles(output_dir, per_class_arrays)
 
 
 if __name__ == "__main__":

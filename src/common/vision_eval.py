@@ -334,19 +334,30 @@ def load_all_rows(output_dir: Path) -> dict[str, list[dict]]:
     return result
 
 
+def per_class_f1_values(rows: list[dict]) -> tuple[list[str], np.ndarray]:
+    """(classes, per_class F1 array) — each class's own F1 from its own
+    TP/FP/FN, computed via resolved_class vs ground_truth. Shared by
+    bootstrap_f1_ci (resamples this array) and the per-class percentile/
+    consistency plot (shows this array's raw spread directly, no resampling)."""
+    refs = [r["ground_truth"] for r in rows]
+    preds = [r.get("resolved_class") or "" for r in rows]
+    classes = sorted(set(refs))
+    if not classes:
+        return [], np.array([])
+    per_class = f1_score(refs, preds, average=None, labels=classes, zero_division=0)
+    return classes, per_class
+
+
 def bootstrap_f1_ci(rows: list[dict], n_boot: int = 2000, seed: int = 42) -> dict:
     """Macro-F1 point estimate + 95% CI, bootstrap-resampled over CLASSES (not
     samples) — each class already has its own well-defined F1 (from its own
     TP/FP/FN), and macro-F1 is just their mean, so resampling which classes
     are in the average is the natural unit of uncertainty here, matching "CI
     based on the classes" rather than per-image noise."""
-    refs = [r["ground_truth"] for r in rows]
-    preds = [r.get("resolved_class") or "" for r in rows]
-    classes = sorted(set(refs))
+    classes, per_class = per_class_f1_values(rows)
     if not classes:
         return {"f1_macro": 0.0, "ci_low": 0.0, "ci_high": 0.0, "n_classes": 0, "n": len(rows)}
 
-    per_class = f1_score(refs, preds, average=None, labels=classes, zero_division=0)
     point = float(np.mean(per_class))
     if len(classes) < 2:
         return {"f1_macro": round(point, 4), "ci_low": round(point, 4),
