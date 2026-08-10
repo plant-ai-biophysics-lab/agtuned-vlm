@@ -206,6 +206,7 @@ if __name__ == "__main__":
         "model", "config", "prompts", "classification_jsonl", "manifest", "images_root",
         "n_samples", "quantize", "gpu_memory_utilization", "max_model_len", "max_num_seqs",
         "enforce_eager", "judge_model", "judge_quantize", "judge_confidence_threshold",
+        "judge_chunk_size",
     }
 
     if _pre_args.vision_baseline_config and Path(_pre_args.vision_baseline_config).exists():

@@ -43,6 +43,8 @@ enforce_eager: false
 judge_model: google/gemma-4-26B-A4B-it
 judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
 judge_confidence_threshold: 1
+judge_chunk_size: 200  # rows per judge call — drives the judge progress bar
+                        # and caps how much work a kill mid-judging can lose
 
 # ── Output directories ───────────────────────────────────────────────────────
 # Kept as three separate keys (not one shared "output_dir") since the three

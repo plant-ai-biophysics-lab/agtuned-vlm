@@ -47,12 +47,11 @@ from src.common.dataset_config import (
     load_manifest, parse_class_label,
 )
 from src.common.io import load_prompts
-from src.common.metrics import apply_judge, contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
+from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     append_ckpt_row, collate_models, compute_model_metrics, judge_gt_hint,
-    load_ckpt, merge_judged, rewrite_ckpt, rows_needing_judge, safe_model_name,
-    write_collated, write_model_metrics,
+    load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
 )
 
 try:
@@ -144,43 +143,10 @@ def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = 
     return [_clean(o.outputs[0].text) for o in outputs]
 
 
-# ── Judge phase ──────────────────────────────────────────────────────────────
-# Separate from generation — always uses args.judge_model (fixed across every
-# baseline/model being evaluated), loaded only after the classification
-# model has been destroyed. Resumable: only judges rows without a
-# judged_correct value yet, whether that's because this run just generated
-# them or a previous run stopped before reaching the judge phase.
-
-def run_judge_phase(rows: list[dict], ckpt_path: Path, args: argparse.Namespace, prompts: dict) -> list[dict]:
-    todo = rows_needing_judge(rows)
-    if not todo:
-        if rows:
-            print(f"  [judge] all {len(rows)} row(s) already judged")
-        return rows
-
-    print(f"  [judge] {len(todo)} row(s) to judge ({len(rows) - len(todo)} already judged) "
-          f"— loading {args.judge_model}")
-    judge_llm, judge_tok = load_llm(
-        args.judge_model, quantization=args.judge_quantize,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_model_len,
-        max_num_seqs=args.max_num_seqs,
-        enforce_eager=args.enforce_eager,
-    )
-    judged_new = apply_judge(
-        rows=todo, llm=judge_llm, tokenizer=judge_tok,
-        system_prompt=prompts.get("judge_system_vision", ""),
-        judge_template=prompts["judge_classification_template"],
-        gt_key="judge_gt_hint", pred_key="prediction",
-        confidence_threshold=args.judge_confidence_threshold,
-    )
-    destroy_llm(judge_llm)
-    del judge_tok
-
-    rows = merge_judged(rows, judged_new)
-    rewrite_ckpt(ckpt_path, rows)
-    print(f"  [judge] done — checkpoint rewritten")
-    return rows
+# run_judge_phase() lives in src/common/vision_eval.py — shared verbatim with
+# desc_augmented_vision_v2.py (and any future classification experiment) so
+# judge behavior (model, chunking, checkpointing, resume, --rejudge,
+# judge_gt_hint backfill) stays identical everywhere. Do not redefine it here.
 
 
 # ── Main run ─────────────────────────────────────────────────────────────────
@@ -324,6 +290,13 @@ if __name__ == "__main__":
                          help="Fixed judge model used for every baseline/model being evaluated.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
+    parser.add_argument("--judge_chunk_size", type=int, default=200,
+                         help="Rows per apply_judge() call — drives the judge progress bar "
+                              "and how much work a kill mid-judging can lose.")
+    parser.add_argument("--rejudge", action="store_true",
+                         help="Clear judged_correct/judge_reasoning on every row and re-judge "
+                              "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "
+                              "on old checkpoints) may have corrupted existing judge results.")
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")

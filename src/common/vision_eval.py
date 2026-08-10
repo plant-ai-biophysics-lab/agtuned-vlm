@@ -6,6 +6,7 @@ collation, so a limited-time remote job can resume exactly where it left off.
 from __future__ import annotations
 
 import csv
+import gc
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -13,7 +14,13 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import f1_score
 
-from src.common.metrics import aggregate_rouge, compute_classification_metrics, judged_summary
+from src.common.metrics import apply_judge, aggregate_rouge, compute_classification_metrics, judged_summary
+from src.common.progress import ProgressBar
+
+try:
+    from vllm import LLM
+except ImportError:
+    LLM = None  # type: ignore[assignment,misc]
 
 CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
@@ -30,6 +37,22 @@ _SUMMARY_FIELDS = ["f1_macro", "accuracy", "contains_accuracy", "rouge_ss", "sem
 
 def safe_model_name(model_id: str) -> str:
     return model_id.replace("/", "_").replace(" ", "_")
+
+
+def ensure_judge_gt_hint(rows: list[dict]) -> int:
+    """Backfill judge_gt_hint from class_label, in place, for any row where
+    it's missing or blank — e.g. a checkpoint CSV written before
+    judge_gt_hint existed as a column has no such key in its DictReader rows
+    at all, and apply_judge()'s r.get(gt_key, "") silently resolves to ""
+    for those, judging every prediction against a blank ground truth (which
+    a judge will near-universally mark as no-match). Returns how many rows
+    were backfilled, so callers can warn if it's a lot."""
+    n = 0
+    for r in rows:
+        if not r.get("judge_gt_hint"):
+            r["judge_gt_hint"] = r.get("class_label", "")
+            n += 1
+    return n
 
 
 def judge_gt_hint(clean_label: str, aliases: list[str]) -> str:
@@ -66,17 +89,23 @@ def append_ckpt_row(path: Path, row: dict) -> None:
         writer.writerow({k: row.get(k, "") for k in CKPT_FIELDS})
 
 
-# ── Judge phase (separate from generation — see run_judge_phase in both
-# vision_baseline.py and desc_augmented_vision_v2.py) ──────────────────────
+# ── Judge phase ──────────────────────────────────────────────────────────────
 #
 # Judging is its own resumable phase, not part of the per-sample generation
 # checkpoint loop: it needs a different model loaded (the judge, default
 # google/gemma-4-26B-A4B-it, fixed across every baseline/model being
 # evaluated), so it always runs after the classification model for this run
-# has already been destroyed. rows_needing_judge() lets a resumed run only judge what a
-# previous run didn't get to; rewrite_ckpt() persists the merged result (a
-# full rewrite, not an append, since it's filling in columns on existing rows
-# rather than adding new ones).
+# has already been destroyed. rows_needing_judge() lets a resumed run only
+# judge what a previous run didn't get to; rewrite_ckpt() persists the
+# merged result (a full rewrite, not an append, since it's filling in
+# columns on existing rows rather than adding new ones).
+#
+# run_judge_phase() is THE shared entry point every classification
+# experiment (vision_baseline.py, desc_augmented_vision_v2.py, and any
+# future one) calls — same judge model, same chunking/checkpoint/resume/
+# rejudge/backfill behavior everywhere, so judge_accuracy is comparable
+# across experiments and a fix here (like the blank-judge_gt_hint bug) only
+# ever needs to happen in one place. Do not re-implement this per-script.
 
 def _judge_row_key(row: dict) -> tuple[str, str, str]:
     return (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""))
@@ -109,6 +138,116 @@ def rewrite_ckpt(path: Path, rows: list[dict]) -> None:
         writer.writeheader()
         for r in rows:
             writer.writerow({k: r.get(k, "") for k in CKPT_FIELDS})
+
+
+def _load_judge_llm(
+    model_id: str,
+    quantization: str | None = None,
+    gpu_memory_utilization: float = 0.9,
+    max_model_len: int = 8192,
+    max_num_seqs: int = 64,
+    enforce_eager: bool = False,
+):
+    print(f"\n[judge] Loading {model_id} via vLLM")
+    llm = LLM(
+        model=model_id,
+        dtype="bfloat16",
+        quantization=quantization,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        max_num_seqs=max_num_seqs,
+        limit_mm_per_prompt={"image": 1},
+        enforce_eager=enforce_eager,
+    )
+    return llm, llm.get_tokenizer()
+
+
+def _destroy_judge_llm(llm) -> None:
+    import torch
+    try:
+        llm.llm_engine.engine_core.shutdown()
+    except Exception:
+        pass
+    try:
+        from vllm.distributed.parallel_state import destroy_model_parallel
+        destroy_model_parallel()
+    except Exception:
+        pass
+    del llm
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+
+def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> list[dict]:
+    """Shared judge phase — see module-level note above.
+
+    `args` (any argparse.Namespace-like object — vision_baseline.py and
+    desc_augmented_vision_v2.py both define these exact flags, and any new
+    experiment reusing this function should too) must carry:
+      judge_model, judge_quantize, judge_confidence_threshold,
+      judge_chunk_size, rejudge, gpu_memory_utilization, max_model_len,
+      max_num_seqs, enforce_eager
+
+    `prompts` must carry judge_classification_template (and optionally
+    judge_system_vision) from prompts.yaml.
+
+    Every judge call's full input/output (system prompt, rendered prompt,
+    untruncated raw response, gt/pred shown) is logged to
+    <ckpt_path's directory>/judge_log.jsonl for QA — this is what caught the
+    blank-judge_gt_hint bug; keep it on by default rather than making it
+    opt-in.
+    """
+    log_path = ckpt_path.parent / "judge_log.jsonl"
+
+    if args.rejudge:
+        for r in rows:
+            r["judged_correct"] = ""
+            r["judge_reasoning"] = ""
+
+    n_backfilled = ensure_judge_gt_hint(rows)
+    if n_backfilled:
+        print(f"  [judge] backfilled judge_gt_hint (from class_label) on {n_backfilled} row(s) "
+              f"missing it — likely a checkpoint written before that column existed")
+
+    todo = rows_needing_judge(rows)
+    if not todo:
+        if rows:
+            print(f"  [judge] all {len(rows)} row(s) already judged")
+        return rows
+
+    print(f"  [judge] {len(todo)} row(s) to judge ({len(rows) - len(todo)} already judged) "
+          f"— loading {args.judge_model}")
+    print(f"  [judge] logging full conversations to {log_path}")
+    judge_llm, judge_tok = _load_judge_llm(
+        args.judge_model, quantization=args.judge_quantize,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len,
+        max_num_seqs=args.max_num_seqs,
+        enforce_eager=args.enforce_eager,
+    )
+
+    chunk_size = max(args.judge_chunk_size, 1)
+    pbar = ProgressBar(total=len(todo), desc="Judging")
+    for i in range(0, len(todo), chunk_size):
+        chunk = todo[i : i + chunk_size]
+        judged_chunk = apply_judge(
+            rows=chunk, llm=judge_llm, tokenizer=judge_tok,
+            system_prompt=prompts.get("judge_system_vision", ""),
+            judge_template=prompts["judge_classification_template"],
+            gt_key="judge_gt_hint", pred_key="prediction",
+            confidence_threshold=args.judge_confidence_threshold,
+            log_path=log_path,
+        )
+        rows = merge_judged(rows, judged_chunk)
+        rewrite_ckpt(ckpt_path, rows)
+        pbar.update(len(chunk))
+    pbar.finish()
+
+    _destroy_judge_llm(judge_llm)
+    del judge_tok
+    print(f"  [judge] done — checkpoint rewritten")
+    return rows
 
 
 def compute_model_metrics(rows: list[dict]) -> dict:
