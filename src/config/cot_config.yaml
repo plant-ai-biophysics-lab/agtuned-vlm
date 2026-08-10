@@ -1,0 +1,54 @@
+# Stage 2 (self_cot.py / cot_yaml.py) shared defaults — edit these directly
+# instead of remembering CLI flags. Loaded automatically by both scripts
+# (default --cot_config path is this file). Any flag you DO pass on the
+# command line still overrides whatever is set here.
+#
+# You run these per model (--model overrides "model" below), one invocation
+# per model per script.
+
+# ── Model ────────────────────────────────────────────────────────────────────
+# Set here for convenience, or pass --model on the command line per run —
+# whichever you pass on the CLI wins.
+model: google/gemma-4-26B-A4B-it
+
+# ── Data sources ─────────────────────────────────────────────────────────────
+config: src/config/datasets.yaml
+prompts: src/config/prompts.yaml
+manifest: dataset/selected_images.json
+images_root: dataset/images
+
+# ── Sampling ─────────────────────────────────────────────────────────────────
+# null = use every image the manifest has for that class (it was built with
+# an n_per_class=50 cap, so this means "all ~50/class", not literally
+# unbounded). Set an int here to sub-cap further for a faster/cheaper run.
+n_samples: null
+
+# ── vLLM ─────────────────────────────────────────────────────────────────────
+quantize: null  # "4bit", "8bit", "awq", "gptq"
+gpu_memory_utilization: 0.9
+# Multi-turn CoT conversations (up to 5 steps + classification for cot_yaml)
+# accumulate more prompt tokens than a single-turn baseline — 16384 matches
+# what vision_baseline_config.yaml also needed for image tokens alone.
+max_model_len: 16384
+max_num_seqs: 64
+enforce_eager: false
+
+# ── Judge ────────────────────────────────────────────────────────────────────
+# Fixed judge model for every baseline/model being evaluated — always this
+# one, regardless of which model is being judged, so judge_accuracy is
+# comparable across all four (and across self_cot/cot_yaml/vision_baseline/
+# desc_augmented_vision_v2). Runs as a separate phase after the
+# classification model for a given run is unloaded.
+judge_model: google/gemma-4-26B-A4B-it
+judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
+judge_confidence_threshold: 1
+judge_chunk_size: 200  # rows per judge call — drives the judge progress bar
+                        # and caps how much work a kill mid-judging can lose
+
+# ── Output directories ───────────────────────────────────────────────────────
+# Kept as two separate keys (not one shared "output_dir") since the two
+# scripts each need a different folder. Each script only actually uses its
+# own key; the other is accepted-but-ignored so both can share this one file
+# without an "unrecognized key" warning.
+self_cot_output_dir: outputs_final/self_cot/
+cot_yaml_output_dir: outputs_final/cot_yaml/

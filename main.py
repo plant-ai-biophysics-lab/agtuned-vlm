@@ -25,6 +25,8 @@ STAGES = {
     "vision-baseline": "src.vision_baseline",
     "desc-aug-v2":   "src.desc_augmented_vision_v2",
     "vision-baseline-collate": "src.vision_baseline_collate",
+    "self-cot":      "src.self_cot",
+    "cot-yaml":      "src.cot_yaml",
     "collate":       "src.collate_results",
 }
 
@@ -60,6 +62,10 @@ Stages:
                                classification question, same resumable per-model setup
     vision-baseline-collate  Stage 2c — combine vision-baseline + desc-aug-v2 across all
                                models into one summary + bar chart (95% CI over classes)
+    self-cot        Stage 2d — self-generated description, then classify using it as
+                               context (own reasoning, no external description)
+    cot-yaml        Stage 2e — structured multi-step reasoning (cot_prompts.yaml) before
+                               classifying; same resumable per-model setup as vision-baseline
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
@@ -84,6 +90,8 @@ Examples:
 
     python main.py vision-baseline --model google/gemma-4-26B-A4B-it
     python main.py desc-aug-v2     --model google/gemma-4-26B-A4B-it
+    python main.py self-cot        --model google/gemma-4-26B-A4B-it
+    python main.py cot-yaml        --model google/gemma-4-26B-A4B-it
     # ... repeat --model per model, then once ALL models/both scripts are done:
     python main.py vision-baseline-collate
 

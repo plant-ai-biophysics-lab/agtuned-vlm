@@ -1,6 +1,7 @@
 # Visual description questions — asked before classification (no class names in prompt)
 visual_description_disease: "Can you describe visually the disease, pest, damage type, or other stress, if any, that is exhibited in this image of {crop}?"
 visual_description_weed: "Can you describe visually the plant or weed exhibited in this image?"
+visual_description_quality: "Can you describe visually the quality, ripeness, or condition exhibited in this image of {crop}?"
 
 # Visual classification questions — OEQ, no class list
 visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"

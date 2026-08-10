@@ -297,6 +297,10 @@ if __name__ == "__main__":
                          help="Clear judged_correct/judge_reasoning on every row and re-judge "
                               "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "
                               "on old checkpoints) may have corrupted existing judge results.")
+    parser.add_argument("--skip_judge", action="store_true",
+                         help="Skip the judge phase entirely (no judge model loaded) — for "
+                              "preliminary/small-GPU runs of classification metrics only. "
+                              "Rerun later without this flag to backfill judging.")
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")

@@ -1,7 +1,8 @@
-"""Shared per-sample checkpoint + collation helpers for vision_baseline.py /
-desc_augmented_vision_v2.py — two-condition (lower/upper bound) vision
-classification eval with a per-model output subfolder and cross-model
-collation, so a limited-time remote job can resume exactly where it left off.
+"""Shared per-sample checkpoint + collation helpers for every classification
+experiment in this repo — vision_baseline.py / desc_augmented_vision_v2.py
+(lower/upper bound), self_cot.py / cot_yaml.py (chain-of-thought) — each
+with a per-model output subfolder and cross-model collation, so a
+limited-time remote job can resume exactly where it left off.
 """
 from __future__ import annotations
 
@@ -27,6 +28,9 @@ CKPT_FIELDS = [
     "prediction", "resolved_class", "ground_truth",
     "correct", "contains_match", "resolvable",
     "rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim",
+    "reasoning",  # self_cot's own generated description / cot_yaml's step-by-step
+                  # Q&A trail — empty string for vision_baseline.py and
+                  # desc_augmented_vision_v2.py, which have no reasoning turn
     "judge_gt_hint",  # class_label + datasets.yaml class_aliases, see judge_gt_hint()
     "judged_correct", "judge_reasoning",  # filled in by the separate judge phase;
                                            # empty string until then
@@ -182,12 +186,13 @@ def _destroy_judge_llm(llm) -> None:
 def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> list[dict]:
     """Shared judge phase — see module-level note above.
 
-    `args` (any argparse.Namespace-like object — vision_baseline.py and
-    desc_augmented_vision_v2.py both define these exact flags, and any new
-    experiment reusing this function should too) must carry:
+    `args` (any argparse.Namespace-like object — vision_baseline.py,
+    desc_augmented_vision_v2.py, self_cot.py, and cot_yaml.py all define
+    these exact flags, and any new experiment reusing this function should
+    too) must carry:
       judge_model, judge_quantize, judge_confidence_threshold,
-      judge_chunk_size, rejudge, gpu_memory_utilization, max_model_len,
-      max_num_seqs, enforce_eager
+      judge_chunk_size, rejudge, skip_judge, gpu_memory_utilization,
+      max_model_len, max_num_seqs, enforce_eager
 
     `prompts` must carry judge_classification_template (and optionally
     judge_system_vision) from prompts.yaml.
@@ -197,7 +202,17 @@ def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> l
     <ckpt_path's directory>/judge_log.jsonl for QA — this is what caught the
     blank-judge_gt_hint bug; keep it on by default rather than making it
     opt-in.
+
+    args.skip_judge (--skip_judge): skip this phase entirely — no judge
+    model loaded, existing judged_correct/judge_reasoning left untouched.
+    For preliminary/small-GPU runs where you want classification metrics
+    (F1, ROUGE) without the extra judge model's memory/time cost. Resume
+    later with a normal (non-skip) run to backfill judging.
     """
+    if getattr(args, "skip_judge", False):
+        print("  [judge] --skip_judge set — skipping judge phase entirely")
+        return rows
+
     log_path = ckpt_path.parent / "judge_log.jsonl"
 
     if args.rejudge:
