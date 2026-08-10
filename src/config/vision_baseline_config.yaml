@@ -29,7 +29,12 @@ n_samples: null
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"
 gpu_memory_utilization: 0.9
-max_model_len: 8192
+# 8192 isn't always enough — a single high-res image's vision tokens (varies
+# by model/aspect ratio) plus the question (and, for desc-aug, the reference
+# description) can exceed it. src/data_generation/generate.py hit the same
+# issue with these models and uses 16384 for its multimodal captioning pass;
+# matching that here rather than guessing a new number.
+max_model_len: 16384
 max_num_seqs: 64
 enforce_eager: false
 
