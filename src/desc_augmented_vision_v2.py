@@ -344,7 +344,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
-    parser.add_argument("--judge_model", default="google/gemma-4-31B-it",
+    parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
                          help="Fixed judge model used for every baseline/model being evaluated.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)

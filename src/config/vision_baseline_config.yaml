@@ -38,7 +38,9 @@ enforce_eager: false
 # one, regardless of which model is being judged, so judge_accuracy is
 # comparable across all four. Runs as a separate phase after the
 # classification model for a given run is unloaded.
-judge_model: google/gemma-4-31B-it
+# google/gemma-4-31B-it 404'd (gated/unavailable in this environment) —
+# defaulting to the 26B variant already used elsewhere in this pipeline.
+judge_model: google/gemma-4-26B-A4B-it
 judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
 judge_confidence_threshold: 1
 

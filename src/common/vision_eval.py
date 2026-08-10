@@ -70,10 +70,10 @@ def append_ckpt_row(path: Path, row: dict) -> None:
 # vision_baseline.py and desc_augmented_vision_v2.py) ──────────────────────
 #
 # Judging is its own resumable phase, not part of the per-sample generation
-# checkpoint loop: it needs a different model loaded (the judge, e.g.
-# google/gemma-4-31B-it, fixed across every baseline/model being evaluated),
-# so it always runs after the classification model for this run has already
-# been destroyed. rows_needing_judge() lets a resumed run only judge what a
+# checkpoint loop: it needs a different model loaded (the judge, default
+# google/gemma-4-26B-A4B-it, fixed across every baseline/model being
+# evaluated), so it always runs after the classification model for this run
+# has already been destroyed. rows_needing_judge() lets a resumed run only judge what a
 # previous run didn't get to; rewrite_ckpt() persists the merged result (a
 # full rewrite, not an append, since it's filling in columns on existing rows
 # rather than adding new ones).
