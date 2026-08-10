@@ -48,11 +48,12 @@ from src.common.dataset_config import (
     load_manifest, parse_class_label,
 )
 from src.common.io import load_jsonl, load_prompts
-from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
+from src.common.metrics import apply_judge, contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
-    append_ckpt_row, collate_models, compute_model_metrics, load_ckpt,
-    safe_model_name, write_collated, write_model_metrics,
+    append_ckpt_row, collate_models, compute_model_metrics, judge_gt_hint,
+    load_ckpt, merge_judged, rewrite_ckpt, rows_needing_judge, safe_model_name,
+    write_collated, write_model_metrics,
 )
 
 try:
@@ -156,6 +157,45 @@ def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = 
     return [_clean(o.outputs[0].text) for o in outputs]
 
 
+# ── Judge phase ──────────────────────────────────────────────────────────────
+# Separate from generation — always uses args.judge_model (fixed across every
+# baseline/model being evaluated), loaded only after the classification
+# model has been destroyed. Resumable: only judges rows without a
+# judged_correct value yet, whether that's because this run just generated
+# them or a previous run stopped before reaching the judge phase.
+
+def run_judge_phase(rows: list[dict], ckpt_path: Path, args: argparse.Namespace, prompts: dict) -> list[dict]:
+    todo = rows_needing_judge(rows)
+    if not todo:
+        if rows:
+            print(f"  [judge] all {len(rows)} row(s) already judged")
+        return rows
+
+    print(f"  [judge] {len(todo)} row(s) to judge ({len(rows) - len(todo)} already judged) "
+          f"— loading {args.judge_model}")
+    judge_llm, judge_tok = load_llm(
+        args.judge_model, quantization=args.judge_quantize,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len,
+        max_num_seqs=args.max_num_seqs,
+        enforce_eager=args.enforce_eager,
+    )
+    judged_new = apply_judge(
+        rows=todo, llm=judge_llm, tokenizer=judge_tok,
+        system_prompt=prompts.get("judge_system_vision", ""),
+        judge_template=prompts["judge_classification_template"],
+        gt_key="judge_gt_hint", pred_key="prediction",
+        confidence_threshold=args.judge_confidence_threshold,
+    )
+    destroy_llm(judge_llm)
+    del judge_tok
+
+    rows = merge_judged(rows, judged_new)
+    rewrite_ckpt(ckpt_path, rows)
+    print(f"  [judge] done — checkpoint rewritten")
+    return rows
+
+
 # ── Main run ─────────────────────────────────────────────────────────────────
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
@@ -191,12 +231,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 n_no_desc += 1
                 continue
             task_type = ds.effective_task_type(raw_label)
+            aliases = ds.effective_search_terms(raw_label)[1:]  # [1:] drops raw_label itself
+            gt_hint = judge_gt_hint(clean_label, aliases)
             path_by_name = {Path(it["path"]).name: it["path"] for it in items}
             names = sample_class_images(list(path_by_name.keys()), args.n_samples)
             pending = [n for n in names if (ds.agml_name, clean_label, n) not in seen]
             if not pending:
                 continue
-            groups.append((ds, clean_label, crop_val, task_type, description, pending, path_by_name))
+            groups.append((ds, clean_label, crop_val, task_type, description, gt_hint, pending, path_by_name))
 
     if n_no_desc:
         print(f"  [skip] {n_no_desc} (dataset, class) pair(s) with no synthesized_description in {args.classification_jsonl}")
@@ -204,7 +246,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     if not groups:
         print("  Nothing to do — all samples already checkpointed (or no descriptions found).")
     else:
-        n_pending = sum(len(g[5]) for g in groups)
+        n_pending = sum(len(g[6]) for g in groups)
         print(f"  {len(groups)} (dataset, class) group(s), {n_pending} pending sample(s)")
 
         llm, tokenizer = load_llm(
@@ -217,7 +259,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
         t_start = time.perf_counter()
         pbar = ProgressBar(total=len(groups), desc="Classes")
-        for ds, clean_label, crop_val, task_type, description, names, path_by_name in groups:
+        for ds, clean_label, crop_val, task_type, description, gt_hint, names, path_by_name in groups:
             pbar.desc = f"Classes ({ds.agml_name} / {clean_label})"
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             base_question = raw_cls_question(task_type, crop_val, prompts)
@@ -240,6 +282,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "resolved_class": resolved or "", "ground_truth": clean_label,
                     "correct": int(correct), "contains_match": int(c_match),
                     "resolvable": int(resolved is not None),
+                    "judge_gt_hint": gt_hint,
                     **scores,
                 }
                 append_ckpt_row(ckpt_path, row)
@@ -251,6 +294,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"\n  Inference time: {elapsed:.1f}s")
         destroy_llm(llm)
         del tokenizer
+
+    rows = run_judge_phase(rows, ckpt_path, args, prompts)
 
     metrics = compute_model_metrics(rows)
     write_model_metrics(model_dir, metrics)
@@ -299,6 +344,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_model_len", type=int, default=8192)
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--judge_model", default="google/gemma-4-31B-it",
+                         help="Fixed judge model used for every baseline/model being evaluated.")
+    parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
+    parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")

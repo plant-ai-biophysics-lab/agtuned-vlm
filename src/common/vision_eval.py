@@ -13,20 +13,35 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import f1_score
 
-from src.common.metrics import aggregate_rouge, compute_classification_metrics
+from src.common.metrics import aggregate_rouge, compute_classification_metrics, judged_summary
 
 CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
     "prediction", "resolved_class", "ground_truth",
     "correct", "contains_match", "resolvable",
     "rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim",
+    "judge_gt_hint",  # class_label + datasets.yaml class_aliases, see judge_gt_hint()
+    "judged_correct", "judge_reasoning",  # filled in by the separate judge phase;
+                                           # empty string until then
 ]
 
-_SUMMARY_FIELDS = ["f1_macro", "accuracy", "contains_accuracy", "rouge_ss", "sem_sim"]
+_SUMMARY_FIELDS = ["f1_macro", "accuracy", "contains_accuracy", "rouge_ss", "sem_sim", "judge_accuracy"]
 
 
 def safe_model_name(model_id: str) -> str:
     return model_id.replace("/", "_").replace(" ", "_")
+
+
+def judge_gt_hint(clean_label: str, aliases: list[str]) -> str:
+    """Ground-truth string shown to the judge: the class label plus any
+    datasets.yaml class_aliases (common/scientific/regional names for classes
+    whose raw label is a cryptic code — species codes, cultivar IDs, nutrient
+    element shorthand). Without this, a judge that only sees e.g. "SalKal" or
+    "1121" as ground truth would have no way to recognize a correct
+    prediction like "Russian thistle" or "Pusa Basmati 1121" as a match."""
+    if not aliases:
+        return clean_label
+    return f"{clean_label} (also known as: {', '.join(aliases)})"
 
 
 def load_ckpt(path: Path) -> tuple[list[dict], set[tuple[str, str, str]]]:
@@ -51,8 +66,54 @@ def append_ckpt_row(path: Path, row: dict) -> None:
         writer.writerow({k: row.get(k, "") for k in CKPT_FIELDS})
 
 
+# ── Judge phase (separate from generation — see run_judge_phase in both
+# vision_baseline.py and desc_augmented_vision_v2.py) ──────────────────────
+#
+# Judging is its own resumable phase, not part of the per-sample generation
+# checkpoint loop: it needs a different model loaded (the judge, e.g.
+# google/gemma-4-31B-it, fixed across every baseline/model being evaluated),
+# so it always runs after the classification model for this run has already
+# been destroyed. rows_needing_judge() lets a resumed run only judge what a
+# previous run didn't get to; rewrite_ckpt() persists the merged result (a
+# full rewrite, not an append, since it's filling in columns on existing rows
+# rather than adding new ones).
+
+def _judge_row_key(row: dict) -> tuple[str, str, str]:
+    return (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""))
+
+
+def rows_needing_judge(rows: list[dict]) -> list[dict]:
+    return [r for r in rows if not r.get("judged_correct")]
+
+
+def merge_judged(rows: list[dict], judged_new: list[dict]) -> list[dict]:
+    """Overlay judged_new's judged_correct/judge_reasoning onto the matching
+    rows in `rows` (by dataset/class/image key), leaving every other row and
+    every other column untouched."""
+    new_map = {_judge_row_key(r): r for r in judged_new}
+    merged = []
+    for r in rows:
+        j = new_map.get(_judge_row_key(r))
+        if j is None:
+            merged.append(r)
+        else:
+            merged.append({**r, "judged_correct": j.get("judged_correct", ""),
+                            "judge_reasoning": j.get("judge_reasoning", "")})
+    return merged
+
+
+def rewrite_ckpt(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CKPT_FIELDS)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k, "") for k in CKPT_FIELDS})
+
+
 def compute_model_metrics(rows: list[dict]) -> dict:
-    """Per-dataset, per-task-type, and overall F1 + ROUGE for one model's rows."""
+    """Per-dataset, per-task-type, and overall F1 + ROUGE (+ judge accuracy, if
+    the judge phase has run) for one model's rows."""
     by_ds: dict[str, list[dict]] = defaultdict(list)
     by_task: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
@@ -64,6 +125,7 @@ def compute_model_metrics(rows: list[dict]) -> dict:
         preds = [r.get("resolved_class") or "" for r in group_rows]
         m = compute_classification_metrics(refs, preds)
         m.update(aggregate_rouge(group_rows))
+        m.update(judged_summary(group_rows))
         return m
 
     return {

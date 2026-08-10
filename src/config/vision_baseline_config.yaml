@@ -33,6 +33,15 @@ max_model_len: 8192
 max_num_seqs: 64
 enforce_eager: false
 
+# ── Judge ────────────────────────────────────────────────────────────────────
+# Fixed judge model for every baseline/model being evaluated — always this
+# one, regardless of which model is being judged, so judge_accuracy is
+# comparable across all four. Runs as a separate phase after the
+# classification model for a given run is unloaded.
+judge_model: google/gemma-4-31B-it
+judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
+judge_confidence_threshold: 1
+
 # ── Output directories ───────────────────────────────────────────────────────
 # Kept as three separate keys (not one shared "output_dir") since the three
 # scripts each need a different folder — one shared key would make them
