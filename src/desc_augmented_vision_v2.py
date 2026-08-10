@@ -65,6 +65,12 @@ except ImportError:
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
+# Used for (dataset, class) pairs with no synthesized_description in
+# agml_classification.jsonl — deliberately generic, no mention of "health"
+# specifically, since the class this substitutes for isn't always the
+# healthy one (e.g. the rare genuine no_source_found case).
+_FALLBACK_DESCRIPTION = "This appears to be a normal image. No potential stresses can be seen in this image."
+
 
 # ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -178,7 +184,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")
 
     groups = []
-    n_no_desc = 0
+    n_fallback = 0
     for ds in active_datasets(Path(args.config)):
         if ds.skip or not ds.task_type:
             continue
@@ -194,8 +200,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             crop_val, clean_label = parse_class_label(raw_label, ds.crop)
             description = desc_map.get((ds.agml_name, clean_label))
             if not description:
-                n_no_desc += 1
-                continue
+                # No description in the JSONL — almost always a class we
+                # deliberately skipped describing at generation time (e.g.
+                # grounding_status "healthy_skip": nothing to visually
+                # describe), not a failed generation. Use a trivial fallback
+                # rather than dropping the class entirely, so desc-aug covers
+                # the same sample set as vision_baseline.py.
+                description = _FALLBACK_DESCRIPTION
+                n_fallback += 1
             task_type = ds.effective_task_type(raw_label)
             aliases = ds.effective_search_terms(raw_label)[1:]  # [1:] drops raw_label itself
             gt_hint = judge_gt_hint(clean_label, aliases)
@@ -206,8 +218,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 continue
             groups.append((ds, clean_label, crop_val, task_type, description, gt_hint, pending, path_by_name))
 
-    if n_no_desc:
-        print(f"  [skip] {n_no_desc} (dataset, class) pair(s) with no synthesized_description in {args.classification_jsonl}")
+    if n_fallback:
+        print(f"  [fallback] {n_fallback} (dataset, class) pair(s) had no synthesized_description "
+              f"in {args.classification_jsonl} — used the generic fallback description instead of skipping")
 
     if not groups:
         print("  Nothing to do — all samples already checkpointed (or no descriptions found).")
