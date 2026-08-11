@@ -53,7 +53,7 @@ import re
 import sys
 import time
 import traceback
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -129,6 +129,257 @@ def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
         selected = subsample_class_balanced(list(range(len(ds))), label_fn, n_per_class, seed)
 
     return repo_id, config, selected
+
+
+def _shade_gradient_by_value(base_hex: str, values: list) -> list:
+    """Colors aligned 1:1 with `values`' own order, but lightness is
+    assigned by each value's RANK (largest -> darkest shade), not by its
+    position in the list. Using position instead of rank would make a
+    "N remaining ..." bucket (always appended last) get an arbitrary shade
+    unrelated to its actual class count — it usually IS the largest single
+    value (so position happened to match rank and looked fine), but not
+    always: species' "3 remaining crops (11)" is smaller than
+    medicinal_plant (174), so position-based shading made the small bucket
+    darkest and the large one lightest — backwards.
+    """
+    import colorsys
+    import matplotlib.colors as mcolors
+    import numpy as np
+
+    n = len(values)
+    if n <= 1:
+        return [base_hex]
+    h, l, s = colorsys.rgb_to_hls(*mcolors.to_rgb(base_hex))
+    lightnesses = np.linspace(0.32, 0.78, n)  # rank 0 (largest value) gets index 0 = darkest
+    order = sorted(range(n), key=lambda i: -values[i])  # index of largest value first
+    result = [None] * n
+    for rank, idx in enumerate(order):
+        result[idx] = colorsys.hls_to_rgb(h, lightnesses[rank], s)
+    return result
+
+
+def _display_task(t: str) -> str:
+    t = t.replace("_identification", "")
+    return "pest/damage" if t == "pest_damage" else t
+
+
+def _add_leader_labels(ax, wedges, labels, radius, xoff, yoff, fontsize) -> None:
+    import numpy as np
+
+    for wedge, label in zip(wedges, labels):
+        ang = (wedge.theta2 - wedge.theta1) / 2.0 + wedge.theta1
+        x, y = np.cos(np.deg2rad(ang)) * radius, np.sin(np.deg2rad(ang)) * radius
+        ha = "left" if x >= 0 else "right"
+        ax.annotate(
+            label, xy=(x, y), xytext=(xoff * (1 if x >= 0 else -1), yoff * y),
+            horizontalalignment=ha, verticalalignment="center", fontsize=fontsize,
+            arrowprops=dict(arrowstyle="-", color="#555555", lw=0.6,
+                             connectionstyle=f"angle,angleA=0,angleB={ang}"),
+        )
+
+
+def _write_breakdown_csv(
+    chart_dir: Path, filename: str, breakdown_key: str,
+    class_task_types: list[str], groups_by_task: dict[str, Counter], top_n: int,
+) -> Path:
+    """Full breakdown (every value, not just the top `top_n` shown on a
+    chart) — shared by the nested donut and the stacked bar, which both
+    truncate to top_n on-chart and point here (by filename) for the rest."""
+    import csv as _csv
+
+    path = chart_dir / filename
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = _csv.writer(f)
+        writer.writerow(["task_type", breakdown_key, "n_classes", "shown_in_chart"])
+        for t in class_task_types:
+            group = groups_by_task[t]
+            top_names = {name for name, _ in group.most_common(top_n)}
+            for key, n in group.most_common():
+                writer.writerow([t, key, n, "top" if key in top_names else "other"])
+    print(f"  Saved: {path}")
+    return path
+
+
+def _task_outer_entries(
+    class_task_types: list[str], groups_by_task: dict[str, Counter], top_n: int, unit_name: str,
+) -> dict[str, list[tuple[str, int, tuple]]]:
+    """{task: [(label, value, color), ...]} — top_n individual entries per
+    task (largest first) plus one "N remaining {unit_name}" catch-all,
+    colored as a light->dark gradient of that task's own color ranked by
+    actual value (see _shade_gradient_by_value). Shared by the nested donut's
+    outer ring and the stacked bar's per-task segments — same top-N cutoff,
+    same shading, so the two chart types agree with each other."""
+    result: dict[str, list[tuple[str, int, tuple]]] = {}
+    for t in class_task_types:
+        group = groups_by_task[t]
+        top = group.most_common(top_n)
+        top_total = sum(v for _, v in top)
+        remainder = sum(group.values()) - top_total
+        entries = list(top)
+        if remainder > 0:
+            entries.append((f"{len(group) - len(top)} remaining {unit_name}", remainder))
+        shades = _shade_gradient_by_value(TASK_COLOR.get(t, "#888888"), [v for _, v in entries])
+        result[t] = [(label, val, color) for (label, val), color in zip(entries, shades)]
+    return result
+
+
+def _render_task_nested_donut(
+    chart_dir: Path,
+    class_task_types: list[str],
+    class_task_counts: Counter,
+    groups_by_task: dict[str, Counter],
+    *,
+    top_n: int,
+    unit_name: str,
+    breakdown_key: str,
+    breakdown_filename: str,
+    chart_filename: str,
+) -> None:
+    """Task type (inner ring, by class count) -> some second attribute
+    (outer ring) — generic over whatever per-task Counter it's given
+    (crop_by_task, location_by_task, ...), so every nested-donut chart in
+    this pipeline shares one implementation instead of each being its own
+    copy. `unit_name` names what's being bucketed for the "N remaining
+    {unit_name}" catch-all label (e.g. "crops", "countries")."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    inner_labels = class_task_types
+    inner_vals = [class_task_counts[t] for t in inner_labels]
+    inner_colors = [TASK_COLOR.get(t, "#888888") for t in inner_labels]
+    inner_callouts = [f"{_display_task(t)} ({class_task_counts[t]} classes)" for t in inner_labels]
+
+    _write_breakdown_csv(chart_dir, breakdown_filename, breakdown_key,
+                          class_task_types, groups_by_task, top_n)
+    outer_entries = _task_outer_entries(class_task_types, groups_by_task, top_n, unit_name)
+
+    outer_vals, outer_colors, outer_labels = [], [], []
+    for t in inner_labels:
+        for label, val, color in outer_entries[t]:
+            outer_vals.append(val)
+            outer_colors.append(color)
+            outer_labels.append(f"{label} ({val})")
+
+    fig, ax = plt.subplots(figsize=(13, 10))
+    ring_w = 0.46  # thick enough that even the smallest task's two-line label fits inside it
+    inner_wedges, _ = ax.pie(
+        inner_vals, radius=1 - ring_w, colors=inner_colors,
+        wedgeprops=dict(width=ring_w, edgecolor="white", linewidth=1.5))
+    outer_wedges, _, _ = ax.pie(
+        outer_vals, radius=1, colors=outer_colors,
+        wedgeprops=dict(width=ring_w, edgecolor="white", linewidth=1),
+        autopct=lambda p: f"{p:.0f}%" if p >= 6 else "", pctdistance=1 - ring_w / 2 + 0.03)
+    ax.set(aspect="equal")
+
+    # Task name, class count, and percentage as ONE compact text block (3
+    # short lines) rather than two separately-positioned elements — keeps
+    # them visually grouped together and lets the whole block sit closer to
+    # the ring's inner edge (nearer the hole/center), where matplotlib
+    # doesn't need to fan two elements across the wedge's full radial span
+    # to keep them apart. Contained within even the thinnest wedge.
+    ring_inner_r = 1 - 2 * ring_w
+    ring_outer_r = 1 - ring_w
+    total_inner = sum(inner_vals)
+    for wedge, val, label in zip(inner_wedges, inner_vals, inner_callouts):
+        ang = (wedge.theta2 - wedge.theta1) / 2.0 + wedge.theta1
+        rad = np.deg2rad(ang)
+        pct = 100 * val / total_inner
+        # Small wedges sit further out toward the ring's outer edge, where
+        # the arc is wider — near the hole all wedges converge tightly, so a
+        # smaller wedge benefits more from the extra room a larger radius
+        # gives than a big wedge does.
+        frac = 0.58 if pct < 15 else 0.38
+        label_r = ring_inner_r + (ring_outer_r - ring_inner_r) * frac
+        name, count = label.split(" (")
+        ax.text(np.cos(rad) * label_r, np.sin(rad) * label_r,
+                 f"{name}\n({count}\n{pct:.0f}%",
+                 ha="center", va="center", fontsize=9, linespacing=1.3)
+
+    _add_leader_labels(ax, outer_wedges, outer_labels, radius=1,
+                        xoff=1.25, yoff=1.15, fontsize=9)
+
+    plt.tight_layout()
+    path = chart_dir / chart_filename
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+# Fixed, distinct-from-TASK_COLOR palette so continent color never gets
+# confused with the task-type color already used elsewhere in these charts.
+CONTINENT_COLOR = {
+    "asia": "#8172B2",
+    "africa": "#CCB974",
+    "europe": "#64B5CD",
+    "north_america": "#937860",
+    "south_america": "#DA8BC3",
+    "oceania": "#8C8C8C",
+    "worldwide": "#4D4D4D",
+}
+
+
+def _render_task_continent_grouped_bar(
+    chart_dir: Path,
+    class_task_types: list[str],
+    continent_by_task: dict[str, Counter],
+    *,
+    breakdown_filename: str,
+    chart_filename: str,
+    ylabel: str,
+) -> None:
+    """One bar per (task, continent) pair, grouped side-by-side within each
+    task — not stacked, and not broken down to country level on-chart (that
+    level of granularity overlapped/crowded once there were ~9 segments in
+    small task bars like pest/damage). Continent is naturally few enough
+    (~7) to read directly off a shared legend instead."""
+    import csv as _csv
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Full country-level detail (which countries make up each continent, per
+    # task) stays available in the CSV even though this chart only shows
+    # continent totals.
+    with open(chart_dir / breakdown_filename, "w", newline="", encoding="utf-8") as f:
+        writer = _csv.writer(f)
+        writer.writerow(["task_type", "continent", "n_classes"])
+        for t in class_task_types:
+            for continent, n in continent_by_task[t].most_common():
+                writer.writerow([t, continent, n])
+    print(f"  Saved: {chart_dir / breakdown_filename}")
+
+    # Consistent continent order across every task cluster — by total count
+    # across all tasks, descending, so the dominant continent (Asia) always
+    # lands in the same relative position.
+    totals = Counter()
+    for t in class_task_types:
+        totals.update(continent_by_task[t])
+    continents = [c for c, _ in totals.most_common()]
+
+    display_names = [_display_task(t) for t in class_task_types]
+    n_bars = len(continents)
+    width = 0.8 / n_bars
+    x = np.arange(len(class_task_types))
+
+    fig, ax = plt.subplots(figsize=(max(8, len(class_task_types) * 2.4), 6.5))
+    for i, continent in enumerate(continents):
+        vals = [continent_by_task[t].get(continent, 0) for t in class_task_types]
+        offset = (i - (n_bars - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=continent.replace("_", " "),
+               color=CONTINENT_COLOR.get(continent, "#888888"),
+               edgecolor="black", linewidth=0.4)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(display_names, fontsize=10)
+    ax.set_ylabel(ylabel)
+    ax.yaxis.grid(True, alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=n_bars, fontsize=9, frameon=False)
+    plt.tight_layout()
+
+    path = chart_dir / chart_filename
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
 
 
 def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) -> None:
@@ -302,6 +553,103 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path}")
+
+    # ── 6. Nested donut(s): task type (inner ring) -> crop / location (outer
+    # ring) ──────────────────────────────────────────────────────────────
+    # More granular version of chart 5's classes_by_task_type_pie.png — same
+    # inner ring (task type, by class count), plus an outer ring breaking
+    # each task down by some second attribute (crop, or separately location),
+    # shaded as a light->dark gradient of that task's own color so the outer
+    # ring visually "belongs" to its inner wedge. Both rings are labeled with
+    # leader-line callouts (no legend, no in-wedge text) — every wedge gets
+    # its label placed outside the ring regardless of how thin that wedge is,
+    # so nothing overflows or collides with its own percentage. Only the
+    # percentage number stays inside. The rendering itself
+    # (_render_task_nested_donut, module-level below) is generic over
+    # whatever Counter-per-task grouping it's given — crop and location are
+    # two separate calls into the same function, not two copies of this code.
+
+    # "mixed" (explicit in datasets.yaml) and unset/None crop both mean "no
+    # single crop applies" — but WHY differs by task, confirmed by inspecting
+    # every dataset behind each bucket: every species_identification dataset
+    # with an ambiguous crop turned out to be a weed/invasive-species
+    # identification set (ACHENY, MH_Weed16, WaterHyacinth,
+    # maize_tomato_weed, crop_weeds_greece, plant_seedlings_aarhus,
+    # rangeland_weeds_australia) where "crop" doesn't apply at all — not
+    # missing metadata. For every other task type, the ambiguous ones
+    # (AgriVision4, three_plant_leaf_disease, BPLD, MedLeafX) are genuinely
+    # multi-crop-spanning or crop-unidentifiable datasets. Datasets where the
+    # specific crops ARE known (e.g. banana_guava_quality_classification)
+    # have their crop written as an explicit list in datasets.yaml instead of
+    # "mixed" — see DatasetConfig.crop / crop_display() — so they're
+    # unaffected by this bucket and appear under their own real crop name(s).
+    _AMBIGUOUS_CROP_LABEL = {"species_identification": "weed / non-crop species"}
+    _AMBIGUOUS_CROP_DEFAULT = "multi-crop / unspecified"
+
+    TOP_N_CROPS = 8
+    crop_by_task: dict[str, Counter] = defaultdict(Counter)
+    for name, entry in ds_entries.items():
+        cfg = ds_by_name.get(name)
+        if cfg is None:
+            continue
+        crop_val = cfg.crop
+        for cls in entry["classes"]:
+            eff = cfg.effective_task_type(cls) if cfg else task_type_by_name.get(name, "unknown")
+            if isinstance(crop_val, list):
+                crop_label = " / ".join(crop_val)
+            elif not crop_val or crop_val == "mixed":
+                crop_label = _AMBIGUOUS_CROP_LABEL.get(eff, _AMBIGUOUS_CROP_DEFAULT)
+            else:
+                crop_label = crop_val
+            crop_by_task[eff][crop_label] += 1
+
+    _render_task_nested_donut(
+        chart_dir, class_task_types, class_task_counts, crop_by_task,
+        top_n=TOP_N_CROPS, unit_name="crops", breakdown_key="crop",
+        breakdown_filename="classes_by_task_type_crop_breakdown.csv",
+        chart_filename="classes_by_task_type_crop_nested_pie.png",
+    )
+
+    # ── 6b. Same nested donut, outer ring by LOCATION (country) instead of
+    # crop — a dataset-level attribute (every class in a dataset shares that
+    # dataset's location), unlike crop which can vary within a multi-crop
+    # dataset. location: [continent, country] per DatasetConfig — see
+    # datasets.yaml; country is location[1] (a " / "-joined string for the
+    # one dataset that genuinely spans multiple countries, same convention
+    # as multi-crop labels). Datasets missing location entirely (shouldn't
+    # happen for the 121 currently populated, but the pipeline shouldn't
+    # crash if a future dataset is added without one) fall into "unspecified".
+    location_by_task: dict[str, Counter] = defaultdict(Counter)
+    continent_by_task: dict[str, Counter] = defaultdict(Counter)
+    for name, entry in ds_entries.items():
+        cfg = ds_by_name.get(name)
+        if cfg is None:
+            continue
+        if cfg.location and len(cfg.location) > 1:
+            continent, country = cfg.location[0], cfg.location[1]
+        else:
+            continent, country = "unspecified", "unspecified"
+        for cls in entry["classes"]:
+            eff = cfg.effective_task_type(cls) if cfg else task_type_by_name.get(name, "unknown")
+            location_by_task[eff][country] += 1
+            continent_by_task[eff][continent] += 1
+
+    _render_task_nested_donut(
+        chart_dir, class_task_types, class_task_counts, location_by_task,
+        top_n=8, unit_name="countries", breakdown_key="country",
+        breakdown_filename="classes_by_task_type_location_breakdown.csv",
+        chart_filename="classes_by_task_type_location_nested_pie.png",
+    )
+
+    # ── 6c. Bar-chart companion to 6b — grouped (not stacked) by continent
+    # rather than country, so it pairs with the pie chart in the paper
+    # without repeating the pie's country-level crowding in bar form.
+    _render_task_continent_grouped_bar(
+        chart_dir, class_task_types, continent_by_task,
+        breakdown_filename="classes_by_task_type_continent_breakdown.csv",
+        chart_filename="classes_by_task_type_continent_grouped_bar.png",
+        ylabel="Number of classes",
+    )
 
     # ── Summary ──────────────────────────────────────────────────────────
     total_classes = sum(n_classes.values())

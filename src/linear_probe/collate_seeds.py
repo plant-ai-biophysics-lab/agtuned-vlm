@@ -39,7 +39,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import t as _t_dist
 
-from src.common.plot_style import family_shaded_colors, is_vision_only
+from src.common.plot_style import family_shaded_colors, is_vision_only, ordered_backbones
 
 
 def _f1(entry) -> float:
@@ -129,7 +129,7 @@ def plot_seed_collated(collated: dict[str, dict[str, dict]], output_dir: Path) -
     if not task_types:
         print("  No data to plot.")
         return
-    backbones = sorted({b for tt in collated.values() for b in tt})
+    backbones = ordered_backbones({b for tt in collated.values() for b in tt})
     n_seeds_max = max((stat["n_seeds"] for tt in collated.values() for stat in tt.values()), default=0)
 
     x = np.arange(len(task_types))

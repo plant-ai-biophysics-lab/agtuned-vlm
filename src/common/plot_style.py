@@ -48,6 +48,28 @@ def param_count_b(name: str) -> float:
     return max((float(m) for m in matches), default=0.0)
 
 
+def ordered_backbones(backbones: list[str]) -> list[str]:
+    """Vision-only backbones first (dinov3, yolo — in FAMILY_BASE_COLORS'
+    declared order), then VLM families in the same declared order, each
+    family's own members smallest-parameter-count first. This is the order
+    probe.py's original single-run chart lands in naturally (dino_model/
+    yolo_model get added to results before the models: list's VLMs) —
+    reproduced explicitly here for any chart (e.g. collate_seeds.py's
+    multi-seed chart) that doesn't build its backbone list the same way."""
+    family_rank = {family: i for i, family in enumerate(FAMILY_BASE_COLORS)}
+
+    def sort_key(b: str):
+        family = backbone_family(b)
+        return (
+            0 if is_vision_only(b) else 1,
+            family_rank.get(family, len(family_rank)),
+            param_count_b(b),
+            b,
+        )
+
+    return sorted(backbones, key=sort_key)
+
+
 def family_shaded_colors(backbones: list[str]) -> dict[str, tuple]:
     """Assign each backbone a color: same base hue per family, with more
     parameters -> darker shade. Single-member families get a mid shade."""

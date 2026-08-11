@@ -430,7 +430,7 @@ datasets:
   hf_config: default
   location:
   - north_america
-  - usa
+  - united_states
   skip: false
   skip_description: false
   notes: Physical/mechanical damage to sugarcane stalks
@@ -546,7 +546,9 @@ datasets:
   - SuaAcu
   - SuaAeg
   hf_config: default
-  location: []
+  location:
+  - asia
+  - iran
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | classes are genus-species codes for rangeland/weed plants (e.g. SalKal=Salsola
@@ -594,7 +596,9 @@ datasets:
   - 2nd-grade
   - 3rd-grade
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | generic fruit grading, species unspecified
@@ -626,11 +630,13 @@ datasets:
   - Yellow_Mosaic_Virus
   - Yellow_Necrotic_Spots_Holes
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
-  notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review | multi-crop general disease benchmark (Carica=papaya genus appears once,
-    but classes span broadly)
+  notes: Multi-crop disease benchmark — bottle gourd, zucchini, papaya, and tomato
+    (confirmed by user); kept as crop:mixed rather than an explicit list since
+    it spans 4 unrelated crops together.
   class_overrides:
     Carica_Insect_Hole: pest_damage
     Insect_Damage: pest_damage
@@ -649,7 +655,9 @@ datasets:
   - Thankuni (Centella asiatica)
   - Tulsi (Ocimum tenuiflorum)
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal-herb identification, not disease/pest-relevant
@@ -665,7 +673,9 @@ datasets:
   - Haribhanga
   - Himsagar
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -687,7 +697,9 @@ datasets:
   - phyllanthus-emblica
   - terminalia-arjuna
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal-leaf identification
@@ -703,7 +715,7 @@ datasets:
     "phyllanthus-emblica": "phyllanthus emblica"
     "terminalia-arjuna": "terminalia arjuna"
 - agml_name: BPLD_leaf_disease_classification
-  crop: null
+  crop: blackgram
   task_type: disease
   n_images: 1007
   classes:
@@ -713,10 +725,11 @@ datasets:
   - Powdery Mildew
   - Yellow Mosaic
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
-  notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review | crop not identifiable from repo name or class list
+  notes: BPLD = BlackGram Plant Leaf Disease (confirmed by user).
 - agml_name: BananaImageBD_ripeness_classification
   crop: banana
   task_type: quality_identification
@@ -727,7 +740,9 @@ datasets:
   - Ripe
   - Semi-ripe
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -741,7 +756,9 @@ datasets:
   - Sabri Kola
   - Sagor Kola
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -760,7 +777,9 @@ datasets:
   - pestalotiopsis
   - sigatoka
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | sigatoka/cordana/pestalotiopsis are classic banana leaf-spot diseases
@@ -781,7 +800,9 @@ datasets:
   - PB_6
   - Unknown
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -804,7 +825,9 @@ datasets:
   - Shoot and Fruit Borer
   - Wet Rot
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -821,7 +844,9 @@ datasets:
   - nutritional
   - powdery mildew
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | same class set as the already-curated chilli_leaf_classification — likely
@@ -839,7 +864,9 @@ datasets:
   - healthy
   - purple blotch
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -880,7 +907,9 @@ datasets:
   - phosphorus-P
   - potasium-K
   hf_config: default
-  location: []
+  location:
+  - south_america
+  - peru
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | every non-healthy class is a nutrient deficiency (abiotic) — pest_damage
@@ -980,7 +1009,9 @@ datasets:
   - kamakasturi
   - kepala
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 80-species medicinal-leaf identification
@@ -1046,7 +1077,9 @@ datasets:
   - Tulasi
   - Wood_sorel
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 40-species medicinal-plant identification
@@ -1070,7 +1103,9 @@ datasets:
   - Bad
   - Good
   hf_config: raw
-  location: []
+  location:
+  - africa
+  - ghana
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | Bad/Good quality grading
@@ -1083,7 +1118,9 @@ datasets:
   - Fresh
   - Rotten
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1105,7 +1142,9 @@ datasets:
   - Slightly_Diseased
   - Wrinkled_Leaf
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | class names are all 'Tea X' despite repo name saying Hibiscus — went
@@ -1120,7 +1159,9 @@ datasets:
   - R
   - S
   hf_config: default
-  location: []
+  location:
+  - asia
+  - iran
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1135,7 +1176,9 @@ datasets:
   - Healthy-Leaf
   - Pest-Damage
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1153,7 +1196,9 @@ datasets:
   - Rust
   - Spectoria_Brown_Spot
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1169,7 +1214,9 @@ datasets:
   - Rust
   - Semilooper_Pest
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1197,7 +1244,9 @@ datasets:
   - Punarnava _(Boerhaavia diffusa)
   - Sicklepod_(Senna obtusifolia)
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1219,7 +1268,9 @@ datasets:
   - RaniBhog
   - Sundari
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1243,7 +1294,9 @@ datasets:
   - Powdery Mildew
   - Sooty Mould
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1251,7 +1304,7 @@ datasets:
     Cutting Weevil: pest_damage
     Gall Midge: pest_damage
 - agml_name: MedLeafX_disease_classification
-  crop: null
+  crop: medicinal_plant
   task_type: disease
   n_images: 0
   classes:
@@ -1262,10 +1315,14 @@ datasets:
   - Shot Hole Leaf
   - Yellow Leaf
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
-  notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review | crop not identifiable from repo name or class list
+  notes: MedLeafX = disease symptoms across 4 medicinal plant species — camphor,
+    haritaki, sojina, and neem (confirmed by user). NOTE n_images:0 — this dataset
+    may not actually be populated in the manifest; the live manifest shows numeric
+    placeholder classes (0-5) rather than the named ones below, worth checking.
 - agml_name: MoringaLeafNet_disease_classification
   crop: moringa
   task_type: disease
@@ -1276,7 +1333,9 @@ datasets:
   - Healthy
   - Yellow
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1292,7 +1351,9 @@ datasets:
   - Leaf curly virus
   - Phyllosticta leaf spot
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1310,7 +1371,9 @@ datasets:
   - PSEUDOSTEM WEEVIL
   - YELLOW SIGATOKA
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1332,7 +1395,9 @@ datasets:
   - MALBHOG FRUIT
   - MALBHOG LEAF
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1385,7 +1450,9 @@ datasets:
   - Br22
   - Br23
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1434,7 +1501,9 @@ datasets:
   - Dried
   - Healthy
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1460,7 +1529,9 @@ datasets:
   - sarpagandha
   - shotomuli
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal-plant identification (Bengali common names)
@@ -1478,7 +1549,9 @@ datasets:
   - Downy Mildew
   - Fresh Leaf
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1508,7 +1581,9 @@ datasets:
   - Trifolium Repens
   - Ziziphus mauritiana
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal/ornamental plant identification
@@ -1585,7 +1660,9 @@ datasets:
   - Yellow Peach
   - Ziraat 0900 Cherry
   hf_config: default
-  location: []
+  location:
+  - asia
+  - turkey
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 64-species fruit-tree identification, not one crop's cultivars
@@ -1601,7 +1678,9 @@ datasets:
   - Disease
   - Healthy
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | binary Disease/Healthy
@@ -1635,7 +1714,9 @@ datasets:
   - tuta-absoluta-p
   - virosis-d
   hf_config: raw
-  location: []
+  location:
+  - africa
+  - burkina_faso
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | class names carry their own -d(disease)/-p(pest)/-a suffix, used that
@@ -1683,7 +1764,9 @@ datasets:
   - Downy Mildew
   - No disease
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1698,7 +1781,9 @@ datasets:
   - Ripe
   - Unripe
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1712,7 +1797,9 @@ datasets:
   - Heartleaf False Pickerelweed (Monochoria korsakowii)
   - Water Lettuce (Pistia stratiotes)
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | water hyacinth + other invasive aquatic weed species
@@ -1728,7 +1815,9 @@ datasets:
   - unaffected
   - unripe
   hf_config: default
-  location: []
+  location:
+  - africa
+  - cameroon
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1772,7 +1861,9 @@ datasets:
   - Apple_Mosaic
   - Healthy
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1787,7 +1878,9 @@ datasets:
   - Leaf curl
   - Leaf miner
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1804,7 +1897,9 @@ datasets:
   - Mild
   - Very Damage
   hf_config: default
-  location: []
+  location:
+  - asia
+  - vietnam
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | bacterial grain rot is a named rice disease
@@ -1816,7 +1911,9 @@ datasets:
   - Cut
   - Keep
   hf_config: default
-  location: []
+  location:
+  - europe
+  - portugal
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1829,12 +1926,14 @@ datasets:
   - grade2
   - grade3
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
 - agml_name: banana_guava_quality_classification
-  crop: mixed
+  crop: [banana, guava]
   task_type: quality_identification
   n_images: 1748
   classes:
@@ -1842,7 +1941,9 @@ datasets:
   - Class_B
   - Defect
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | spans both banana and guava
@@ -1861,7 +1962,9 @@ datasets:
   - Sulphur
   - Zinc
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | every non-healthy class is a nutrient deficiency — pest_damage is the
@@ -1878,7 +1981,9 @@ datasets:
   - Shagor
   - Shobri
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -1944,7 +2049,9 @@ datasets:
   - Leaf_Rot
   - Leaf_Spot
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2043,7 +2150,9 @@ datasets:
   - Healthy
   - Unhealthy
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | medicinal herb, same Dried/Healthy/Unhealthy pattern
@@ -2059,7 +2168,9 @@ datasets:
   - melanose
   - scab
   hf_config: default
-  location: []
+  location:
+  - asia
+  - pakistan
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2073,7 +2184,9 @@ datasets:
   - tangerine
   - tankan
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - taiwan
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2095,7 +2208,9 @@ datasets:
   - Texas_mite
   - Zn
   hf_config: default
-  location: []
+  location:
+  - north_america
+  - mexico
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | single-letter classes are nutrient deficiency codes (Fe/Mg/Mn/N/Zn)
@@ -2124,7 +2239,9 @@ datasets:
   - PB-I
   - PB-II
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | bean grading (A/AA/AAA/etc.)
@@ -2158,7 +2275,9 @@ datasets:
   - Healthy_Leaf
   - Verticillium_Wilt
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2175,7 +2294,9 @@ datasets:
   - Leaf Redding
   - Leaf Variegation
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2194,7 +2315,9 @@ datasets:
   - Leaf spot on fruit
   - Mealy Bug
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2209,7 +2332,9 @@ datasets:
   - grade-2
   - grade-3
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - pakistan
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2228,7 +2353,9 @@ datasets:
   - Potassium Deficiency
   - Rachis Blight
   hf_config: default
-  location: []
+  location:
+  - asia
+  - saudi_arabia
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | Parlatoria Blanchardi is a scale-insect pest of date palms
@@ -2283,7 +2410,9 @@ datasets:
   - Immature Dragon Fruit
   - Mature Dragon Fruit
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2295,7 +2424,9 @@ datasets:
   - Defect Dragon Fruit
   - Fresh Dragon Fruit
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2336,7 +2467,9 @@ datasets:
   - Leaf_Phomopsis
   - Leaf_Rhizoctonia
   hf_config: default
-  location: []
+  location:
+  - asia
+  - vietnam
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2376,7 +2509,9 @@ datasets:
   - Powdery Mildew
   - Tobacco Mosaic Virus
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2391,7 +2526,9 @@ datasets:
   - healthy
   - infected
   hf_config: default
-  location: []
+  location:
+  - asia
+  - iraq
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | explicitly about a worm pest — pest_damage is the primary type
@@ -2442,7 +2579,9 @@ datasets:
   - Healthy Leaves
   - Powdery Mildew
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2563,7 +2702,9 @@ datasets:
   - Scab
   - Styler and Root
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2576,7 +2717,9 @@ datasets:
   - mature-green
   - ripe
   hf_config: default
-  location: []
+  location:
+  - asia
+  - pakistan
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2602,7 +2745,9 @@ datasets:
   - bruised
   - healthy
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | bruising is physical/abiotic damage — pest_damage is the primary type
@@ -2617,7 +2762,9 @@ datasets:
   - Mosaic
   - Stem Soft Rot
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | 'Holed' implies insect feeding damage
@@ -2675,7 +2822,9 @@ datasets:
   - Healthy
   - Unhealthy
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2689,7 +2838,9 @@ datasets:
   - Normal
   - Powdery Mildew
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2727,7 +2878,9 @@ datasets:
   - sorghum
   - tomato
   hf_config: default
-  location: []
+  location:
+  - europe
+  - spain
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | weed species classified within maize/tomato/sorghum fields
@@ -2800,7 +2953,9 @@ datasets:
   - Powdery_Mildew
   - Sooty_Mold
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2817,7 +2972,9 @@ datasets:
   - Spoiled
   - Sunlight
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | post-harvest freshness state (Dried/Fresh/Spoiled/Sunlight)
@@ -2830,7 +2987,9 @@ datasets:
   - Healthy
   - Manganese Toxicity
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2852,7 +3011,9 @@ datasets:
   - TaiwanStraberry
   - WhiteKing
   hf_config: default
-  location: []
+  location:
+  - asia
+  - thailand
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2882,7 +3043,9 @@ datasets:
   - Over-mature
   - Under-mature
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2894,7 +3057,9 @@ datasets:
   - adequate_matured
   - over_matured
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -2992,7 +3157,9 @@ datasets:
   - Tomato leaf curl virus
   - Tomato spotted wilt
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | spans eggplant and tomato classes together
@@ -3114,7 +3281,9 @@ datasets:
   - grade-2
   - grade-3
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3127,7 +3296,9 @@ datasets:
   - Minor Defect
   - No Defect
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3243,7 +3414,9 @@ datasets:
   - Pteris vittata
   - Synedrella nodiflora
   hf_config: default
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3273,7 +3446,9 @@ datasets:
   - Shorna5
   - Subol_Lota
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3286,7 +3461,9 @@ datasets:
   - single
   - undefined
   hf_config: default
-  location: []
+  location:
+  - asia
+  - vietnam
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | seedling clustering/spacing classification, growth-stage-adjacent
@@ -3334,7 +3511,9 @@ datasets:
   - Binadhan7
   - Binadhan8
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3387,7 +3566,9 @@ datasets:
   - ripe
   - unripe
   hf_config: default
-  location: []
+  location:
+  - europe
+  - united_kingdom
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3401,7 +3582,9 @@ datasets:
   - Small
   - Spoiled
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3437,7 +3620,9 @@ datasets:
   - Grass
   - Sorghum
   hf_config: default
-  location: []
+  location:
+  - asia
+  - india
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3452,7 +3637,9 @@ datasets:
   - Skin-damaged
   - Spotted
   hf_config: default
-  location: []
+  location:
+  - asia
+  - china
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | seed/grain physical damage grading — pest_damage is the primary type
@@ -3501,7 +3688,9 @@ datasets:
   - Dega
   - Grobogan
   hf_config: default
-  location: []
+  location:
+  - asia
+  - indonesia
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3538,7 +3727,9 @@ datasets:
   - Late_Blight
   - Mid_Blight
   hf_config: default
-  location: []
+  location:
+  - africa
+  - ghana / nigeria
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | blight progression stages, still disease
@@ -3582,7 +3773,7 @@ datasets:
     (--skip_existing reruns), even after --only-per-dataset timeout wrapping. Re-enable
     and investigate individually if needed.
 - agml_name: three_plant_leaf_disease_classification
-  crop: mixed
+  crop: [aegle_marmelos, hog_plum, lemon]
   task_type: disease
   n_images: 3941
   classes:
@@ -3596,10 +3787,12 @@ datasets:
   - Leaf_Spot
   - Sooty_Mold
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
-  notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review | spans three plant species
+  notes: The three species are aegle marmelos (bael), hog plum, and lemon (confirmed
+    by user).
   class_overrides:
     Caterpillars_Infestation: pest_damage
 - agml_name: tomato_maturity_classification
@@ -3610,7 +3803,9 @@ datasets:
   - Immature
   - Mature
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
@@ -3622,7 +3817,9 @@ datasets:
   - Fresh
   - Rotten
   hf_config: raw
-  location: []
+  location:
+  - asia
+  - bangladesh
   skip: false
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
