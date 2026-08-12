@@ -117,6 +117,7 @@ class ProgressBar:
         desc: str = "",
         width: int = 30,
         stream=sys.stdout,
+        window: int = 20,
     ) -> None:
         if total is None and iterable is not None:
             try:
@@ -135,6 +136,16 @@ class ProgressBar:
         self._last_len = 0
         self._last_pct_shown = -1
         self._done = False
+        # Rolling window of (time, n) samples for the ETA's rate — items
+        # per second AVERAGED SINCE THE VERY START of a long, highly
+        # variable-cost loop (e.g. cot_yaml.py --per_step, where one class's
+        # cost scales with its own image count and CoT step count) lags
+        # badly behind the CURRENT pace: one early slow stretch permanently
+        # drags the displayed ETA up even after things speed back up. Using
+        # only the last `window` update() calls instead means the ETA
+        # reflects recent pace, not the whole run's history.
+        self._window = max(window, 2)
+        self._recent: list[tuple[float, int]] = [(self._start, 0)]
         self._draw()
 
     def __iter__(self) -> Iterator[T]:
@@ -158,6 +169,9 @@ class ProgressBar:
         if self._done:
             return
         self.n += n
+        self._recent.append((time.monotonic(), self.n))
+        if len(self._recent) > self._window:
+            del self._recent[0]
         self._draw()
 
     def finish(self, completed: bool = True) -> None:
@@ -182,7 +196,10 @@ class ProgressBar:
 
     def _draw(self, force: bool = False) -> None:
         elapsed = time.monotonic() - self._start
-        rate = self.n / elapsed if elapsed > 0 else 0.0
+        t_old, n_old = self._recent[0]
+        window_dt = time.monotonic() - t_old
+        window_dn = self.n - n_old
+        rate = window_dn / window_dt if window_dt > 0 else 0.0
 
         if self.total is not None:
             frac = min(self.n / self.total, 1.0)
