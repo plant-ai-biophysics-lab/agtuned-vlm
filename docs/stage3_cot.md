@@ -71,4 +71,10 @@ Scoped to a handful of datasets deliberately — cost scales with the number of 
 uv run python main.py cot-yaml-step-report
 ```
 
-Adds, per task type present in the swap data: `swap_step_f1.csv` and `swap_step_f1_<task>.png` (one line per rotation).
+Adds, per task type present in the swap data:
+
+- `swap_step_f1.csv` / `swap_step_f1_<task>.png` — F1 at each step, one line per rotation
+- `anchor_recovery.csv` / `anchor_recovery_<task>.png` — **anchor rate** (P(final correct | step-*k* correct) — does being right early "lock in" a right final answer?) and **recovery rate** (P(final correct | step-*k* wrong) — can a wrong early step still end up right?), at every step position, one line per rotation
+- `diagnosis_stability.csv` / `diagnosis_stability_<task>.png` — buckets each image by whether its predicted class ever changed across the chain (**stable** = same prediction every step, **unstable** = changed at least once) and reports final judged F1 per bucket, per rotation — does a flip-flopping diagnosis predict a wrong final answer?
+
+All three read the same `ckpt_swap_<safe_model_name>.csv` — no extra generation needed beyond Step 4's swap run.
