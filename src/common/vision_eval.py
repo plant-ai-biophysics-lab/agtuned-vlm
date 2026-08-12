@@ -71,38 +71,63 @@ def judge_gt_hint(clean_label: str, aliases: list[str]) -> str:
     return f"{clean_label} (also known as: {', '.join(aliases)})"
 
 
-# Columns that have never moved/renamed across every CKPT_FIELDS revision
-# this session — used by load_ckpt() to align rows from a stale-header file
-# without needing to know exactly which past schema(s) it was written under.
-_CKPT_FRONT_FIELDS = CKPT_FIELDS[: CKPT_FIELDS.index("sem_sim") + 1]
-_CKPT_BACK_FIELDS = ["judged_correct", "judge_reasoning"]
-_CKPT_MIDDLE_FIELDS = [f for f in CKPT_FIELDS if f not in _CKPT_FRONT_FIELDS and f not in _CKPT_BACK_FIELDS]
+def _split_front_middle_back(
+    fields: list[str], header: list[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """Longest common prefix/suffix between the CURRENT schema (`fields`) and
+    an on-disk `header` that may reflect an older revision of the same
+    checkpoint schema. Whatever's left of `fields` in between is the
+    "middle" — the span where past schema changes have actually inserted
+    columns (e.g. CKPT_FIELDS gained judge_gt_hint, then reasoning, both
+    slotted in between the front columns and the trailing judge_* columns,
+    which is why old and new rows still share this same stable prefix/
+    suffix). Computed fresh from whatever header is actually in the file
+    (not a hardcoded list of past field names), so this generalizes to any
+    fields/CKPT_FIELDS-shaped schema, not just the specific history of
+    CKPT_FIELDS itself."""
+    n = min(len(fields), len(header))
+    front = 0
+    while front < n and fields[front] == header[front]:
+        front += 1
+    back = 0
+    while back < n - front and fields[len(fields) - 1 - back] == header[len(header) - 1 - back]:
+        back += 1
+    front_fields = fields[:front]
+    back_fields = fields[len(fields) - back:] if back else []
+    middle_fields = fields[front: len(fields) - back] if back else fields[front:]
+    return front_fields, middle_fields, back_fields
 
 
-def load_ckpt(path: Path) -> tuple[list[dict], set[tuple[str, str, str]]]:
+def load_ckpt(
+    path: Path, fields: list[str] = CKPT_FIELDS
+) -> tuple[list[dict], set[tuple[str, str, str]]]:
     """Load an existing checkpoint CSV. Returns (rows, seen-keys) so a resumed
     run can skip (dataset, class_label, image_name) triples already scored.
 
-    Handles a stale on-disk header: append_ckpt_row() only writes a header
-    for a brand-new file, so every time CKPT_FIELDS has gained a column
-    (has happened repeatedly this session — judge_gt_hint, then reasoning)
-    after a checkpoint file already existed, rows appended since are written
-    in the CURRENT field order while line 1 still reflects an OLDER one. A
-    plain csv.DictReader then zips the new, longer rows against the old,
-    shorter header, silently shifting every value from the divergence point
-    on — e.g. a class name landing in what reads as judged_correct,
-    breaking int(r["judged_correct"]) deep in judged_summary(). A file can
-    even mix rows from more than two schema generations if it predates
-    multiple additions.
+    `fields` defaults to CKPT_FIELDS (the single-final-prediction row shape
+    used by vision_baseline.py / desc_augmented_vision_v2.py / self_cot.py /
+    cot_yaml.py) but any checkpoint using this same append/rewrite machinery
+    with a different row shape (e.g. cot_yaml.py's per-step STEP_CKPT_FIELDS)
+    can pass its own field list here.
 
-    Every past CKPT_FIELDS revision only ever inserted new columns into the
-    same middle slot (between sem_sim and judged_correct) — the front
-    columns (agml_dataset..sem_sim) and back columns (judged_correct,
-    judge_reasoning) have stayed fixed all session — so each row can be
-    aligned unambiguously from both ends using its own field COUNT, without
-    needing to know exactly which historical schema(s) are mixed into the
-    file. The file is then rewritten with a consistent, current header so
-    future append_ckpt_row() calls stay aligned."""
+    Handles a stale on-disk header: append_ckpt_row() only writes a header
+    for a brand-new file, so every time a schema gains a column (has
+    happened repeatedly this session for CKPT_FIELDS — judge_gt_hint, then
+    reasoning) after a checkpoint file already existed, rows appended since
+    are written in the CURRENT field order while line 1 still reflects an
+    OLDER one. A plain csv.DictReader then zips the new, longer rows against
+    the old, shorter header, silently shifting every value from the
+    divergence point on — e.g. a class name landing in what reads as
+    judged_correct, breaking int(r["judged_correct"]) deep in
+    judged_summary(). A file can even mix rows from more than two schema
+    generations if it predates multiple additions.
+
+    Each row is aligned by its own field COUNT against the stable front/back
+    columns shared between `fields` and the file's actual header (see
+    _split_front_middle_back) — no need to know exactly which historical
+    schema(s) are mixed into the file. The file is then rewritten with a
+    consistent, current header so future append_ckpt_row() calls stay
+    aligned."""
     if not path.exists():
         return [], set()
     with open(path, newline="", encoding="utf-8") as f:
@@ -110,53 +135,51 @@ def load_ckpt(path: Path) -> tuple[list[dict], set[tuple[str, str, str]]]:
     if not raw_rows:
         return [], set()
     header, raw_rows = raw_rows[0], raw_rows[1:]
-    n_front, n_back = len(_CKPT_FRONT_FIELDS), len(_CKPT_BACK_FIELDS)
+    front, middle, back = _split_front_middle_back(fields, header)
+    n_front, n_back = len(front), len(back)
 
     rows = []
     n_healed = 0
     for raw in raw_rows:
         n_middle = len(raw) - n_front - n_back
-        if len(raw) == len(CKPT_FIELDS) and header == CKPT_FIELDS:
-            row = dict(zip(CKPT_FIELDS, raw))
-        elif 0 <= n_middle <= len(_CKPT_MIDDLE_FIELDS):
-            # Middle fields were added in order (judge_gt_hint, then
-            # reasoning inserted before it) — a row with fewer middle
-            # values than today's schema is missing the most-recently-added
-            # ones, so take the middle schema's own trailing slice, not its
-            # front, to line values up with the fields that actually exist
-            # in a row this short.
-            middle = _CKPT_MIDDLE_FIELDS[-n_middle:] if n_middle else []
-            fields = _CKPT_FRONT_FIELDS + middle + _CKPT_BACK_FIELDS
+        if len(raw) == len(fields) and header == fields:
             row = dict(zip(fields, raw))
-            for k in CKPT_FIELDS:
+        elif 0 <= n_middle <= len(middle):
+            # A row with fewer middle values than today's schema is missing
+            # the most-recently-added ones — take the middle schema's own
+            # TRAILING slice (not its front), since every past insertion has
+            # landed new columns before the existing middle ones, not after.
+            row_fields = front + (middle[-n_middle:] if n_middle else []) + back
+            row = dict(zip(row_fields, raw))
+            for k in fields:
                 row.setdefault(k, "")
             n_healed += 1
         else:
             raise ValueError(
                 f"{path}: row has {len(raw)} fields — can't align to any known "
-                f"CKPT_FIELDS schema (current has {len(CKPT_FIELDS)}): {raw[:5]}..."
+                f"schema (current has {len(fields)}): {raw[:5]}..."
             )
         rows.append(row)
 
     if n_healed:
         print(f"  [ckpt] {path.name}: healed {n_healed} row(s) written under a "
               f"stale header (schema drift) — rewriting with current schema.")
-        rewrite_ckpt(path, rows)
+        rewrite_ckpt(path, rows, fields=fields)
 
     seen = {(r["agml_dataset"], r["class_label"], r["image_name"]) for r in rows}
     return rows, seen
 
 
-def append_ckpt_row(path: Path, row: dict) -> None:
+def append_ckpt_row(path: Path, row: dict, fields: list[str] = CKPT_FIELDS) -> None:
     """Flush one scored sample to the checkpoint CSV immediately — a kill
     mid-run loses at most the in-flight batch, not the whole model's progress."""
     is_new = not path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CKPT_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=fields)
         if is_new:
             writer.writeheader()
-        writer.writerow({k: row.get(k, "") for k in CKPT_FIELDS})
+        writer.writerow({k: row.get(k, "") for k in fields})
 
 
 # ── Judge phase ──────────────────────────────────────────────────────────────
@@ -177,8 +200,14 @@ def append_ckpt_row(path: Path, row: dict) -> None:
 # across experiments and a fix here (like the blank-judge_gt_hint bug) only
 # ever needs to happen in one place. Do not re-implement this per-script.
 
-def _judge_row_key(row: dict) -> tuple[str, str, str]:
-    return (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""))
+def _judge_row_key(row: dict) -> tuple[str, str, str, str, str]:
+    """(dataset, class, image[, step_idx, rotation]) — the last two are ""
+    for every CKPT_FIELDS row (one prediction per image) and only meaningful
+    for cot_yaml.py's STEP_CKPT_FIELDS rows (multiple predictions per image,
+    one per chain position/rotation), so that case doesn't collapse distinct
+    steps of the same image onto the same judged_correct value."""
+    return (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""),
+            str(row.get("step_idx", "")), str(row.get("rotation", "")))
 
 
 def rows_needing_judge(rows: list[dict]) -> list[dict]:
@@ -201,13 +230,13 @@ def merge_judged(rows: list[dict], judged_new: list[dict]) -> list[dict]:
     return merged
 
 
-def rewrite_ckpt(path: Path, rows: list[dict]) -> None:
+def rewrite_ckpt(path: Path, rows: list[dict], fields: list[str] = CKPT_FIELDS) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CKPT_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in rows:
-            writer.writerow({k: r.get(k, "") for k in CKPT_FIELDS})
+            writer.writerow({k: r.get(k, "") for k in fields})
 
 
 def _load_judge_llm(
@@ -249,7 +278,9 @@ def _destroy_judge_llm(llm) -> None:
     torch.cuda.empty_cache()
 
 
-def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> list[dict]:
+def run_judge_phase(
+    rows: list[dict], ckpt_path: Path, args, prompts: dict, fields: list[str] = CKPT_FIELDS
+) -> list[dict]:
     """Shared judge phase — see module-level note above.
 
     `args` (any argparse.Namespace-like object — vision_baseline.py,
@@ -262,6 +293,13 @@ def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> l
 
     `prompts` must carry judge_classification_template (and optionally
     judge_system_vision) from prompts.yaml.
+
+    `fields` is the row schema to checkpoint with — defaults to CKPT_FIELDS,
+    override for a differently-shaped checkpoint (e.g. cot_yaml.py's
+    per-step STEP_CKPT_FIELDS) so the SAME judge implementation (same judge
+    model, same prompts, same confidence threshold, same logging) scores
+    every classification experiment in this repo, not a reimplementation
+    per row shape.
 
     Every judge call's full input/output (system prompt, rendered prompt,
     untruncated raw response, gt/pred shown) is logged to
@@ -321,7 +359,7 @@ def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> l
             log_path=log_path,
         )
         rows = merge_judged(rows, judged_chunk)
-        rewrite_ckpt(ckpt_path, rows)
+        rewrite_ckpt(ckpt_path, rows, fields=fields)
         pbar.update(len(chunk))
     pbar.finish()
 
@@ -329,6 +367,31 @@ def run_judge_phase(rows: list[dict], ckpt_path: Path, args, prompts: dict) -> l
     del judge_tok
     print(f"  [judge] done — checkpoint rewritten")
     return rows
+
+
+def compute_step_metrics(rows: list[dict], group_keys: tuple[str, ...]) -> dict[tuple, dict]:
+    """Group step-level rows (cot_yaml.py's STEP_CKPT_FIELDS shape — multiple
+    rows per image, one per chain position) by `group_keys` — e.g.
+    ("agml_dataset", "step_idx") for a per-step F1 curve, or
+    ("agml_dataset", "rotation", "step_idx") for the --swap_datasets sweep —
+    and compute the SAME F1/ROUGE/judge metrics compute_model_metrics uses
+    for single-prediction rows. Reuses those exact scoring functions rather
+    than a step-analysis-specific reimplementation, so results stay
+    comparable with vision_baseline.py / desc_augmented_vision_v2.py /
+    self_cot.py / cot_yaml.py's own final-answer metrics."""
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        groups[tuple(r.get(k, "") for k in group_keys)].append(r)
+
+    def _summarize(group_rows: list[dict]) -> dict:
+        refs = [r["ground_truth"] for r in group_rows]
+        preds = [r.get("resolved_class") or "" for r in group_rows]
+        m = compute_classification_metrics(refs, preds)
+        m.update(aggregate_rouge(group_rows))
+        m.update(judged_summary(group_rows))
+        return m
+
+    return {key: _summarize(rs) for key, rs in groups.items()}
 
 
 def compute_model_metrics(rows: list[dict]) -> dict:

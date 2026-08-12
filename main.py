@@ -28,6 +28,8 @@ STAGES = {
     "vision-baseline-collate": "src.vision_baseline_collate",
     "self-cot":      "src.self_cot",
     "cot-yaml":      "src.cot_yaml",
+    "cot-yaml-step-report": "src.cot_yaml_step_report",
+    "cot-compare":   "src.cot_compare",
     "collate":       "src.collate_results",
 }
 
@@ -68,7 +70,14 @@ Stages:
     self-cot        Stage 2d — self-generated description, then classify using it as
                                context (own reasoning, no external description)
     cot-yaml        Stage 2e — structured multi-step reasoning (cot_prompts.yaml) before
-                               classifying; same resumable per-model setup as vision-baseline
+                               classifying; same resumable per-model setup as vision-baseline.
+                               --per_step also classifies after every intermediate step;
+                               --swap_datasets re-runs a dataset subset once per step-order
+                               rotation (robustness check)
+    cot-yaml-step-report     — per-step F1 report from cot-yaml --per_step / --swap_datasets
+                               output (no GPU needed)
+    cot-compare              — win rate / mean gain / mean loss / top-5 gains & losses for
+                               desc-aug-v2, self-cot, cot-yaml vs. vision-baseline (no GPU needed)
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
@@ -94,9 +103,15 @@ Examples:
     python main.py vision-baseline --model google/gemma-4-26B-A4B-it
     python main.py desc-aug-v2     --model google/gemma-4-26B-A4B-it
     python main.py self-cot        --model google/gemma-4-26B-A4B-it
-    python main.py cot-yaml        --model google/gemma-4-26B-A4B-it
+    python main.py cot-yaml        --model google/gemma-4-26B-A4B-it --per_step
     # ... repeat --model per model, then once ALL models/both scripts are done:
     python main.py vision-baseline-collate
+    python main.py cot-yaml-step-report
+    python main.py cot-compare
+    # then, for cot-compare's top gain/loss datasets:
+    python main.py cot-yaml --model google/gemma-4-26B-A4B-it \\
+        --swap_datasets ds_one_classification ds_two_classification
+    python main.py cot-yaml-step-report
 
 Pass --help after the stage name for all available options:
     python main.py probe --help
