@@ -81,8 +81,8 @@ from src.common.io import load_prompts
 from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
-    CKPT_FIELDS, append_ckpt_row, collate_models, compute_model_metrics, judge_gt_hint,
-    load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
+    CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
+    judge_gt_hint, load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
 )
 
 # Per-step checkpoint schema (--per_step / --swap_datasets): one row per
@@ -344,6 +344,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    archive_ckpt_if_rerun(ckpt_path, args.rerun)
     rows, seen = load_ckpt(ckpt_path)
     if rows:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")
@@ -352,6 +353,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     step_rows: list[dict] = []
     step_seen: set = set()
     if args.per_step:
+        archive_ckpt_if_rerun(step_ckpt_path, args.rerun)
         step_rows, _ = load_ckpt(step_ckpt_path, fields=STEP_CKPT_FIELDS)
         step_seen = _step_seen_complete(step_rows, cot_prompts)
         if step_rows:
@@ -444,6 +446,7 @@ def run_swap_model(model_id: str, args: argparse.Namespace) -> None:
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     swap_ckpt_path = model_dir / f"ckpt_swap_{safe_model_name(model_id)}.csv"
+    archive_ckpt_if_rerun(swap_ckpt_path, args.rerun)
     swap_rows, _ = load_ckpt(swap_ckpt_path, fields=STEP_CKPT_FIELDS)
     if swap_rows:
         print(f"  [resume] {len(swap_rows)} swap row(s) already scored in {swap_ckpt_path.name}")
@@ -541,6 +544,13 @@ if __name__ == "__main__":
     parser.add_argument("--images_root", default="dataset/images")
     parser.add_argument("--output_dir", default="outputs_final/cot_yaml/")
     parser.add_argument("--n_samples", type=int, default=10, help="Images/class to evaluate.")
+    parser.add_argument("--rerun", action="store_true",
+                         help="Move any existing checkpoint(s) (final and/or step/swap, whichever "
+                              "this invocation would otherwise read from — and judge_log.jsonl) aside, "
+                              "timestamped, and regenerate every row from scratch — unlike a plain "
+                              "rerun, which would silently keep already-checkpointed rows even if "
+                              "they're known-bad (e.g. corrupted by a since-fixed prompt-building "
+                              "bug). Old files are archived, never deleted.")
     parser.add_argument("--per_step", action="store_true",
                          help="Also classify after every intermediate step (not just the last) "
                               "and checkpoint it separately to ckpt_steps_<model>.csv — view with "

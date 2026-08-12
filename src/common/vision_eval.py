@@ -10,6 +10,7 @@ import csv
 import gc
 import json
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -180,6 +181,36 @@ def append_ckpt_row(path: Path, row: dict, fields: list[str] = CKPT_FIELDS) -> N
         if is_new:
             writer.writeheader()
         writer.writerow({k: row.get(k, "") for k in fields})
+
+
+def archive_ckpt_if_rerun(ckpt_path: Path, rerun: bool) -> None:
+    """--rerun support: load_ckpt()'s resume-by-key behavior is normally a
+    feature (survives a kill mid-run) but becomes a liability the one time
+    you actually WANT every row regenerated — e.g. after fixing a bug in how
+    prompts were built (silently-enabled Qwen "thinking" mode truncating
+    classification answers) that corrupted predictions already checkpointed
+    under the old code. Just rerunning the same command wouldn't help: every
+    row already present in the checkpoint would be silently kept, bug and
+    all, since load_ckpt has no way to tell a corrupted row from a finished
+    one.
+
+    Moves ckpt_path (and its directory's judge_log.jsonl, if present, so a
+    fresh run's judge conversations don't mix into the old log) aside with a
+    timestamp — never overwrites a previous archive — rather than deleting,
+    so old data is always recoverable. No-op if `rerun` is false or there's
+    nothing at ckpt_path yet."""
+    if not rerun or not ckpt_path.exists():
+        return
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = ckpt_path.parent / f"{ckpt_path.stem}.{ts}.bak.csv"
+    ckpt_path.rename(backup)
+    print(f"  [rerun] moved existing checkpoint aside: {backup.name}")
+
+    log_path = ckpt_path.parent / "judge_log.jsonl"
+    if log_path.exists():
+        log_backup = log_path.parent / f"judge_log.{ts}.bak.jsonl"
+        log_path.rename(log_backup)
+        print(f"  [rerun] moved existing judge log aside: {log_backup.name}")
 
 
 # ── Judge phase ──────────────────────────────────────────────────────────────

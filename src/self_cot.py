@@ -58,7 +58,7 @@ from src.common.io import load_prompts
 from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
-    append_ckpt_row, collate_models, compute_model_metrics, judge_gt_hint,
+    append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics, judge_gt_hint,
     load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
 )
 
@@ -170,6 +170,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    archive_ckpt_if_rerun(ckpt_path, args.rerun)
     rows, seen = load_ckpt(ckpt_path)
     if rows:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")
@@ -305,6 +306,12 @@ if __name__ == "__main__":
     parser.add_argument("--images_root", default="dataset/images")
     parser.add_argument("--output_dir", default="outputs_final/self_cot/")
     parser.add_argument("--n_samples", type=int, default=10, help="Images/class to evaluate.")
+    parser.add_argument("--rerun", action="store_true",
+                         help="Move any existing checkpoint (and judge_log.jsonl) aside, timestamped, "
+                              "and regenerate every row from scratch — unlike a plain rerun, which "
+                              "would silently keep already-checkpointed rows even if they're known-bad "
+                              "(e.g. corrupted by a since-fixed prompt-building bug). Old files are "
+                              "archived, never deleted.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=16384)
