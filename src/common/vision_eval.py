@@ -71,12 +71,78 @@ def judge_gt_hint(clean_label: str, aliases: list[str]) -> str:
     return f"{clean_label} (also known as: {', '.join(aliases)})"
 
 
+# Columns that have never moved/renamed across every CKPT_FIELDS revision
+# this session — used by load_ckpt() to align rows from a stale-header file
+# without needing to know exactly which past schema(s) it was written under.
+_CKPT_FRONT_FIELDS = CKPT_FIELDS[: CKPT_FIELDS.index("sem_sim") + 1]
+_CKPT_BACK_FIELDS = ["judged_correct", "judge_reasoning"]
+_CKPT_MIDDLE_FIELDS = [f for f in CKPT_FIELDS if f not in _CKPT_FRONT_FIELDS and f not in _CKPT_BACK_FIELDS]
+
+
 def load_ckpt(path: Path) -> tuple[list[dict], set[tuple[str, str, str]]]:
     """Load an existing checkpoint CSV. Returns (rows, seen-keys) so a resumed
-    run can skip (dataset, class_label, image_name) triples already scored."""
+    run can skip (dataset, class_label, image_name) triples already scored.
+
+    Handles a stale on-disk header: append_ckpt_row() only writes a header
+    for a brand-new file, so every time CKPT_FIELDS has gained a column
+    (has happened repeatedly this session — judge_gt_hint, then reasoning)
+    after a checkpoint file already existed, rows appended since are written
+    in the CURRENT field order while line 1 still reflects an OLDER one. A
+    plain csv.DictReader then zips the new, longer rows against the old,
+    shorter header, silently shifting every value from the divergence point
+    on — e.g. a class name landing in what reads as judged_correct,
+    breaking int(r["judged_correct"]) deep in judged_summary(). A file can
+    even mix rows from more than two schema generations if it predates
+    multiple additions.
+
+    Every past CKPT_FIELDS revision only ever inserted new columns into the
+    same middle slot (between sem_sim and judged_correct) — the front
+    columns (agml_dataset..sem_sim) and back columns (judged_correct,
+    judge_reasoning) have stayed fixed all session — so each row can be
+    aligned unambiguously from both ends using its own field COUNT, without
+    needing to know exactly which historical schema(s) are mixed into the
+    file. The file is then rewritten with a consistent, current header so
+    future append_ckpt_row() calls stay aligned."""
     if not path.exists():
         return [], set()
-    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    with open(path, newline="", encoding="utf-8") as f:
+        raw_rows = list(csv.reader(f))
+    if not raw_rows:
+        return [], set()
+    header, raw_rows = raw_rows[0], raw_rows[1:]
+    n_front, n_back = len(_CKPT_FRONT_FIELDS), len(_CKPT_BACK_FIELDS)
+
+    rows = []
+    n_healed = 0
+    for raw in raw_rows:
+        n_middle = len(raw) - n_front - n_back
+        if len(raw) == len(CKPT_FIELDS) and header == CKPT_FIELDS:
+            row = dict(zip(CKPT_FIELDS, raw))
+        elif 0 <= n_middle <= len(_CKPT_MIDDLE_FIELDS):
+            # Middle fields were added in order (judge_gt_hint, then
+            # reasoning inserted before it) — a row with fewer middle
+            # values than today's schema is missing the most-recently-added
+            # ones, so take the middle schema's own trailing slice, not its
+            # front, to line values up with the fields that actually exist
+            # in a row this short.
+            middle = _CKPT_MIDDLE_FIELDS[-n_middle:] if n_middle else []
+            fields = _CKPT_FRONT_FIELDS + middle + _CKPT_BACK_FIELDS
+            row = dict(zip(fields, raw))
+            for k in CKPT_FIELDS:
+                row.setdefault(k, "")
+            n_healed += 1
+        else:
+            raise ValueError(
+                f"{path}: row has {len(raw)} fields — can't align to any known "
+                f"CKPT_FIELDS schema (current has {len(CKPT_FIELDS)}): {raw[:5]}..."
+            )
+        rows.append(row)
+
+    if n_healed:
+        print(f"  [ckpt] {path.name}: healed {n_healed} row(s) written under a "
+              f"stale header (schema drift) — rewriting with current schema.")
+        rewrite_ckpt(path, rows)
+
     seen = {(r["agml_dataset"], r["class_label"], r["image_name"]) for r in rows}
     return rows, seen
 
