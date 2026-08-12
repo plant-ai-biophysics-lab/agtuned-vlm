@@ -43,6 +43,7 @@ import time
 
 from PIL import Image as PILImage
 
+from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
     load_manifest, parse_class_label,
@@ -140,20 +141,6 @@ def destroy_llm(llm) -> None:
     gc.collect()
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
-
-
-def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str, system_prompt: str = "") -> dict:
-    user_msg = {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
-    messages = ([{"role": "system", "content": system_prompt}] if system_prompt else []) + [user_msg]
-    try:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
-        )
-    except TypeError:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-    return {"prompt": text, "multi_modal_data": {"image": image}}
 
 
 def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = "") -> list[str]:

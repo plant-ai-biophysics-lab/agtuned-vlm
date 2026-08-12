@@ -25,6 +25,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image as PILImage
+from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
 from src.common.distribution_plots import (
     gather_cls_per_class_by_dataset,
@@ -166,30 +167,6 @@ def _clean_response(text: str) -> str:
     return text.strip()
 
 
-def _apply_chat_template(tokenizer, prompt: str, system_prompt: str = "") -> str:
-    messages = [{"role": "user", "content": prompt}]
-    sys_msg = system_prompt or ""
-    try:
-        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
-        return tokenizer.apply_chat_template(
-            full, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-    except TypeError:
-        pass
-    try:
-        # Qwen fallback: merge system prompt with /no_think
-        sys_content = " ".join(filter(None, [sys_msg, "/no_think"]))
-        return tokenizer.apply_chat_template(
-            [{"role": "system", "content": sys_content}, *messages],
-            tokenize=False, add_generation_prompt=True,
-        )
-    except Exception:
-        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
-        return tokenizer.apply_chat_template(
-            full, tokenize=False, add_generation_prompt=True
-        )
-
-
 _MAMBA_MAX_NUM_SEQS = 32
 _MAMBA_MODEL_PREFIXES = {"mamba", "jamba", "zamba", "falcon_mamba", "bamba", "qwen"}
 
@@ -242,21 +219,6 @@ def destroy_llm(llm) -> None:
     gc.collect()
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
-
-
-def build_multimodal_prompt(tokenizer, image: PILImage.Image, question: str, system_prompt: str = "") -> dict:
-    sys_msg = system_prompt or ""
-    user_msg = {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
-    messages = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + [user_msg]
-    try:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-    except TypeError:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    return {"prompt": text, "multi_modal_data": {"image": image}}
 
 
 def run_batch(

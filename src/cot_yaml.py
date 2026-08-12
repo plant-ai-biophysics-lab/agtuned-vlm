@@ -72,6 +72,7 @@ from collections import defaultdict
 
 from PIL import Image as PILImage
 
+from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
     load_manifest, parse_class_label,
@@ -193,15 +194,7 @@ def _sys_msg(prompts: dict) -> list[dict]:
 def build_prompt(tokenizer, image: PILImage.Image, messages: list[dict]) -> dict:
     """messages already contains the full conversation history — the first
     user turn's content must be [{"type": "image"}, {"type": "text", ...}]."""
-    try:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
-        )
-    except TypeError:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-    return {"prompt": text, "multi_modal_data": {"image": image}}
+    return {"prompt": render_chat_template(tokenizer, messages), "multi_modal_data": {"image": image}}
 
 
 def run_batch(llm, tokenizer, images: list, histories: list[list[dict]], params) -> list[str]:
