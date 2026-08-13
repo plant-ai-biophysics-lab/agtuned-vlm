@@ -27,9 +27,23 @@ n_samples: null
 quantize: null  # "4bit", "8bit", "awq", "gptq"
 gpu_memory_utilization: 0.9
 # Multi-turn CoT conversations (up to 5 steps + classification for cot_yaml)
-# accumulate more prompt tokens than a single-turn baseline — 16384 matches
-# what vision_baseline_config.yaml also needed for image tokens alone.
-max_model_len: 16384
+# accumulate more prompt tokens than a single-turn baseline, and each turn
+# resends the whole growing history — 24576 matches vision_baseline_config
+# .yaml's headroom, kept even with vision_token_budget capping both model
+# families' per-image tokens to the same ~1120. Applies to both Gemma and
+# Qwen runs.
+max_model_len: 24576
+# Per-image vision token budget every model family is aligned to (see
+# src/common/vlm_load.py and the matching comment in
+# vision_baseline_config.yaml) — without this, Gemma defaults to 280
+# tokens/image and Qwen scales UNCAPPED with the image's native resolution.
+# Matters even more here than for the single-turn baseline scripts: the
+# image is only inserted once (turn 1), but each step's generate() call
+# resends the whole growing history — no cross-call KV-cache reuse — so an
+# unaligned per-image token count gets reprocessed, and its cost compounds,
+# on every turn of the chain. 1120 = Gemma's own maximum supported tier;
+# Qwen is capped to match.
+vision_token_budget: 1120
 max_num_seqs: 64
 enforce_eager: false
 

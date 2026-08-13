@@ -27,6 +27,8 @@ import numpy as np
 from PIL import Image as PILImage
 from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import datasets_by_name, prefetch_agml_datasets
+from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm
+from src.common.vlm_load import load_llm as _shared_load_llm
 from src.common.distribution_plots import (
     gather_cls_per_class_by_dataset,
     gather_cls_values_by_dataset,
@@ -181,44 +183,21 @@ def load_llm(
     quantization: str | None = None,
     max_num_seqs: int = 64,
     gpu_memory_utilization: float = 0.9,
-    max_model_len: int = 8192,
+    max_model_len: int = 24576,
     enforce_eager: bool = False,
+    vision_token_budget: int | None = DEFAULT_VISION_TOKEN_BUDGET,
 ):
-    from vllm import LLM
     if _is_mamba(model_id):
         effective_seqs = min(max_num_seqs, _MAMBA_MAX_NUM_SEQS)
         if effective_seqs < max_num_seqs:
             print(f"  [load_llm] Mamba architecture detected — capping max_num_seqs at {effective_seqs}")
         max_num_seqs = effective_seqs
 
-    llm = LLM(
-        model=model_id,
-        dtype="bfloat16",
-        max_model_len=max_model_len,
-        gpu_memory_utilization=gpu_memory_utilization,
-        max_num_seqs=max_num_seqs,
-        limit_mm_per_prompt={"image": 1},
-        quantization=quantization,
-        enforce_eager=enforce_eager,
+    return _shared_load_llm(
+        model_id, quantization=quantization, gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len, max_num_seqs=max_num_seqs, enforce_eager=enforce_eager,
+        vision_token_budget=vision_token_budget, caller_tag="vision_assessment",
     )
-    return llm, llm.get_tokenizer()
-
-
-def destroy_llm(llm) -> None:
-    import torch
-    try:
-        llm.llm_engine.engine_core.shutdown()
-    except Exception:
-        pass
-    try:
-        from vllm.distributed.parallel_state import destroy_model_parallel
-        destroy_model_parallel()
-    except Exception:
-        pass
-    del llm
-    gc.collect()
-    torch.cuda.synchronize()
-    torch.cuda.empty_cache()
 
 
 def run_batch(
@@ -259,10 +238,11 @@ def run_model(
     quantization: str | None = None,
     max_num_seqs: int = 64,
     gpu_memory_utilization: float = 0.9,
-    max_model_len: int = 8192,
+    max_model_len: int = 24576,
     enforce_eager: bool = False,
     images_dir: Path | None = None,
     system_prompt: str = "",
+    vision_token_budget: int | None = DEFAULT_VISION_TOKEN_BUDGET,
 ) -> tuple[list[dict], list[dict]]:
     """Load model, run both tasks on all records, unload, return (desc_rows, cls_rows)."""
     from vllm import SamplingParams
@@ -272,7 +252,7 @@ def run_model(
     llm, tokenizer = load_llm(
         model_id, quantization=quantization, max_num_seqs=max_num_seqs,
         gpu_memory_utilization=gpu_memory_utilization, max_model_len=max_model_len,
-        enforce_eager=enforce_eager,
+        enforce_eager=enforce_eager, vision_token_budget=vision_token_budget,
     )
 
     from tqdm import tqdm
@@ -1056,10 +1036,11 @@ def _worker_vision(kwargs: dict) -> None:
         quantization=kwargs["quantization"],
         max_num_seqs=kwargs.get("max_num_seqs", 64),
         gpu_memory_utilization=kwargs.get("gpu_memory_utilization", 0.9),
-        max_model_len=kwargs.get("max_model_len", 8192),
+        max_model_len=kwargs.get("max_model_len", 24576),
         enforce_eager=kwargs.get("enforce_eager", False),
         images_dir=Path(kwargs["images_dir"]) if kwargs.get("images_dir") else None,
         system_prompt=kwargs.get("system_prompt", ""),
+        vision_token_budget=kwargs.get("vision_token_budget", DEFAULT_VISION_TOKEN_BUDGET),
     )
     with open(kwargs["out_path"], "w") as f:
         json.dump({"desc_rows": desc_rows, "cls_rows": cls_rows}, f)
@@ -1174,6 +1155,7 @@ def main(args: argparse.Namespace) -> None:
                 enforce_eager=args.enforce_eager,
                 images_dir=str(images_dir_val) if images_dir_val else None,
                 system_prompt=assessment_system,
+                vision_token_budget=args.vision_token_budget,
                 out_path=str(worker_out),
             ))
             worker_result = json.loads(worker_out.read_text())
@@ -1230,6 +1212,7 @@ def main(args: argparse.Namespace) -> None:
             args.judge_model,
             quantization=args.judge_quantization,
             gpu_memory_utilization=0.9,
+            vision_token_budget=None,  # judge compares prediction vs. ground-truth text only, no image
         )
 
         for model_id in args.models:
@@ -1518,8 +1501,16 @@ if __name__ == "__main__":
         help="Fraction of GPU VRAM vLLM may use for weights + KV cache (default 0.9)",
     )
     parser.add_argument(
-        "--max_model_len", type=int, default=8192,
-        help="Maximum sequence length (tokens) vLLM will allocate KV cache for (default 8192)",
+        "--max_model_len", type=int, default=24576,
+        help="Maximum sequence length (tokens) vLLM will allocate KV cache for (default 24576)",
+    )
+    parser.add_argument(
+        "--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET,
+        help="Per-image vision token count to align every model family to (see "
+             "src/common/vlm_load.py) — Gemma defaults to 280 unaligned, Qwen scales uncapped with "
+             "image resolution unaligned; this pins both to the same budget so an accuracy "
+             "comparison isn't confounded by unequal visual detail. Pass 0 to opt out (each model's "
+             "own default).",
     )
     parser.add_argument(
         "--enforce_eager", action="store_true",

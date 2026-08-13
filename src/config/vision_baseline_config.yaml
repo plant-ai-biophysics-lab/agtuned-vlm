@@ -29,12 +29,23 @@ n_samples: null
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"
 gpu_memory_utilization: 0.9
-# 8192 isn't always enough — a single high-res image's vision tokens (varies
-# by model/aspect ratio) plus the question (and, for desc-aug, the reference
-# description) can exceed it. src/data_generation/generate.py hit the same
-# issue with these models and uses 16384 for its multimodal captioning pass;
-# matching that here rather than guessing a new number.
-max_model_len: 16384
+# 8192/16384 weren't always enough even with vision_token_budget capping
+# both model families' per-image tokens to the same ~1120 — the question
+# text (and, for desc-aug, the reference description) still add on top, and
+# 24576 gives real headroom rather than chasing the next overflow one
+# image at a time. Applies to both Gemma and Qwen runs.
+max_model_len: 24576
+# Per-image vision token budget every model family is aligned to (see
+# src/common/vlm_load.py) — without this, Gemma defaults to 280 tokens/image
+# and Qwen scales UNCAPPED with the image's native resolution (sometimes
+# 10k+ tokens on a large/oddly-shaped image, which is what caused the
+# max_model_len overflow before this existed). Left unaligned, a Gemma vs.
+# Qwen comparison isn't just "which model understands agriculture better" —
+# it's partly "how much of the image did each model actually get to see."
+# 1120 = Gemma's own maximum supported tier; Qwen is capped to match. Set to
+# 0 to opt out (each model's own default) or lower (e.g. 280) for a
+# faster/cheaper exploratory run.
+vision_token_budget: 1120
 max_num_seqs: 64
 enforce_eager: false
 

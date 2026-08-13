@@ -37,7 +37,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
-import gc
 import re
 import time
 
@@ -55,12 +54,12 @@ from src.common.vision_eval import (
     append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics, judge_gt_hint,
     load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
 )
+from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
 try:
-    from vllm import LLM, SamplingParams
+    from vllm import SamplingParams
     _CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
 except ImportError:
-    LLM = None  # type: ignore[assignment,misc]
     SamplingParams = None  # type: ignore[assignment,misc]
     _CLS_PARAMS = None
 
@@ -102,45 +101,6 @@ def load_description_map(jsonl_path: Path) -> dict[tuple[str, str], str]:
 
 def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
-
-
-def load_llm(
-    model_id: str,
-    quantization: str | None = None,
-    gpu_memory_utilization: float = 0.9,
-    max_model_len: int = 8192,
-    max_num_seqs: int = 64,
-    enforce_eager: bool = False,
-):
-    print(f"\n[desc_augmented_vision_v2] Loading {model_id} via vLLM")
-    llm = LLM(
-        model=model_id,
-        dtype="bfloat16",
-        quantization=quantization,
-        gpu_memory_utilization=gpu_memory_utilization,
-        max_model_len=max_model_len,
-        max_num_seqs=max_num_seqs,
-        limit_mm_per_prompt={"image": 1},
-        enforce_eager=enforce_eager,
-    )
-    return llm, llm.get_tokenizer()
-
-
-def destroy_llm(llm) -> None:
-    import torch
-    try:
-        llm.llm_engine.engine_core.shutdown()
-    except Exception:
-        pass
-    try:
-        from vllm.distributed.parallel_state import destroy_model_parallel
-        destroy_model_parallel()
-    except Exception:
-        pass
-    del llm
-    gc.collect()
-    torch.cuda.synchronize()
-    torch.cuda.empty_cache()
 
 
 def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = "") -> list[str]:
@@ -222,6 +182,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             max_model_len=args.max_model_len,
             max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
+            vision_token_budget=args.vision_token_budget,
+            caller_tag="desc_augmented_vision_v2",
         )
 
         t_start = time.perf_counter()
@@ -314,7 +276,15 @@ if __name__ == "__main__":
                               "archived, never deleted.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
-    parser.add_argument("--max_model_len", type=int, default=8192)
+    parser.add_argument("--max_model_len", type=int, default=24576)
+    parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET,
+                         help="Per-image vision token count to align every model family to (see "
+                             "src/common/vlm_load.py) — Gemma defaults to 280 unaligned, Qwen scales "
+                             "uncapped with image resolution unaligned; this pins both to the same "
+                             "budget so an accuracy comparison isn't confounded by unequal visual "
+                             "detail. Also bounds Qwen's prompt length, fixing the max_model_len "
+                             "overflow some large images hit. Pass a lower value (e.g. 280) for a "
+                             "faster/cheaper run, or 0 to opt out (each model's own default).")
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
     parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
