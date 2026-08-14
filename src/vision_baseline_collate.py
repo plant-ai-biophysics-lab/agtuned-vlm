@@ -58,6 +58,26 @@ from src.common.vision_eval import (
 _CONDITIONS = [("baseline", "Lower Bound"), ("desc_aug", "Upper Bound")]
 
 
+def _legend_row_major(items: list, ncol: int) -> list:
+    """Reorder legend entries (already in the same left-to-right order the
+    bars were plotted in) so a multi-row matplotlib legend actually DISPLAYS
+    them in that order. matplotlib fills a legend column-major by default —
+    with our bars-plotted order (model0-cond0, model0-cond1, model1-cond0,
+    ...) and ncol=n_models, that default fill puts all "Lower Bound"
+    entries in row 0 and all "Upper Bound" entries in row 1, which reads as
+    "grouped by condition" rather than "left-to-right, matching the bars".
+    This computes the input permutation that makes matplotlib's own
+    column-major fill reproduce true row-major reading order instead."""
+    n = len(items)
+    nrows = -(-n // ncol)  # ceil division
+    padded = list(items) + [None] * (nrows * ncol - n)
+    reordered = [None] * len(padded)
+    for j in range(len(padded)):
+        r, c = j % nrows, j // nrows
+        reordered[j] = padded[r * ncol + c]
+    return [x for x in reordered if x is not None]
+
+
 def collate(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[str, dict[str, dict]]:
     """{model: {"baseline": {scope: stats}, "desc_aug": {scope: stats}}}"""
     baseline_rows = load_all_rows(baseline_dir)
@@ -207,7 +227,10 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
     # differences between them) into an illegibly thin band at the bottom.
     ax.set_ylim(0, max(max_top * 1.15, 0.05))
     ax.set_ylabel("Judged F1 Macro")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(models), 4), fontsize=7)
+    ncol = min(len(models), 4)
+    handles, labels = ax.get_legend_handles_labels()
+    handles, labels = _legend_row_major(handles, ncol), _legend_row_major(labels, ncol)
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=ncol, fontsize=7)
     plt.tight_layout()
     path = output_dir / "stage2_f1_by_task.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
