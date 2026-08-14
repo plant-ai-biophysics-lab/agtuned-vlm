@@ -19,6 +19,13 @@ Outputs (into --output_dir):
   stage2_summary.json         — same, structured
   stage2_f1_by_task.png       — grouped bar chart: task types (+ overall), bars
                                  per (model, condition), with 95% CI error bars
+  stage2_delta_summary.csv/.json — model, scope, delta_f1_macro, delta_ci_low, delta_ci_high,
+                                 delta_n_classes — Upper minus Lower Bound judged F1, bootstrapped
+                                 over the PAIRED per-class deltas (see bootstrap_judge_f1_delta_ci
+                                 in src/common/vision_eval.py), not a naive subtraction of the two
+                                 conditions' independent CIs
+  stage2_f1_delta_by_task.png — companion chart to stage2_f1_by_task.png: one bar per model per
+                                 scope (the delta itself, not two bars), same ordering/coloring
   stage2_f1_percentiles.png   — supplementary: box plot of each model/condition's
                                  raw per-class F1 scores, one panel per task type + overall
 
@@ -43,9 +50,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.common.plot_style import family_shaded_colors as _family_shaded_colors
-from src.common.vision_eval import compute_condition_stats, load_all_rows, per_class_f1_values
+from src.common.plot_style import ordered_backbones as _ordered_backbones
+from src.common.vision_eval import (
+    compute_condition_stats, compute_delta_stats, load_all_rows, per_class_f1_values,
+)
 
-_CONDITIONS = [("baseline", "Vision Baseline"), ("desc_aug", "Desc-Augmented")]
+_CONDITIONS = [("baseline", "Lower Bound"), ("desc_aug", "Upper Bound")]
 
 
 def collate(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[str, dict[str, dict]]:
@@ -62,6 +72,16 @@ def collate(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[s
         if model in aug_rows:
             combined[model]["desc_aug"] = compute_condition_stats(aug_rows[model], n_boot, seed)
     return combined
+
+
+def collate_deltas(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[str, dict[str, dict]]:
+    """{model: {scope: delta_stats}} — Upper Bound minus Lower Bound judged
+    F1, only for models with a run in BOTH directions (a delta needs both
+    sides; see compute_delta_stats)."""
+    baseline_rows = load_all_rows(baseline_dir)
+    aug_rows = load_all_rows(aug_dir)
+    models = sorted(set(baseline_rows) & set(aug_rows))
+    return {model: compute_delta_stats(baseline_rows[model], aug_rows[model], n_boot, seed) for model in models}
 
 
 def collect_per_class_f1(baseline_dir: Path, aug_dir: Path) -> dict[str, dict[str, dict[str, list[float]]]]:
@@ -98,7 +118,8 @@ def write_summary(output_dir: Path, combined: dict[str, dict[str, dict]]) -> Non
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "stage2_summary.json").write_text(json.dumps(combined, indent=2))
 
-    fieldnames = ["model", "condition", "scope", "f1_macro", "ci_low", "ci_high", "n_classes", "n"]
+    fieldnames = ["model", "condition", "scope", "f1_macro", "ci_low", "ci_high", "n_classes",
+                  "judge_f1_macro", "judge_ci_low", "judge_ci_high", "judge_n_classes", "n"]
     with open(output_dir / "stage2_summary.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -111,7 +132,7 @@ def write_summary(output_dir: Path, combined: dict[str, dict[str, dict]]) -> Non
 
 
 def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> None:
-    models = sorted(combined.keys())
+    models = _ordered_backbones(list(combined.keys()))
     if not models:
         print("  No models to plot.")
         return
@@ -129,25 +150,43 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
 
     fig, ax = plt.subplots(figsize=(max(9, len(scopes) * 2.2), 5.5))
     bar_i = 0
+    max_top = 0.0
+    any_unjudged = False
     for model in models:
         for cond_key, cond_label in _CONDITIONS:
             by_scope = combined[model].get(cond_key, {})
             means, lo_err, hi_err = [], [], []
             for scope in scopes:
                 stats = by_scope.get(scope)
-                m = stats["f1_macro"] if stats else 0.0
-                lo = stats["ci_low"] if stats else 0.0
-                hi = stats["ci_high"] if stats else 0.0
+                # Judge-scored F1 is the headline metric — it credits a
+                # correct-but-differently-phrased answer that strict
+                # resolved_class matching can't. Fall back to the strict
+                # f1_macro only if this particular (model, condition, scope)
+                # was never judged (--skip_judge, or judging still pending),
+                # so the bar isn't just silently zero.
+                if stats and stats.get("judge_n_classes", 0) > 0:
+                    m, lo, hi = stats["judge_f1_macro"], stats["judge_ci_low"], stats["judge_ci_high"]
+                elif stats:
+                    m, lo, hi = stats["f1_macro"], stats["ci_low"], stats["ci_high"]
+                    any_unjudged = True
+                else:
+                    m = lo = hi = 0.0
                 means.append(m)
                 lo_err.append(max(0.0, m - lo))
                 hi_err.append(max(0.0, hi - m))
+                max_top = max(max_top, hi)
 
             offset = (bar_i - (n_bars - 1) / 2) * width
             label = f"{model.split('/')[-1]} ({cond_label})"
             ax.bar(
                 x + offset, means, width, label=label,
                 color=model_colors[model],
-                hatch="//" if cond_key == "desc_aug" else None,
+                # Hatch marks Upper Bound (desc_aug) — horizontal ("--"),
+                # not diagonal ("//"), so it reads as a different signal
+                # than linear probe's diagonal hatch (which means
+                # vision-only there, condition here — same mark would imply
+                # the same meaning at a glance).
+                hatch="--" if cond_key == "desc_aug" else None,
                 edgecolor="white" if cond_key == "desc_aug" else "black",
                 linewidth=0.5,
                 yerr=[lo_err, hi_err], capsize=2,
@@ -155,15 +194,108 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
             )
             bar_i += 1
 
+    if any_unjudged:
+        print("  [warn] some (model, condition, scope) combinations had no judged rows — "
+              "plotted their strict f1_macro instead (unjudged data, not a judge_f1_macro of 0)")
+
     ax.set_xticks(x)
-    ax.set_xticklabels([s.replace("_", " ") for s in scopes], rotation=15, ha="right")
-    ax.set_ylim(0, 1.15)
-    ax.set_ylabel("F1 Macro (95% CI over classes)")
+    ax.set_xticklabels([s.replace("_identification", "").replace("_", " ") for s in scopes],
+                       rotation=15, ha="right")
+    # Scaled to the actual tallest bar+CI rather than a fixed [0, 1.15] —
+    # these scores cluster well under 1.0, so a fixed full-range axis left
+    # most of the plot as dead space and compressed the bars (and the
+    # differences between them) into an illegibly thin band at the bottom.
+    ax.set_ylim(0, max(max_top * 1.15, 0.05))
+    ax.set_ylabel("Judged F1 Macro")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(models), 4), fontsize=7)
     plt.tight_layout()
     path = output_dir / "stage2_f1_by_task.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     print(f"  Saved: {path}")
+
+
+def plot_f1_delta_by_task(output_dir: Path, delta_combined: dict[str, dict[str, dict]]) -> None:
+    """Upper Bound minus Lower Bound judged F1, one bar per model per scope
+    (not two — there's only one delta per model) — same model
+    ordering/coloring/scope handling as plot_f1_by_task, so the two figures
+    read as a matched pair."""
+    models = _ordered_backbones(list(delta_combined.keys()))
+    if not models:
+        print("  No models to plot deltas for.")
+        return
+
+    task_types = sorted({
+        scope for by_scope in delta_combined.values() for scope in by_scope if scope != "overall"
+    })
+    scopes = task_types + ["overall"]
+
+    model_colors = _family_shaded_colors(models)
+    width = 0.8 / len(models)
+    x = np.arange(len(scopes))
+
+    fig, ax = plt.subplots(figsize=(max(9, len(scopes) * 2.2), 5.5))
+    max_top, min_bottom = 0.0, 0.0
+    any_unpaired = False
+    for i, model in enumerate(models):
+        by_scope = delta_combined[model]
+        means, lo_err, hi_err = [], [], []
+        for scope in scopes:
+            stats = by_scope.get(scope)
+            # delta_n_classes==0 means no class was judged on BOTH sides to
+            # pair a delta from (e.g. one condition's judge phase hasn't run
+            # yet) — that renders as a flat bar at 0, which reads as "no
+            # improvement" rather than the truth ("not known yet"); flag it
+            # rather than let it pass as a real measurement.
+            if not stats or stats.get("delta_n_classes", 0) == 0:
+                any_unpaired = True
+            m = stats["delta_f1_macro"] if stats else 0.0
+            lo = stats["delta_ci_low"] if stats else 0.0
+            hi = stats["delta_ci_high"] if stats else 0.0
+            means.append(m)
+            lo_err.append(max(0.0, m - lo))
+            hi_err.append(max(0.0, hi - m))
+            max_top = max(max_top, hi)
+            min_bottom = min(min_bottom, lo)
+
+        offset = (i - (len(models) - 1) / 2) * width
+        ax.bar(
+            x + offset, means, width, label=model.split("/")[-1],
+            color=model_colors[model], edgecolor="black", linewidth=0.5,
+            yerr=[lo_err, hi_err], capsize=2,
+            error_kw={"elinewidth": 0.8, "alpha": 0.7},
+        )
+
+    if any_unpaired:
+        print("  [warn] some (model, scope) combinations had no class judged on both sides — "
+              "plotted as a delta of 0 (unpaired, not a real measurement of no improvement)")
+
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([s.replace("_identification", "").replace("_", " ") for s in scopes],
+                       rotation=15, ha="right")
+    pad = max((max_top - min_bottom) * 0.15, 0.02)
+    ax.set_ylim(min_bottom - pad, max_top + pad)
+    ax.set_ylabel("Δ Judged F1 Macro (Upper − Lower Bound)")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(models), 4), fontsize=7)
+    plt.tight_layout()
+    path = output_dir / "stage2_f1_delta_by_task.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path}")
+
+
+def write_delta_summary(output_dir: Path, delta_combined: dict[str, dict[str, dict]]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "stage2_delta_summary.json").write_text(json.dumps(delta_combined, indent=2))
+
+    fieldnames = ["model", "scope", "delta_f1_macro", "delta_ci_low", "delta_ci_high", "delta_n_classes"]
+    with open(output_dir / "stage2_delta_summary.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for model, by_scope in delta_combined.items():
+            for scope, stats in by_scope.items():
+                writer.writerow({"model": model, "scope": scope, **stats})
+    print(f"  Saved: {output_dir / 'stage2_delta_summary.csv'}")
+    print(f"  Saved: {output_dir / 'stage2_delta_summary.json'}")
 
 
 def plot_f1_percentiles(output_dir: Path, per_class_arrays: dict[str, dict[str, dict[str, list[float]]]]) -> None:
@@ -173,7 +305,7 @@ def plot_f1_percentiles(output_dir: Path, per_class_arrays: dict[str, dict[str, 
     whiskers/wide IQR = some classes much harder than others), which the CI
     bar chart doesn't — that chart's error bars describe uncertainty in the
     mean, not the spread of the underlying per-class scores."""
-    models = sorted(per_class_arrays.keys())
+    models = _ordered_backbones(list(per_class_arrays.keys()))
     if not models:
         print("  No models to plot.")
         return
@@ -248,6 +380,11 @@ def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     write_summary(output_dir, combined)
     plot_f1_by_task(output_dir, combined)
+
+    delta_combined = collate_deltas(Path(args.baseline_dir), Path(args.aug_dir), args.n_boot, args.seed)
+    if delta_combined:
+        write_delta_summary(output_dir, delta_combined)
+        plot_f1_delta_by_task(output_dir, delta_combined)
 
     per_class_arrays = collect_per_class_f1(Path(args.baseline_dir), Path(args.aug_dir))
     plot_f1_percentiles(output_dir, per_class_arrays)

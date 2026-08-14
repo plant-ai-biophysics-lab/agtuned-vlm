@@ -454,16 +454,14 @@ def write_model_metrics(model_dir: Path, metrics: dict) -> None:
 
 
 def collate_models(output_dir: Path) -> dict[str, dict]:
-    """Scan output_dir/<model>/ckpt_*.csv (one subfolder per model already
-    run), recompute metrics per model, return {model_dir_name: metrics}."""
+    """Scan output_dir/<model>/ckpt_<model>.csv (one subfolder per model
+    already run), recompute metrics per model, return {model_dir_name: metrics}."""
     if not output_dir.exists():
         return {}
     result = {}
     for model_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
-        ckpt_files = list(model_dir.glob("ckpt_*.csv"))
-        if not ckpt_files:
-            continue
-        rows = list(csv.DictReader(open(ckpt_files[0], encoding="utf-8")))
+        ckpt_path = model_dir / f"ckpt_{model_dir.name}.csv"
+        rows, _ = load_ckpt(ckpt_path)
         if not rows:
             continue
         result[model_dir.name] = compute_model_metrics(rows)
@@ -480,15 +478,21 @@ def collate_models(output_dir: Path) -> dict[str, dict]:
 # vision_baseline_collate.py, built on the two helpers below.
 
 def load_all_rows(output_dir: Path) -> dict[str, list[dict]]:
-    """{model_dir_name: [row, ...]} — every ckpt_*.csv under output_dir/<model>/."""
+    """{model_dir_name: [row, ...]} — ckpt_<model>.csv under output_dir/<model>/,
+    loaded through load_ckpt() (not a raw csv.DictReader) so a stale-header
+    checkpoint (schema drift — see load_ckpt's docstring) gets healed here
+    too rather than silently misreading judged_correct as a class-name
+    string. Previously used model_dir.glob("ckpt_*.csv")[0], which — now
+    that --rerun archives old checkpoints as ckpt_<model>.<timestamp>.bak.csv
+    right alongside the live one — could match and load a STALE BACKUP
+    instead of the current file; the exact expected filename sidesteps that
+    too."""
     if not output_dir.exists():
         return {}
     result = {}
     for model_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
-        ckpt_files = list(model_dir.glob("ckpt_*.csv"))
-        if not ckpt_files:
-            continue
-        rows = list(csv.DictReader(open(ckpt_files[0], encoding="utf-8")))
+        ckpt_path = model_dir / f"ckpt_{model_dir.name}.csv"
+        rows, _ = load_ckpt(ckpt_path)
         if rows:
             result[model_dir.name] = rows
     return result
@@ -513,7 +517,15 @@ def bootstrap_f1_ci(rows: list[dict], n_boot: int = 2000, seed: int = 42) -> dic
     samples) — each class already has its own well-defined F1 (from its own
     TP/FP/FN), and macro-F1 is just their mean, so resampling which classes
     are in the average is the natural unit of uncertainty here, matching "CI
-    based on the classes" rather than per-image noise."""
+    based on the classes" rather than per-image noise.
+
+    This is the STRICT metric — resolved_class vs ground_truth exact match,
+    same as compute_classification_metrics's f1_macro. It can't credit a
+    correct-but-differently-phrased prediction (e.g. a full descriptive
+    sentence that never resolved to a bare class name) at all, which is
+    exactly the gap the judge exists to close — see bootstrap_judge_f1_ci
+    for the judge-scored counterpart, generally the more meaningful number
+    for a headline comparison."""
     classes, per_class = per_class_f1_values(rows)
     if not classes:
         return {"f1_macro": 0.0, "ci_low": 0.0, "ci_high": 0.0, "n_classes": 0, "n": len(rows)}
@@ -539,15 +551,149 @@ def bootstrap_f1_ci(rows: list[dict], n_boot: int = 2000, seed: int = 42) -> dic
     }
 
 
+def per_class_judge_f1_values(rows: list[dict]) -> tuple[list[str], np.ndarray]:
+    """(classes, per_class F1 array), judge-scored — same TP/FP/FN-per-class
+    construction as per_class_f1_values, but a row counts as a match
+    whenever the judge said so (judged_correct), falling back to
+    resolved_class only when the judge disagreed — identical prediction
+    logic to judged_summary()'s judge_f1_macro (metrics.py), just exposed
+    per-class instead of pre-averaged so bootstrap_judge_f1_ci can resample
+    it exactly like the strict version does. Rows without a judged_correct
+    value (judge phase skipped/not yet run) are excluded, same as
+    judged_summary()."""
+    judged = [r for r in rows if r.get("judged_correct", "") != ""]
+    if not judged:
+        return [], np.array([])
+    jc = [int(r["judged_correct"]) for r in judged]
+    refs = [r["class_label"] for r in judged]
+    preds = [r["class_label"] if jc[i] else (r.get("resolved_class") or "") for i, r in enumerate(judged)]
+    classes = sorted(set(refs))
+    if not classes:
+        return [], np.array([])
+    per_class = f1_score(refs, preds, average=None, labels=classes, zero_division=0)
+    return classes, per_class
+
+
+def bootstrap_judge_f1_ci(rows: list[dict], n_boot: int = 2000, seed: int = 42) -> dict:
+    """Judge-scored counterpart to bootstrap_f1_ci — same class-resampling
+    CI construction, built on per_class_judge_f1_values instead of the
+    strict per_class_f1_values. Falls back to all-zero (n_classes=0) if the
+    judge phase hasn't run on these rows, same shape as the strict version's
+    empty-case so callers can treat them uniformly."""
+    classes, per_class = per_class_judge_f1_values(rows)
+    if not classes:
+        return {"judge_f1_macro": 0.0, "judge_ci_low": 0.0, "judge_ci_high": 0.0,
+                "judge_n_classes": 0, "n": len(rows)}
+
+    point = float(np.mean(per_class))
+    if len(classes) < 2:
+        return {"judge_f1_macro": round(point, 4), "judge_ci_low": round(point, 4),
+                "judge_ci_high": round(point, 4), "judge_n_classes": len(classes), "n": len(rows)}
+
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(classes))
+    boot_means = np.array([
+        per_class[rng.choice(idx, size=len(classes), replace=True)].mean()
+        for _ in range(n_boot)
+    ])
+    ci_low, ci_high = np.percentile(boot_means, [2.5, 97.5])
+    return {
+        "judge_f1_macro": round(point, 4),
+        "judge_ci_low": round(float(ci_low), 4),
+        "judge_ci_high": round(float(ci_high), 4),
+        "judge_n_classes": len(classes),
+        "n": len(rows),
+    }
+
+
+def per_class_judge_f1_delta(baseline_rows: list[dict], aug_rows: list[dict]) -> tuple[list[str], np.ndarray]:
+    """Per-class (aug - baseline) judge-F1 delta, PAIRED on classes judged in
+    both conditions. This is what bootstrap_judge_f1_delta_ci resamples —
+    treating "does description-augmentation help this class" as the
+    resampling unit, rather than the naive (and statistically invalid)
+    shortcut of just subtracting two independently-bootstrapped CIs from
+    each other."""
+    base_classes, base_f1 = per_class_judge_f1_values(baseline_rows)
+    aug_classes, aug_f1 = per_class_judge_f1_values(aug_rows)
+    base_map = dict(zip(base_classes, base_f1))
+    aug_map = dict(zip(aug_classes, aug_f1))
+    common = sorted(set(base_map) & set(aug_map))
+    if not common:
+        return [], np.array([])
+    deltas = np.array([aug_map[c] - base_map[c] for c in common])
+    return common, deltas
+
+
+def bootstrap_judge_f1_delta_ci(
+    baseline_rows: list[dict], aug_rows: list[dict], n_boot: int = 2000, seed: int = 42
+) -> dict:
+    """Point estimate + 95% CI for the (aug - baseline) judge-F1 delta,
+    bootstrap-resampled over the paired per-class deltas (see
+    per_class_judge_f1_delta) — same class-resampling logic as
+    bootstrap_judge_f1_ci, just resampling deltas instead of raw scores."""
+    classes, deltas = per_class_judge_f1_delta(baseline_rows, aug_rows)
+    if not classes:
+        return {"delta_f1_macro": 0.0, "delta_ci_low": 0.0, "delta_ci_high": 0.0, "delta_n_classes": 0}
+
+    point = float(np.mean(deltas))
+    if len(classes) < 2:
+        return {"delta_f1_macro": round(point, 4), "delta_ci_low": round(point, 4),
+                "delta_ci_high": round(point, 4), "delta_n_classes": len(classes)}
+
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(classes))
+    boot_means = np.array([
+        deltas[rng.choice(idx, size=len(classes), replace=True)].mean()
+        for _ in range(n_boot)
+    ])
+    ci_low, ci_high = np.percentile(boot_means, [2.5, 97.5])
+    return {
+        "delta_f1_macro": round(point, 4),
+        "delta_ci_low": round(float(ci_low), 4),
+        "delta_ci_high": round(float(ci_high), 4),
+        "delta_n_classes": len(classes),
+    }
+
+
+def compute_delta_stats(
+    baseline_rows: list[dict], aug_rows: list[dict], n_boot: int = 2000, seed: int = 42
+) -> dict[str, dict]:
+    """{"overall": {...}, "<task_type>": {...}, ...} — bootstrap_judge_f1_delta_ci
+    scoped to all rows and to each task_type subset present in EITHER
+    condition (a scope missing from one side just yields no common classes,
+    handled gracefully by bootstrap_judge_f1_delta_ci's empty-case)."""
+    base_by_task: dict[str, list[dict]] = defaultdict(list)
+    for r in baseline_rows:
+        base_by_task[r["task_type"]].append(r)
+    aug_by_task: dict[str, list[dict]] = defaultdict(list)
+    for r in aug_rows:
+        aug_by_task[r["task_type"]].append(r)
+
+    task_types = set(base_by_task) | set(aug_by_task)
+    stats = {"overall": bootstrap_judge_f1_delta_ci(baseline_rows, aug_rows, n_boot, seed)}
+    for tt in task_types:
+        stats[tt] = bootstrap_judge_f1_delta_ci(base_by_task.get(tt, []), aug_by_task.get(tt, []), n_boot, seed)
+    return stats
+
+
 def compute_condition_stats(rows: list[dict], n_boot: int = 2000, seed: int = 42) -> dict[str, dict]:
-    """{"overall": {...}, "<task_type>": {...}, ...} — bootstrap_f1_ci scoped
-    to all rows and to each task_type subset."""
+    """{"overall": {...}, "<task_type>": {...}, ...} — bootstrap_f1_ci AND
+    bootstrap_judge_f1_ci scoped to all rows and to each task_type subset,
+    merged into one dict per scope (strict f1_macro/ci_low/ci_high alongside
+    judge_f1_macro/judge_ci_low/judge_ci_high) so callers can plot either
+    without recomputing."""
     by_task: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_task[r["task_type"]].append(r)
-    stats = {"overall": bootstrap_f1_ci(rows, n_boot, seed)}
+
+    def _both(group_rows: list[dict]) -> dict:
+        merged = bootstrap_f1_ci(group_rows, n_boot, seed)
+        merged.update(bootstrap_judge_f1_ci(group_rows, n_boot, seed))
+        return merged
+
+    stats = {"overall": _both(rows)}
     for tt, trows in by_task.items():
-        stats[tt] = bootstrap_f1_ci(trows, n_boot, seed)
+        stats[tt] = _both(trows)
     return stats
 
 
