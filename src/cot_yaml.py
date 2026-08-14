@@ -264,7 +264,7 @@ def _step_row(
     resolved = resolve_class(entry["prediction"], ds.clean_classes)
     correct = resolved is not None and resolved.lower() == clean_label.lower()
     c_match = contains_match(resolved or entry["prediction"], clean_label)
-    scores = rouge_scores_per_sample(entry["prediction"], clean_label)
+    scores = rouge_scores_per_sample(entry["prediction"], clean_label, include_rouge=False)
     return {
         "agml_dataset": ds.agml_name, "class_label": clean_label,
         "task_type": task_type, "crop": crop_display(crop_val),

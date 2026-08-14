@@ -80,8 +80,24 @@ def rouge_ss_score(prediction: str, reference: str) -> float:
     return round(2 * precision * recall / (precision + recall), 4)
 
 
-def rouge_scores_per_sample(prediction: str, reference: str) -> dict[str, float]:
-    """Returns {rouge1, rouge2, rougeL, rouge_ss, sem_sim} for a single prediction/reference pair."""
+def rouge_scores_per_sample(prediction: str, reference: str, include_rouge: bool = True) -> dict[str, float]:
+    """Returns {rouge1, rouge2, rougeL, rouge_ss, sem_sim} for a single
+    prediction/reference pair. include_rouge=False skips the ROUGE family
+    (rouge1/rouge2/rougeL's RougeScorer + rouge_ss's WordNet synonym
+    expansion) and returns "" for those four — used by the classification
+    scripts (vision_baseline.py, desc_augmented_vision_v2.py, self_cot.py,
+    cot_yaml.py), where ROUGE was only ever a secondary partial-credit
+    signal alongside the real metrics (F1 / judge_f1_macro) and isn't used.
+    language_assessment/assess.py and vision_assessment/assess.py (open-ended
+    QA, not classification) still call this with the default — there ROUGE-SS
+    is a primary metric, not a bonus number. sem_sim is unaffected either
+    way — aggregate_rouge() already skips "" values when averaging, so this
+    doesn't require any downstream changes."""
+    if not include_rouge:
+        return {
+            "rouge1": "", "rouge2": "", "rougeL": "", "rouge_ss": "",
+            "sem_sim": sem_sim_score(prediction, reference),
+        }
     scorer = rs_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     s = scorer.score(reference, prediction)
     return {

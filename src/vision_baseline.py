@@ -164,7 +164,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 resolved = resolve_class(pred, ds.clean_classes)
                 correct = resolved is not None and resolved.lower() == clean_label.lower()
                 c_match = contains_match(resolved or pred, clean_label)
-                scores = rouge_scores_per_sample(pred, clean_label)
+                scores = rouge_scores_per_sample(pred, clean_label, include_rouge=False)
                 row = {
                     "agml_dataset": ds.agml_name, "class_label": clean_label,
                     "task_type": task_type, "crop": crop_display(crop_val),

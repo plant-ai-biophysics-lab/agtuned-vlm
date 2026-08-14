@@ -63,6 +63,17 @@ def _f1(m: dict) -> float | None:
     return float(v) if v is not None else None
 
 
+def _auto_ylim(ax, *value_lists) -> None:
+    """Scale the y-axis to the actual plotted F1 values instead of a fixed
+    [0, 1] — judged F1 on this pipeline's data clusters well under 1.0 (see
+    stage2_f1_by_task.png's fix), so a fixed full-range axis wastes most of
+    the plot and compresses exactly the step-to-step differences these
+    charts exist to show into an illegibly thin band."""
+    vals = [v for values in value_lists for v in values if v is not None]
+    top = max(vals) if vals else 0.0
+    ax.set_ylim(0, max(top * 1.15, 0.05))
+
+
 def _write_csv(path: Path, header: list[str], rows: list[list]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -109,14 +120,17 @@ def process_step_curve(model_name: str, rows: list[dict], out_dir: Path) -> None
 
     fig, ax = plt.subplots(figsize=(7, 5))
     palette = ["#2ca02c", "#d62728", "#9467bd", "#1f77b4", "#ff7f0e"]
+    all_ys: list = []
     for i, task in enumerate(sorted({t for t, _ in by_task_step})):
         steps = sorted({int(s) for t, s in by_task_step if t == task})
         ys = [_f1(by_task_step[(task, str(s))]) for s in steps]
+        all_ys.extend(ys)
         ax.plot(steps, ys, marker="o", linewidth=1.6, alpha=0.85,
                 color=palette[i % len(palette)], label=TASK_LABEL.get(task, task))
 
     all_steps = sorted(int(s) for (s,) in by_overall_step)
     ys = [_f1(by_overall_step[(str(s),)]) for s in all_steps]
+    all_ys.extend(ys)
     ax.plot(all_steps, ys, marker="o", linewidth=2.4, color="black", label="overall", zorder=5)
     for s, y in zip(all_steps, ys):
         if y is not None:
@@ -126,7 +140,7 @@ def process_step_curve(model_name: str, rows: list[dict], out_dir: Path) -> None
     ax.set_xticks(all_steps)
     ax.set_xlabel("Step (chain position)", fontsize=10)
     ax.set_ylabel(f"{_F1_KEY} (falls back to f1_macro if unjudged)", fontsize=9)
-    ax.set_ylim(0, 1.0)
+    _auto_ylim(ax, all_ys)
     ax.set_title(f"CoT-YAML per-step F1 — {model_name}", fontsize=11)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.25)
@@ -313,7 +327,7 @@ def write_diagnosis_stability(model_name: str, rows: list[dict], out_dir: Path) 
                             va="bottom", xytext=(0, 3), textcoords="offset points")
         ax.set_xticks(list(x))
         ax.set_xticklabels([f"Q{int(r) + 1} first" for r in rotations], fontsize=8)
-        ax.set_ylim(0, 1.0)
+        _auto_ylim(ax, stable_ys, unstable_ys)
         ax.set_ylabel(f"{_F1_KEY} (falls back to f1_macro if unjudged)", fontsize=9)
         ax.set_title(f"CoT-YAML diagnosis stability vs. final F1 — {model_name} — "
                      f"{TASK_LABEL.get(task, task)}", fontsize=11)
@@ -355,14 +369,16 @@ def process_swap_curve(model_name: str, rows: list[dict], out_dir: Path) -> None
             continue
         cmap = cm.get_cmap("tab10", max(len(rotations), 1))
         fig, ax = plt.subplots(figsize=(7, 5))
+        all_ys: list = []
         for i, rot in enumerate(rotations):
             ys = [_f1(by_key[(task, str(rot), str(s))]) if (task, str(rot), str(s)) in by_key else None
                   for s in steps]
+            all_ys.extend(ys)
             ax.plot(steps, ys, marker="o", linewidth=1.6, color=cmap(i), label=f"Q{rot + 1} first")
         ax.set_xticks(steps)
         ax.set_xlabel("Step (chain position)", fontsize=10)
         ax.set_ylabel(f"{_F1_KEY} (falls back to f1_macro if unjudged)", fontsize=9)
-        ax.set_ylim(0, 1.0)
+        _auto_ylim(ax, all_ys)
         ax.set_title(f"CoT-YAML swap-order per-step F1 — {model_name} — "
                      f"{TASK_LABEL.get(task, task)}", fontsize=11)
         ax.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=(1.01, 1))
