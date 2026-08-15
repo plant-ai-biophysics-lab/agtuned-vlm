@@ -91,3 +91,24 @@ def family_shaded_colors(backbones: list[str]) -> dict[str, tuple]:
             lightness = 0.68 - frac * 0.38  # smallest ~0.68 (light) -> largest ~0.30 (dark)
             colors[b] = colorsys.hls_to_rgb(h, lightness, s)
     return colors
+
+
+def legend_row_major(items: list, ncol: int) -> list:
+    """Reorder legend entries (already in the same left-to-right order the
+    bars were plotted in) so a multi-row matplotlib legend actually DISPLAYS
+    them in that order. matplotlib fills a legend column-major by default —
+    with a plotted order like (model0-cond0, model0-cond1, model1-cond0,
+    ...) and ncol=n_conditions, that default fill puts all "condition 0"
+    entries in row 0 and all "condition 1" entries in row 1, which reads as
+    "grouped by condition" rather than "left-to-right, matching the bars".
+    This computes the input permutation that makes matplotlib's own
+    column-major fill reproduce true row-major reading order instead. Used
+    by vision_baseline_collate.py and cot_compare.py's grouped bar charts."""
+    n = len(items)
+    nrows = -(-n // ncol)  # ceil division
+    padded = list(items) + [None] * (nrows * ncol - n)
+    reordered = [None] * len(padded)
+    for j in range(len(padded)):
+        r, c = j % nrows, j // nrows
+        reordered[j] = padded[r * ncol + c]
+    return [x for x in reordered if x is not None]

@@ -50,32 +50,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.common.plot_style import family_shaded_colors as _family_shaded_colors
+from src.common.plot_style import legend_row_major as _legend_row_major
 from src.common.plot_style import ordered_backbones as _ordered_backbones
 from src.common.vision_eval import (
     compute_condition_stats, compute_delta_stats, load_all_rows, per_class_f1_values,
 )
 
 _CONDITIONS = [("baseline", "Lower Bound"), ("desc_aug", "Upper Bound")]
-
-
-def _legend_row_major(items: list, ncol: int) -> list:
-    """Reorder legend entries (already in the same left-to-right order the
-    bars were plotted in) so a multi-row matplotlib legend actually DISPLAYS
-    them in that order. matplotlib fills a legend column-major by default —
-    with our bars-plotted order (model0-cond0, model0-cond1, model1-cond0,
-    ...) and ncol=n_models, that default fill puts all "Lower Bound"
-    entries in row 0 and all "Upper Bound" entries in row 1, which reads as
-    "grouped by condition" rather than "left-to-right, matching the bars".
-    This computes the input permutation that makes matplotlib's own
-    column-major fill reproduce true row-major reading order instead."""
-    n = len(items)
-    nrows = -(-n // ncol)  # ceil division
-    padded = list(items) + [None] * (nrows * ncol - n)
-    reordered = [None] * len(padded)
-    for j in range(len(padded)):
-        r, c = j % nrows, j // nrows
-        reordered[j] = padded[r * ncol + c]
-    return [x for x in reordered if x is not None]
 
 
 def collate(baseline_dir: Path, aug_dir: Path, n_boot: int, seed: int) -> dict[str, dict[str, dict]]:
