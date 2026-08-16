@@ -118,14 +118,14 @@ _CRITERIA_DISEASE_C3 = {
         "specific, not generic, and visually consistent with all features in the image?"
     ),
 }
-_CRITERIA_WEED_C1 = {
+_CRITERIA_SPECIES_C1 = {
     "Visual_Match": (
-        "Does the prediction correctly identify the weed species in a way that "
+        "Does the prediction correctly identify the plant/weed species in a way that "
         "is botanically consistent with the visible leaf shape, arrangement, "
         "margins, growth habit, and any reproductive structures in the image?"
     ),
 }
-_CRITERIA_WEED_C3 = {
+_CRITERIA_SPECIES_C3 = {
     "Morphological_Features": (
         "Does the prediction match visible leaf arrangement, shape, margins, "
         "venation pattern, and stem characteristics shown in the image?"
@@ -140,13 +140,43 @@ _CRITERIA_WEED_C3 = {
         "specific and consistent with all visible features in the image?"
     ),
 }
+_CRITERIA_QUALITY_C1 = {
+    "Visual_Match": (
+        "Does the prediction correctly identify the quality, ripeness, or condition "
+        "in a way that is specific and visually consistent with the size, color, and "
+        "surface texture cues visible in the image?"
+    ),
+}
+_CRITERIA_QUALITY_C3 = {
+    "Size_and_Shape": (
+        "Does the prediction match the visible size and shape relative to a "
+        "typical mature specimen?"
+    ),
+    "Color_and_Ripeness": (
+        "Does the prediction align with the observed color and its position "
+        "between unripe and overripe/spoiled?"
+    ),
+    "Surface_Condition": (
+        "Does the prediction account for the visible surface texture and firmness "
+        "cues (bruising, wrinkling, gloss, softness), and is the stated quality/"
+        "ripeness/condition visually consistent with the image?"
+    ),
+}
+
+# task_type values as they actually appear in datasets.yaml today (DISEASE_TASK_TYPES
+# / IDENTIFICATION_TASK_TYPES in src/common/dataset_config.py) — "weed_identification"
+# was an earlier task-type name this file predates; every weed/species dataset is now
+# tagged species_identification (see _build_task_datasets's own tasks tuple below,
+# which had the same stale name and silently selected 0 datasets for it).
+_CRITERIA_BY_TASK_TYPE = {
+    "species_identification": (_CRITERIA_SPECIES_C1, _CRITERIA_SPECIES_C3),
+    "quality_identification": (_CRITERIA_QUALITY_C1, _CRITERIA_QUALITY_C3),
+}
 
 
 def _criteria_for(task_type: str, n_criteria: int) -> dict[str, str]:
-    is_weed = task_type == "weed_identification"
-    if n_criteria == 1:
-        return _CRITERIA_WEED_C1 if is_weed else _CRITERIA_DISEASE_C1
-    return _CRITERIA_WEED_C3 if is_weed else _CRITERIA_DISEASE_C3
+    c1, c3 = _CRITERIA_BY_TASK_TYPE.get(task_type, (_CRITERIA_DISEASE_C1, _CRITERIA_DISEASE_C3))
+    return c1 if n_criteria == 1 else c3
 
 
 # ── CSV helpers ────────────────────────────────────────────────────────────────
@@ -193,8 +223,10 @@ def _raw_cls_question(task_type: str, crop: str | None) -> str:
     _p = yaml.safe_load(
         (Path(__file__).parent / "config" / "prompts.yaml").read_text()
     )
-    if task_type == "weed_identification":
+    if task_type == "species_identification":
         return _p["visual_classification_weed"]
+    if task_type == "quality_identification":
+        return _p["visual_classification_quality"].format(crop=crop or "plant")
     return _p["visual_classification_disease"].format(crop=crop or "plant")
 
 
@@ -214,7 +246,7 @@ def _build_task_datasets(config_path: str) -> dict[str, dict[str, list[str]]]:
         for task in (d.get("class_overrides") or {}).values():
             if task != d["task_type"]:
                 override[task].add(name)
-    tasks = ("disease", "pest_damage", "weed_identification")
+    tasks = ("disease", "pest_damage", "species_identification", "quality_identification")
     return {
         t: {"primary": sorted(primary.get(t, [])), "override": sorted(override.get(t, []))}
         for t in tasks
@@ -246,19 +278,51 @@ def load_items(
     task_type: str,
     crop: str | None,
     n_samples: int | None,
+    manifest: dict,
+    images_root: Path,
     class_overrides: dict[str, str] | None = None,
+    excluded_classes: list[str] | None = None,
     seed: int = SEED,
     test_split: dict | None = None,
 ) -> list[dict]:
-    from src.cot_vision import load_dataset_classes, DATASET_TASK_TYPES
-    by_class = load_dataset_classes(ds_name, n_samples, test_split)
-    primary_task = DATASET_TASK_TYPES.get(ds_name, (task_type, crop))[0]
+    """Same [{"ds","task_type","crop","cls","image_path","image_name"}, ...]
+    shape as before this was migrated — now sourced from the same
+    HF-manifest pipeline every other stage uses (load_hf_samples /
+    load_manifest, src/common/dataset_config.py) instead of the legacy
+    agml pip-package loader (cot_vision.load_dataset_classes ->
+    agml.data.AgMLDataLoader), which only covers ~20% of this project's
+    current dataset corpus — most datasets were added later via
+    scripts/agml_hf/download_and_sample.py's HuggingFace-based pipeline
+    and were never registered with the old agml package at all, so the
+    old loader raised "invalid public source" for the large majority of
+    datasets select_datasets() could pick. class_overrides/excluded_classes
+    are the same raw (manifest-label-keyed) dicts/lists DatasetConfig
+    carries — see excluded_class_pairs()'s docstring for why raw form,
+    not the cleaned display form, is correct here."""
+    from src.common.dataset_config import load_hf_samples
+    from src.common.metrics import sample_class_images
+
+    samples = load_hf_samples(ds_name, manifest, images_root, excluded_classes=excluded_classes)
+    by_class: dict[str, list[Path]] = defaultdict(list)
+    for s in samples:
+        by_class[s["label"]].append(Path(s["path"]))
+
     items: list[dict] = []
+    split_cls = (test_split or {}).get(ds_name, {})
     for cls, paths in by_class.items():
-        effective = (class_overrides or {}).get(cls, primary_task)
+        effective = (class_overrides or {}).get(cls, task_type)
         if effective != task_type:
             continue
-        for p in paths:
+        if split_cls and cls in split_cls:
+            # Use test_split JSON order (same as vision_assessment) for deterministic sampling.
+            allowed_ordered = split_cls[cls]
+            path_by_name = {p.name: p for p in paths}
+            paths = [path_by_name[n] for n in allowed_ordered if n in path_by_name]
+        else:
+            paths = sorted(paths, key=lambda p: p.name)
+        path_by_name = {p.name: p for p in paths}
+        for n in sample_class_images(list(path_by_name.keys()), n_samples, seed=seed):
+            p = path_by_name[n]
             items.append({
                 "ds": ds_name, "task_type": task_type,
                 "crop": crop, "cls": cls,
@@ -964,6 +1028,11 @@ def main() -> None:
     parser.add_argument("--verifier_dir", default="outputs/verifier_vision/",
                         help="Dir with ckpt_judged.csv from verifier_vision.py")
     parser.add_argument("--config",       default="src/config/datasets.yaml")
+    parser.add_argument("--manifest",     default="dataset/selected_images.json",
+                        help="scripts/agml_hf/download_and_sample.py's manifest — same one "
+                             "every other stage (vision_baseline.py, cot_yaml.py, etc.) reads via "
+                             "load_hf_samples().")
+    parser.add_argument("--images_root",  default="dataset/images")
     parser.add_argument("--test_split",   default="outputs/linear_probe/test_split.json")
     parser.add_argument("--n_samples",    type=int, default=50)
     parser.add_argument("--n_datasets",   type=int, default=N_DATASETS_PER_TASK)
@@ -997,6 +1066,10 @@ def main() -> None:
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
     ds_info = {d["agml_name"]: d for d in cfg["datasets"]}
+
+    from src.common.dataset_config import load_manifest
+    hf_manifest = load_manifest(Path(args.manifest))
+    images_root = Path(args.images_root)
 
     test_split: dict | None = None
     ts_path = Path(args.test_split)
@@ -1042,8 +1115,11 @@ def main() -> None:
                 info            = ds_info.get(ds, {})
                 crop            = info.get("crop", "plant")
                 class_overrides = info.get("class_overrides", {})
+                excluded_classes = info.get("excluded_classes", [])
                 items           = load_items(ds, task, crop, n_samples=args.n_samples,
-                                             class_overrides=class_overrides, seed=args.seed,
+                                             manifest=hf_manifest, images_root=images_root,
+                                             class_overrides=class_overrides,
+                                             excluded_classes=excluded_classes, seed=args.seed,
                                              test_split=test_split)
                 all_items.extend(items)
                 print(f"  {ds} ({task}): {len(items)} items")

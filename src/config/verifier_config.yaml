@@ -24,7 +24,7 @@ n_samples: 10  # images/class to evaluate
 seed: 42       # seeds the incumbent-A/B-slot randomization in --baseline belief's pairwise scoring
 
 # ── Round loop / belief-tracking hyperparameters (Sec. 13 of the design doc) ─
-k_candidates: 3        # K -- candidates generated per round via temperature sampling
+k_candidates: 8        # K -- candidates generated per round via temperature sampling
 k_pivots: 2             # k -- pivot-set size for the full PPT tournament (--baseline belief only);
                          # matches llm_verifier.pivot_tournament.DEFAULT_PIVOTS, repeated here as a
                          # literal rather than imported so this file has no Python-side dependency

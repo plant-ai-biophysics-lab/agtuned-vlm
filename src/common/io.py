@@ -36,6 +36,7 @@ def load_jsonl(path: Path, n_samples: int | None = None) -> list[dict]:
 
 
 def append_jsonl(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
 
