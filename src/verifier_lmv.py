@@ -257,8 +257,27 @@ def select_datasets(
     n_per_task: int = N_DATASETS_PER_TASK,
     seed: int = SEED,
     config_path: str = "src/config/datasets.yaml",
+    subsample: set[str] | None = None,
 ) -> dict[str, list[str]]:
+    """subsample (--subsample) restricts to exactly these agml_name(s) —
+    every one of them that falls in a given task's pool, not a further
+    n_per_task-capped random draw from within them — instead of the usual
+    random n_per_task-per-task selection. Same convention as
+    cot_yaml.py's --swap_datasets / verifier_cot.py's --subsample, for
+    fast testing against a small, deliberate set (e.g. cot-compare's own
+    top gain/loss cot_yaml_swap_datasets.txt)."""
     pools = _build_task_datasets(config_path)
+    if subsample is not None:
+        selected = {
+            task: sorted((set(buckets["primary"]) | set(buckets["override"])) & subsample)
+            for task, buckets in pools.items()
+        }
+        found = {d for names in selected.values() for d in names}
+        missing = subsample - found
+        if missing:
+            print(f"  [warn] --subsample not found (skip/not in any known task pool?): {sorted(missing)}")
+        return selected
+
     rng = random.Random(seed)
     selected: dict[str, list[str]] = {}
     for task, buckets in pools.items():
@@ -1036,6 +1055,12 @@ def main() -> None:
     parser.add_argument("--test_split",   default="outputs/linear_probe/test_split.json")
     parser.add_argument("--n_samples",    type=int, default=50)
     parser.add_argument("--n_datasets",   type=int, default=N_DATASETS_PER_TASK)
+    parser.add_argument("--subsample",    nargs="+", default=None,
+                        help="Restrict to these dataset(s) only (agml_name, space-separated) "
+                             "instead of the usual random n_datasets-per-task draw — for fast "
+                             "testing. Same convention as verifier_cot.py's --subsample / "
+                             "cot_yaml.py's --swap_datasets; pass the SAME list to cot-compare's "
+                             "--filter_datasets so the comparisons are scoped consistently.")
     parser.add_argument("--n_max",        type=int, default=N_MAX_DEFAULT,
                         help="N: candidates per image for PPT to select from (sliced to 1/5/10 at judge time)")
     parser.add_argument("--seed",         type=int, default=SEED)
@@ -1081,7 +1106,8 @@ def main() -> None:
         print(f"[warn] test_split not found at {ts_path} — using all images")
 
     selected = select_datasets(n_per_task=args.n_datasets, seed=args.seed,
-                               config_path=args.config)
+                               config_path=args.config,
+                               subsample=set(args.subsample) if args.subsample else None)
     print("\n=== Selected datasets ===")
     for task, names in selected.items():
         print(f"  {task} ({len(names)}): {names}")

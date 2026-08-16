@@ -31,6 +31,15 @@ Outputs (into --output_dir/<model>/, alongside the checkpoints it read from):
                                    = changed at least once): final judged F1
   diagnosis_stability_<task>.png — (--swap_datasets data only) final judged F1,
                                    stable vs. unstable, per rotation
+  reasoning_dose_response.csv       — (--swap_datasets data only) per task_type/
+                                        rotation/n_correct_steps: n_images, final_accuracy —
+                                        does getting MORE of the intermediate steps right
+                                        predict a correct final answer?
+  reasoning_perfect_vs_imperfect.csv — (--swap_datasets data only) per task_type/rotation/
+                                        {all_correct, any_wrong}: n_images, final_accuracy —
+                                        the starkest version of the same question.
+  reasoning_consistency_<task>.png   — (--swap_datasets data only) both of the above,
+                                        side by side, one line/bar-pair per rotation
 
 Usage (run once per model has produced --per_step / --swap_datasets data):
     uv run python main.py cot-yaml-step-report
@@ -44,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import csv
+import json
 from collections import defaultdict
 
 from src.common.vision_eval import compute_step_metrics, load_ckpt
@@ -83,7 +93,19 @@ def _write_csv(path: Path, header: list[str], rows: list[list]) -> None:
     print(f"  Saved: {path}")
 
 
-def process_step_curve(model_name: str, rows: list[dict], out_dir: Path) -> None:
+def process_step_curve(
+    model_name: str, rows: list[dict], out_dir: Path, final_metrics: dict | None = None,
+) -> None:
+    """final_metrics: the model's own metrics.json (compute_model_metrics'
+    output — "overall" + "by_task"), from the REGULAR (non --per_step)
+    ckpt_<model>.csv run — i.e. the official CoT-YAML number quoted
+    everywhere else in this project (cot-compare's bars/violin/boxplot).
+    --per_step's own step-N value is a separate inference call and can
+    drift slightly from that official number even though both represent
+    "classify after the full chain" — plotting it as an explicit extra
+    point completes the curve against the number that actually gets
+    reported, rather than leaving the reader to assume step-N already is
+    that number."""
     import matplotlib.pyplot as plt
 
     ds_task = {r["agml_dataset"]: r["task_type"] for r in rows}
@@ -121,27 +143,60 @@ def process_step_curve(model_name: str, rows: list[dict], out_dir: Path) -> None
     fig, ax = plt.subplots(figsize=(7, 5))
     palette = ["#2ca02c", "#d62728", "#9467bd", "#1f77b4", "#ff7f0e"]
     all_ys: list = []
+    all_steps_seen = sorted({int(s) for (s,) in by_overall_step})
+    final_x = (all_steps_seen[-1] + 1) if all_steps_seen else 1
+
+    def _plot_line(steps, ys, color, label, linewidth, zorder, final_y):
+        ax.plot(steps, ys, marker="o", linewidth=linewidth, alpha=0.85 if zorder < 5 else 1.0,
+                 color=color, label=label, zorder=zorder)
+        if final_y is not None and steps:
+            # Dashed segment + a distinct star marker for the OFFICIAL final
+            # F1 (from the regular, non-per-step run) — visually separate
+            # from the per-step chain itself, since it's a different
+            # inference call, not literally "one more step."
+            ax.plot([steps[-1], final_x], [ys[-1], final_y], linestyle="--",
+                     linewidth=linewidth * 0.7, color=color, alpha=0.6, zorder=zorder)
+            ax.plot([final_x], [final_y], marker="*", markersize=13,
+                     color=color, markeredgecolor="black", markeredgewidth=0.6, zorder=zorder + 1)
+            ax.annotate(f"{final_y:.2f}", (final_x, final_y), fontsize=7, ha="center",
+                        xytext=(0, 8), textcoords="offset points")
+
     for i, task in enumerate(sorted({t for t, _ in by_task_step})):
         steps = sorted({int(s) for t, s in by_task_step if t == task})
         ys = [_f1(by_task_step[(task, str(s))]) for s in steps]
         all_ys.extend(ys)
-        ax.plot(steps, ys, marker="o", linewidth=1.6, alpha=0.85,
-                color=palette[i % len(palette)], label=TASK_LABEL.get(task, task))
+        color = palette[i % len(palette)]
+        final_y = _f1((final_metrics or {}).get("by_task", {}).get(task, {})) if final_metrics else None
+        if final_y is not None:
+            all_ys.append(final_y)
+        _plot_line(steps, ys, color, TASK_LABEL.get(task, task), 1.6, 3, final_y)
 
     all_steps = sorted(int(s) for (s,) in by_overall_step)
     ys = [_f1(by_overall_step[(str(s),)]) for s in all_steps]
     all_ys.extend(ys)
-    ax.plot(all_steps, ys, marker="o", linewidth=2.4, color="black", label="overall", zorder=5)
+    final_overall = _f1((final_metrics or {}).get("overall", {})) if final_metrics else None
+    if final_overall is not None:
+        all_ys.append(final_overall)
+    _plot_line(all_steps, ys, "black", "overall", 2.4, 5, final_overall)
     for s, y in zip(all_steps, ys):
         if y is not None:
             ax.annotate(f"{y:.2f}", (s, y), fontsize=7, ha="center",
                         xytext=(0, 6), textcoords="offset points")
 
-    ax.set_xticks(all_steps)
+    xticks = list(all_steps)
+    xticklabels = [str(s) for s in all_steps]
+    if final_metrics is not None:
+        xticks.append(final_x)
+        xticklabels.append("Final")
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xticklabels)
     ax.set_xlabel("Step (chain position)", fontsize=10)
     ax.set_ylabel(f"{_F1_KEY} (falls back to f1_macro if unjudged)", fontsize=9)
     _auto_ylim(ax, all_ys)
-    ax.set_title(f"CoT-YAML per-step F1 — {model_name}", fontsize=11)
+    title = f"CoT-YAML per-step F1 — {model_name}"
+    if final_metrics is None:
+        title += "\n(no metrics.json found — run the regular cot-yaml pass to add the Final marker)"
+    ax.set_title(title, fontsize=11)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.25)
     plt.tight_layout()
@@ -226,6 +281,7 @@ def write_anchor_recovery(model_name: str, rows: list[dict], out_dir: Path) -> N
         positions = sorted({p for by_pos in by_rot.values() for p in by_pos})
         if not rotations or not positions:
             continue
+        final_x = positions[-1] + 1
         cmap = cm.get_cmap("tab10", max(len(rotations), 1))
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
         for i, rot in enumerate(rotations):
@@ -238,12 +294,26 @@ def write_anchor_recovery(model_name: str, rows: list[dict], out_dir: Path) -> N
             label = f"Q{int(rot) + 1} first"
             ax1.plot(positions, anchor, marker="o", color=color, label=label)
             ax2.plot(positions, recovery, marker="o", color=color, label=label)
+            # "Final" — step-N compared to itself is trivial by definition
+            # (anchor rate = 100%, recovery rate = 0%), which is exactly why
+            # step-N itself is excluded from `positions` above. Plotting it
+            # anyway as an explicit, visually-distinct reference point
+            # completes the curve into its known endpoint instead of just
+            # stopping short of it — same treatment as step_f1_overall.png's
+            # "Final" marker.
+            for ax, ys, final_y in ((ax1, anchor, 100.0), (ax2, recovery, 0.0)):
+                if ys and ys[-1] is not None:
+                    ax.plot([positions[-1], final_x], [ys[-1], final_y], linestyle="--",
+                             linewidth=1.2, color=color, alpha=0.6, zorder=2)
+                ax.plot([final_x], [final_y], marker="*", markersize=11, color=color,
+                         markeredgecolor="black", markeredgewidth=0.5, zorder=3)
 
         for ax, title, ylabel in [
             (ax1, "Anchor rate", "Anchor rate (%)\nstep-k right → final right"),
             (ax2, "Recovery rate", "Recovery rate (%)\nstep-k wrong → final right"),
         ]:
-            ax.set_xticks(positions)
+            ax.set_xticks(positions + [final_x])
+            ax.set_xticklabels([str(p) for p in positions] + ["Final"])
             ax.set_xlabel("Step position in chain", fontsize=10)
             ax.set_ylabel(ylabel, fontsize=9)
             ax.set_ylim(0, 100)
@@ -340,6 +410,154 @@ def write_diagnosis_stability(model_name: str, rows: list[dict], out_dir: Path) 
         print(f"  Saved: {path}")
 
 
+def compute_reasoning_consistency(rows: list[dict]) -> dict[str, dict[str, dict]]:
+    """{task_type: {rotation: {"by_n_correct": {n_correct_steps: {n_images,
+    final_accuracy}}, "split": {"all_correct"/"any_wrong": {n_images,
+    final_accuracy}}}}}
+
+    Tests "if we reason through steps correctly, do we get the correct
+    final answer" directly, unlike anchor_rate (which is per-step-position
+    and marginal — doesn't ask about the chain as a whole) or diagnosis
+    stability (which measures whether the predicted class ever changed,
+    not whether it was ever right).
+
+    by_n_correct — dose-response: bucket images by how MANY of the
+    (n_steps - 1) intermediate steps were judged correct (order-agnostic —
+    "3 right" counts the same whether steps 1,2,3 or 1,2,4 were the
+    correct ones), then final_accuracy = fraction of that bucket whose
+    final answer was also judged correct. A hypothesis-confirming result
+    trends upward with n_correct_steps.
+
+    split — the starkest version: "all_correct" (every intermediate step
+    right) vs. "any_wrong" (at least one intermediate step wrong),
+    final_accuracy compared directly between the two groups.
+
+    Only uses rows with judged_correct set. Same (task, rot) grouping and
+    "final = last step_idx" convention as compute_anchor_recovery."""
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r.get("judged_correct", "") == "":
+            continue
+        key = (r["agml_dataset"], r["image_name"], r["class_label"], r["task_type"], r["rotation"])
+        groups[key].append(r)
+
+    by_n_correct: dict[tuple, dict[int, list[bool]]] = defaultdict(lambda: defaultdict(list))
+    by_split: dict[tuple, dict[str, list[bool]]] = defaultdict(lambda: defaultdict(list))
+
+    for (_ds, _img, _cls, task, rot), grp in groups.items():
+        grp.sort(key=lambda r: int(r["step_idx"]))
+        if len(grp) < 2:
+            continue
+        final_ok = bool(int(grp[-1]["judged_correct"]))
+        step_oks = [bool(int(r["judged_correct"])) for r in grp[:-1]]
+        n_correct = sum(step_oks)
+        by_n_correct[(task, rot)][n_correct].append(final_ok)
+        split = "all_correct" if all(step_oks) else "any_wrong"
+        by_split[(task, rot)][split].append(final_ok)
+
+    result: dict[str, dict[str, dict]] = defaultdict(lambda: defaultdict(dict))
+    for key in set(by_n_correct) | set(by_split):
+        task, rot = key
+        result[task][rot] = {
+            "by_n_correct": {
+                n: {"n_images": len(oks), "final_accuracy": sum(oks) / len(oks)}
+                for n, oks in sorted(by_n_correct[key].items())
+            },
+            "split": {
+                label: {"n_images": len(oks), "final_accuracy": sum(oks) / len(oks)}
+                for label, oks in by_split[key].items()
+            },
+        }
+    return result
+
+
+def write_reasoning_consistency(model_name: str, rows: list[dict], out_dir: Path) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+
+    by_task = compute_reasoning_consistency(rows)
+    if not by_task:
+        return
+
+    dose_rows, split_rows = [], []
+    for task, by_rot in by_task.items():
+        for rot, d in by_rot.items():
+            for n, s in sorted(d["by_n_correct"].items()):
+                dose_rows.append([model_name, task, rot, n, s["n_images"], s["final_accuracy"]])
+            for label, s in d["split"].items():
+                split_rows.append([model_name, task, rot, label, s["n_images"], s["final_accuracy"]])
+    _write_csv(
+        out_dir / "reasoning_dose_response.csv",
+        ["model", "task_type", "rotation", "n_correct_steps", "n_images", "final_accuracy"],
+        dose_rows,
+    )
+    _write_csv(
+        out_dir / "reasoning_perfect_vs_imperfect.csv",
+        ["model", "task_type", "rotation", "group", "n_images", "final_accuracy"],
+        split_rows,
+    )
+
+    for task, by_rot in by_task.items():
+        rotations = sorted(by_rot, key=int)
+        n_values = sorted({n for d in by_rot.values() for n in d["by_n_correct"]})
+        if not rotations or not n_values:
+            continue
+        cmap = cm.get_cmap("tab10", max(len(rotations), 1))
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+        for i, rot in enumerate(rotations):
+            by_n = by_rot[rot]["by_n_correct"]
+            ys = [((by_n.get(n) or {}).get("final_accuracy", None)) for n in n_values]
+            ys = [y * 100 if y is not None else None for y in ys]
+            ns = [(by_n.get(n) or {}).get("n_images", 0) for n in n_values]
+            color = cmap(i)
+            label = f"Q{int(rot) + 1} first"
+            ax1.plot(n_values, ys, marker="o", color=color, label=label)
+            for n, y, cnt in zip(n_values, ys, ns):
+                if y is not None:
+                    ax1.annotate(f"n={cnt}", (n, y), fontsize=6, ha="center",
+                                 xytext=(0, 6), textcoords="offset points", color=color)
+        ax1.set_xticks(n_values)
+        ax1.set_xlabel("# intermediate steps judged correct (order-agnostic)", fontsize=9)
+        ax1.set_ylabel("Final judged accuracy (%)", fontsize=9)
+        ax1.set_ylim(0, 100)
+        ax1.set_title("Dose-response", fontsize=11)
+        ax1.grid(True, alpha=0.25)
+
+        x = range(len(rotations))
+        w = 0.35
+        all_ys = [((by_rot[rot]["split"].get("all_correct") or {}).get("final_accuracy")) for rot in rotations]
+        any_ys = [((by_rot[rot]["split"].get("any_wrong") or {}).get("final_accuracy")) for rot in rotations]
+        all_n = [(by_rot[rot]["split"].get("all_correct") or {}).get("n_images", 0) for rot in rotations]
+        any_n = [(by_rot[rot]["split"].get("any_wrong") or {}).get("n_images", 0) for rot in rotations]
+        all_ys_pct = [y * 100 if y is not None else None for y in all_ys]
+        any_ys_pct = [y * 100 if y is not None else None for y in any_ys]
+        ax2.bar([i - w / 2 for i in x], all_ys_pct, width=w, color="#2ca02c", label="all steps correct")
+        ax2.bar([i + w / 2 for i in x], any_ys_pct, width=w, color="#d62728", label="any step wrong")
+        for i, (ay, ry, an, rn) in enumerate(zip(all_ys_pct, any_ys_pct, all_n, any_n)):
+            if ay is not None:
+                ax2.annotate(f"{ay:.0f}%\n(n={an})", (i - w / 2, ay), fontsize=6.5, ha="center",
+                             va="bottom", xytext=(0, 3), textcoords="offset points")
+            if ry is not None:
+                ax2.annotate(f"{ry:.0f}%\n(n={rn})", (i + w / 2, ry), fontsize=6.5, ha="center",
+                             va="bottom", xytext=(0, 3), textcoords="offset points")
+        ax2.set_xticks(list(x))
+        ax2.set_xticklabels([f"Q{int(r) + 1} first" for r in rotations], fontsize=8)
+        ax2.set_ylabel("Final judged accuracy (%)", fontsize=9)
+        ax2.set_ylim(0, 100)
+        ax2.set_title("Perfect chain vs. any miss", fontsize=11)
+        ax2.legend(fontsize=8)
+        ax2.grid(True, axis="y", alpha=0.25)
+
+        fig.suptitle(f"CoT-YAML reasoning consistency — {model_name} — {TASK_LABEL.get(task, task)}",
+                     fontsize=12)
+        plt.tight_layout()
+        path = out_dir / f"reasoning_consistency_{task}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
+
+
 def process_swap_curve(model_name: str, rows: list[dict], out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     from matplotlib import cm
@@ -391,6 +609,7 @@ def process_swap_curve(model_name: str, rows: list[dict], out_dir: Path) -> None
 
     write_anchor_recovery(model_name, rows, out_dir)
     write_diagnosis_stability(model_name, rows, out_dir)
+    write_reasoning_consistency(model_name, rows, out_dir)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -411,7 +630,13 @@ def main(args: argparse.Namespace) -> None:
             if rows:
                 any_data = True
                 print(f"\n[{safe}] {len(rows)} per-step row(s)")
-                process_step_curve(safe, rows, model_dir)
+                metrics_path = model_dir / "metrics.json"
+                final_metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else None
+                if final_metrics is None:
+                    print(f"  [note] {metrics_path.name} not found — step_f1_overall.png will "
+                          f"skip the Final marker (run the regular `cot-yaml` pass, not just "
+                          f"--per_step, to produce it).")
+                process_step_curve(safe, rows, model_dir, final_metrics=final_metrics)
 
         if swap_path.exists():
             rows, _ = load_ckpt(swap_path, fields=STEP_CKPT_FIELDS)

@@ -130,17 +130,39 @@ _VERIFIER_CONDITIONS = [
 _VERIFIER_HATCH = {"verifier_belief": "\\\\", "verifier_argmax": "oo", "ppt_direct_n10": "**"}
 
 
+def _filter_rows_map(rows_map: dict[str, list[dict]], dataset_filter: set[str] | None) -> dict[str, list[dict]]:
+    """Restrict every model's rows to dataset_filter (--filter_datasets) —
+    applied uniformly across every condition this script loads (lower/
+    upper bound, self-cot, cot-yaml, and the verifier conditions) so a
+    --subsample'd verifier_cot.py/verifier_lmv.py run gets compared
+    against the SAME dataset scope, not the full config. None = no-op."""
+    if dataset_filter is None:
+        return rows_map
+    return {m: [r for r in rows if r.get("agml_dataset") in dataset_filter] for m, rows in rows_map.items()}
+
+
+def _filter_rows(rows: list[dict], dataset_filter: set[str] | None) -> list[dict]:
+    """Same as _filter_rows_map but for a flat row list (verifier_lmv.py's
+    ckpt_judged.csv, which isn't keyed by model)."""
+    if dataset_filter is None:
+        return rows
+    return [r for r in rows if r.get("agml_dataset") in dataset_filter]
+
+
 def collate_all_conditions(
     baseline_dir: Path, aug_dir: Path, self_cot_dir: Path, cot_yaml_dir: Path, n_boot: int, seed: int,
+    dataset_filter: set[str] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """{model: {condition_key: {scope: stats}}} across all four conditions,
     via load_all_rows()/compute_condition_stats() — the same bootstrap-CI
     machinery vision_baseline_collate.py's stage2_f1_by_task.png uses (NOT
     collate_models()'s point-estimate-only metrics, which is what the rest
     of this script uses for the win-rate/gain/loss comparison) — so this
-    chart's error bars are directly comparable to the other two."""
+    chart's error bars are directly comparable to the other two.
+    dataset_filter (--filter_datasets) scopes every condition to the same
+    dataset subset, e.g. matching a --subsample'd verifier run."""
     dirs = {"baseline": baseline_dir, "desc_aug": aug_dir, "self_cot": self_cot_dir, "cot_yaml": cot_yaml_dir}
-    rows_by_cond = {cond: load_all_rows(Path(d)) for cond, d in dirs.items()}
+    rows_by_cond = {cond: _filter_rows_map(load_all_rows(Path(d)), dataset_filter) for cond, d in dirs.items()}
     models = sorted(set().union(*(set(r) for r in rows_by_cond.values())))
 
     result: dict[str, dict[str, dict]] = {}
@@ -154,6 +176,7 @@ def collate_all_conditions(
 
 def collate_gemma_cot_deltas(
     baseline_dir: Path, aug_dir: Path, self_cot_dir: Path, cot_yaml_dir: Path, n_boot: int, seed: int,
+    dataset_filter: set[str] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """Gemma-4 models only: {model: {condition_key: {scope: delta_stats}}}
     where condition_key is one of "desc_aug" / "self_cot" / "cot_yaml" and
@@ -161,10 +184,11 @@ def collate_gemma_cot_deltas(
     per-class bootstrap (see bootstrap_judge_f1_delta_ci) — NOT two
     independently-bootstrapped condition_stats CIs subtracted. desc_aug's
     delta is the ceiling plotted as the upper-bound reference line; the
-    lower bound is baseline itself, whose delta from itself is trivially 0."""
+    lower bound is baseline itself, whose delta from itself is trivially 0.
+    dataset_filter — see collate_all_conditions."""
     dirs = {"desc_aug": aug_dir, "self_cot": self_cot_dir, "cot_yaml": cot_yaml_dir}
-    baseline_rows_map = load_all_rows(Path(baseline_dir))
-    rows_by_cond = {cond: load_all_rows(Path(d)) for cond, d in dirs.items()}
+    baseline_rows_map = _filter_rows_map(load_all_rows(Path(baseline_dir)), dataset_filter)
+    rows_by_cond = {cond: _filter_rows_map(load_all_rows(Path(d)), dataset_filter) for cond, d in dirs.items()}
     # Only the 26B-A4B-it run — the only model this CoT sweep was actually
     # run against (E4B-it's self_cot/cot_yaml data present under
     # outputs_final/ is not from that validated run).
@@ -182,16 +206,17 @@ def collate_gemma_cot_deltas(
 
 def collate_gemma_cot_delta_distributions(
     baseline_dir: Path, aug_dir: Path, self_cot_dir: Path, cot_yaml_dir: Path,
+    dataset_filter: set[str] | None = None,
 ) -> dict[str, dict[str, dict[str, np.ndarray]]]:
     """Gemma-4 models only: {model: {condition_key: {scope: per-class delta
     array}}} — the same raw per-class (condition - baseline) judge-F1
     deltas collate_gemma_cot_deltas bootstrap-means into a point + CI
     (per_class_judge_f1_delta), kept here as the full array instead —
     feeds plot_gemma_cot_delta_violin, the distribution counterpart to
-    plot_gemma_cot_deltas's bars."""
+    plot_gemma_cot_deltas's bars. dataset_filter — see collate_all_conditions."""
     dirs = {"desc_aug": aug_dir, "self_cot": self_cot_dir, "cot_yaml": cot_yaml_dir}
-    baseline_rows_map = load_all_rows(Path(baseline_dir))
-    rows_by_cond = {cond: load_all_rows(Path(d)) for cond, d in dirs.items()}
+    baseline_rows_map = _filter_rows_map(load_all_rows(Path(baseline_dir)), dataset_filter)
+    rows_by_cond = {cond: _filter_rows_map(load_all_rows(Path(d)), dataset_filter) for cond, d in dirs.items()}
     models = sorted(m for m in baseline_rows_map if "26b" in m.lower() and "gemma" in m.lower())
 
     result: dict[str, dict[str, dict[str, np.ndarray]]] = {}
@@ -258,6 +283,7 @@ def load_verifier_lmv_rows(ckpt_judged_path: Path, gen_mode: str, n_max: int) ->
 
 def collate_verifier_conditions(
     verifier_dir: Path, verifier_lmv_ckpt: Path, n_boot: int, seed: int,
+    dataset_filter: set[str] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """{model: {condition_key: {scope: stats}}} for the Stage 4 verifier
     conditions (belief-tracking, its argmax ablation, and the full-PPT
@@ -268,10 +294,12 @@ def collate_verifier_conditions(
     own data identifies (in practice just gemma-4-26B-A4B-it, per this
     project's established single-model scoping for this whole line of
     work) rather than auto-discovered, since verifier_lmv.py's flat output
-    doesn't self-identify a model."""
-    belief_rows = load_verifier_cot_rows(verifier_dir, "belief")
-    argmax_rows = load_verifier_cot_rows(verifier_dir, "argmax")
-    ppt_rows = load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10)
+    doesn't self-identify a model. dataset_filter — see collate_all_conditions
+    (also applied here, so a --subsample'd verifier run's own conditions
+    stay scoped consistently with the rest of this file's --filter_datasets)."""
+    belief_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "belief"), dataset_filter)
+    argmax_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "argmax"), dataset_filter)
+    ppt_rows = _filter_rows(load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10), dataset_filter)
 
     result: dict[str, dict[str, dict]] = {}
     for model in sorted(set(belief_rows) | set(argmax_rows)):
@@ -289,15 +317,17 @@ def collate_verifier_conditions(
 
 def collate_verifier_deltas(
     baseline_dir: Path, verifier_dir: Path, verifier_lmv_ckpt: Path, n_boot: int, seed: int,
+    dataset_filter: set[str] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """Gemma-4-26B-A4B-it only, (condition - baseline) judge-F1 delta for
     the Stage 4 verifier conditions — same paired-bootstrap machinery as
     collate_gemma_cot_deltas, feeding plot_gemma_cot_deltas via
-    _VERIFIER_CONDITIONS/_VERIFIER_HATCH."""
-    baseline_rows_map = load_all_rows(baseline_dir)
-    belief_rows = load_verifier_cot_rows(verifier_dir, "belief")
-    argmax_rows = load_verifier_cot_rows(verifier_dir, "argmax")
-    ppt_rows = load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10)
+    _VERIFIER_CONDITIONS/_VERIFIER_HATCH. dataset_filter — see
+    collate_all_conditions."""
+    baseline_rows_map = _filter_rows_map(load_all_rows(baseline_dir), dataset_filter)
+    belief_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "belief"), dataset_filter)
+    argmax_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "argmax"), dataset_filter)
+    ppt_rows = _filter_rows(load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10), dataset_filter)
 
     models = sorted(m for m in baseline_rows_map if "26b" in m.lower() and "gemma" in m.lower())
     result: dict[str, dict[str, dict]] = {}
@@ -1038,6 +1068,7 @@ def write_swap_datasets_file(model_dir: Path, cot_yaml_summary: dict) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
+    dataset_filter = set(args.filter_datasets) if args.filter_datasets else None
     baseline_all = collate_models(Path(args.baseline_dir))
     if not baseline_all:
         print(f"No per-model runs found under --baseline_dir {args.baseline_dir} "
@@ -1078,7 +1109,7 @@ def main(args: argparse.Namespace) -> None:
 
     condition_stats = collate_all_conditions(
         Path(args.baseline_dir), Path(args.aug_dir), Path(args.self_cot_dir), Path(args.cot_yaml_dir),
-        args.n_boot, args.seed,
+        args.n_boot, args.seed, dataset_filter=dataset_filter,
     )
     if condition_stats:
         write_all_conditions_summary(output_dir, condition_stats)
@@ -1086,13 +1117,14 @@ def main(args: argparse.Namespace) -> None:
 
     gemma_deltas = collate_gemma_cot_deltas(
         Path(args.baseline_dir), Path(args.aug_dir), Path(args.self_cot_dir), Path(args.cot_yaml_dir),
-        args.n_boot, args.seed,
+        args.n_boot, args.seed, dataset_filter=dataset_filter,
     )
     if gemma_deltas:
         plot_gemma_cot_deltas(output_dir, gemma_deltas)
 
     gemma_delta_distributions = collate_gemma_cot_delta_distributions(
         Path(args.baseline_dir), Path(args.aug_dir), Path(args.self_cot_dir), Path(args.cot_yaml_dir),
+        dataset_filter=dataset_filter,
     )
     if gemma_delta_distributions:
         plot_gemma_cot_delta_violin(output_dir, gemma_delta_distributions)
@@ -1108,6 +1140,7 @@ def main(args: argparse.Namespace) -> None:
     #    `if gemma_deltas:` guards above.
     verifier_condition_stats = collate_verifier_conditions(
         Path(args.verifier_dir), Path(args.verifier_lmv_ckpt), args.n_boot, args.seed,
+        dataset_filter=dataset_filter,
     )
     if verifier_condition_stats:
         plot_gemma_cot_f1_by_task(
@@ -1118,6 +1151,7 @@ def main(args: argparse.Namespace) -> None:
 
     verifier_deltas = collate_verifier_deltas(
         Path(args.baseline_dir), Path(args.verifier_dir), Path(args.verifier_lmv_ckpt), args.n_boot, args.seed,
+        dataset_filter=dataset_filter,
     )
     if verifier_deltas:
         plot_gemma_cot_deltas(
@@ -1145,4 +1179,11 @@ if __name__ == "__main__":
     parser.add_argument("--n_boot", type=int, default=2000,
                          help="Bootstrap resamples for cot_all_conditions_by_task.png's 95%% CI.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--filter_datasets", nargs="+", default=None,
+                         help="Restrict EVERY condition's rows (lower/upper bound, self-cot, "
+                              "cot-yaml, and the verifier conditions) to just these dataset(s) "
+                              "before computing any stats/charts — pass the SAME list you gave "
+                              "verifier_cot.py's/verifier_lmv.py's --subsample so a fast, "
+                              "subsampled verifier run gets compared against the same dataset "
+                              "scope, not the full config's worth of baseline/self-cot/cot-yaml data.")
     main(parser.parse_args())

@@ -311,10 +311,16 @@ def _parse_same(text: str) -> bool:
 
 # ── Dataset grouping (same shape as cot_yaml.py's _build_groups) ───────────
 
-def _build_groups(args: argparse.Namespace, manifest: dict):
+def _build_groups(args: argparse.Namespace, manifest: dict, dataset_filter: set[str] | None = None):
+    """dataset_filter (--subsample) restricts to just these agml_name(s) —
+    same convention as cot_yaml.py's --swap_datasets, meant for fast
+    testing against a small, deliberate set (e.g. cot-compare's own
+    top gain/loss cot_yaml_swap_datasets.txt) instead of the whole config."""
     groups = []
     for ds in active_datasets(Path(args.config)):
         if ds.skip or not ds.task_type:
+            continue
+        if dataset_filter is not None and ds.agml_name not in dataset_filter:
             continue
         try:
             samples = load_hf_samples(
@@ -968,12 +974,19 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [resume] {len(rows)} round row(s) already scored in {ckpt_path.name} "
               f"({len(finished)} image(s) complete)")
 
+    dataset_filter = set(args.subsample) if args.subsample else None
     groups = []
-    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in _build_groups(args, manifest):
+    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in _build_groups(
+        args, manifest, dataset_filter=dataset_filter,
+    ):
         pending = [n for n in names if (ds.agml_name, clean_label, n) not in finished]
         if not pending:
             continue
         groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
+    if dataset_filter is not None:
+        missing = dataset_filter - {ds.agml_name for ds, *_ in groups}
+        if missing:
+            print(f"  [warn] --subsample not found (skip/not in manifest/already complete?): {sorted(missing)}")
 
     n_rows_before = len(rows)
     call_stats: dict = {"n_calls": 0, "n_prompts": 0}
@@ -1119,6 +1132,15 @@ if __name__ == "__main__":
     parser.add_argument("--images_root", default="dataset/images")
     parser.add_argument("--output_dir", default="outputs_final/verifier_cot/")
     parser.add_argument("--n_samples", type=int, default=10, help="Images/class to evaluate.")
+    parser.add_argument("--subsample", nargs="+", default=None,
+                         help="Restrict to these dataset(s) only (agml_name, space-separated) "
+                              "instead of the whole active config — for fast testing. Same "
+                              "convention as cot_yaml.py's --swap_datasets; e.g. feed it "
+                              "cot-compare's own cot_yaml_swap_datasets.txt (top gain/loss "
+                              "datasets) via $(cat outputs_final/cot_compare/<model>/"
+                              "cot_yaml_swap_datasets.txt). Pass the SAME list to cot-compare's "
+                              "--filter_datasets so the lower/upper-bound and self-cot/cot-yaml "
+                              "comparisons are scoped to the same datasets, not the full config.")
     parser.add_argument("--seed", type=int, default=42,
                          help="Seeds the incumbent-A/B-slot randomization in --baseline belief's "
                               "pairwise scoring (positional-bias mitigation).")
