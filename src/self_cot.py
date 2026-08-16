@@ -141,7 +141,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         if ds.skip or not ds.task_type:
             continue
         try:
-            samples = load_hf_samples(ds.agml_name, manifest, Path(args.images_root))
+            samples = load_hf_samples(
+                ds.agml_name, manifest, Path(args.images_root), excluded_classes=ds.excluded_classes,
+            )
         except KeyError:
             print(f"  [skip] {ds.agml_name} — not in manifest")
             continue

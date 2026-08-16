@@ -1387,7 +1387,9 @@ def main(args):
             if use_dg:
                 samples = load_dg_samples(images_dir, Path(dg_jsonl))
             else:
-                samples = load_hf_samples(agml_name, manifest, images_root)
+                samples = load_hf_samples(
+                    agml_name, manifest, images_root, excluded_classes=ds_cfg.excluded_classes,
+                )
         except Exception as e:
             print(f"  [error] {e}")
             continue

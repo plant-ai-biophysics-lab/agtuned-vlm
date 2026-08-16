@@ -17,6 +17,20 @@ Two generation strategies × N ∈ {1, 5, 10}:
 
 Condition labels: PPT-Direct-N{1,5,10}, PPT-SelfCoT-N{1,5,10}
 
+Scoring mechanism — two-pass prefill, factored into src/common/
+ppt_scoring.py (shared with src/verifier_cot.py's --baseline belief
+pairwise duel, which uses this exact same mechanism): pass 1 generates
+the comparative analysis only (temperature=1.0, max_tokens=150, no
+logprobs needed — the tag content it writes here is discarded, not
+scored). Pass 2 continues that exact prefix with "\n<score_A>" (then
+separately "\n<score_B>") appended and the very next token constrained to
+just the 20 scale letters (+ their leading-space tokenization variants)
+via a grammar mask. The resulting top-20 logprobs are then a distribution
+already renormalized over the scale itself, not competing against the
+model's full vocabulary. See ppt_scoring.py's module docstring for why
+this replaced an earlier single-free-generation-call version that
+collapsed onto "A" ~96% of the time on a real feasibility test.
+
 Usage:
   uv run python src/verifier_lmv.py \\
     --model google/gemma-4-26B-A4B-it \\
@@ -57,6 +71,11 @@ try:
 except ImportError:
     LLM = None
     SamplingParams = None
+
+from src.common.ppt_scoring import (
+    analysis_before_tags, build_score_prompt, extract_tag_score,
+    pairwise_scoring_prompt, score_prefill_params,
+)
 
 try:
     from llm_verifier.pivot_tournament import (
@@ -177,59 +196,6 @@ def _raw_cls_question(task_type: str, crop: str | None) -> str:
     if task_type == "weed_identification":
         return _p["visual_classification_weed"]
     return _p["visual_classification_disease"].format(crop=crop or "plant")
-
-
-def _pairwise_prompt_text(
-    task_type: str,
-    crop: str | None,
-    pred_a: str,
-    pred_b: str,
-    criterion_name: str,
-    criterion_desc: str,
-) -> str:
-    """Pairwise verifier prompt using <score_A>/<score_B> tags for extract_score."""
-    question = _raw_cls_question(task_type, crop)
-    return (
-        "You are evaluating two agricultural image classification predictions. "
-        "The image is attached.\n\n"
-        f"Question asked: {question}\n\n"
-        f"Prediction A:\n{pred_a[:300]}\n\n"
-        f"Prediction B:\n{pred_b[:300]}\n\n"
-        f"Criterion — {criterion_name}: {criterion_desc}\n\n"
-        "Rate each prediction on a 20-point letter scale:\n"
-        "  A = 20 (best: perfectly correct, specific, visually grounded)\n"
-        "  J = 11 (uncertain, partially correct)\n"
-        "  T = 1  (worst: completely wrong or irrelevant)\n\n"
-        "Briefly analyze both predictions against the criterion, then output:\n"
-        "<score_A>LETTER_A_TO_T</score_A>\n"
-        "<score_B>LETTER_A_TO_T</score_B>"
-    )
-
-
-# ── vLLM → extract_score format ───────────────────────────────────────────────
-
-def _vllm_to_score_format(out) -> tuple[str, list[str], list[list[tuple]]]:
-    """Convert vLLM RequestOutput to (text, tokens, position_logprobs) for extract_score.
-
-    extract_score expects:
-      text: full generated string
-      tokens: list of decoded token strings
-      position_logprobs: list of [(decoded_token, logprob)] per token position
-    """
-    text = out.outputs[0].text
-    token_ids = out.outputs[0].token_ids
-    logprobs_list = out.outputs[0].logprobs or []
-
-    tokens: list[str] = []
-    position_logprobs: list[list[tuple]] = []
-    for i, tid in enumerate(token_ids):
-        lp_dict = logprobs_list[i] if i < len(logprobs_list) else {}
-        tok_str = lp_dict[tid].decoded_token if (lp_dict and tid in lp_dict) else ""
-        tokens.append(tok_str)
-        alts = [(lp.decoded_token, lp.logprob) for lp in (lp_dict or {}).values()]
-        position_logprobs.append(alts)
-
-    return text, tokens, position_logprobs
 
 
 # ── Dataset selection (same logic as verifier_vision.py) ─────────────────────
@@ -419,13 +385,17 @@ def _score_pairs_batch(
     batch_size: int,
     desc: str = "scoring",
 ) -> list[tuple[float, float]]:
-    """Score all (key, a_idx, b_idx) pairs using inline vLLM + extract_score.
+    """Score all (key, a_idx, b_idx) pairs via src/common/ppt_scoring.py's
+    two-pass prefill scheme: pass 1 free-generates the comparative
+    analysis, pass 2 forces the very next token under a grammar mask (once
+    per tag) and reads its logprobs via extract_score.
 
-    Each pair is scored n_evals × n_criteria times; rewards averaged per pair.
-    Returns [(avg_ra, avg_rb)] in the same order as pair_specs.
+    Each pair is scored n_evals × n_criteria times; rewards averaged per
+    pair. Returns [(avg_ra, avg_rb)] in the same order as pair_specs.
     """
     (_sys_msg, _, _, _build_prompt, _, _, _) = _import_cot_helpers()
-    _PAIR_P = SamplingParams(temperature=1.0, max_tokens=150, logprobs=20)
+    _ANALYSIS_P = SamplingParams(temperature=1.0, max_tokens=150)
+    _SCORE_P = score_prefill_params()
 
     # Expand: each spec × criteria × n_evals evaluations
     requests: list[tuple[int, str, str]] = [
@@ -442,31 +412,39 @@ def _score_pairs_batch(
     for start in tqdm(range(0, len(requests), batch_size),
                       total=n_batches, desc=desc, unit="batch"):
         batch = requests[start:start + batch_size]
-        prompts = []
+
+        base_prompts = []
         for spec_idx, crit_name, crit_desc in batch:
             key, a_idx, b_idx = pair_specs[spec_idx]
             row_a = groups[key][a_idx]
             row_b = groups[key][b_idx]
-            text = _pairwise_prompt_text(
-                row_a["task_type"], row_a.get("crop") or None,
-                row_a["prediction"], row_b["prediction"],
-                crit_name, crit_desc,
+            question = _raw_cls_question(row_a["task_type"], row_a.get("crop") or None)
+            text = pairwise_scoring_prompt(
+                rubric=f"{crit_name}: {crit_desc}", question=question,
+                trajectory_a=row_a["prediction"], trajectory_b=row_b["prediction"],
             )
             msgs = _sys_msg() + [{"role": "user", "content": [
                 {"type": "image"}, {"type": "text", "text": text},
             ]}]
-            prompts.append(_build_prompt(
+            base_prompts.append(_build_prompt(
                 msgs, tokenizer,
                 PILImage.open(row_a["image_path"]).convert("RGB"),
             ))
-        outputs = llm.generate(prompts, _PAIR_P)
-        for (spec_idx, _, _), out in zip(batch, outputs):
-            text_out, tokens, pos_lp = _vllm_to_score_format(out)
-            ra = extract_score(text_out, tokens, pos_lp, "<score_A>")
-            rb = extract_score(text_out, tokens, pos_lp, "<score_B>")
-            rewards_a[spec_idx].append(ra)
-            rewards_b[spec_idx].append(rb)
-        del prompts
+
+        # ── Pass 1: free-generate the comparative analysis ───────────────
+        analysis_outputs = llm.generate(base_prompts, _ANALYSIS_P)
+        analyses = [analysis_before_tags(out.outputs[0].text) for out in analysis_outputs]
+
+        # ── Pass 2: force each tag's very next token, once per tag ───────
+        for tag, rewards in (("<score_A>", rewards_a), ("<score_B>", rewards_b)):
+            score_prompts = [build_score_prompt(bp, an, tag)
+                             for bp, an in zip(base_prompts, analyses)]
+            score_outputs = llm.generate(score_prompts, _SCORE_P)
+            for (spec_idx, _, _), analysis, out in zip(batch, analyses, score_outputs):
+                comp = out.outputs[0]
+                reward = extract_tag_score(analysis, tag, comp.text, comp.logprobs or [])
+                rewards[spec_idx].append(reward)
+        del base_prompts
 
     return [
         (float(np.mean(rewards_a[i])), float(np.mean(rewards_b[i])))

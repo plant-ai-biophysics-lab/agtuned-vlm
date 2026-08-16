@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import f1_score
 
+from src.common.dataset_config import excluded_class_pairs
 from src.common.metrics import apply_judge, aggregate_rouge, compute_classification_metrics, judged_summary
 from src.common.progress import ProgressBar
 
@@ -23,6 +24,21 @@ try:
     from vllm import LLM
 except ImportError:
     LLM = None  # type: ignore[assignment,misc]
+
+_DATASETS_CONFIG_PATH = Path(__file__).parent.parent / "config" / "datasets.yaml"
+_EXCLUDED_CLASS_PAIRS_CACHE: set[tuple[str, str]] | None = None
+
+
+def _cached_excluded_class_pairs() -> set[tuple[str, str]]:
+    """Memoized excluded_class_pairs() over the default datasets.yaml —
+    load_ckpt() is called once per checkpoint file across a run/collation
+    sweep (dozens of times for a full outputs_final regeneration), and the
+    exclusion set never changes mid-process, so re-parsing the whole YAML
+    every call would be pure waste."""
+    global _EXCLUDED_CLASS_PAIRS_CACHE
+    if _EXCLUDED_CLASS_PAIRS_CACHE is None:
+        _EXCLUDED_CLASS_PAIRS_CACHE = excluded_class_pairs(_DATASETS_CONFIG_PATH)
+    return _EXCLUDED_CLASS_PAIRS_CACHE
 
 CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
@@ -166,6 +182,14 @@ def load_ckpt(
         print(f"  [ckpt] {path.name}: healed {n_healed} row(s) written under a "
               f"stale header (schema drift) — rewriting with current schema.")
         rewrite_ckpt(path, rows, fields=fields)
+
+    excluded = _cached_excluded_class_pairs()
+    if excluded:
+        n_before = len(rows)
+        rows = [r for r in rows if (r.get("agml_dataset"), r.get("class_label")) not in excluded]
+        if len(rows) != n_before:
+            print(f"  [ckpt] {path.name}: dropped {n_before - len(rows)} row(s) for classes now "
+                  f"marked excluded_classes in datasets.yaml.")
 
     seen = {(r["agml_dataset"], r["class_label"], r["image_name"]) for r in rows}
     return rows, seen

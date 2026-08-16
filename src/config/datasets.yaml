@@ -799,6 +799,17 @@ datasets:
   - PB1
   - PB_6
   - Unknown
+  excluded_classes:
+  - '1121'
+  - '1509'
+  - '1637'
+  - '1718'
+  - '1728'
+  - BAS_370
+  - CSR_30
+  - DHBT_3
+  - PB1
+  - PB_6
   hf_config: default
   location:
   - asia
@@ -1414,6 +1425,42 @@ datasets:
   task_type: species_identification
   n_images: 14000
   classes:
+  - BD70
+  - Bd30
+  - Bd33
+  - Bd34
+  - Bd49
+  - Bd51
+  - Bd52
+  - Bd56
+  - Bd57
+  - Bd72
+  - Bd75
+  - Bd76
+  - Bd79
+  - Bd85
+  - Bd87
+  - Bd91
+  - Bd93
+  - Bd95
+  - Binadhan07
+  - Binadhan08
+  - Binadhan10
+  - Binadhan11
+  - Binadhan12
+  - Binadhan14
+  - Binadhan16
+  - Binadhan17
+  - Binadhan19
+  - Binadhan20
+  - Binadhan21
+  - Binadhan23
+  - Binadhan24
+  - Binadhan25
+  - Binadhan26
+  - Br22
+  - Br23
+  excluded_classes:
   - BD70
   - Bd30
   - Bd33
@@ -3445,6 +3492,9 @@ datasets:
   - Shampakatari
   - Shorna5
   - Subol_Lota
+  excluded_classes:
+  - BR28
+  - BR29
   hf_config: raw
   location:
   - asia
@@ -3472,6 +3522,45 @@ datasets:
   task_type: species_identification
   n_images: 19000
   classes:
+  - BD30
+  - BD33
+  - BD39
+  - BD49
+  - BD51
+  - BD52
+  - BD56
+  - BD57
+  - BD70
+  - BD72
+  - BD75
+  - BD76
+  - BD79
+  - BD85
+  - BD87
+  - BD91
+  - BD93
+  - BD95
+  - BR22
+  - BR23
+  - BRRI102
+  - BRRI67
+  - BRRI74
+  - Binadhan10
+  - Binadhan11
+  - Binadhan12
+  - Binadhan14
+  - Binadhan16
+  - Binadhan17
+  - Binadhan19
+  - Binadhan20
+  - Binadhan21
+  - Binadhan23
+  - Binadhan24
+  - Binadhan25
+  - Binadhan26
+  - Binadhan7
+  - Binadhan8
+  excluded_classes:
   - BD30
   - BD33
   - BD39

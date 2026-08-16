@@ -180,7 +180,9 @@ def _build_groups(args: argparse.Namespace, manifest: dict, dataset_filter: set[
         if dataset_filter is not None and ds.agml_name not in dataset_filter:
             continue
         try:
-            samples = load_hf_samples(ds.agml_name, manifest, Path(args.images_root))
+            samples = load_hf_samples(
+                ds.agml_name, manifest, Path(args.images_root), excluded_classes=ds.excluded_classes,
+            )
         except KeyError:
             print(f"  [skip] {ds.agml_name} — not in manifest")
             continue

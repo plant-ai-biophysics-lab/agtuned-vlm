@@ -577,6 +577,22 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     task_type_by_name = {d.agml_name: d.task_type for d in datasets}
     ds_entries = manifest["datasets"]
 
+    # Apply datasets.yaml's excluded_classes here too — these charts read
+    # class lists straight from the manifest, which has no notion of
+    # exclusion (it just records what was successfully downloaded); every
+    # count below should still reflect the current, curated class list, the
+    # same way src/common/dataset_config.py's load_hf_samples (future runs)
+    # and excluded_class_pairs/load_ckpt (existing checkpoint rows) already
+    # do at the sampling/eval layer. A dataset with no excluded_classes is
+    # untouched (this is a no-op for the other ~175 datasets).
+    ds_entries = {
+        name: {**entry, "classes": {
+            c: idxs for c, idxs in entry["classes"].items()
+            if c not in set(ds_by_name[name].excluded_classes or [] if name in ds_by_name else [])
+        }}
+        for name, entry in ds_entries.items()
+    }
+
     # NOT manifest.get("failed", {}) alone — that dict can only ever contain
     # datasets that raised a catchable Python exception *inside* this
     # process. A dataset killed by an external `timeout` wrapper (or any

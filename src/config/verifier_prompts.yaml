@@ -1,0 +1,113 @@
+# Verifier prompt templates for Stage 4 (verifier-cot) — round-based belief
+# tracking, see docs/verifier_score_belief_update.md. Two prompts live here:
+#
+# - score_prompt — used exclusively by --baseline argmax (the basic-PPT-score
+#   ablation: every candidate scored independently, no reference, no
+#   pairwise call, no belief object — isolates what the pairwise/belief
+#   machinery buys over naive repeated absolute-scoring).
+# - same_answer_prompt — used exclusively by --baseline belief, and only for
+#   the persistent-belief carry-forward decision (NOT for ranking the pool —
+#   that's still the PPT tournament). When a NEW candidate outranks the
+#   incumbent's own pool slot, this asks whether its extracted <answer> tag
+#   is the SAME underlying class/diagnosis as the incumbent's, allowing for
+#   wording/synonym/detail differences — a "same answer, reworded" verdict
+#   carries the persistent belief forward instead of resetting it. Text-only
+#   (just the two short extracted answers, no image, no full trajectory) —
+#   deliberately open-ended, no closed-set class vocabulary, since real-world
+#   answers aren't a fixed label set (docs/verifier_score_belief_update.md's
+#   class-identity note).
+#
+# --baseline belief's actual pairwise tournament duels (ranking the pool)
+# still do NOT use a YAML prompt — they use the PPT paper's own
+# dual-trajectory scoring mechanism (arXiv:2607.05391 Section 3.2:
+# <score_A>/<score_B> tags, two-pass teacher-forced/prefill logprob
+# extraction), which lives in src/common/ppt_scoring.py as a fixed Python
+# template rather than YAML — same convention src/verifier_lmv.py already
+# uses for this exact template, since it's a citable reproduction of the
+# paper's prompt, not meant to be edited per-project. An earlier version of
+# this file had a simple JSON-verdict pairwise_prompt here (no scoring at
+# all, just "which one wins") — removed; it wasn't what "pairwise scoring"
+# was supposed to mean, see docs/verifier_score_belief_update.md Section
+# 13's "why every comparison is pairwise" note for the corrected mechanism.
+#
+# Rubrics are diagnostic reference material shown to the VERIFIER only —
+# never to the model being tested — derived from cot_prompts.yaml's step
+# content, same precedent as src/verifier_vision.py's inline
+# _RUBRIC_DISEASE/_RUBRIC_WEED (moved here so they're edit-without-redeploy,
+# same convention as cot_prompts.yaml's step chains).
+
+rubrics:
+  disease_pest: |
+    1. Does it correctly identify the crop or plant species affected?
+    2. Does it match the pattern of affected plant parts visible (leaves, stem, fruit, roots)?
+    3. Does it align with the visible symptom characteristics — color, shape, and texture of damage?
+    4. If pest-related, does it account for visible pest signs (webbing, frass, eggs, insect bodies)?
+    5. Does it reflect whether the damage is systemic/uniform or isolated/localized?
+    6. Is the stated condition (disease name, pest, or stress type) visually consistent with the image?
+  species_identification: &species_identification_rubric |
+    1. Does it match the visible leaf arrangement, shape, margins, and venation pattern?
+    2. Does it align with the plant's growth habit (erect, prostrate, climbing) and stem characteristics?
+    3. If flowers or seed structures are visible, does the prediction account for them?
+    4. Is the botanical identification (Scientific Name and/or Common Name) consistent with all visible features?
+  weed_identification: *species_identification_rubric
+  quality_identification: |
+    1. Does it match the visible size and shape relative to a typical mature specimen?
+    2. Does it align with the observed color and its position between unripe and overripe/spoiled?
+    3. Does it account for the visible surface texture and firmness cues (bruising, wrinkling, gloss, softness)?
+    4. Is the stated quality/ripeness/condition visually consistent with the image?
+
+# Maps dataset task_type (src/config/datasets.yaml) -> rubric key above —
+# mirrors cot_prompts.yaml's task_type_to_cot routing.
+task_type_to_rubric:
+  disease:                 disease_pest
+  pest_damage:              disease_pest
+  species_identification:  species_identification
+  weed_identification:     weed_identification
+  quality_identification:  quality_identification
+
+# --baseline argmax ONLY. Independent 1-20 scorer (G=20, matching the PPT
+# paper's granularity — see src/verifier_cot.py's SCORE_SCALE_MAX; this is
+# a JSON-parsed text score, not logprob-extracted, unlike
+# src/verifier_lmv.py's letter-scale prompt). No SUPPORTED/UNSUPPORTED
+# verdict field (dropped per explicit request — not useful at this stage)
+# — just a score and a short feedback note fed back to the VLM for the
+# next round.
+# Params: {rubric} {question} {candidate}
+score_prompt: |
+  You are evaluating a classification prediction for an agricultural image.
+
+  Question asked: "{question}"
+  Prediction: "{candidate}"
+
+  Evaluate the prediction against these diagnostic dimensions:
+  {rubric}
+
+  Rate correctness on a 1-20 scale based on the diagnostic dimensions above:
+  1 = incorrect (clearly wrong or irrelevant to the image)
+  10 = borderline (plausible but vague or imprecise)
+  20 = correct (precisely correct, specific, and visually grounded)
+
+  Respond with JSON only:
+  {{ "score": <int 1-20>, "feedback": "<one sentence on what's missing or worth checking next>" }}
+
+# --baseline belief ONLY. Fired only when this round's tournament top-1 is a
+# NEW candidate, not the incumbent's own pool slot — decides whether the
+# persistent belief carries forward (same underlying answer, just
+# re-derived/reworded) or resets to a fresh prior (a genuine answer
+# change). Text-only, no image, no full trajectory — the tournament has
+# already judged trajectory quality; this only asks "same conclusion or
+# not." No closed-set constraint on either answer string.
+# Params: {question} {answer_a} {answer_b}
+same_answer_prompt: |
+  You are comparing two short answers given to the same agricultural
+  classification question, to decide whether they refer to the same
+  underlying class, diagnosis, or condition — allowing for different
+  wording, synonyms, added or removed detail, or scientific vs. common
+  names.
+
+  Question: "{question}"
+  Answer A: "{answer_a}"
+  Answer B: "{answer_b}"
+
+  Respond with JSON only:
+  {{ "same": true or false }}

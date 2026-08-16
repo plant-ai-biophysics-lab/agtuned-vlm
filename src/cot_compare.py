@@ -50,13 +50,15 @@ from collections import defaultdict
 
 import numpy as np
 
-from src.common.plot_style import family_shaded_colors, legend_row_major, ordered_backbones
+from src.common.plot_style import family_shaded_colors, ordered_backbones
 from src.common.vision_eval import (
     collate_models,
     compute_condition_stats,
     compute_delta_stats,
     compute_model_metrics,
     load_all_rows,
+    load_ckpt,
+    per_class_judge_f1_delta,
 )
 
 METHOD_DIRS_DEFAULT = {
@@ -71,6 +73,10 @@ METHOD_DIRS_DEFAULT = {
     "cot-yaml":  "outputs_final/cot_yaml/",
 }
 METHOD_COLOR = {"desc-aug": "#ff7f0e", "self-cot": "#2ca02c", "cot-yaml": "#9467bd"}
+# Display names for plot_summary's x-axis — the raw METHOD_DIRS_DEFAULT keys
+# above (hyphenated, internal) aren't the paper-facing names used everywhere
+# else in this script (_ALL_CONDITIONS's "Self CoT"/"Manual CoT" labels).
+METHOD_DISPLAY = {"desc-aug": "Desc-Aug", "self-cot": "Self CoT", "cot-yaml": "Manual CoT"}
 
 # All four conditions on one chart — same (dataset dir key, display label)
 # shape as vision_baseline_collate.py's _CONDITIONS, extended with the two
@@ -96,6 +102,32 @@ _CONDITION_HATCH = {"baseline": None, "desc_aug": "--", "self_cot": "..", "cot_y
 # the ceiling — for the upper bound).
 _DELTA_CONDITIONS = [("self_cot", "Self CoT"), ("cot_yaml", "Manual CoT")]
 _BOUND_LINE_COLOR = {"desc_aug": "#d62728", "baseline": "#1f77b4"}  # red = upper bound, blue = lower bound
+# Self CoT / Manual CoT fill colors for the three delta-distribution charts
+# (bar/violin/boxplot) — yellow/orange, requested specifically so the two
+# conditions read apart from each other without relying on hatch alone.
+# Only ever looked up for these two condition keys (see the `.get(...) or
+# model_colors[model]` fallback at each call site) — the 3-condition
+# verifier charts (_VERIFIER_CONDITIONS) fall through to their existing
+# per-model/hatch coloring untouched.
+_DELTA_CONDITION_COLORS = {"self_cot": "#FDD835", "cot_yaml": "#E06B00"}
+_DELTA_FILL_ALPHA = 0.55
+
+# Stage 4 — round-based verifier belief tracking (src/verifier_cot.py) and
+# its two baselines: verifier_cot.py's own --baseline argmax ablation, and
+# the full PPT tournament from src/verifier_lmv.py (PPT-Direct-N10 — the
+# N=10 condition since that's the closest equal-budget comparison to
+# verifier_cot's typical total candidate count across a full 3-10 round
+# run). Per docs/verifier_score_belief_update.md Sec. 16. Same lower/
+# upper-bound reference-line convention as _DELTA_CONDITIONS above; plotted
+# via the same two functions, just with a 3-condition set instead of 2 —
+# see plot_gemma_cot_deltas/plot_gemma_cot_f1_by_task's
+# `conditions`/`hatch_map`/`output_name` params.
+_VERIFIER_CONDITIONS = [
+    ("verifier_belief", "Verifier-Belief"),
+    ("verifier_argmax", "Verifier-Argmax"),
+    ("ppt_direct_n10",  "PPT-Direct-N10"),
+]
+_VERIFIER_HATCH = {"verifier_belief": "\\\\", "verifier_argmax": "oo", "ppt_direct_n10": "**"}
 
 
 def collate_all_conditions(
@@ -148,6 +180,141 @@ def collate_gemma_cot_deltas(
     return result
 
 
+def collate_gemma_cot_delta_distributions(
+    baseline_dir: Path, aug_dir: Path, self_cot_dir: Path, cot_yaml_dir: Path,
+) -> dict[str, dict[str, dict[str, np.ndarray]]]:
+    """Gemma-4 models only: {model: {condition_key: {scope: per-class delta
+    array}}} — the same raw per-class (condition - baseline) judge-F1
+    deltas collate_gemma_cot_deltas bootstrap-means into a point + CI
+    (per_class_judge_f1_delta), kept here as the full array instead —
+    feeds plot_gemma_cot_delta_violin, the distribution counterpart to
+    plot_gemma_cot_deltas's bars."""
+    dirs = {"desc_aug": aug_dir, "self_cot": self_cot_dir, "cot_yaml": cot_yaml_dir}
+    baseline_rows_map = load_all_rows(Path(baseline_dir))
+    rows_by_cond = {cond: load_all_rows(Path(d)) for cond, d in dirs.items()}
+    models = sorted(m for m in baseline_rows_map if "26b" in m.lower() and "gemma" in m.lower())
+
+    result: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    for model in models:
+        base_rows = baseline_rows_map[model]
+        base_by_task: dict[str, list[dict]] = defaultdict(list)
+        for r in base_rows:
+            base_by_task[r["task_type"]].append(r)
+        result[model] = {}
+        for cond, rows_map in rows_by_cond.items():
+            if model not in rows_map:
+                continue
+            cond_rows = rows_map[model]
+            cond_by_task: dict[str, list[dict]] = defaultdict(list)
+            for r in cond_rows:
+                cond_by_task[r["task_type"]].append(r)
+            by_scope: dict[str, np.ndarray] = {}
+            _, by_scope["overall"] = per_class_judge_f1_delta(base_rows, cond_rows)
+            for tt in set(base_by_task) | set(cond_by_task):
+                _, by_scope[tt] = per_class_judge_f1_delta(base_by_task.get(tt, []), cond_by_task.get(tt, []))
+            result[model][cond] = by_scope
+    return result
+
+
+def load_verifier_cot_rows(output_dir: Path, baseline: str) -> dict[str, list[dict]]:
+    """{model: [row, ...]} for src/verifier_cot.py's --baseline
+    {belief,argmax} output — flat <output_dir>/<model>/ckpt_<baseline>_
+    <model>.csv layout, filtered to is_final_round rows only (one row per
+    image, matching every other condition's shape here) since
+    verifier_cot.py's checkpoint has one row per (image, round). Needs
+    VERIFIER_STEP_FIELDS, not plain CKPT_FIELDS, to align columns
+    correctly — see verifier_cot.py's module docstring for the schema."""
+    from src.verifier_cot import VERIFIER_STEP_FIELDS
+    if not output_dir.exists():
+        return {}
+    result: dict[str, list[dict]] = {}
+    for model_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
+        ckpt_path = model_dir / f"ckpt_{baseline}_{model_dir.name}.csv"
+        rows, _ = load_ckpt(ckpt_path, fields=VERIFIER_STEP_FIELDS)
+        final_rows = [r for r in rows if str(r.get("is_final_round")) == "1"]
+        if final_rows:
+            result[model_dir.name] = final_rows
+    return result
+
+
+def load_verifier_lmv_rows(ckpt_judged_path: Path, gen_mode: str, n_max: int) -> list[dict]:
+    """One (gen_mode, n_max) condition slice from src/verifier_lmv.py's
+    ckpt_judged.csv — the full PPT-tournament baseline (arXiv:2607.05391),
+    scored via the corrected two-pass prefill mechanism (see that module's
+    docstring). Unlike every other condition here, verifier_lmv.py's
+    --output_dir is flat (one model's worth of output per run, no <model>/
+    subfolder) — point --verifier_lmv_ckpt at whichever model's run you
+    want compared; its rows get attached to that model in
+    collate_verifier_conditions/collate_verifier_deltas below. gen_mode:
+    "direct" | "self_cot". No resolved_class column in this schema, so the
+    strict f1_macro reads as 0 — only judge_f1_macro is meaningful, which
+    is what this whole pipeline already prefers everywhere else."""
+    from src.verifier_lmv import JUDGED_FIELDS
+    if not ckpt_judged_path.exists():
+        return []
+    rows, _ = load_ckpt(ckpt_judged_path, fields=JUDGED_FIELDS)
+    return [r for r in rows if r.get("gen_mode") == gen_mode and str(r.get("n_max")) == str(n_max)]
+
+
+def collate_verifier_conditions(
+    verifier_dir: Path, verifier_lmv_ckpt: Path, n_boot: int, seed: int,
+) -> dict[str, dict[str, dict]]:
+    """{model: {condition_key: {scope: stats}}} for the Stage 4 verifier
+    conditions (belief-tracking, its argmax ablation, and the full-PPT
+    baseline) — same compute_condition_stats machinery as
+    collate_all_conditions, feeding plot_gemma_cot_f1_by_task via
+    _VERIFIER_CONDITIONS/_VERIFIER_HATCH (docs/verifier_score_belief_update.md
+    Sec. 16). PPT-Direct-N10 rows get attached to every model verifier_cot's
+    own data identifies (in practice just gemma-4-26B-A4B-it, per this
+    project's established single-model scoping for this whole line of
+    work) rather than auto-discovered, since verifier_lmv.py's flat output
+    doesn't self-identify a model."""
+    belief_rows = load_verifier_cot_rows(verifier_dir, "belief")
+    argmax_rows = load_verifier_cot_rows(verifier_dir, "argmax")
+    ppt_rows = load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10)
+
+    result: dict[str, dict[str, dict]] = {}
+    for model in sorted(set(belief_rows) | set(argmax_rows)):
+        by_cond: dict[str, dict] = {}
+        if model in belief_rows:
+            by_cond["verifier_belief"] = compute_condition_stats(belief_rows[model], n_boot, seed)
+        if model in argmax_rows:
+            by_cond["verifier_argmax"] = compute_condition_stats(argmax_rows[model], n_boot, seed)
+        if ppt_rows:
+            by_cond["ppt_direct_n10"] = compute_condition_stats(ppt_rows, n_boot, seed)
+        if by_cond:  # skip entirely rather than leaving an empty {model: {}} entry —
+            result[model] = by_cond  # a truthy-but-empty dict would make `if verifier_condition_stats:`
+    return result  # (main()'s no-op guard) fire even when neither script has ever been run.
+
+
+def collate_verifier_deltas(
+    baseline_dir: Path, verifier_dir: Path, verifier_lmv_ckpt: Path, n_boot: int, seed: int,
+) -> dict[str, dict[str, dict]]:
+    """Gemma-4-26B-A4B-it only, (condition - baseline) judge-F1 delta for
+    the Stage 4 verifier conditions — same paired-bootstrap machinery as
+    collate_gemma_cot_deltas, feeding plot_gemma_cot_deltas via
+    _VERIFIER_CONDITIONS/_VERIFIER_HATCH."""
+    baseline_rows_map = load_all_rows(baseline_dir)
+    belief_rows = load_verifier_cot_rows(verifier_dir, "belief")
+    argmax_rows = load_verifier_cot_rows(verifier_dir, "argmax")
+    ppt_rows = load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10)
+
+    models = sorted(m for m in baseline_rows_map if "26b" in m.lower() and "gemma" in m.lower())
+    result: dict[str, dict[str, dict]] = {}
+    for model in models:
+        base_rows = baseline_rows_map[model]
+        by_cond: dict[str, dict] = {}
+        if model in belief_rows:
+            by_cond["verifier_belief"] = compute_delta_stats(base_rows, belief_rows[model], n_boot, seed)
+        if model in argmax_rows:
+            by_cond["verifier_argmax"] = compute_delta_stats(base_rows, argmax_rows[model], n_boot, seed)
+        if ppt_rows:
+            by_cond["ppt_direct_n10"] = compute_delta_stats(base_rows, ppt_rows, n_boot, seed)
+        if by_cond:  # same empty-dict guard as collate_verifier_conditions above
+            result[model] = by_cond
+    return result
+
+
 def write_all_conditions_summary(output_dir: Path, condition_stats: dict[str, dict[str, dict]]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "cot_all_conditions_summary.json").write_text(json.dumps(condition_stats, indent=2))
@@ -165,18 +332,35 @@ def write_all_conditions_summary(output_dir: Path, condition_stats: dict[str, di
     print(f"  Saved: {output_dir / 'cot_all_conditions_summary.json'}")
 
 
-def plot_gemma_cot_deltas(output_dir: Path, delta_stats: dict[str, dict[str, dict]]) -> None:
-    """Gemma-4 models only. Bars: Self CoT / Manual CoT judge-F1 delta vs the
-    lower bound, per task type + overall. The lower and upper bounds
+def plot_gemma_cot_deltas(
+    output_dir: Path, delta_stats: dict[str, dict[str, dict]],
+    conditions: list[tuple[str, str]] | None = None,
+    hatch_map: dict[str, str | None] | None = None,
+    condition_colors: dict[str, str] | None = None,
+    output_name: str = "cot_all_conditions_by_task.png",
+) -> None:
+    """Gemma-4 models only. Bars: judge-F1 delta vs the lower bound for
+    every condition in `conditions` (defaults to _DELTA_CONDITIONS — Self
+    CoT / Manual CoT), per task type + overall. The lower and upper bounds
     themselves are drawn as horizontal dotted reference lines spanning each
     model's bar cluster — blue at 0 (lower bound: no improvement over
     baseline) and red at the desc-aug delta (upper bound / ceiling) —
     rather than as their own bars, since on a delta axis the lower bound is
     trivially 0 and the upper bound is just another delta value to compare
-    the CoT bars against."""
+    the bars against. `conditions`/`hatch_map`/`output_name` let this same
+    function drive a second chart for a different condition set (e.g. the
+    Stage 4 verifier conditions, _VERIFIER_CONDITIONS/_VERIFIER_HATCH) —
+    see docs/verifier_score_belief_update.md Sec. 16. `condition_colors`
+    (defaults to _DELTA_CONDITION_COLORS — yellow Self CoT / orange Manual
+    CoT) colors each condition directly instead of shading by model; a
+    condition key missing from it (e.g. the 3-way verifier set, which has
+    no entry here) falls back to the model's own shaded color, unaffected."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
+
+    conditions = conditions or _DELTA_CONDITIONS
+    hatch_map = hatch_map or _CONDITION_HATCH
+    condition_colors = _DELTA_CONDITION_COLORS if condition_colors is None else condition_colors
 
     models = [m for m in ordered_backbones(list(delta_stats.keys())) if "26b" in m.lower() and "gemma" in m.lower()]
     if not models:
@@ -190,30 +374,26 @@ def plot_gemma_cot_deltas(output_dir: Path, delta_stats: dict[str, dict[str, dic
     scopes = task_types + ["overall"]
 
     model_colors = family_shaded_colors(models)
-    n_cond = len(_DELTA_CONDITIONS)
+    n_cond = len(conditions)
     n_bars = len(models) * n_cond
-    width = 0.8 / n_bars
+    width = 0.92 / n_bars
     x = np.arange(len(scopes))
 
     fig, ax = plt.subplots(figsize=(max(9, len(scopes) * 2.4), 5.5))
     bar_i = 0
     max_top, min_bottom = 0.0, 0.0
     any_missing = False
-    # Same row-major legend concern as the other collate charts: keep a
-    # blank placeholder per (model, condition) with no data so each model
-    # still contributes exactly n_cond slots to the grid.
-    blank_handle = Patch(facecolor="none", edgecolor="none")
     legend_handles, legend_labels = [], []
     for model in models:
         model_start = bar_i
-        for cond_key, cond_label in _DELTA_CONDITIONS:
+        for cond_key, cond_label in conditions:
             by_scope = delta_stats[model].get(cond_key, {})
             if not by_scope:
                 # No data at all for this (model, condition) — e.g. cot_yaml
-                # was only run for one model.
+                # was only run for one model. No legend placeholder needed
+                # (the row-major grid layout that required one is gone now
+                # that the legend sits inside the chart instead of below it).
                 bar_i += 1
-                legend_handles.append(blank_handle)
-                legend_labels.append("")
                 continue
             means, lo_err, hi_err = [], [], []
             for scope in scopes:
@@ -231,10 +411,11 @@ def plot_gemma_cot_deltas(output_dir: Path, delta_stats: dict[str, dict[str, dic
 
             offset = (bar_i - (n_bars - 1) / 2) * width
             label = f"{model.split('/')[-1]} ({cond_label})"
-            hatch = _CONDITION_HATCH[cond_key]
+            hatch = hatch_map[cond_key]
+            color = condition_colors.get(cond_key) or model_colors[model]
             bars = ax.bar(
                 x + offset, means, width, label=label,
-                color=model_colors[model], hatch=hatch,
+                color=color, hatch=hatch, alpha=_DELTA_FILL_ALPHA,
                 edgecolor="white" if hatch else "black", linewidth=0.5,
                 yerr=[lo_err, hi_err], capsize=2,
                 error_kw={"elinewidth": 0.8, "alpha": 0.7}, zorder=2,
@@ -244,15 +425,15 @@ def plot_gemma_cot_deltas(output_dir: Path, delta_stats: dict[str, dict[str, dic
             bar_i += 1
         model_end = bar_i
 
-        # Horizontal dotted reference lines spanning this model's full bar
-        # cluster (both condition slots), one pair per scope.
+        # Horizontal dotted reference line (upper bound / ceiling only —
+        # the lower bound is dropped: on a delta-vs-lower-bound axis it's
+        # trivially 0 everywhere, already legible from the y-axis itself)
+        # spanning this model's full bar cluster, one per scope.
         lo_offset = (model_start - (n_bars - 1) / 2) * width - width / 2
         hi_offset = (model_end - 1 - (n_bars - 1) / 2) * width + width / 2
         aug_by_scope = delta_stats[model].get("desc_aug", {})
         for i, scope in enumerate(scopes):
             xmin, xmax = x[i] + lo_offset, x[i] + hi_offset
-            ax.hlines(0.0, xmin, xmax, colors=_BOUND_LINE_COLOR["baseline"],
-                      linestyles=":", linewidth=1.8, zorder=3)
             aug_stats = aug_by_scope.get(scope)
             if aug_stats and aug_stats.get("delta_n_classes", 0) > 0:
                 ceiling = aug_stats["delta_f1_macro"]
@@ -272,34 +453,248 @@ def plot_gemma_cot_deltas(output_dir: Path, delta_stats: dict[str, dict[str, dic
     ax.set_ylim(min_bottom - pad, max_top + pad)
     ax.set_ylabel("Δ Judged F1 Macro (vs Lower Bound)")
 
-    # One row per model (n_cond slots each) matching the bars left to right,
-    # then one final row for the two bound-line entries — all one combined
-    # row-major permutation so the trailing row lands correctly too.
-    ncol = n_cond
     bound_handles = [
-        Line2D([0], [0], color=_BOUND_LINE_COLOR["desc_aug"], linestyle=":", linewidth=1.8, label="Upper Bound"),
-        Line2D([0], [0], color=_BOUND_LINE_COLOR["baseline"], linestyle=":", linewidth=1.8, label="Lower Bound"),
+        Line2D([0], [0], color=_BOUND_LINE_COLOR["desc_aug"], linestyle=":", linewidth=1.8, label="Upper Bound (mean)"),
     ]
     full_handles = legend_handles + bound_handles
-    full_labels = legend_labels + ["Upper Bound", "Lower Bound"]
-    handles = legend_row_major(full_handles, ncol)
-    labels = legend_row_major(full_labels, ncol)
-    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=ncol, fontsize=8)
+    full_labels = legend_labels + ["Upper Bound (mean)"]
+    ax.legend(full_handles, full_labels, loc="upper right", fontsize=8, framealpha=0.9)
     plt.tight_layout()
-    path = output_dir / "cot_all_conditions_by_task.png"
+    path = output_dir / output_name
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
 
-def plot_gemma_cot_f1_by_task(output_dir: Path, condition_stats: dict[str, dict[str, dict]]) -> None:
-    """Gemma-4-26B-A4B-it only — the non-delta companion to
-    plot_gemma_cot_deltas: Self CoT / Manual CoT plotted as raw Judged F1
-    Macro bars, with Lower Bound / Upper Bound still drawn as horizontal
-    dotted reference lines (same red/blue convention) rather than their own
-    bars, so both figures read as a matched pair."""
+def _half_violin(ax, x_center: float, values: np.ndarray, side: int, color: str, half_width: float) -> bool:
+    """Draw one half of a split violin at x_center via a Gaussian KDE —
+    side=-1 mirrors it to the left, side=+1 to the right — plus a short
+    horizontal tick at the mean (matching the reference style: a plain
+    filled half-teardrop with a mean marker, no whiskers/extrema). Returns
+    False (draws nothing) if there are too few points for a KDE to mean
+    anything, same "< 2" guard bootstrap_judge_f1_delta_ci itself uses."""
+    from scipy.stats import gaussian_kde
+
+    values = np.asarray(values, dtype=float)
+    if values.size < 2 or np.std(values) == 0:
+        return False
+    kde = gaussian_kde(values)
+    y_min, y_max = float(values.min()), float(values.max())
+    pad = (y_max - y_min) * 0.1 or abs(y_min) * 0.1 or 0.01
+    ys = np.linspace(y_min - pad, y_max + pad, 200)
+    density = kde(ys)
+    density = density / density.max() * half_width
+    ax.fill_betweenx(ys, x_center, x_center + side * density,
+                      facecolor=color, edgecolor="black", linewidth=0.8, alpha=_DELTA_FILL_ALPHA, zorder=2)
+    mean_y = float(values.mean())
+    mean_half_width = float(np.interp(mean_y, ys, density))
+    ax.plot([x_center, x_center + side * mean_half_width], [mean_y, mean_y],
+            color="black", linewidth=1.8, zorder=3)
+    return True
+
+
+def plot_gemma_cot_delta_violin(
+    output_dir: Path, distributions: dict[str, dict[str, dict[str, np.ndarray]]],
+    conditions: list[tuple[str, str]] | None = None,
+    condition_colors: dict[str, str] | None = None,
+    output_name: str = "cot_all_conditions_by_task_violin.png",
+) -> None:
+    """Distribution counterpart to plot_gemma_cot_deltas — the same
+    per-class judge-F1 deltas the bars collapse to a bootstrap mean + CI
+    (collate_gemma_cot_delta_distributions), shown here as a SPLIT violin
+    per scope instead: left half = conditions[0]'s distribution, right
+    half = conditions[1]'s, sharing one x position (not two side-by-side
+    violins) — exactly two conditions only, since a split violin has
+    exactly two halves; pass a 2-entry `conditions` or don't call this.
+    The upper bound (desc_aug's ceiling, already present in `distributions`
+    even though it's not one of the two split halves) is kept as a
+    horizontal dashed reference line per scope, same red as every other
+    chart's Upper Bound."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    conditions = conditions or _DELTA_CONDITIONS
+    if len(conditions) != 2:
+        raise ValueError(f"split-violin plotting needs exactly 2 conditions, got {len(conditions)}")
+    (cond0_key, cond0_label), (cond1_key, cond1_label) = conditions
+    condition_colors = condition_colors or _DELTA_CONDITION_COLORS
+
+    models = [m for m in ordered_backbones(list(distributions.keys())) if "26b" in m.lower() and "gemma" in m.lower()]
+    if not models:
+        print("  No Gemma-4-26B-A4B-it data to plot.")
+        return
+
+    scopes_present = {
+        scope for by_cond in distributions.values() for by_scope in by_cond.values() for scope in by_scope
+    }
+    task_types = sorted(s for s in scopes_present if s != "overall")
+    scopes = task_types + ["overall"]
+    x = np.arange(len(scopes))
+
+    group_width = 0.7
+    model_width = group_width / len(models)
+    half_width = model_width * 0.42
+
+    fig, ax = plt.subplots(figsize=(max(9, len(scopes) * 2.2), 5.5))
+    for model_i, model in enumerate(models):
+        x_centers = x - group_width / 2 + model_width * (model_i + 0.5)
+        by_cond = distributions[model]
+        for i, scope in enumerate(scopes):
+            xc = x_centers[i]
+            left = by_cond.get(cond0_key, {}).get(scope, np.array([]))
+            right = by_cond.get(cond1_key, {}).get(scope, np.array([]))
+            _half_violin(ax, xc, left, -1, condition_colors[cond0_key], half_width)
+            _half_violin(ax, xc, right, +1, condition_colors[cond1_key], half_width)
+
+            ceiling_vals = by_cond.get("desc_aug", {}).get(scope, np.array([]))
+            if ceiling_vals.size > 0:
+                ceiling = float(ceiling_vals.mean())
+                ax.hlines(ceiling, xc - model_width / 2, xc + model_width / 2,
+                          colors=_BOUND_LINE_COLOR["desc_aug"], linestyles="--", linewidth=1.5, zorder=1)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([s.replace("_identification", "").replace("_", " ") for s in scopes],
+                       rotation=15, ha="right")
+    ax.set_ylabel("Δ Judged F1 (per class, vs Lower Bound)")
+
+    legend_handles = [
+        Patch(facecolor=condition_colors[cond0_key], edgecolor="black", alpha=_DELTA_FILL_ALPHA, label=cond0_label),
+        Patch(facecolor=condition_colors[cond1_key], edgecolor="black", alpha=_DELTA_FILL_ALPHA, label=cond1_label),
+        Line2D([0], [0], color=_BOUND_LINE_COLOR["desc_aug"], linestyle="--", linewidth=1.5, label="Upper Bound (mean)"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=8, framealpha=0.9)
+    plt.tight_layout()
+    path = output_dir / output_name
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_gemma_cot_delta_boxplot(
+    output_dir: Path, distributions: dict[str, dict[str, dict[str, np.ndarray]]],
+    conditions: list[tuple[str, str]] | None = None,
+    condition_colors: dict[str, str] | None = None,
+    ylim: tuple[float, float] | None = (-0.5, 0.5),
+    output_name: str = "cot_all_conditions_by_task_boxplot.png",
+) -> None:
+    """Third distribution view of the same per-class judge-F1 deltas
+    (collate_gemma_cot_delta_distributions) — a classic box-and-whisker per
+    (model, condition) per scope, side-by-side within each scope like the
+    bars (plot_gemma_cot_deltas), not split like the violin
+    (plot_gemma_cot_delta_violin). Median/IQR/whiskers/outlier points
+    instead of a KDE shape or a bootstrap mean+CI — purely a different way
+    to look at the same numbers, not a different metric. Solid fills, no
+    hatch (unlike the bar/violin charts) — color alone is enough to tell
+    the two conditions apart here since there's no split/overlapping shape
+    to disambiguate. `ylim` fixes the y-axis range so it's comparable across
+    repeated regenerations instead of autoscaling to whatever the current
+    data's extremes happen to be; pass None to autoscale."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    conditions = conditions or _DELTA_CONDITIONS
+    condition_colors = _DELTA_CONDITION_COLORS if condition_colors is None else condition_colors
+
+    models = [m for m in ordered_backbones(list(distributions.keys())) if "26b" in m.lower() and "gemma" in m.lower()]
+    if not models:
+        print("  No Gemma-4-26B-A4B-it data to plot.")
+        return
+
+    scopes_present = {
+        scope for by_cond in distributions.values() for by_scope in by_cond.values() for scope in by_scope
+    }
+    task_types = sorted(s for s in scopes_present if s != "overall")
+    scopes = task_types + ["overall"]
+    x = np.arange(len(scopes))
+
+    model_colors = family_shaded_colors(models)
+    n_cond = len(conditions)
+    n_bars = len(models) * n_cond
+    width = 0.92 / n_bars
+
+    fig, ax = plt.subplots(figsize=(max(9, len(scopes) * 2.2), 5.5))
+    legend_handles, legend_labels = [], []
+    bar_i = 0
+    for model in models:
+        model_start = bar_i
+        for cond_key, cond_label in conditions:
+            by_scope = distributions[model].get(cond_key, {})
+            offset = (bar_i - (n_bars - 1) / 2) * width
+            positions, data = [], []
+            for i, scope in enumerate(scopes):
+                arr = by_scope.get(scope, np.array([]))
+                if arr.size >= 1:
+                    positions.append(x[i] + offset)
+                    data.append(arr)
+            bar_i += 1
+            if not data:
+                continue
+
+            color = condition_colors.get(cond_key) or model_colors[model]
+            ax.boxplot(
+                data, positions=positions, widths=width * 0.85, patch_artist=True,
+                showfliers=False,
+                medianprops={"color": "black", "linewidth": 1.3},
+                whiskerprops={"color": "black", "linewidth": 0.8},
+                capprops={"color": "black", "linewidth": 0.8},
+                boxprops={"facecolor": color, "edgecolor": "black", "linewidth": 0.6,
+                          "alpha": _DELTA_FILL_ALPHA},
+            )
+            legend_handles.append(Patch(facecolor=color, edgecolor="black", alpha=_DELTA_FILL_ALPHA))
+            legend_labels.append(f"{model.split('/')[-1]} ({cond_label})")
+        model_end = bar_i
+
+        # Upper Bound reference line spanning this model's bar cluster, one
+        # per scope — same convention as plot_gemma_cot_deltas.
+        lo_offset = (model_start - (n_bars - 1) / 2) * width - width / 2
+        hi_offset = (model_end - 1 - (n_bars - 1) / 2) * width + width / 2
+        aug_by_scope = distributions[model].get("desc_aug", {})
+        for i, scope in enumerate(scopes):
+            arr = aug_by_scope.get(scope, np.array([]))
+            if arr.size > 0:
+                ceiling = float(arr.mean())
+                ax.hlines(ceiling, x[i] + lo_offset, x[i] + hi_offset,
+                          colors=_BOUND_LINE_COLOR["desc_aug"], linestyles="--", linewidth=1.5, zorder=3)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([s.replace("_identification", "").replace("_", " ") for s in scopes],
+                       rotation=15, ha="right")
+    ax.set_ylabel("Δ Judged F1 (per class, vs Lower Bound)")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+    bound_handles = [
+        Line2D([0], [0], color=_BOUND_LINE_COLOR["desc_aug"], linestyle="--", linewidth=1.5, label="Upper Bound (mean)"),
+    ]
+    ax.legend(legend_handles + bound_handles, legend_labels + ["Upper Bound (mean)"],
+              loc="upper right", fontsize=8, framealpha=0.9)
+    plt.tight_layout()
+    path = output_dir / output_name
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_gemma_cot_f1_by_task(
+    output_dir: Path, condition_stats: dict[str, dict[str, dict]],
+    conditions: list[tuple[str, str]] | None = None,
+    hatch_map: dict[str, str | None] | None = None,
+    output_name: str = "cot_gemma_f1_by_task.png",
+) -> None:
+    """Gemma-4-26B-A4B-it only — the non-delta companion to
+    plot_gemma_cot_deltas: every condition in `conditions` (defaults to
+    _DELTA_CONDITIONS — Self CoT / Manual CoT) plotted as raw Judged F1
+    Macro bars, with Lower Bound / Upper Bound still drawn as horizontal
+    dotted reference lines (same red/blue convention) rather than their own
+    bars, so both figures read as a matched pair. `conditions`/`hatch_map`/
+    `output_name` mirror plot_gemma_cot_deltas's — see its docstring."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    conditions = conditions or _DELTA_CONDITIONS
+    hatch_map = hatch_map or _CONDITION_HATCH
 
     models = [m for m in ordered_backbones(list(condition_stats.keys())) if "26b" in m.lower() and "gemma" in m.lower()]
     if not models:
@@ -321,7 +716,7 @@ def plot_gemma_cot_f1_by_task(output_dir: Path, condition_stats: dict[str, dict[
         return 0.0, 0.0, 0.0, False
 
     model_color = family_shaded_colors(models)[model]
-    n_cond = len(_DELTA_CONDITIONS)
+    n_cond = len(conditions)
     width = 0.8 / n_cond
     x = np.arange(len(scopes))
 
@@ -330,7 +725,7 @@ def plot_gemma_cot_f1_by_task(output_dir: Path, condition_stats: dict[str, dict[
     max_top = 0.0
     any_unjudged = False
     legend_handles, legend_labels = [], []
-    for cond_key, cond_label in _DELTA_CONDITIONS:
+    for cond_key, cond_label in conditions:
         by_scope = by_cond.get(cond_key, {})
         if not by_scope:
             bar_i += 1
@@ -345,7 +740,7 @@ def plot_gemma_cot_f1_by_task(output_dir: Path, condition_stats: dict[str, dict[
             max_top = max(max_top, hi)
 
         offset = (bar_i - (n_cond - 1) / 2) * width
-        hatch = _CONDITION_HATCH[cond_key]
+        hatch = hatch_map[cond_key]
         bars = ax.bar(
             x + offset, means, width, label=cond_label,
             color=model_color, hatch=hatch,
@@ -388,13 +783,13 @@ def plot_gemma_cot_f1_by_task(output_dir: Path, condition_stats: dict[str, dict[
     ax.set_ylabel("Judged F1 Macro")
 
     bound_handles = [
-        Line2D([0], [0], color=_BOUND_LINE_COLOR["desc_aug"], linestyle=":", linewidth=1.8, label="Upper Bound"),
+        Line2D([0], [0], color=_BOUND_LINE_COLOR["desc_aug"], linestyle=":", linewidth=1.8, label="Upper Bound (mean)"),
         Line2D([0], [0], color=_BOUND_LINE_COLOR["baseline"], linestyle=":", linewidth=1.8, label="Lower Bound"),
     ]
-    ax.legend(legend_handles + bound_handles, legend_labels + ["Upper Bound", "Lower Bound"],
+    ax.legend(legend_handles + bound_handles, legend_labels + ["Upper Bound (mean)", "Lower Bound"],
               loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=len(legend_handles) + 2, fontsize=8)
     plt.tight_layout()
-    path = output_dir / "cot_gemma_f1_by_task.png"
+    path = output_dir / output_name
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -592,11 +987,12 @@ def plot_summary(model_dir: Path, model: str, summaries: dict[str, dict]) -> Non
     if not methods:
         return
     colors = [METHOD_COLOR.get(m, "#7f7f7f") for m in methods]
+    labels = [METHOD_DISPLAY.get(m, m) for m in methods]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
 
     win_rates = [summaries[m]["win_rate"] * 100 for m in methods]
-    bars = ax1.bar(methods, win_rates, color=colors)
+    bars = ax1.bar(labels, win_rates, color=colors)
     for b, v in zip(bars, win_rates):
         ax1.annotate(f"{v:.0f}%", (b.get_x() + b.get_width() / 2, v),
                      ha="center", va="bottom", fontsize=8, xytext=(0, 3), textcoords="offset points")
@@ -613,7 +1009,7 @@ def plot_summary(model_dir: Path, model: str, summaries: dict[str, dict]) -> Non
     ax2.bar(x, losses, color=colors, alpha=0.5, hatch="//", label="mean loss")
     ax2.axhline(0, color="black", linewidth=0.8)
     ax2.set_xticks(list(x))
-    ax2.set_xticklabels(methods)
+    ax2.set_xticklabels(labels)
     ax2.set_ylabel("Judged F1 delta vs. vision-baseline", fontsize=9)
     ax2.set_title("Mean gain / mean loss", fontsize=10)
     ax2.legend(fontsize=8)
@@ -695,9 +1091,40 @@ def main(args: argparse.Namespace) -> None:
     if gemma_deltas:
         plot_gemma_cot_deltas(output_dir, gemma_deltas)
 
+    gemma_delta_distributions = collate_gemma_cot_delta_distributions(
+        Path(args.baseline_dir), Path(args.aug_dir), Path(args.self_cot_dir), Path(args.cot_yaml_dir),
+    )
+    if gemma_delta_distributions:
+        plot_gemma_cot_delta_violin(output_dir, gemma_delta_distributions)
+        plot_gemma_cot_delta_boxplot(output_dir, gemma_delta_distributions)
+
     species_breakdown = collate_species_breakdown(Path(args.baseline_dir))
     if species_breakdown:
         plot_species_identification_breakdown(output_dir, species_breakdown)
+
+    # ── Stage 4 — verifier belief tracking + baselines (Sec. 16 of
+    #    docs/verifier_score_belief_update.md) — no-ops until either script
+    #    has actually been run, same pattern as the `if condition_stats:` /
+    #    `if gemma_deltas:` guards above.
+    verifier_condition_stats = collate_verifier_conditions(
+        Path(args.verifier_dir), Path(args.verifier_lmv_ckpt), args.n_boot, args.seed,
+    )
+    if verifier_condition_stats:
+        plot_gemma_cot_f1_by_task(
+            output_dir, verifier_condition_stats,
+            conditions=_VERIFIER_CONDITIONS, hatch_map=_VERIFIER_HATCH,
+            output_name="verifier_gemma_f1_by_task.png",
+        )
+
+    verifier_deltas = collate_verifier_deltas(
+        Path(args.baseline_dir), Path(args.verifier_dir), Path(args.verifier_lmv_ckpt), args.n_boot, args.seed,
+    )
+    if verifier_deltas:
+        plot_gemma_cot_deltas(
+            output_dir, verifier_deltas,
+            conditions=_VERIFIER_CONDITIONS, hatch_map=_VERIFIER_HATCH,
+            output_name="verifier_all_conditions_by_task.png",
+        )
 
 
 if __name__ == "__main__":
@@ -707,6 +1134,12 @@ if __name__ == "__main__":
     parser.add_argument("--aug_dir", default=METHOD_DIRS_DEFAULT["desc-aug"])
     parser.add_argument("--self_cot_dir", default=METHOD_DIRS_DEFAULT["self-cot"])
     parser.add_argument("--cot_yaml_dir", default=METHOD_DIRS_DEFAULT["cot-yaml"])
+    parser.add_argument("--verifier_dir", default="outputs_final/verifier_cot/",
+                         help="src/verifier_cot.py's --output_dir (both --baseline belief/argmax).")
+    parser.add_argument("--verifier_lmv_ckpt", default="outputs_final/verifier_lmv/ckpt_judged.csv",
+                         help="src/verifier_lmv.py's ckpt_judged.csv (its --output_dir is flat, one "
+                              "model's worth of output per run — point this at whichever model's "
+                              "run you want compared; only the PPT-Direct-N10 slice is used here).")
     parser.add_argument("--output_dir", default="outputs_final/cot_compare/")
     parser.add_argument("--top_n", type=int, default=5, help="Top-N gains / top-N losses to report per method.")
     parser.add_argument("--n_boot", type=int, default=2000,

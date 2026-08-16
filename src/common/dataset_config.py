@@ -31,6 +31,18 @@ class DatasetConfig:
                                  # etc.). Opt-in, empty by default; see
                                  # effective_search_terms().
     hf_config: Optional[str] = None  # Project-AgML HF dataset config/split-group, e.g. "raw" vs "augmented"
+    excluded_classes: list = None  # [raw_class_label, ...] — classes to skip
+                                    # entirely (never sampled by load_hf_samples,
+                                    # never counted in downstream charts/metrics via
+                                    # excluded_class_pairs()). Opt-in, empty by
+                                    # default. Raw manifest-key form (matches this
+                                    # dataset's own `classes:` list spelling exactly,
+                                    # e.g. "BAS_370" not "BAS 370") — for classes
+                                    # that are fundamentally too difficult for the
+                                    # task at hand (e.g. bare cultivar-registry codes
+                                    # like "BD70" with no visually groundable signal
+                                    # to distinguish them from "BD72"), not a
+                                    # generic quality filter.
 
     @property
     def clean_classes(self) -> list[str]:
@@ -79,12 +91,33 @@ def load_datasets(config_path: Path) -> list[DatasetConfig]:
             class_overrides=d.get("class_overrides", {}),
             class_aliases=d.get("class_aliases", {}),
             hf_config=d.get("hf_config"),
+            excluded_classes=d.get("excluded_classes", []),
         ))
     return result
 
 
 def active_datasets(config_path: Path) -> list[DatasetConfig]:
     return [d for d in load_datasets(config_path) if not d.skip]
+
+
+def excluded_class_pairs(config_path: Path) -> set[tuple[str, str]]:
+    """{(agml_name, cleaned_class_label), ...} across every dataset's
+    excluded_classes — the CSV-row-filtering counterpart to
+    load_hf_samples's excluded_classes param: checkpoint rows store the
+    CLEANED class_label (clean_class_list — underscores -> spaces), not the
+    raw manifest key excluded_classes is spelled in, so this applies that
+    same cleaning before returning the lookup set. Used by
+    src/common/vision_eval.py's load_ckpt to keep every existing
+    chart/metric consumer (which reads through load_ckpt, directly or via
+    load_all_rows/collate_models) automatically excluding these classes
+    without each script needing its own filter."""
+    pairs = set()
+    for d in load_datasets(config_path):
+        if not d.excluded_classes:
+            continue
+        for cleaned in clean_class_list(d.excluded_classes):
+            pairs.add((d.agml_name, cleaned))
+    return pairs
 
 
 def datasets_by_name(config_path: Path) -> dict[str, DatasetConfig]:
@@ -249,7 +282,9 @@ def _safe_label_dir(label: str) -> str:
     return _UNSAFE_LABEL_CHARS.sub("_", label).strip("_") or "unlabeled"
 
 
-def load_hf_samples(agml_name: str, manifest: dict, images_root: Path) -> list[dict]:
+def load_hf_samples(
+    agml_name: str, manifest: dict, images_root: Path, excluded_classes: list[str] | None = None,
+) -> list[dict]:
     """Materialize the images a download_and_sample.py manifest selected for
     one dataset into local JPEG files, returning [{"path": str, "label": str}, ...]
     — the exact shape every embedding/inference consumer already expects.
@@ -259,6 +294,12 @@ def load_hf_samples(agml_name: str, manifest: dict, images_root: Path) -> list[d
     `datasets.load_dataset` call) is only opened if at least one image for
     this dataset is actually missing — repeat runs after the first are pure
     local-disk reads, no network/HF Hub involvement at all.
+
+    `excluded_classes` (raw manifest-key form, e.g. DatasetConfig.excluded_classes)
+    skips those labels entirely — never materialized, never sampled, never
+    evaluated. This is the future-run-facing half of class exclusion; the
+    already-checkpointed-row-facing half is excluded_class_pairs() +
+    load_ckpt() in src/common/vision_eval.py.
 
     Raises KeyError if `agml_name` has no entry in manifest["datasets"] —
     i.e. it was never downloaded, or download failed/was skipped. Callers
@@ -277,6 +318,7 @@ def load_hf_samples(agml_name: str, manifest: dict, images_root: Path) -> list[d
     repo_id = entry["hf_repo_id"]
     config = entry["hf_config"]
     classes: dict[str, list[int]] = entry["classes"]
+    excluded = set(excluded_classes or [])
 
     out_dir = Path(images_root) / agml_name
     samples: list[dict] = []
@@ -284,6 +326,8 @@ def load_hf_samples(agml_name: str, manifest: dict, images_root: Path) -> list[d
     image_col = None
 
     for label, indices in classes.items():
+        if label in excluded:
+            continue
         label_dir = out_dir / _safe_label_dir(label)
         for idx in indices:
             path = label_dir / f"{idx}.jpg"
