@@ -64,7 +64,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 from PIL import Image as PILImage
-from tqdm import tqdm
 
 try:
     from vllm import LLM, SamplingParams
@@ -76,6 +75,7 @@ from src.common.ppt_scoring import (
     analysis_before_tags, build_score_prompt, extract_tag_score,
     pairwise_scoring_prompt, score_prefill_params,
 )
+from src.common.progress import ProgressBar
 
 try:
     from llm_verifier.pivot_tournament import (
@@ -288,7 +288,7 @@ def run_generate(
     rows: list[dict] = []
 
     print(f"\n[generate/direct] {len(items)} images × {n_max} candidates")
-    for start in tqdm(range(0, len(items), batch_size), desc="direct", unit="batch"):
+    for start in ProgressBar(range(0, len(items), batch_size), desc="direct"):
         batch = items[start:start + batch_size]
         prompts = [
             _build_prompt(
@@ -321,7 +321,7 @@ def run_generate(
     descriptions:   list[str]        = []
     desc_histories: list[list[dict]] = []
 
-    for start in tqdm(range(0, len(items), batch_size), desc="self_cot desc", unit="batch"):
+    for start in ProgressBar(range(0, len(items), batch_size), desc="self_cot desc"):
         batch = items[start:start + batch_size]
         prompts, hists = [], []
         for item in batch:
@@ -341,7 +341,7 @@ def run_generate(
             desc_histories.append(hist + [{"role": "assistant", "content": resp}])
         del prompts
 
-    for start in tqdm(range(0, len(items), batch_size), desc="self_cot cls", unit="batch"):
+    for start in ProgressBar(range(0, len(items), batch_size), desc="self_cot cls"):
         batch       = items[start:start + batch_size]
         batch_hists = desc_histories[start:start + batch_size]
         prompts = [
@@ -408,9 +408,7 @@ def _score_pairs_batch(
     rewards_a: dict[int, list[float]] = defaultdict(list)
     rewards_b: dict[int, list[float]] = defaultdict(list)
 
-    n_batches = (len(requests) + batch_size - 1) // batch_size
-    for start in tqdm(range(0, len(requests), batch_size),
-                      total=n_batches, desc=desc, unit="batch"):
+    for start in ProgressBar(range(0, len(requests), batch_size), desc=desc):
         batch = requests[start:start + batch_size]
 
         base_prompts = []
