@@ -1095,7 +1095,17 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--verifier_config", default="src/config/verifier_config.yaml")
+    _pre_args, _ = _pre.parse_known_args()
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--verifier_config", default=_pre_args.verifier_config,
+        help="YAML file of defaults (k_candidates, beta, min_round/max_round, etc.) — edit it "
+             "directly for routine changes instead of passing flags every time. Any flag also "
+             "passed on the command line overrides this file.",
+    )
     parser.add_argument("--model", default=None, help="Single model to run. Not needed with --collate.")
     parser.add_argument("--baseline", choices=["belief", "argmax"], default="belief",
                          help="belief = our contribution (pairwise Bradley-Terry belief tracking, "
@@ -1145,4 +1155,13 @@ if __name__ == "__main__":
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/<baseline>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")
+
+    if _pre_args.verifier_config and Path(_pre_args.verifier_config).exists():
+        _cfg = _load_yaml(Path(_pre_args.verifier_config)) or {}
+        _valid_dests = {a.dest for a in parser._actions}
+        _unknown = set(_cfg) - _valid_dests
+        if _unknown:
+            print(f"[warn] {_pre_args.verifier_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
+        parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
+
     main(parser.parse_args())

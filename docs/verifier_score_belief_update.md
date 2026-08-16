@@ -53,16 +53,14 @@ then narrows and shifts this bell curve.
 When the verifier compares candidates i and j, we assume its judgment follows the
 Bradley–Terry model, a standard way to model "which of two things is better" outcomes:
 
-```
-p_ij = σ( R(x, τ_i) − R(x, τ_j) )
-```
+$$p_{ij} = \sigma\big(R(x,\tau_i) - R(x,\tau_j)\big)$$
 
 Reading this:
 
-- `R(x, τ_i)` is the *true* (unknown) quality score of candidate i, and likewise for j.
-- The difference `R(x, τ_i) − R(x, τ_j)` is how much better i is than j, according to the verifier's internal sense of quality.
-- `σ(·)` here is the logistic sigmoid function, `σ(t) = 1 / (1 + e^(−t))` — it squashes any real number into a probability between 0 and 1.
-- `p_ij` is the probability the verifier says "i is better."
+- $R(x, \tau_i)$ is the *true* (unknown) quality score of candidate i, and likewise for j.
+- The difference $R(x, \tau_i) - R(x, \tau_j)$ is how much better i is than j, according to the verifier's internal sense of quality.
+- $\sigma(\cdot)$ here is the logistic sigmoid function, $\sigma(t) = \dfrac{1}{1+e^{-t}}$ — it squashes any real number into a probability between 0 and 1.
+- $p_{ij}$ is the probability the verifier says "i is better."
 
 Intuition: if i is much better than j, the difference is a big positive number, the sigmoid
 pushes it close to 1, and the verifier almost always picks i. If they're equally good, the
@@ -106,21 +104,15 @@ logistic and Gaussian curves have very similar shapes once you match their sprea
 
 Say candidates i and j were just compared, and i won. Define:
 
-```
-c = sqrt( σᵢ² + σⱼ² + 2β² )
-z = (μᵢ − μⱼ) / c
-```
+$$c = \sqrt{\sigma_i^2 + \sigma_j^2 + 2\beta^2} \qquad\qquad z = \frac{\mu_i - \mu_j}{c}$$
 
-- **c** is the *combined uncertainty* of the matchup: how much spread there is between the two candidates' beliefs, plus `β²`, a fixed "how noisy is a single verifier judgment" parameter (a hyperparameter you choose — bigger β means you trust any one comparison less).
+- **c** is the *combined uncertainty* of the matchup: how much spread there is between the two candidates' beliefs, plus $\beta^2$, a fixed "how noisy is a single verifier judgment" parameter (a hyperparameter you choose — bigger $\beta$ means you trust any one comparison less).
 - **z** is a *normalized gap*: how far apart the two candidates' current mean estimates are, measured in units of combined uncertainty. If z is large and positive, i was already believed to be clearly better than j, so i winning isn't very surprising. If z is near 0, the two were considered roughly equal, so the win is more informative.
 
-Now define two correction terms, built from the standard normal density `N(z)` (the
-bell-curve height at z) and cumulative distribution `Φ(z)` (the probability mass to the left of z):
+Now define two correction terms, built from the standard normal density $N(z)$ (the
+bell-curve height at z) and cumulative distribution $\Phi(z)$ (the probability mass to the left of z):
 
-```
-v(z) = N(z) / Φ(z)
-w(z) = v(z) · ( v(z) + z )
-```
+$$v(z) = \frac{N(z)}{\Phi(z)} \qquad\qquad w(z) = v(z)\big(v(z) + z\big)$$
 
 These come from the mean and variance of a *truncated* normal distribution — i.e., "a normal
 distribution, but we've thrown away the part that's inconsistent with the observed
@@ -130,23 +122,19 @@ when the outcome was more surprising given our current beliefs.
 
 The update for the winner, i:
 
-```
-μᵢ,new  = μᵢ + (σᵢ² / c) · v(z)
-σᵢ²,new = σᵢ² · [ 1 − (σᵢ² / c²) · w(z) ]
-```
+$$\mu_i^{\text{new}} = \mu_i + \frac{\sigma_i^2}{c}\,v(z) \qquad\qquad
+(\sigma_i^2)^{\text{new}} = \sigma_i^2\left[1 - \frac{\sigma_i^2}{c^2}\,w(z)\right]$$
 
 Reading this in words:
 
-- The new mean is the old mean, **nudged upward** by an amount proportional to how uncertain we were (σᵢ²) and how surprising the win was (v(z)). A candidate we were already confident about barely moves; a candidate we were unsure about moves more.
-- The new variance is the old variance, **shrunk** by a factor that depends on the same surprise term (w(z)). Winning a comparison always makes us more certain (variance never increases from this step), and it shrinks more when the win was surprising.
+- The new mean is the old mean, **nudged upward** by an amount proportional to how uncertain we were ($\sigma_i^2$) and how surprising the win was ($v(z)$). A candidate we were already confident about barely moves; a candidate we were unsure about moves more.
+- The new variance is the old variance, **shrunk** by a factor that depends on the same surprise term ($w(z)$). Winning a comparison always makes us more certain (variance never increases from this step), and it shrinks more when the win was surprising.
 
 By the symmetric logic (and this is the "swap i<->j" note in the win/loss formula), the loser, j,
 gets pushed the opposite direction:
 
-```
-μⱼ,new  = μⱼ − (σⱼ² / c) · v(z)
-σⱼ²,new = σⱼ² · [ 1 − (σⱼ² / c²) · w(z) ]
-```
+$$\mu_j^{\text{new}} = \mu_j - \frac{\sigma_j^2}{c}\,v(z) \qquad\qquad
+(\sigma_j^2)^{\text{new}} = \sigma_j^2\left[1 - \frac{\sigma_j^2}{c^2}\,w(z)\right]$$
 
 Same shrinkage logic, but the mean moves down instead of up. Both candidates get more
 certain after a comparison; the winner's mean rises and the loser's mean falls, by amounts
@@ -156,47 +144,39 @@ proportional to how uncertain each one individually was going in.
 
 Suppose two brand-new candidates start with identical, wide-open beliefs:
 
-```
-μ₁ = 0, σ₁² = 1
-μ₂ = 0, σ₂² = 1
-β  = 0.5   (chosen noise level for a single verifier judgment)
-```
+$$\mu_1 = 0,\ \sigma_1^2 = 1 \qquad\qquad \mu_2 = 0,\ \sigma_2^2 = 1 \qquad\qquad \beta = 0.5$$
+
+($\beta = 0.5$ is the chosen noise level for a single verifier judgment.)
 
 **Step 1 — compute c and z.**
 
-```
-c = sqrt(1 + 1 + 2·0.5²) = sqrt(1 + 1 + 0.5) = sqrt(2.5) ≈ 1.581
-z = (μ₁ − μ₂) / c = (0 − 0) / 1.581 = 0
-```
+$$c = \sqrt{1 + 1 + 2(0.5)^2} = \sqrt{2.5} \approx 1.581 \qquad\qquad
+z = \frac{\mu_1 - \mu_2}{c} = \frac{0-0}{1.581} = 0$$
 
 Makes sense — the two candidates start out believed equal, so z = 0.
 
 **Step 2 — compute the correction terms at z = 0.**
 
-```
-N(0) ≈ 0.3989   (peak height of the standard bell curve)
-Φ(0) = 0.5      (half the mass is to the left of the center)
+$$N(0) \approx 0.3989 \qquad\qquad \Phi(0) = 0.5$$
 
-v(0) = 0.3989 / 0.5 ≈ 0.7979
-w(0) = 0.7979 · (0.7979 + 0) ≈ 0.6367
-```
+($N(0)$ is the peak height of the standard bell curve; $\Phi(0) = 0.5$ means half the mass is to
+the left of the center.)
+
+$$v(0) = \frac{0.3989}{0.5} \approx 0.7979 \qquad\qquad
+w(0) = 0.7979(0.7979 + 0) \approx 0.6367$$
 
 **Step 3 — suppose the verifier says candidate 1 wins. Update candidate 1:**
 
-```
-μ₁,new  = 0 + (1 / 1.581) · 0.7979 ≈ 0.505
-σ₁²,new = 1 · [ 1 − (1 / 2.5) · 0.6367 ] = 1 − 0.2547 ≈ 0.745
-```
+$$\mu_1^{\text{new}} = 0 + \frac{1}{1.581}(0.7979) \approx 0.505 \qquad\qquad
+(\sigma_1^2)^{\text{new}} = 1\left[1 - \frac{1}{2.5}(0.6367)\right] = 1 - 0.2547 \approx 0.745$$
 
 Candidate 1's estimated quality moved up from 0 to about 0.505, and its uncertainty shrank
-from 1.0 to about 0.745 (equivalently, σ₁ went from 1.0 to about 0.863).
+from 1.0 to about 0.745 (equivalently, $\sigma_1$ went from 1.0 to about 0.863).
 
 **Step 4 — update candidate 2 (the loser) symmetrically:**
 
-```
-μ₂,new  = 0 − (1 / 1.581) · 0.7979 ≈ −0.505
-σ₂²,new = 1 · [ 1 − (1 / 2.5) · 0.6367 ] ≈ 0.745
-```
+$$\mu_2^{\text{new}} = 0 - \frac{1}{1.581}(0.7979) \approx -0.505 \qquad\qquad
+(\sigma_2^2)^{\text{new}} = 1\left[1 - \frac{1}{2.5}(0.6367)\right] \approx 0.745$$
 
 Candidate 2's estimate dropped to about −0.505, with the same shrunk uncertainty. After
 one comparison, the two beliefs have separated symmetrically around 0, and both are more
@@ -213,15 +193,13 @@ Once you have updated beliefs for all candidates, you'll want to know: "am I con
 enough in the current best one to just output it?" This reuses the exact same building block
 as the update step, applied once at the top level instead of pairwise.
 
-Let i* be the current best candidate (highest μ) and "runner-up" the second-best. Because
+Let i* be the current best candidate (highest $\mu$) and "runner-up" the second-best. Because
 the difference of two independent Gaussians is itself Gaussian, we can compute:
 
-```
-P(i* truly better than runner-up)
-  = Φ( (μ_i* − μ_runner-up) / sqrt(σ²_i* + σ²_runner-up + 2β²) )
-```
+$$P(i^* \text{ truly better than runner-up}) = \Phi\!\left(\frac{\mu_{i^*} - \mu_{\text{runner-up}}}
+{\sqrt{\sigma_{i^*}^2 + \sigma_{\text{runner-up}}^2 + 2\beta^2}}\right)$$
 
-This is structurally identical to the z-score computation from Step 1 above, just fed into Φ
+This is structurally identical to the z-score computation from Step 1 above, just fed into $\Phi$
 directly rather than into v and w. If this probability clears a chosen threshold (say, 0.95),
 you stop and output candidate i*. Otherwise, you run another verifier comparison and
 repeat the update.
@@ -554,9 +532,9 @@ has no separate feedback field) for round k+1's re-ask.
 
 **Stopping**, checked starting at round 3, hard cap at round 10:
 
-```
-P_k = Φ( (μ − μ₁) / sqrt(σ² + σ₁² + 2β²) )
+$$P_k = \Phi\!\left(\frac{\mu - \mu_1}{\sqrt{\sigma^2 + \sigma_1^2 + 2\beta^2}}\right)$$
 
+```
 P_k ≥ 0.85            -> "high confidence"   -> stop
 0.6 ≤ P_k < 0.85       -> "medium confidence"
 P_k < 0.6              -> "low confidence"

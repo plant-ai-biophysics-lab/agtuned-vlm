@@ -434,6 +434,18 @@ def run_swap_model(model_id: str, args: argparse.Namespace) -> None:
         caller_tag="cot_yaml-swap",
     )
 
+    # Total work units = sum of n_steps (rotations) across every group — same
+    # "Classes" ProgressBar convention as run_step_model/vision_baseline.py
+    # etc., just scoped to (group, rotation) since that's this loop's actual
+    # unit of work, not just the group.
+    steps_by_task: dict[str, int] = {}
+    total_rotations = 0
+    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in groups:
+        if task_type not in steps_by_task:
+            steps_by_task[task_type] = len(cot_steps(task_type, cot_prompts))
+        total_rotations += steps_by_task[task_type]
+    pbar = ProgressBar(total=total_rotations, desc="Swap rotations")
+
     t_start = time.perf_counter()
     for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in groups:
         steps = cot_steps(task_type, cot_prompts)
@@ -442,15 +454,15 @@ def run_swap_model(model_id: str, args: argparse.Namespace) -> None:
         images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
 
         for rot in range(n_steps):
+            pbar.desc = f"Swap rotations ({ds.agml_name}/{clean_label} rot {rot + 1}/{n_steps})"
             rot_complete = _step_seen_complete(
                 [r for r in swap_rows if r.get("rotation") == str(rot)], cot_prompts, mode="swap",
             )
             pending_idx = [i for i, n in enumerate(names)
                            if (ds.agml_name, clean_label, n) not in rot_complete]
             if not pending_idx:
+                pbar.update()
                 continue
-            print(f"  {ds.agml_name}/{clean_label} — rotation {rot + 1}/{n_steps} "
-                  f"({len(pending_idx)}/{len(names)} pending)")
             step_order = list(range(rot, n_steps)) + list(range(rot))
             per_image_rows = run_group_steps(
                 llm, tokenizer, [images[i] for i in pending_idx], steps, cls_q, prompts,
@@ -462,6 +474,8 @@ def run_swap_model(model_id: str, args: argparse.Namespace) -> None:
                                       mode="swap", rotation=str(rot))
                     append_ckpt_row(swap_ckpt_path, srow, fields=STEP_CKPT_FIELDS)
                     swap_rows.append(srow)
+            pbar.update()
+    pbar.finish()
 
     elapsed = time.perf_counter() - t_start
     print(f"\n  Inference time: {elapsed:.1f}s")
