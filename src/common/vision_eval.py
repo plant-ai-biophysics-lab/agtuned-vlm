@@ -302,10 +302,12 @@ def _load_judge_llm(
     max_num_seqs: int = 64,
     enforce_eager: bool = False,
 ):
-    print(f"\n[judge] Loading {model_id} via vLLM")
+    from src.common.vlm_load import _best_supported_dtype
+    dtype = _best_supported_dtype()
+    print(f"\n[judge] Loading {model_id} via vLLM (dtype={dtype})")
     llm = LLM(
         model=model_id,
-        dtype="bfloat16",
+        dtype=dtype,
         quantization=quantization,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,

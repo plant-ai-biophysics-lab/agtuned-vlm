@@ -49,6 +49,25 @@ def mm_processor_kwargs_for(model_id: str, token_budget: int) -> dict:
     return {}
 
 
+def _best_supported_dtype() -> str:
+    """bfloat16 needs compute capability >= 8.0 (Ampere+ — A100, RTX 30xx+,
+    H100...); older cards (TITAN RTX, RTX 20xx, V100 — capability 7.x)
+    raise vLLM's own ValueError at engine startup ("Bfloat16 is only
+    supported on GPUs with compute capability of at least 8.0") if handed
+    dtype="bfloat16" unconditionally, as this used to do. Auto-detecting
+    means a job scheduled onto whatever GPU the cluster happens to hand
+    out never hard-fails on this — it just quietly uses float16 there
+    instead of needing a per-script --dtype flag threaded through every
+    caller of load_llm()."""
+    try:
+        import torch
+        if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8:
+            return "bfloat16"
+    except Exception:
+        pass
+    return "float16"
+
+
 def load_llm(
     model_id: str,
     quantization: str | None = None,
@@ -67,10 +86,12 @@ def load_llm(
 
     kwargs = mm_processor_kwargs_for(model_id, vision_token_budget) if vision_token_budget else {}
     tag = f"[{caller_tag}] " if caller_tag else ""
-    print(f"\n{tag}Loading {model_id} via vLLM" + (f" (mm_processor_kwargs={kwargs})" if kwargs else ""))
+    dtype = _best_supported_dtype()
+    print(f"\n{tag}Loading {model_id} via vLLM (dtype={dtype})"
+          + (f" (mm_processor_kwargs={kwargs})" if kwargs else ""))
     llm = LLM(
         model=model_id,
-        dtype="bfloat16",
+        dtype=dtype,
         quantization=quantization,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
