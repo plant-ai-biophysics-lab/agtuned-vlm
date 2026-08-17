@@ -79,7 +79,7 @@ import json
 import random
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from PIL import Image as PILImage
 
@@ -341,6 +341,26 @@ def _build_groups(args: argparse.Namespace, manifest: dict, dataset_filter: set[
             gt_hint = judge_gt_hint(clean_label, aliases)
             groups.append((ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name))
     return groups
+
+
+def _sample_random_classes_per_task(groups: list, n_per_task: int, seed: int) -> list:
+    """--random_classes_per_task's implementation: group `groups` (one per
+    (dataset, class_label), from _build_groups) by task_type and randomly
+    keep `n_per_task` of them per type — an alternative to --subsample's
+    explicit dataset-name list for fast testing, when you'd rather sample
+    a random spread of classes across the whole config than hand-pick
+    which datasets to test. Seeded by --seed for reproducibility. A
+    task_type with fewer than n_per_task groups keeps all of them."""
+    rng = random.Random(seed)
+    by_task: dict[str, list] = defaultdict(list)
+    for g in groups:
+        by_task[g[3]].append(g)  # g[3] = task_type
+    selected = []
+    for task_type in sorted(by_task):
+        task_groups = by_task[task_type]
+        rng.shuffle(task_groups)
+        selected.extend(task_groups[:n_per_task])
+    return selected
 
 
 def _rounds_seen_complete(rows: list[dict]) -> set:
@@ -976,10 +996,15 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
               f"({len(finished)} image(s) complete)")
 
     dataset_filter = set(args.subsample) if args.subsample else None
+    all_groups = list(_build_groups(args, manifest, dataset_filter=dataset_filter))
+    if args.random_classes_per_task:
+        all_groups = _sample_random_classes_per_task(all_groups, args.random_classes_per_task, args.seed)
+        by_task_counts = Counter(g[3] for g in all_groups)
+        print(f"  [random_classes_per_task={args.random_classes_per_task}, seed={args.seed}] "
+              f"{len(all_groups)} (dataset, class) group(s) selected: {dict(by_task_counts)}")
+
     groups = []
-    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in _build_groups(
-        args, manifest, dataset_filter=dataset_filter,
-    ):
+    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in all_groups:
         pending = [n for n in names if (ds.agml_name, clean_label, n) not in finished]
         if not pending:
             continue
@@ -1142,6 +1167,16 @@ if __name__ == "__main__":
                               "cot_yaml_swap_datasets.txt). Pass the SAME list to cot-compare's "
                               "--filter_datasets so the lower/upper-bound and self-cot/cot-yaml "
                               "comparisons are scoped to the same datasets, not the full config.")
+    parser.add_argument("--random_classes_per_task", type=int, default=None,
+                         help="Instead of (or combined with, if --subsample also given — it "
+                              "pre-filters, this samples from what's left) hand-picking datasets, "
+                              "randomly keep this many (dataset, class) groups PER task_type "
+                              "(disease/pest_damage/species_identification/quality_identification) "
+                              "for fast testing across a randomized spread instead of chosen "
+                              "datasets. Seeded by --seed for reproducibility. Pass the same value "
+                              "+ --seed to reproduce the exact same selection, or read the printed "
+                              "[random_classes_per_task=...] line / the resulting ckpt's own "
+                              "agml_dataset column for cot-compare's --filter_datasets.")
     parser.add_argument("--seed", type=int, default=42,
                          help="Seeds the incumbent-A/B-slot randomization in --baseline belief's "
                               "pairwise scoring (positional-bias mitigation).")
