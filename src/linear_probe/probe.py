@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
+import csv
 import gc
 import os
 from collections import Counter, defaultdict
@@ -37,8 +38,10 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     f1_score,
+    silhouette_score,
 )
 from sklearn.model_selection import StratifiedShuffleSplit
+from scipy.stats import pearsonr, spearmanr
 from sklearn.preprocessing import LabelEncoder
 import transformers
 from transformers import (
@@ -600,6 +603,31 @@ def run_probe(
     return metrics, y_test_labels, y_pred_labels
 
 
+def compute_separability(X: np.ndarray, y_enc: np.ndarray) -> float | None:
+    """Silhouette score on raw embeddings — mean(each point's own-class
+    cohesion vs. nearest-other-class separation), in [-1, 1], higher =
+    classes sit in tighter, better-separated regions of embedding space.
+
+    Deliberately a different signal than linear-probe F1: silhouette is
+    purely geometric/unsupervised (distance-based clustering quality),
+    while F1 measures whether a LINEAR decision boundary specifically can
+    separate the classes — embeddings can cluster well but still not be
+    linearly separable, or vice versa (e.g. concentric-ring classes:
+    perfectly separable by a nonlinear boundary, terrible silhouette).
+    That's exactly the gap worth correlating against F1 for.
+
+    Returns None if there are too few classes/samples for silhouette_score
+    to be mathematically defined (needs 2 <= n_labels <= n_samples - 1) —
+    happens for small per-dataset test splits with very few classes."""
+    n_labels = len(set(y_enc.tolist()))
+    if n_labels < 2 or n_labels > len(y_enc) - 1:
+        return None
+    try:
+        return float(silhouette_score(X, y_enc))
+    except ValueError:
+        return None
+
+
 # ── FC probe ───────────────────────────────────────────────────────────────────
 
 def run_fc_probe(
@@ -878,6 +906,72 @@ def plot_per_class_f1(backbone_reports: dict[str, dict], dataset_name: str, outp
     plt.tight_layout()
 
     path = output_dir / f"per_class_f1_{_safe_name(dataset_name)}.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_separability_vs_f1(results_per_dataset: dict[str, dict], output_dir: Path) -> None:
+    """Does embedding separability (silhouette, computed alongside each
+    per-dataset LR probe — see compute_separability's docstring for why
+    it's a genuinely different signal than F1) predict linear-probe F1?
+    One point per (backbone, dataset) with both metrics available,
+    scatter-plotted and colored by backbone, with Pearson + Spearman
+    correlation (across ALL points, not per-backbone — a per-backbone
+    breakdown would need far more datasets per backbone than this
+    project's ~3-per-task-type sampling gives for a meaningful r).
+    Writes separability_vs_f1.csv alongside the scatter plot; no-op if
+    --per_dataset wasn't run (results_per_dataset empty) or no point has
+    both a defined silhouette and f1_macro (e.g. every dataset's test
+    split was too small for silhouette_score to be defined)."""
+    if not results_per_dataset:
+        return
+
+    rows = []
+    for agml_name, ds_data in results_per_dataset.items():
+        for backbone, m in ds_data.get("backbones", {}).items():
+            sil, f1 = m.get("silhouette"), m.get("f1_macro")
+            if sil is not None and f1 is not None:
+                rows.append({"agml_dataset": agml_name, "backbone": backbone,
+                             "silhouette": sil, "f1_macro": f1})
+    if not rows:
+        print("  [skip] plot_separability_vs_f1 — no (backbone, dataset) point had both metrics defined")
+        return
+
+    csv_path = output_dir / "separability_vs_f1.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["agml_dataset", "backbone", "silhouette", "f1_macro"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"  Saved: {csv_path}")
+
+    xs = np.array([r["silhouette"] for r in rows])
+    ys = np.array([r["f1_macro"] for r in rows])
+    backbones = sorted({r["backbone"] for r in rows})
+    cmap = plt.get_cmap("tab10", max(len(backbones), 1))
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for i, backbone in enumerate(backbones):
+        bx = [r["silhouette"] for r in rows if r["backbone"] == backbone]
+        by = [r["f1_macro"] for r in rows if r["backbone"] == backbone]
+        ax.scatter(bx, by, label=backbone, color=cmap(i), alpha=0.75, edgecolor="black", linewidth=0.4)
+
+    title = "Embedding separability (silhouette) vs. linear-probe F1"
+    if len(rows) >= 3:
+        r_pearson, p_pearson = pearsonr(xs, ys)
+        r_spearman, p_spearman = spearmanr(xs, ys)
+        title += (f"\nPearson r={r_pearson:.2f} (p={p_pearson:.3f}), "
+                  f"Spearman ρ={r_spearman:.2f} (p={p_spearman:.3f}), n={len(rows)}")
+    else:
+        title += f"\n(n={len(rows)} — too few points for a meaningful correlation)"
+
+    ax.set_xlabel("Silhouette score (embedding separability)", fontsize=10)
+    ax.set_ylabel("Linear-probe F1 macro", fontsize=10)
+    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.25)
+    plt.tight_layout()
+    path = output_dir / "separability_vs_f1.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
@@ -1330,6 +1424,79 @@ def _plots_only_mode(args, output_dir: Path) -> None:
     print(f"\nPlots saved to {output_dir}/")
 
 
+def _feature_sep_only_mode(args, output_dir: Path) -> None:
+    """--feature_sep: compute silhouette + the separability-vs-F1 plot from
+    ALREADY-CACHED embeddings only — no model ever gets loaded, no GPU
+    touched, and the ONLY files this writes are separability_vs_f1.csv/.png.
+    Every other output (linear_probe_results.json, test_split.json, the
+    other plots, ...) is left completely untouched, unlike a normal run or
+    even --plots_only (which does touch other files it regenerates).
+
+    A (backbone, dataset) pair with no cache hit is skipped with a
+    [skip] line — this mode NEVER falls back to loading a live model,
+    since the entire point is "never risk pulling a real backbone onto
+    the GPU." Re-run the normal command with --cache_embeddings first if
+    something's missing here."""
+    cache_dir = Path(getattr(args, "cache_dir", None) or (output_dir / "embedding_cache"))
+    if not cache_dir.exists():
+        print(f"ERROR: {cache_dir} not found — nothing is cached yet. Run the normal "
+              f"probe command with --cache_embeddings (and --per_dataset) first.")
+        return
+
+    if args.dino_model and args.dino_model.lower() == "none":
+        args.dino_model = None
+    if not hasattr(args, "models"):
+        args.models = None
+
+    manifest_path = Path(getattr(args, "manifest", None) or "dataset/selected_images.json")
+    manifest = load_manifest(manifest_path)
+    datasets = active_datasets(Path(args.config))
+    gaps = missing_from_manifest(datasets, manifest)
+    ds_names = [d.agml_name for d in datasets if d.agml_name not in gaps]
+
+    layer_selections = _load_layer_selections()
+
+    # (backbone_key, cache split-type, layer_path-for-cache-lookup) — same
+    # derivation main() itself uses for each backbone family.
+    backbone_specs: list[tuple[str, str, str | None]] = []
+    if args.dino_model:
+        backbone_specs.append((args.dino_model.split("/")[-1], "emb", None))
+    if args.yolo_model:
+        backbone_specs.append((args.yolo_model.replace(".pt", ""), "emb", None))
+    if getattr(args, "bioclip_model", None):
+        backbone_specs.append((args.bioclip_model.split("/")[-1], "emb", None))
+    for model_id in (args.models or []):
+        backbone_key = model_id.split("/")[-1]
+        pre_layer_path = layer_selections.get(model_id, {}).get("pre")
+        backbone_specs.append((backbone_key, "pre", pre_layer_path))
+
+    if not backbone_specs:
+        print("ERROR: no backbones requested (--models/--dino_model/--yolo_model/--bioclip_model all unset).")
+        return
+
+    n_samples = args.n_samples
+    seed = args.seed
+    results_per_dataset: dict[str, dict] = {}
+    n_hits = n_misses = 0
+    for backbone_key, split, layer_path in backbone_specs:
+        for agml_name in ds_names:
+            cached = load_cached_embeddings(cache_dir, backbone_key, agml_name, split, layer_path)
+            if cached is None:
+                print(f"  [skip] no cache for {backbone_key} / {agml_name} — never loading a live model here")
+                n_misses += 1
+                continue
+            n_hits += 1
+            X, cached_labels = cached
+            X, labels_all, y_enc, train_idx, test_idx, le = _split_from_labels(X, cached_labels, n_samples, seed=seed)
+            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+            metrics, _, _ = run_probe(X[train_idx], X[test_idx], y_train, y_test, le, backbone_key)
+            metrics["silhouette"] = compute_separability(X[test_idx], y_test)
+            results_per_dataset.setdefault(agml_name, {"backbones": {}})["backbones"][backbone_key] = metrics
+
+    print(f"\n  {n_hits} cache hit(s), {n_misses} miss(es) skipped")
+    plot_separability_vs_f1(results_per_dataset, output_dir)
+
+
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
@@ -1341,6 +1508,10 @@ def main(args):
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(args, "feature_sep", False):
+        _feature_sep_only_mode(args, output_dir)
+        return
 
     if getattr(args, "plots_only", False):
         _plots_only_mode(args, output_dir)
@@ -1740,6 +1911,13 @@ def main(args):
                 metrics, y_test_lbl, y_pred_lbl = run_probe(
                     X[train_idx], X[test_idx], y_train, y_test, le, backbone
                 )
+                # Same held-out split F1 is measured on, so both metrics
+                # describe the same sample — not train (would let the
+                # classifier's own memorization leak in) or all data
+                # (would mix train-time-seen geometry into a "held-out
+                # separability" number).
+                metrics["silhouette"] = compute_separability(X[test_idx], y_test)
+                print(f"  Silhouette  : {metrics['silhouette']}")
                 results_per_dataset[agml_name]["backbones"][backbone] = metrics
                 embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
                 report_store[agml_name][backbone] = metrics["per_class_report_dict"]
@@ -2122,6 +2300,10 @@ def main(args):
             for backbone, (y_true, y_pred) in fc_pred_store[agml_name].items():
                 plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_fc", cm_dir)
 
+    # Separability (silhouette) vs. linear-probe F1 — only needs Phase 2a's
+    # --per_dataset results, not --all_experiments.
+    plot_separability_vs_f1(results_per_dataset, output_dir)
+
     # Update pipeline results CSV (fc_combined is default; lr_combined overrides if run)
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
     _probe_results_for_csv = results["lr_combined"] or results["fc_combined"]
@@ -2299,6 +2481,14 @@ if __name__ == "__main__":
         "--plots_only", action="store_true",
         help="Regenerate plots from a previous run without re-extracting embeddings or retraining. "
              "Requires linear_probe_results.json, fc_comb_preds.json, and fc_comb_embeds/ in --output_dir.",
+    )
+    parser.add_argument(
+        "--feature_sep", action="store_true",
+        help="Compute silhouette (embedding separability) + the separability-vs-F1 correlation "
+             "plot from ALREADY-CACHED embeddings only (needs a prior run with --cache_embeddings) "
+             "— no model is ever loaded, no GPU touched. Writes only separability_vs_f1.csv/.png; "
+             "every other file in --output_dir is left untouched. A (backbone, dataset) with no "
+             "cache hit is skipped with a [skip] line, never falls back to a live model.",
     )
 
     if _pre_args.probe_config and Path(_pre_args.probe_config).exists():
