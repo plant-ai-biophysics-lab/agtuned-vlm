@@ -61,23 +61,70 @@ except ImportError:
 SCORE_LETTERS = [chr(65 + i) for i in range(20)] + [f" {chr(65 + i)}" for i in range(20)]
 
 
-def pairwise_scoring_prompt(rubric: str, question: str, trajectory_a: str, trajectory_b: str) -> str:
-    """The PPT paper's own consolidated dual-trajectory template (Section
-    3.2) — one prompt carrying both trajectories and both score tags
-    together, not two separate calls."""
-    return (
-        "You are an expert agricultural scientist reviewer. You will see a "
-        "task description and two trajectories.\n\n"
-        f"Evaluation Criteria: {rubric}\n\n"
-        f"Task: {question}\n\n"
-        f"Trajectory A: {trajectory_a[:500]}\n"
-        f"Trajectory B: {trajectory_b[:500]}\n\n"
-        "Carefully analyze each trajectory, then provide your final scores:\n"
-        "<score_A>LETTER_A_TO_T</score_A>\n"
-        "<score_B>LETTER_A_TO_T</score_B>\n\n"
-        "Rating Rules: rate correctness on a 1-20 scale based on the evaluation "
-        "criteria (1 = incorrect, 10 = borderline, 20 = correct). The scale is "
-        "encoded as letters A (=20, best) through T (=1, worst)."
+def _truncate_keep_answer(trajectory: str, limit: int = 500) -> str:
+    """Truncate to `limit` chars, but never cut off a trailing
+    <answer>...</answer> tag — a plain trajectory[:limit] silently dropped
+    the final answer for any trajectory whose reasoning ran long, leaving
+    the verifier scoring a trajectory it could never actually see the
+    conclusion of (found empirically: ~2% of pairs in a real run). If the
+    tag starts past `limit`, keep the head up to `limit` MINUS the tag's
+    own length, then append the tag itself, so the total stays roughly
+    bounded while the answer is always present."""
+    if len(trajectory) <= limit:
+        return trajectory
+    tag_start = trajectory.find("<answer>")
+    if tag_start == -1 or tag_start < limit:
+        return trajectory[:limit]
+    answer_tag = trajectory[tag_start:]
+    head_budget = max(limit - len(answer_tag), 0)
+    return trajectory[:head_budget].rstrip() + "\n...\n" + answer_tag
+
+
+# Fallback only for callers that don't pass a `template` (kept in sync with
+# src/config/verifier_prompts.yaml's pairwise_prompt — that YAML file is
+# the actual source of truth callers should load and pass in; see its
+# header comment for the full rationale behind this exact wording).
+_DEFAULT_PAIRWISE_TEMPLATE = (
+    "You are an expert agricultural scientist reviewer. You will see a "
+    "task description and two trajectories.\n\n"
+    "Evaluation Criteria: {rubric}\n\n"
+    "Task: {question}\n\n"
+    "Trajectory A: {trajectory_a}\n"
+    "Trajectory B: {trajectory_b}\n\n"
+    "Write 2-4 sentences comparing what each trajectory actually "
+    "diagnoses and how well it matches the visual evidence and the "
+    "evaluation criteria above. Name the specific difference between "
+    "A and B — do not just restate that both look reasonable, and do "
+    "not treat them as tied unless one is genuinely indistinguishable "
+    "from the other in correctness. You will be asked for a numeric "
+    "score for each trajectory (1-20 scale: 1 = incorrect, "
+    "10 = borderline, 20 = correct) immediately after this analysis, "
+    "so make sure your analysis actually justifies whatever gap (or "
+    "lack of gap) you're about to score.\n\n"
+    "Analysis:"
+)
+
+
+def pairwise_scoring_prompt(
+    rubric: str, question: str, trajectory_a: str, trajectory_b: str,
+    template: str | None = None,
+) -> str:
+    """The dual-trajectory scoring prompt (PPT paper, arXiv:2607.05391
+    Section 3.2 — adapted; see src/config/verifier_prompts.yaml's
+    pairwise_prompt header comment for exactly what changed and why).
+    `template` should be src/config/verifier_prompts.yaml's
+    "pairwise_prompt" entry, loaded once by the caller and passed straight
+    through — that YAML file is the editable, citable record of this
+    prompt; `_DEFAULT_PAIRWISE_TEMPLATE` here is only a fallback for a
+    caller that hasn't been wired up to load it yet. Deliberately does
+    NOT include the <score_A>/<score_B> tags — those are supplied only by
+    build_score_prompt's pass-2 forced continuation, never sampled
+    freely (see the YAML comment for why that matters)."""
+    tmpl = template if template is not None else _DEFAULT_PAIRWISE_TEMPLATE
+    return tmpl.format(
+        rubric=rubric, question=question,
+        trajectory_a=_truncate_keep_answer(trajectory_a),
+        trajectory_b=_truncate_keep_answer(trajectory_b),
     )
 
 

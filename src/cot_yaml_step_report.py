@@ -31,6 +31,11 @@ Outputs (into --output_dir/<model>/, alongside the checkpoints it read from):
                                    = changed at least once): final judged F1
   diagnosis_stability_<task>.png — (--swap_datasets data only) final judged F1,
                                    stable vs. unstable, per rotation
+  answer_change_frequency.csv      — (--swap_datasets data only) per task_type/n_changes
+                                       (# times the predicted class flipped across the
+                                       whole chain, aggregated over rotations): n_images, fraction
+  answer_change_frequency_<task>.png — (--swap_datasets data only) distribution of #
+                                       answer changes per chain, per task type
   reasoning_dose_response.csv       — (--swap_datasets data only) per task_type/
                                         rotation/n_correct_steps: n_images, final_accuracy —
                                         does getting MORE of the intermediate steps right
@@ -410,6 +415,76 @@ def write_diagnosis_stability(model_name: str, rows: list[dict], out_dir: Path) 
         print(f"  Saved: {path}")
 
 
+def compute_answer_change_frequency(rows: list[dict]) -> dict[str, dict[int, dict]]:
+    """{task_type: {n_changes: {n_images, fraction}}} — aggregated across
+    rotations. How often does the predicted class flip at all across a
+    chain, and how many times? Reuses tag_diagnosis_stability's per-
+    (image, rotation) n_changes rather than recomputing it, so this is
+    exactly the same "changed >=1x" split as diagnosis_stability.csv,
+    just shown as a full distribution instead of a stable/unstable binary."""
+    tagged = tag_diagnosis_stability(rows)
+    by_task: dict[str, list[int]] = defaultdict(list)
+    for r in tagged:
+        by_task[r["task_type"]].append(r["n_changes"])
+
+    result: dict[str, dict[int, dict]] = {}
+    for task, changes in by_task.items():
+        total = len(changes)
+        counts: dict[int, int] = defaultdict(int)
+        for n in changes:
+            counts[n] += 1
+        result[task] = {
+            n: {"n_images": c, "fraction": c / total}
+            for n, c in sorted(counts.items())
+        }
+    return result
+
+
+def write_answer_change_frequency(model_name: str, rows: list[dict], out_dir: Path) -> None:
+    import matplotlib.pyplot as plt
+
+    by_task = compute_answer_change_frequency(rows)
+    if not by_task:
+        return
+
+    csv_rows = []
+    for task, by_n in by_task.items():
+        for n, s in sorted(by_n.items()):
+            csv_rows.append([model_name, task, n, s["n_images"], s["fraction"]])
+    _write_csv(
+        out_dir / "answer_change_frequency.csv",
+        ["model", "task_type", "n_changes", "n_images", "fraction"],
+        csv_rows,
+    )
+
+    for task, by_n in by_task.items():
+        ns = sorted(by_n)
+        fracs = [by_n[n]["fraction"] for n in ns]
+        counts = [by_n[n]["n_images"] for n in ns]
+        total = sum(counts)
+        mean_changes = sum(n * c for n, c in zip(ns, counts)) / total if total else 0.0
+        pct_any_change = 1.0 - (by_n.get(0, {}).get("fraction") or 0.0)
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.bar(ns, [f * 100 for f in fracs], color="#1f77b4")
+        for n, f, c in zip(ns, fracs, counts):
+            ax.annotate(f"{f * 100:.0f}%\n(n={c})", (n, f * 100), fontsize=8, ha="center",
+                        va="bottom", xytext=(0, 3), textcoords="offset points")
+        ax.set_xticks(ns)
+        ax.set_xlabel("# times predicted class changed across the chain", fontsize=10)
+        ax.set_ylabel("% of images", fontsize=10)
+        ax.set_title(f"CoT-YAML answer-change frequency — {model_name} — "
+                     f"{TASK_LABEL.get(task, task)}\n"
+                     f"mean={mean_changes:.2f} changes/chain, "
+                     f"{pct_any_change * 100:.0f}% changed at least once", fontsize=11)
+        ax.grid(True, axis="y", alpha=0.25)
+        plt.tight_layout()
+        path = out_dir / f"answer_change_frequency_{task}.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {path}")
+
+
 def compute_reasoning_consistency(rows: list[dict]) -> dict[str, dict[str, dict]]:
     """{task_type: {rotation: {"by_n_correct": {n_correct_steps: {n_images,
     final_accuracy}}, "split": {"all_correct"/"any_wrong": {n_images,
@@ -609,6 +684,7 @@ def process_swap_curve(model_name: str, rows: list[dict], out_dir: Path) -> None
 
     write_anchor_recovery(model_name, rows, out_dir)
     write_diagnosis_stability(model_name, rows, out_dir)
+    write_answer_change_frequency(model_name, rows, out_dir)
     write_reasoning_consistency(model_name, rows, out_dir)
 
 

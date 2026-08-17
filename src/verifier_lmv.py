@@ -55,6 +55,7 @@ import csv
 import gc
 import json
 import random
+import functools
 import sys
 import time
 from collections import defaultdict
@@ -63,6 +64,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
+import yaml
 from PIL import Image as PILImage
 
 try:
@@ -458,6 +460,17 @@ def run_generate(
 
 # ── Phase 2: PPT verification ─────────────────────────────────────────────────
 
+@functools.lru_cache(maxsize=1)
+def _pairwise_prompt_template() -> str:
+    """src/config/verifier_prompts.yaml's pairwise_prompt — same shared,
+    editable template src/verifier_cot.py's --baseline belief uses (see
+    that YAML entry's header comment for why this moved out of a hardcoded
+    Python string). Cached — this file has no other reason to load YAML,
+    so avoid re-reading it on every batch."""
+    path = Path(__file__).parent / "config" / "verifier_prompts.yaml"
+    return yaml.safe_load(path.read_text())["pairwise_prompt"]
+
+
 def _score_pairs_batch(
     pair_specs: list[tuple],              # [(key, a_idx, b_idx), ...]
     groups: dict[tuple, list[dict]],
@@ -503,6 +516,7 @@ def _score_pairs_batch(
             text = pairwise_scoring_prompt(
                 rubric=f"{crit_name}: {crit_desc}", question=question,
                 trajectory_a=row_a["prediction"], trajectory_b=row_b["prediction"],
+                template=_pairwise_prompt_template(),
             )
             msgs = _sys_msg() + [{"role": "user", "content": [
                 {"type": "image"}, {"type": "text", "text": text},

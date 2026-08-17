@@ -206,6 +206,7 @@ def _build_groups(args: argparse.Namespace, manifest: dict, dataset_filter: set[
 def run_group_steps(
     llm, tokenizer, images: list, steps: list[str], cls_q: str, prompts: dict,
     step_order: list[int] | None = None, capture_all_steps: bool = False,
+    feedback_predictions: bool = False,
 ) -> list[list[dict]]:
     """Run one (dataset, class) group's full CoT step chain, in `step_order`
     (a permutation of question indices — identity order if None), optionally
@@ -219,7 +220,18 @@ def run_group_steps(
     per_image_rows[i][-1] is always that image's final answer — callers that
     don't care about intermediate steps can ignore everything but [-1], which
     is why this one function serves both the plain run and the step-analysis
-    modes without duplicating the generation loop."""
+    modes without duplicating the generation loop.
+
+    feedback_predictions (requires capture_all_steps): by default each
+    step's classification probe is a throwaway aside — cls_histories is
+    built fresh from `h + [...]` and never written back into `histories[i]`,
+    so the model has no memory of its own prior guesses and every step's
+    prediction is an independent read of the accumulating step Q&A alone.
+    With feedback_predictions=True, the probe question and the model's own
+    answer are appended back into histories[i] before the next step is
+    asked, so the model actually sees "you previously predicted X" and can
+    revise it — a genuine self-consistency test rather than N independent
+    snapshots of the same growing context."""
     order = step_order if step_order is not None else list(range(len(steps)))
     ordered_steps = [steps[i] for i in order]
     n = len(ordered_steps)
@@ -240,6 +252,7 @@ def run_group_steps(
             step_responses[i].append(resp)
 
         is_last = step_idx == n - 1
+        preds = None
         if capture_all_steps or is_last:
             cls_histories = [h + [{"role": "user", "content": cls_q}] for h in histories]
             preds = run_batch(llm, tokenizer, images, cls_histories, _CLS_PARAMS)
@@ -251,6 +264,11 @@ def run_group_steps(
                     "step_idx": step_idx + 1, "question_id": order[step_idx] + 1,
                     "prediction": pred, "reasoning": reasoning,
                 })
+
+        if feedback_predictions and capture_all_steps and preds is not None and step_idx < n - 1:
+            for i, pred in enumerate(preds):
+                histories[i].append({"role": "user", "content": cls_q})
+                histories[i].append({"role": "assistant", "content": pred})
 
         if step_idx < n - 1:
             for i in range(len(images)):
@@ -305,6 +323,13 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     cot_prompts = _load_yaml(_COT_PROMPTS_PATH)
     manifest = load_manifest(Path(args.manifest))
 
+    # --feedback_predictions is a different condition from the plain manual
+    # CoT run, but keeps the exact same <output_dir>/<safe_model_name>/
+    # layout (matching load_all_rows()'s f"ckpt_{model_dir.name}.csv"
+    # convention) — point --output_dir at a separate top-level directory
+    # for a feedback run (e.g. outputs_final/cot_yaml_feedback/), the same
+    # way self_cot.py and cot_yaml.py already each get their own top-level
+    # dir, rather than suffixing the model subfolder name.
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
     archive_ckpt_if_rerun(ckpt_path, args.rerun)
@@ -364,6 +389,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             per_image_rows = run_group_steps(
                 llm, tokenizer, images, steps, cls_q, prompts,
                 capture_all_steps=args.per_step,
+                feedback_predictions=args.feedback_predictions,
             )
 
             for name, entries in zip(names, per_image_rows):
@@ -537,6 +563,18 @@ if __name__ == "__main__":
                               "and checkpoint it separately to ckpt_steps_<model>.csv — view with "
                               "`main.py cot-yaml-step-report`. Roughly doubles generation cost "
                               "(one extra, cheap classification pass per step).")
+    parser.add_argument("--feedback_predictions", action="store_true",
+                         help="Requires --per_step. Feed each step's classification probe and the "
+                              "model's own answer back into that image's conversation history before "
+                              "the next step is asked, so the model actually sees its own prior guess "
+                              "and can revise it — a genuine self-consistency test. Default (off) "
+                              "matches the original manual CoT-YAML behavior, where each step's "
+                              "classification probe is a throwaway aside the model never sees again. "
+                              "Not applied to --swap_datasets runs (those keep the original behavior). "
+                              "Point --output_dir at a SEPARATE top-level directory for this run (e.g. "
+                              "outputs_final/cot_yaml_feedback/) so it doesn't collide with a plain "
+                              "manual-CoT run's checkpoints — cot-compare then treats it as a third "
+                              "condition via --cot_yaml_feedback_dir.")
     parser.add_argument("--swap_datasets", nargs="+", default=None,
                          help="Restrict to these dataset(s) and re-run --per_step-style generation "
                               "once per rotation of the step order (every question gets a turn "

@@ -377,7 +377,7 @@ def _gen_histories_for_round(
 
 def _score_pairs_batch(
     llm, tokenizer, images: list, active: list[int], pools: dict[int, list[str]],
-    pair_by_image: dict[int, tuple[int, int]], prompts: dict, cls_q: str, rubric: str,
+    pair_by_image: dict[int, tuple[int, int]], prompts: dict, vprompts: dict, cls_q: str, rubric: str,
     rng: random.Random, analysis_params, score_params, call_stats: dict | None,
     agml_dataset: str, class_label: str, image_names: list[str],
     round_idx: int, log_path: Path | None,
@@ -399,7 +399,8 @@ def _score_pairs_batch(
         text_a, text_b = pools[i][a], pools[i][b]
         swapped = rng.random() < 0.5
         traj_a, traj_b = (text_b, text_a) if swapped else (text_a, text_b)
-        pw_text = pairwise_scoring_prompt(rubric=rubric, question=cls_q, trajectory_a=traj_a, trajectory_b=traj_b)
+        pw_text = pairwise_scoring_prompt(rubric=rubric, question=cls_q, trajectory_a=traj_a, trajectory_b=traj_b,
+                                           template=vprompts["pairwise_prompt"])
         msgs = _sys_msg(prompts) + [{"role": "user", "content": [
             {"type": "image"}, {"type": "text", "text": pw_text},
         ]}]
@@ -571,7 +572,7 @@ def _process_round_belief(
 
     def _accumulate(pair_by_image: dict[int, tuple[int, int]]) -> None:
         result = _score_pairs_batch(
-            llm, tokenizer, images, active, pools, pair_by_image, prompts, cls_q, rubric, rng,
+            llm, tokenizer, images, active, pools, pair_by_image, prompts, vprompts, cls_q, rubric, rng,
             analysis_params, score_params, call_stats,
             agml_dataset, class_label, image_names, round_idx, log_path,
         )

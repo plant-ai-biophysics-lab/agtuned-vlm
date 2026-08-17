@@ -911,22 +911,11 @@ def plot_per_class_f1(backbone_reports: dict[str, dict], dataset_name: str, outp
     print(f"  Saved: {path}")
 
 
-def plot_separability_vs_f1(results_per_dataset: dict[str, dict], output_dir: Path) -> None:
-    """Does embedding separability (silhouette, computed alongside each
-    per-dataset LR probe — see compute_separability's docstring for why
-    it's a genuinely different signal than F1) predict linear-probe F1?
-    One point per (backbone, dataset) with both metrics available,
-    scatter-plotted and colored by backbone, with Pearson + Spearman
-    correlation (across ALL points, not per-backbone — a per-backbone
-    breakdown would need far more datasets per backbone than this
-    project's ~3-per-task-type sampling gives for a meaningful r).
-    Writes separability_vs_f1.csv alongside the scatter plot; no-op if
-    --per_dataset wasn't run (results_per_dataset empty) or no point has
-    both a defined silhouette and f1_macro (e.g. every dataset's test
-    split was too small for silhouette_score to be defined)."""
-    if not results_per_dataset:
-        return
-
+def _collect_separability_rows(results_per_dataset: dict[str, dict]) -> list[dict]:
+    """One dict per (backbone, dataset) with both silhouette and f1_macro
+    defined — shared by plot_separability_vs_f1 (all backbones pooled) and
+    plot_separability_vs_f1_by_backbone (one subplot/correlation per
+    backbone)."""
     rows = []
     for agml_name, ds_data in results_per_dataset.items():
         for backbone, m in ds_data.get("backbones", {}).items():
@@ -934,6 +923,26 @@ def plot_separability_vs_f1(results_per_dataset: dict[str, dict], output_dir: Pa
             if sil is not None and f1 is not None:
                 rows.append({"agml_dataset": agml_name, "backbone": backbone,
                              "silhouette": sil, "f1_macro": f1})
+    return rows
+
+
+def plot_separability_vs_f1(results_per_dataset: dict[str, dict], output_dir: Path) -> None:
+    """Does embedding separability (silhouette, computed alongside each
+    per-dataset LR probe — see compute_separability's docstring for why
+    it's a genuinely different signal than F1) predict linear-probe F1?
+    One point per (backbone, dataset) with both metrics available,
+    scatter-plotted and colored by backbone, with Pearson + Spearman
+    correlation across ALL points pooled — see
+    plot_separability_vs_f1_by_backbone for the same data split into one
+    correlation per backbone. Writes separability_vs_f1.csv alongside the
+    scatter plot; no-op if --per_dataset wasn't run (results_per_dataset
+    empty) or no point has both a defined silhouette and f1_macro (e.g.
+    every dataset's test split was too small for silhouette_score to be
+    defined)."""
+    if not results_per_dataset:
+        return
+
+    rows = _collect_separability_rows(results_per_dataset)
     if not rows:
         print("  [skip] plot_separability_vs_f1 — no (backbone, dataset) point had both metrics defined")
         return
@@ -975,6 +984,100 @@ def plot_separability_vs_f1(results_per_dataset: dict[str, dict], output_dir: Pa
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_separability_vs_f1_by_backbone(results_per_dataset: dict[str, dict], output_dir: Path) -> None:
+    """Same silhouette-vs-F1 question as plot_separability_vs_f1, but one
+    subplot + one Pearson/Spearman correlation PER BACKBONE instead of a
+    single pooled correlation — different backbones can have very
+    different silhouette/F1 relationships (e.g. a backbone whose embedding
+    space is always well-separated vs. one where separability tracks
+    probe difficulty), which a pooled r can hide or distort. Needs >= 3
+    points per backbone for a correlation; backbones with fewer are
+    plotted (if 1+ point) without one. Writes separability_vs_f1_by_backbone.png
+    (all backbones as subplots, one figure) AND
+    separability_vs_f1_<backbone>.png (one standalone plot per backbone,
+    same scatter + title as its subplot) plus
+    separability_vs_f1_by_backbone.csv (one row per backbone); no-op under
+    the same conditions as plot_separability_vs_f1."""
+    if not results_per_dataset:
+        return
+
+    rows = _collect_separability_rows(results_per_dataset)
+    if not rows:
+        print("  [skip] plot_separability_vs_f1_by_backbone — no (backbone, dataset) "
+              "point had both metrics defined")
+        return
+
+    backbones = sorted({r["backbone"] for r in rows})
+    cmap = plt.get_cmap("tab10", max(len(backbones), 1))
+
+    per_backbone: dict[str, tuple[np.ndarray, np.ndarray, str, dict]] = {}
+    corr_rows = []
+    for i, backbone in enumerate(backbones):
+        bx = np.array([r["silhouette"] for r in rows if r["backbone"] == backbone])
+        by = np.array([r["f1_macro"] for r in rows if r["backbone"] == backbone])
+
+        title = backbone
+        if len(bx) >= 3:
+            r_pearson, p_pearson = pearsonr(bx, by)
+            r_spearman, p_spearman = spearmanr(bx, by)
+            title += (f"\nPearson r={r_pearson:.2f} (p={p_pearson:.3f}), "
+                      f"Spearman ρ={r_spearman:.2f} (p={p_spearman:.3f}), n={len(bx)}")
+            corr_rows.append({"backbone": backbone, "n": len(bx),
+                               "pearson_r": r_pearson, "pearson_p": p_pearson,
+                               "spearman_r": r_spearman, "spearman_p": p_spearman})
+        else:
+            title += f"\n(n={len(bx)} — too few points for a meaningful correlation)"
+            corr_rows.append({"backbone": backbone, "n": len(bx),
+                               "pearson_r": "", "pearson_p": "", "spearman_r": "", "spearman_p": ""})
+        per_backbone[backbone] = (bx, by, title, {"color": cmap(i)})
+
+    # One combined figure, all backbones as subplots.
+    n_cols = min(3, len(backbones))
+    n_rows = -(-len(backbones) // n_cols)  # ceil div
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.5 * n_cols, 5 * n_rows), squeeze=False)
+    for i, backbone in enumerate(backbones):
+        ax = axes[i // n_cols][i % n_cols]
+        bx, by, title, style = per_backbone[backbone]
+        ax.scatter(bx, by, color=style["color"], alpha=0.75, edgecolor="black", linewidth=0.4)
+        ax.set_xlabel("Silhouette score", fontsize=9)
+        ax.set_ylabel("Linear-probe F1 macro", fontsize=9)
+        ax.set_title(title, fontsize=9)
+        ax.grid(True, alpha=0.25)
+    # Blank out any unused grid cells (len(backbones) doesn't evenly fill n_rows*n_cols).
+    for i in range(len(backbones), n_rows * n_cols):
+        axes[i // n_cols][i % n_cols].axis("off")
+    fig.suptitle("Embedding separability (silhouette) vs. linear-probe F1 — per backbone", fontsize=12)
+    plt.tight_layout()
+    path = output_dir / "separability_vs_f1_by_backbone.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+    # One standalone figure per backbone.
+    for backbone in backbones:
+        bx, by, title, style = per_backbone[backbone]
+        fig, ax = plt.subplots(figsize=(7, 6))
+        ax.scatter(bx, by, color=style["color"], alpha=0.75, edgecolor="black", linewidth=0.4)
+        ax.set_xlabel("Silhouette score (embedding separability)", fontsize=10)
+        ax.set_ylabel("Linear-probe F1 macro", fontsize=10)
+        ax.set_title(title, fontsize=10)
+        ax.grid(True, alpha=0.25)
+        plt.tight_layout()
+        slug = backbone.replace("/", "_")
+        bpath = output_dir / f"separability_vs_f1_{slug}.png"
+        fig.savefig(bpath, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {bpath}")
+
+    csv_path = output_dir / "separability_vs_f1_by_backbone.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["backbone", "n", "pearson_r", "pearson_p",
+                                                "spearman_r", "spearman_p"])
+        writer.writeheader()
+        writer.writerows(corr_rows)
+    print(f"  Saved: {csv_path}")
 
 
 def plot_overall_summary(results: dict, output_dir: Path):
@@ -1495,6 +1598,7 @@ def _feature_sep_only_mode(args, output_dir: Path) -> None:
 
     print(f"\n  {n_hits} cache hit(s), {n_misses} miss(es) skipped")
     plot_separability_vs_f1(results_per_dataset, output_dir)
+    plot_separability_vs_f1_by_backbone(results_per_dataset, output_dir)
 
 
 def main(args):
@@ -2303,6 +2407,7 @@ def main(args):
     # Separability (silhouette) vs. linear-probe F1 — only needs Phase 2a's
     # --per_dataset results, not --all_experiments.
     plot_separability_vs_f1(results_per_dataset, output_dir)
+    plot_separability_vs_f1_by_backbone(results_per_dataset, output_dir)
 
     # Update pipeline results CSV (fc_combined is default; lr_combined overrides if run)
     pipeline_csv = output_dir.parent / "pipeline_results.csv"

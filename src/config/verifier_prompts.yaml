@@ -1,5 +1,5 @@
 # Verifier prompt templates for Stage 4 (verifier-cot) — round-based belief
-# tracking, see docs/verifier_score_belief_update.md. Two prompts live here:
+# tracking, see docs/verifier_score_belief_update.md. Three prompts live here:
 #
 # - score_prompt — used exclusively by --baseline argmax (the basic-PPT-score
 #   ablation: every candidate scored independently, no reference, no
@@ -16,19 +16,26 @@
 #   deliberately open-ended, no closed-set class vocabulary, since real-world
 #   answers aren't a fixed label set (docs/verifier_score_belief_update.md's
 #   class-identity note).
-#
-# --baseline belief's actual pairwise tournament duels (ranking the pool)
-# still do NOT use a YAML prompt — they use the PPT paper's own
-# dual-trajectory scoring mechanism (arXiv:2607.05391 Section 3.2:
-# <score_A>/<score_B> tags, two-pass teacher-forced/prefill logprob
-# extraction), which lives in src/common/ppt_scoring.py as a fixed Python
-# template rather than YAML — same convention src/verifier_lmv.py already
-# uses for this exact template, since it's a citable reproduction of the
-# paper's prompt, not meant to be edited per-project. An earlier version of
-# this file had a simple JSON-verdict pairwise_prompt here (no scoring at
-# all, just "which one wins") — removed; it wasn't what "pairwise scoring"
-# was supposed to mean, see docs/verifier_score_belief_update.md Section
-# 13's "why every comparison is pairwise" note for the corrected mechanism.
+# - pairwise_prompt — used by --baseline belief's PPT tournament duels
+#   (ranking the pool) AND by src/verifier_lmv.py's own PPT baseline — the
+#   dual-trajectory scoring template (arXiv:2607.05391 Section 3.2:
+#   <score_A>/<score_B> tags, two-pass teacher-forced/prefill logprob
+#   extraction via src/common/ppt_scoring.py). Originally a fixed Python
+#   template (not meant to be edited, a "citable reproduction of the
+#   paper's prompt") — moved here after a real run showed the paper's own
+#   template needed two fixes: (1) it embedded the literal <score_A>/
+#   <score_B> tags right after the "analyze, then score" instruction,
+#   which caused the model to skip analysis almost entirely (99.6% empty
+#   analysis on a 20k-pair sample) rather than write free text first — the
+#   tags are no longer shown here at all, they're only ever supplied by
+#   pass 2's forced continuation (src/common/ppt_scoring.py::
+#   build_score_prompt), never sampled freely; (2) the rating rule was
+#   lenient enough that 80.6% of a real sample scored BOTH trajectories
+#   above 0.9 — added an explicit anti-tie instruction. So this is now OUR
+#   adapted version of the paper's template, not a verbatim reproduction —
+#   which is exactly why it belongs here (edit-without-redeploy, and a
+#   single citable record for the paper) rather than staying hardcoded.
+#   Params: {rubric} {question} {trajectory_a} {trajectory_b}
 #
 # Rubrics are diagnostic reference material shown to the VERIFIER only —
 # never to the model being tested — derived from cot_prompts.yaml's step
@@ -111,3 +118,25 @@ same_answer_prompt: |
 
   Respond with JSON only:
   {{ "same": true or false }}
+
+# --baseline belief's PPT tournament duels AND src/verifier_lmv.py's PPT
+# baseline. This is the free-generation (pass 1) prompt only — it
+# deliberately does NOT show the <score_A>/<score_B> tags (see the header
+# comment above for why); pass 2's forced continuation supplies them
+# separately via src/common/ppt_scoring.py::build_score_prompt. Trajectory
+# text is truncated to ~500 chars by _truncate_keep_answer before this
+# template is filled (never mid-<answer>-tag).
+# Params: {rubric} {question} {trajectory_a} {trajectory_b}
+pairwise_prompt: |
+  You are an expert agricultural scientist reviewer. You will see a task description and two trajectories.
+
+  Evaluation Criteria: {rubric}
+
+  Task: {question}
+
+  Trajectory A: {trajectory_a}
+  Trajectory B: {trajectory_b}
+
+  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
+
+  Analysis:

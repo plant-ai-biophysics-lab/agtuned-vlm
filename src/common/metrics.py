@@ -157,7 +157,12 @@ def resolve_class(response: str, classes: list[str]) -> str | None:
 def compute_classification_metrics(refs: list[str], preds: list[str]) -> dict:
     """Compute accuracy, contains_accuracy, f1_macro, f1_weighted, n_total, n_resolvable."""
     labels = sorted(set(refs) | set(p for p in preds if p))
-    contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
+    # An unresolved prediction (p == "") must never count as a contains-match —
+    # contains_match("", r) is True for ANY r (an empty string is a substring
+    # of everything), which previously inflated contains_accuracy toward 100%
+    # whenever resolve_class failed on most rows (e.g. free-text CoT/verifier
+    # answers), silently masking a parsing failure as a near-perfect score.
+    contains_correct = [int(bool(p) and contains_match(p, r)) for p, r in zip(preds, refs)]
     n_resolvable = sum(1 for p in preds if p)
     return {
         "accuracy": round(accuracy_score(refs, preds), 4),
