@@ -1012,26 +1012,28 @@ def plot_separability_vs_f1_by_backbone(results_per_dataset: dict[str, dict], ou
     backbones = sorted({r["backbone"] for r in rows})
     cmap = plt.get_cmap("tab10", max(len(backbones), 1))
 
-    per_backbone: dict[str, tuple[np.ndarray, np.ndarray, str, dict]] = {}
+    per_backbone: dict[str, tuple[np.ndarray, np.ndarray, str, str, dict]] = {}
     corr_rows = []
     for i, backbone in enumerate(backbones):
         bx = np.array([r["silhouette"] for r in rows if r["backbone"] == backbone])
         by = np.array([r["f1_macro"] for r in rows if r["backbone"] == backbone])
 
-        title = backbone
         if len(bx) >= 3:
             r_pearson, p_pearson = pearsonr(bx, by)
             r_spearman, p_spearman = spearmanr(bx, by)
-            title += (f"\nPearson r={r_pearson:.2f} (p={p_pearson:.3f}), "
-                      f"Spearman ρ={r_spearman:.2f} (p={p_spearman:.3f}), n={len(bx)}")
+            r_label = f"r = {r_pearson:.2f}"
             corr_rows.append({"backbone": backbone, "n": len(bx),
                                "pearson_r": r_pearson, "pearson_p": p_pearson,
                                "spearman_r": r_spearman, "spearman_p": p_spearman})
         else:
-            title += f"\n(n={len(bx)} — too few points for a meaningful correlation)"
+            r_label = f"n={len(bx)} — too few points for r"
             corr_rows.append({"backbone": backbone, "n": len(bx),
                                "pearson_r": "", "pearson_p": "", "spearman_r": "", "spearman_p": ""})
-        per_backbone[backbone] = (bx, by, title, {"color": cmap(i)})
+        per_backbone[backbone] = (bx, by, backbone, r_label, {"color": cmap(i)})
+
+    def _annotate_r(ax, label: str) -> None:
+        ax.text(0.05, 0.95, label, transform=ax.transAxes, fontsize=10, va="top", ha="left",
+                bbox={"facecolor": "white", "edgecolor": "black", "alpha": 0.8, "boxstyle": "round,pad=0.3"})
 
     # One combined figure, all backbones as subplots.
     n_cols = min(3, len(backbones))
@@ -1039,11 +1041,12 @@ def plot_separability_vs_f1_by_backbone(results_per_dataset: dict[str, dict], ou
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.5 * n_cols, 5 * n_rows), squeeze=False)
     for i, backbone in enumerate(backbones):
         ax = axes[i // n_cols][i % n_cols]
-        bx, by, title, style = per_backbone[backbone]
+        bx, by, title, r_label, style = per_backbone[backbone]
         ax.scatter(bx, by, color=style["color"], alpha=0.75, edgecolor="black", linewidth=0.4)
         ax.set_xlabel("Silhouette score", fontsize=9)
         ax.set_ylabel("Linear-probe F1 macro", fontsize=9)
         ax.set_title(title, fontsize=9)
+        _annotate_r(ax, r_label)
         ax.grid(True, alpha=0.25)
     # Blank out any unused grid cells (len(backbones) doesn't evenly fill n_rows*n_cols).
     for i in range(len(backbones), n_rows * n_cols):
@@ -1057,9 +1060,10 @@ def plot_separability_vs_f1_by_backbone(results_per_dataset: dict[str, dict], ou
 
     # One standalone figure per backbone.
     for backbone in backbones:
-        bx, by, title, style = per_backbone[backbone]
+        bx, by, title, r_label, style = per_backbone[backbone]
         fig, ax = plt.subplots(figsize=(7, 6))
         ax.scatter(bx, by, color=style["color"], alpha=0.75, edgecolor="black", linewidth=0.4)
+        _annotate_r(ax, r_label)
         ax.set_xlabel("Silhouette score (embedding separability)", fontsize=10)
         ax.set_ylabel("Linear-probe F1 macro", fontsize=10)
         ax.set_title(title, fontsize=10)
