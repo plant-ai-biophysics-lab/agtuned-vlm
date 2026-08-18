@@ -71,6 +71,63 @@ def pairwise_update(winner: Belief, loser: Belief, beta: float) -> tuple[Belief,
 
 
 
+def evidence_scaled_beta(
+    base_beta: float, winner_score: float, loser_score: float,
+    floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
+) -> float:
+    """Scale beta (pairwise_update's per-comparison noise term) by how
+    decisive AND how absolutely good this round's verifier evidence was,
+    instead of trusting every win equally regardless of score quality.
+
+    Two problems this fixes, found on a real run: (1) bradley_terry(ra, rb)
+    is translation-invariant to absolute score level — a winner scoring
+    0.4 vs a 0.05 loser (both bad) produces the same win probability as a
+    0.95 vs 0.6 winner (both good) if the gap is similar, and (2)
+    pairwise_update itself never even sees ra/rb — only categorical
+    win/loss — so both cases previously produced IDENTICAL belief updates.
+    In practice this let a "best of several bad candidates" win inflate
+    belief just as fast as a genuinely decisive win, which is exactly the
+    pattern behind confidently-wrong trajectories accumulating
+    stop_confidence almost as fast as confidently-right ones.
+
+    IMPORTANT — why this blends toward max_beta instead of dividing
+    base_beta down/up (an earlier version of this function did that, and
+    was numerically almost inert): pairwise_update's moment-matching
+    formula is flat/saturated for any beta below ~0.5-1.0 — c grows with
+    beta in the denominator, but z shrinking pushes v(z)/w(z) up almost
+    enough to cancel it, so the resulting belief shift barely moves across
+    that whole range. It only becomes meaningfully sensitive to beta once
+    beta climbs toward ~2-10 (confirmed empirically — see this module's
+    own dev notes). So "confidence" here doesn't shrink beta below
+    base_beta at all (that wouldn't help — already in the flat zone);
+    it only pushes beta UP toward max_beta as evidence weakens, since
+    that's the only direction with real sensitivity.
+
+    confidence = floor_factor * margin_factor, both in [0, 1]:
+      floor_factor = winner_score / floor_threshold, capped at 1 — how far
+        the winner's own absolute score clears the "is this actually any
+        good" bar, independent of what it was compared against.
+      margin_factor = margin / margin_ref, capped at 1, where
+        margin = max(0, winner_score - loser_score) — how decisive the win
+        was, saturating once the gap is "big enough" (margin_ref).
+
+    confidence=1 (winner clears floor_threshold AND margin >= margin_ref)
+    -> eff_beta = base_beta (today's default, near-maximal update strength
+    in the flat zone). confidence=0 (winner scores 0, or margin == 0) ->
+    eff_beta = max_beta, which DOES visibly weaken the resulting shift.
+    "Best of two bad options" (both scores low, e.g. 0.4 vs 0.05) lands
+    partway toward max_beta even with a decent margin, because floor_factor
+    alone caps confidence — margin can't rescue a bad winner. This is the
+    part margin alone can't express, and exactly the case that inflated
+    belief on wrong answers before this existed."""
+    floor_factor = min(1.0, winner_score / floor_threshold) if floor_threshold > 0 else 1.0
+    floor_factor = max(0.0, floor_factor)
+    margin = max(0.0, winner_score - loser_score)
+    margin_factor = min(1.0, margin / margin_ref) if margin_ref > 0 else 1.0
+    confidence = floor_factor * margin_factor
+    return base_beta + (max_beta - base_beta) * (1.0 - confidence)
+
+
 def stop_probability(current: Belief, anchor: Belief, beta: float) -> float:
     """P(current belief > anchor belief) (doc Section 7/13) — same
     z-score-into-Phi construction as a pairwise update, just evaluated once

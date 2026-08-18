@@ -84,7 +84,7 @@ from collections import Counter, defaultdict
 from PIL import Image as PILImage
 
 from src.common.belief_update import (
-    Belief, confidence_bin, pairwise_update, should_stop, stop_probability,
+    Belief, confidence_bin, evidence_scaled_beta, pairwise_update, should_stop, stop_probability,
 )
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import (
@@ -520,12 +520,49 @@ def _judge_same_answer(
     return result
 
 
+def _generate_rephrased_questions(
+    llm, tokenizer, cls_q: str, vprompts: dict, rephrase_count: int, rephrase_temperature: float,
+    call_stats: dict | None, agml_dataset: str, class_label: str, log_path: Path | None,
+) -> list[str]:
+    """--rephrase only. ONE text-only call (no image — rephrasing a
+    question is a pure text task) sampled rephrase_count times, producing
+    rephrase_count alternate wordings of cls_q — made once per (dataset,
+    class) group, before round 1 (see run_group_rounds's docstring for
+    why not per-round/per-image). Falls back to cls_q itself (unmodified)
+    for any sample that comes back empty after cleanup, so the caller
+    always gets exactly rephrase_count usable strings, never fewer."""
+    text = vprompts["question_rephrase_prompt"].format(question=cls_q)
+    prompt = {"prompt": render_chat_template(tokenizer, [{"role": "user", "content": text}])}
+    params = SamplingParams(temperature=rephrase_temperature, max_tokens=100, n=rephrase_count)
+    outputs = llm.generate([prompt], sampling_params=params)
+    if call_stats is not None:
+        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
+        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + 1
+
+    results: list[str] = []
+    for comp in outputs[0].outputs:
+        rq = comp.text.strip().strip('"').strip()
+        rq = rq.splitlines()[0].strip() if rq else ""
+        if not rq:
+            rq = cls_q
+        results.append(rq)
+        _log_verifier_call(
+            log_path, agml_dataset=agml_dataset, class_label=class_label,
+            image_name="", round=0, call_type="question_rephrase",
+            user_prompt=text, raw_response=comp.text, rephrased_question=rq,
+            prompt_tokens=len(getattr(outputs[0], "prompt_token_ids", None) or []),
+            completion_tokens=len(getattr(comp, "token_ids", None) or []),
+        )
+    return results
+
+
 def _process_round_belief(
     llm, tokenizer, images: list, active: list[int], candidate_lists: list[list[str]],
     answer_lists: list[list[str]], state: list[dict], prompts: dict, vprompts: dict, cls_q: str, rubric: str,
     k_candidates: int, round_idx: int, beta: float, k_pivots: int, rng: random.Random,
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None, call_stats: dict | None,
+    floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
 ) -> None:
     """The full Probabilistic Pivot Tournament (arXiv:2607.05391 Section
     3.2), via llm_verifier.pivot_tournament's own ring_cycle/select_pivots/
@@ -568,6 +605,12 @@ def _process_round_belief(
     pairwise_winner, pool_size, n_comparisons, top1_win_rate,
     incumbent_survived, transcript, round_prompt_tokens,
     round_completion_tokens.
+
+    floor_threshold/margin_ref/max_beta — evidence_scaled_beta's params
+    (see its docstring): the belief update's effective beta gets scaled
+    per-call by how decisive AND how absolutely good the winner/loser's
+    raw verifier scores were this round, instead of a flat beta for every
+    win regardless of score quality.
     """
     pools: dict[int, list[str]] = {}
     pool_answers: dict[int, list[str]] = {}
@@ -580,6 +623,15 @@ def _process_round_belief(
 
     w = {i: [0.0] * pool_size for i in active}
     c = {i: [0] * pool_size for i in active}
+    # Raw verifier scores (r_a/r_b, before the bradley_terry transform) per
+    # pool index — used only for evidence_scaled_beta's margin/floor-gate
+    # calculation at finalize time. w/c (soft win-rate) still drives
+    # ranking/top1 selection, unchanged; this is a separate signal for how
+    # ABSOLUTELY good the winner's own score was, which win-rate alone
+    # can't express (win-rate is relative to whatever this round's pool
+    # happened to contain, even if the whole pool is weak).
+    score_sum = {i: [0.0] * pool_size for i in active}
+    score_n = {i: [0] * pool_size for i in active}
     n_comparisons = {i: 0 for i in active}
     # First analysis text that ever mentioned each pool index — used as
     # this round's feedback for whichever index ends up the winner. Every
@@ -604,6 +656,10 @@ def _process_round_belief(
             c[i][a] += 1
             w[i][b] += 1.0 - p
             c[i][b] += 1
+            score_sum[i][a] += r_a
+            score_n[i][a] += 1
+            score_sum[i][b] += r_b
+            score_n[i][b] += 1
             n_comparisons[i] += 1
             first_analysis[i].setdefault(a, analysis)
             first_analysis[i].setdefault(b, analysis)
@@ -683,7 +739,19 @@ def _process_round_belief(
         persistent_is_loser = round_idx >= 2 and status == "replaced"
         winner_belief = s["belief"] if persistent_is_winner else Belief(0.0, 1.0)
         loser_belief = s["belief"] if persistent_is_loser else Belief(0.0, 1.0)
-        new_winner, _new_loser = pairwise_update(winner=winner_belief, loser=loser_belief, beta=beta)
+
+        # Evidence-scaled beta: how decisive AND how absolutely good this
+        # round's winner/loser raw scores were, not just a flat beta for
+        # every win. See evidence_scaled_beta's docstring. Falls back to
+        # the flat beta when there's no score data for one side (pool_size
+        # == 1 — no comparisons ever happened this round).
+        if score_n[i][winner_idx] and score_n[i][loser_idx]:
+            winner_score = score_sum[i][winner_idx] / score_n[i][winner_idx]
+            loser_score = score_sum[i][loser_idx] / score_n[i][loser_idx]
+            eff_beta = evidence_scaled_beta(beta, winner_score, loser_score, floor_threshold, margin_ref, max_beta)
+        else:
+            eff_beta = beta
+        new_winner, _new_loser = pairwise_update(winner=winner_belief, loser=loser_belief, beta=eff_beta)
 
         s["belief"] = new_winner
         s["C_best"] = pool_texts[winner_idx]
@@ -760,6 +828,8 @@ def run_group_rounds(
     beta: float, high: float, medium: float, gen_temperature: float, k_pivots: int, rng: random.Random,
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None,
+    floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
+    rephrase: bool = False, rephrase_count: int = 4, rephrase_temperature: float = 1.3,
 ) -> list[list[dict]]:
     """Run the full round loop for every image in one (dataset, class) group
     in parallel, each image stopping independently once its own stopping
@@ -775,12 +845,45 @@ def run_group_rounds(
     n_prompts across every run_batch1/run_batch_n call this function makes
     — see run_batch1's docstring. Both are run_model()'s to own and pass
     through; this function never creates them itself, so a caller that
-    doesn't want logging/counting can simply omit them."""
+    doesn't want logging/counting can simply omit them.
+
+    rephrase/rephrase_count/rephrase_temperature: when rephrase is True,
+    vprompts["question_rephrase_prompt"] is used ONCE per group (text-only,
+    before round 1 — the classification question is the same across every
+    image/round in this group, so there's no reason to re-rephrase it
+    per-image or per-round) to produce rephrase_count alternate wordings
+    of cls_q at rephrase_temperature. EVERY round thereafter ALSO
+    generates one extra candidate per rephrased-question variant (on top
+    of the base k_candidates at gen_temperature), merged into the same
+    pool — see question_rephrase_prompt's comment in verifier_prompts.yaml
+    for why rephrasing the QUESTION (not asking the model to "reconsider"
+    its own answer) is the mechanism here. Applies uniformly to every
+    active image every round (not conditional on measured diversity) so
+    pool_size stays uniform across the batch, which the ring-pass/pivot
+    tournament requires. Off by default — zero behavior change unless
+    enabled."""
     n = len(images)
     gen_q = cls_q + _ANSWER_TAG_INSTRUCTION
     base_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
         {"type": "image"}, {"type": "text", "text": gen_q},
     ]}] for _ in range(n)]
+
+    rephrased_questions: list[str] = []
+    gen_q_variants: list[str] = []
+    base_hist_variants: list[list[list[dict]]] = []
+    if rephrase and rephrase_count > 0:
+        rephrased_questions = _generate_rephrased_questions(
+            llm, tokenizer, cls_q, vprompts, rephrase_count, rephrase_temperature, call_stats,
+            agml_dataset, class_label, log_path,
+        )
+        gen_q_variants = [rq + _ANSWER_TAG_INSTRUCTION for rq in rephrased_questions]
+        base_hist_variants = [
+            [_sys_msg(prompts) + [{"role": "user", "content": [
+                {"type": "image"}, {"type": "text", "text": gq},
+            ]}] for _ in range(n)]
+            for gq in gen_q_variants
+        ]
+    effective_k_candidates = k_candidates + len(rephrased_questions)
 
     state = [{"C_best": "", "answer": "", "belief": None, "anchor": None, "best_score": 0,
               "feedback": "", "transcript": [], "pairwise_winner": "",
@@ -832,11 +935,35 @@ def run_group_rounds(
                     prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"],
                 )
 
+        for slot, gq in enumerate(gen_q_variants):
+            gen_hists_r = _gen_histories_for_round(base_hist_variants[slot], state, active, round_idx, gq)
+            gen_params_r = SamplingParams(
+                temperature=rephrase_temperature, max_tokens=180,
+                repetition_penalty=1.1, n=1,
+            )
+            gen_out_r = run_batch_n(llm, tokenizer, [images[i] for i in active], gen_hists_r, gen_params_r, call_stats)
+            for local_j, i in enumerate(active):
+                c = gen_out_r[local_j][0]
+                state[i]["round_prompt_tokens"] += c["prompt_tokens"]
+                state[i]["round_completion_tokens"] += c["completion_tokens"]
+                a, f = extract_answer_tag(c["text"])
+                candidate_lists[local_j].append(c["text"])
+                answer_lists[local_j].append(a)
+                answer_found_lists[local_j].append(f)
+                _log_verifier_call(
+                    log_path, agml_dataset=agml_dataset, class_label=class_label,
+                    image_name=image_names[i], round=round_idx, call_type="candidate_rephrase",
+                    candidate_index=slot, rephrased_question=rephrased_questions[slot],
+                    raw_text=c["text"], extracted_answer=a, answer_tag_found=f,
+                    prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"],
+                )
+
         if mode == "belief":
             _process_round_belief(
                 llm, tokenizer, images, active, candidate_lists, answer_lists, state, prompts, vprompts,
-                cls_q, rubric, k_candidates, round_idx, beta, k_pivots, rng,
+                cls_q, rubric, effective_k_candidates, round_idx, beta, k_pivots, rng,
                 agml_dataset, class_label, image_names, log_path, call_stats,
+                floor_threshold, margin_ref, max_beta,
             )
         else:
             _process_round_argmax(
@@ -1065,6 +1192,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 gen_temperature=args.temperature, k_pivots=args.k_pivots, rng=rng,
                 agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
                 log_path=log_path, call_stats=call_stats,
+                floor_threshold=args.floor_threshold, margin_ref=args.margin_ref, max_beta=args.max_beta,
+                rephrase=args.rephrase, rephrase_count=args.rephrase_count,
+                rephrase_temperature=args.rephrase_temperature,
             )
 
             for name, entries in zip(names, per_image_rounds):
@@ -1201,8 +1331,53 @@ if __name__ == "__main__":
     parser.add_argument("--max_round", type=int, default=10)
     parser.add_argument("--temperature", type=float, default=1.0,
                          help="Sampling temperature for the K per-round candidates.")
+    parser.add_argument("--rephrase", action="store_true",
+                         help="Also generate one extra candidate per round from each of "
+                              "--rephrase_count model-generated alternate wordings of the "
+                              "classification question (via vprompts['question_rephrase_prompt'], "
+                              "generated once per group before round 1 — not per round/image) — "
+                              "targets low candidate diversity found on a real run (~36%% of "
+                              "image-rounds collapsed to 1-2 distinct answers among K=8 candidates "
+                              "at temperature=1.0). See run_group_rounds's docstring. Off by default "
+                              "— zero behavior change unless passed.")
+    parser.add_argument("--rephrase_count", type=int, default=4,
+                         help="--rephrase only. How many alternate question wordings to generate "
+                              "(and how many extra candidates per round that adds to the pool).")
+    parser.add_argument("--rephrase_temperature", type=float, default=1.3,
+                         help="--rephrase only. Sampling temperature for BOTH the question-rephrasing "
+                              "call and the extra candidates generated from each rephrased question — "
+                              "deliberately hotter than --temperature's default (1.0) since the whole "
+                              "point of this mechanism is more diversity, not just a different prompt "
+                              "sampled at the same temperature as the base K candidates.")
     parser.add_argument("--beta", type=float, default=0.5,
-                         help="Bradley-Terry per-comparison noise (doc Sec. 5) — --baseline belief only.")
+                         help="Bradley-Terry per-comparison noise (doc Sec. 5) — --baseline belief only. "
+                              "This is the FLOOR value used for a high-confidence win; the actual "
+                              "per-update beta is scaled UP toward --max_beta as evidence weakens "
+                              "(evidence_scaled_beta), using each round's actual winner/loser scores — "
+                              "not applied as a flat constant. See src/common/belief_update.py's "
+                              "evidence_scaled_beta docstring for why it blends toward a much larger "
+                              "max_beta rather than dividing beta down (the belief-update math is "
+                              "nearly insensitive to beta below ~1.0).")
+    parser.add_argument("--floor_threshold", type=float, default=0.5,
+                         help="--baseline belief only. Belief-update discount gate: if the winning "
+                              "candidate's own raw verifier score (averaged across its comparisons "
+                              "this round) is below this threshold, the update is weakened toward "
+                              "--max_beta regardless of how decisively it won — 'best of several bad "
+                              "candidates' shouldn't build belief just because the margin was large. "
+                              "See evidence_scaled_beta's docstring for the full rationale.")
+    parser.add_argument("--margin_ref", type=float, default=0.3,
+                         help="--baseline belief only. Winner-vs-loser score gap (out of 1.0) that "
+                              "counts as a 'decisive enough' win — margins at or above this get full "
+                              "confidence from the margin side of evidence_scaled_beta; smaller margins "
+                              "scale down proportionally. 0 disables margin-sensitivity (only the floor "
+                              "gate still applies).")
+    parser.add_argument("--max_beta", type=float, default=4.0,
+                         help="--baseline belief only. Belief-update beta used for the WEAKEST possible "
+                              "evidence (winner_score at/below 0, or margin at/below 0) — a value in "
+                              "the range where pairwise_update's moment-matching formula actually "
+                              "produces a visibly smaller belief shift (unlike --beta's default 0.5, "
+                              "which sits in a nearly-flat/insensitive region). See "
+                              "evidence_scaled_beta's docstring.")
     parser.add_argument("--high_conf", type=float, default=0.85, help="Stop-early / 'high' bin threshold.")
     parser.add_argument("--med_conf", type=float, default=0.6, help="'medium' vs 'low' bin threshold.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)

@@ -36,6 +36,25 @@
 #   which is exactly why it belongs here (edit-without-redeploy, and a
 #   single citable record for the paper) rather than staying hardcoded.
 #   Params: {rubric} {question} {trajectory_a} {trajectory_b}
+# - question_rephrase_prompt — --rephrase only (src/verifier_cot.py's
+#   --baseline belief). Text-only (no image) call, made ONCE per (dataset,
+#   class) group before round 1 — not per round, not per image, since the
+#   classification question is the same for every image/round in a group —
+#   producing rephrase_count alternate wordings of that SAME question
+#   (task-specific diagnostic content unchanged, e.g. "What disease... is
+#   exhibited in this image of a arabica coffee?"; only surface phrasing
+#   varies) via one generate() call sampled rephrase_count times at
+#   --rephrase_temperature. Those rephrasings are then reused for every
+#   round's rephrase candidates for the rest of that group's run. This is
+#   deliberate: rephrasing the QUESTION (not asking the model to
+#   "reconsider" its own answer given the identical prompt) targets a
+#   different diversity source — a real run found ~36% of image-rounds
+#   collapsed onto only 1-2 distinct answers among K=8 candidates at
+#   temperature=1.0, i.e. the model anchors hard on a specific literal
+#   prompt; varying the prompt itself is more reliable than asking the
+#   same model, given the same exact prompt, to introspect on alternatives
+#   (which tends to produce shallow hedging rather than genuinely
+#   different reasoning). Params: {question} only.
 #
 # Rubrics are diagnostic reference material shown to the VERIFIER only —
 # never to the model being tested — derived from cot_prompts.yaml's step
@@ -140,3 +159,15 @@ pairwise_prompt: |
   Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
 
   Analysis:
+
+# --rephrase only. Params: {question}. Text-only (no image) — this asks
+# the model to reword a QUESTION, not analyze an image, so no visual
+# input is needed here (see the header comment above for the full
+# rationale). Sampled rephrase_count times at --rephrase_temperature in
+# one call, made once per (dataset, class) group before round 1.
+question_rephrase_prompt: |
+  Rephrase the following question in different words, keeping its exact meaning and intent unchanged — do not broaden, narrow, or otherwise change what is being asked. Do not answer the question yourself. Return ONLY the rephrased question text, with no preamble, quotation marks, or explanation.
+
+  Question: {question}
+
+  Rephrased question:

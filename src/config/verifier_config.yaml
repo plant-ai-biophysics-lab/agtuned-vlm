@@ -24,14 +24,37 @@ n_samples: 10  # images/class to evaluate
 seed: 42       # seeds the incumbent-A/B-slot randomization in --baseline belief's pairwise scoring
 
 # ── Round loop / belief-tracking hyperparameters (Sec. 13 of the design doc) ─
-k_candidates: 8        # K -- candidates generated per round via temperature sampling
+k_candidates: 4        # K -- candidates generated per round via temperature sampling
 k_pivots: 2             # k -- pivot-set size for the full PPT tournament (--baseline belief only);
                          # matches llm_verifier.pivot_tournament.DEFAULT_PIVOTS, repeated here as a
                          # literal rather than imported so this file has no Python-side dependency
 min_round: 3
 max_round: 10
-temperature: 1.0        # sampling temperature for the K per-round candidates
-beta: 0.5                # Bradley-Terry per-comparison noise (--baseline belief only)
+temperature: 0.8        # sampling temperature for the K per-round candidates
+
+# ── Rephrase step (--baseline belief only) — off by default ──────────────────
+# Adds one extra per-round candidate per rephrased-question variant, on top
+# of the base k_candidates above — targets low candidate diversity found on
+# a real run (~36% of image-rounds collapsed to 1-2 distinct answers among
+# K=8 candidates at temperature=1.0). See run_group_rounds's docstring
+# (src/verifier_cot.py) and question_rephrase_prompt's comment in
+# verifier_prompts.yaml for the full mechanism.
+rephrase: True
+rephrase_count: 8            # how many alternate question wordings (= extra candidates/round)
+rephrase_temperature: 1.3    # for BOTH the rephrasing call and the candidates generated from it
+
+# ── Belief-update evidence sensitivity (--baseline belief only) ──────────────
+# pairwise_update's moment-matching formula is nearly flat/insensitive to
+# beta below ~1.0 and only meaningfully weakens the belief shift once beta
+# climbs toward ~2-10 — so these blend the EFFECTIVE per-update beta from
+# `beta` (used for high-confidence evidence) up toward `max_beta` (used for
+# the weakest evidence) rather than scaling beta down, which barely moved
+# anything. See evidence_scaled_beta's docstring (src/common/belief_update.py).
+beta: 0.5                # floor value — Bradley-Terry per-comparison noise for a decisive, high-quality win
+floor_threshold: 0.5      # winner's own raw score must clear this, or the update gets discounted
+margin_ref: 0.3           # winner-vs-loser score gap counted as "decisive enough" for full confidence
+max_beta: 4.0             # beta used for the weakest possible evidence (winner_score<=0 or margin<=0)
+
 high_conf: 0.85          # stop-early / "high" confidence-bin threshold
 med_conf: 0.6            # "medium" vs "low" confidence-bin threshold
 
