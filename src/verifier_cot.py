@@ -988,7 +988,15 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     # loaders — belief vs argmax are disambiguated by filename instead.
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{args.baseline}_{safe_model_name(model_id)}.csv"
-    archive_ckpt_if_rerun(ckpt_path, args.rerun)
+    # verifier_log_<baseline>.jsonl is this script's own raw per-call log
+    # (every tournament_pair/same_answer prompt+response) — must be archived
+    # alongside the checkpoint on --rerun too, or old and new run entries
+    # silently concatenate in one ever-growing file with no way to tell
+    # them apart (this bit a real prompt-fix verification: a diagnostic run
+    # counted old-prompt AND new-prompt calls together and looked like the
+    # fix had only partially worked, when it had fully worked).
+    archive_ckpt_if_rerun(ckpt_path, args.rerun,
+                           extra_logs=("judge_log.jsonl", f"verifier_log_{args.baseline}.jsonl"))
     rows, _ = load_ckpt(ckpt_path, fields=VERIFIER_STEP_FIELDS)
     finished = _rounds_seen_complete(rows)
     if rows:

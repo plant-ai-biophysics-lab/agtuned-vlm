@@ -207,7 +207,9 @@ def append_ckpt_row(path: Path, row: dict, fields: list[str] = CKPT_FIELDS) -> N
         writer.writerow({k: row.get(k, "") for k in fields})
 
 
-def archive_ckpt_if_rerun(ckpt_path: Path, rerun: bool) -> None:
+def archive_ckpt_if_rerun(
+    ckpt_path: Path, rerun: bool, extra_logs: tuple[str, ...] = ("judge_log.jsonl",),
+) -> None:
     """--rerun support: load_ckpt()'s resume-by-key behavior is normally a
     feature (survives a kill mid-run) but becomes a liability the one time
     you actually WANT every row regenerated — e.g. after fixing a bug in how
@@ -218,11 +220,18 @@ def archive_ckpt_if_rerun(ckpt_path: Path, rerun: bool) -> None:
     all, since load_ckpt has no way to tell a corrupted row from a finished
     one.
 
-    Moves ckpt_path (and its directory's judge_log.jsonl, if present, so a
-    fresh run's judge conversations don't mix into the old log) aside with a
-    timestamp — never overwrites a previous archive — rather than deleting,
-    so old data is always recoverable. No-op if `rerun` is false or there's
-    nothing at ckpt_path yet."""
+    Moves ckpt_path (and each of `extra_logs` present in its directory —
+    default just judge_log.jsonl, so a fresh run's judge conversations
+    don't mix into the old log) aside with a timestamp — never overwrites a
+    previous archive — rather than deleting, so old data is always
+    recoverable. No-op if `rerun` is false or there's nothing at ckpt_path
+    yet. Pass extra_logs=("judge_log.jsonl", "verifier_log_belief.jsonl")
+    (etc.) for a script with its OWN raw per-call log beyond the checkpoint
+    + judge log — e.g. verifier_cot.py's verifier_log_<baseline>.jsonl,
+    which used to just keep appending across every --rerun forever (old and
+    new run entries silently concatenated in one file, with no way to tell
+    them apart short of diffing prompt wording) since nothing ever archived
+    it."""
     if not rerun or not ckpt_path.exists():
         return
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -230,11 +239,13 @@ def archive_ckpt_if_rerun(ckpt_path: Path, rerun: bool) -> None:
     ckpt_path.rename(backup)
     print(f"  [rerun] moved existing checkpoint aside: {backup.name}")
 
-    log_path = ckpt_path.parent / "judge_log.jsonl"
-    if log_path.exists():
-        log_backup = log_path.parent / f"judge_log.{ts}.bak.jsonl"
-        log_path.rename(log_backup)
-        print(f"  [rerun] moved existing judge log aside: {log_backup.name}")
+    for name in extra_logs:
+        log_path = ckpt_path.parent / name
+        if log_path.exists():
+            stem, _, ext = name.rpartition(".")
+            log_backup = log_path.parent / f"{stem}.{ts}.bak.{ext}"
+            log_path.rename(log_backup)
+            print(f"  [rerun] moved existing log aside: {log_backup.name}")
 
 
 # ── Judge phase ──────────────────────────────────────────────────────────────
