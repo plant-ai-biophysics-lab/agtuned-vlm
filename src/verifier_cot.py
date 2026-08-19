@@ -124,18 +124,6 @@ except ImportError:
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
 
-# Appended only to the GENERATION-facing question (never to the verifier's
-# own prompts, which still reference the plain cls_q) — asks each round's
-# candidate to restate its conclusion in an open-ended tag, no closed-set
-# vocabulary. This is what lets belief-tracking key persistence off the
-# ANSWER rather than the pool slot that produced it (see extract_answer_tag
-# and _process_round_belief's docstring for why).
-_ANSWER_TAG_INSTRUCTION = (
-    " After your reasoning, restate your single best answer wrapped in "
-    "<answer></answer> tags (e.g. <answer>Early Blight</answer>) — as "
-    "briefly and precisely as you can state it, not a full sentence."
-)
-
 # 1-20, matching the PPT paper's G=20 granularity (arXiv:2607.05391 Section
 # 4.1) — not itself logprob-extracted here (this is a JSON-parsed text
 # score, not a forced-decode letter scale; see src/verifier_lmv.py for the
@@ -204,73 +192,6 @@ def extract_answer_tag(text: str) -> tuple[str, bool]:
     if m:
         return m.group(1).strip(), True
     return text.strip(), False
-
-
-# Leading list markers ("1.", "2)", "- ", "* ") stripped off a parsed
-# hypothesis block so each trajectory reads as a standalone diagnosis
-# rather than carrying its position in a list it's been separated from.
-# Tolerates bold-wrapped markers too ("**1.**", "**1)**"), which models
-# emit often enough that a bare "[-*•]|\d+[.)]" pattern would strip only
-# the first asterisk and leave "*1)** " glued to the trajectory text.
-_LIST_MARKER_RE = re.compile(r"^\s*(?:\*\*)?\s*(?:[-*•]|\(?\d+[.)])\s*(?:\*\*)?\s*")
-
-
-def _parse_hypotheses(text: str, n_hypotheses: int) -> tuple[list[str], list[str], list[bool], int]:
-    """--multi_hypothesis only. Split ONE response containing several
-    numbered candidate answers into exactly `n_hypotheses` separate
-    trajectories.
-
-    Anchors on <answer>...</answer> tags, NOT on the list numbering: the
-    numbering style a model actually emits varies ("1.", "1)", "**1.**",
-    bullets, sometimes none at all), while the tag is explicitly required
-    by multi_hypothesis_prompt and is the same convention the
-    single-answer path already depends on. Each trajectory is the text
-    running from the end of the previous tag up to and including its own
-    tag — i.e. that hypothesis's justification plus its answer.
-
-    Returns (trajectories, answers, tag_found_flags, n_parsed) where
-    n_parsed is how many tagged blocks were ACTUALLY found before
-    padding/truncation — logged by the caller so the mechanism's real hit
-    rate stays auditable rather than assumed (same reasoning as
-    extract_answer_tag's `found` flag).
-
-    Padding/truncation to exactly n_hypotheses is mandatory, not cosmetic:
-    _process_round_belief computes pool_size as a single scalar shared by
-    every image in the batch (and ring_cycle/pivot_round_pairs are built
-    from it), so a batch where one image yielded 5 blocks and another 7
-    would break the tournament. Short responses pad by cycling through
-    what was parsed; a response with no tags at all falls back to one
-    trajectory of the whole cleaned text, cycled — degraded but never
-    empty, matching extract_answer_tag's own fallback philosophy."""
-    matches = list(_ANSWER_TAG_RE.finditer(text))
-    trajectories: list[str] = []
-    answers: list[str] = []
-    prev_end = 0
-    for m in matches:
-        block = text[prev_end:m.end()].strip()
-        block = _LIST_MARKER_RE.sub("", block)
-        prev_end = m.end()
-        if block:
-            trajectories.append(block)
-            answers.append(m.group(1).strip())
-    n_parsed = len(trajectories)
-
-    if not trajectories:  # no tags at all — degrade, don't crash
-        cleaned = text.strip()
-        trajectories = [cleaned]
-        answers = [cleaned]
-
-    found = [n_parsed > 0] * len(trajectories)
-    # Cycle over the ORIGINALS only — indexing into the growing list would
-    # start duplicating already-padded copies (2 real hypotheses would pad
-    # to A,B,A,A,A,A instead of A,B,A,B,A,B).
-    n_original = len(trajectories)
-    while len(trajectories) < n_hypotheses:
-        idx = len(trajectories) % n_original
-        trajectories.append(trajectories[idx])
-        answers.append(answers[idx])
-        found.append(found[idx])
-    return trajectories[:n_hypotheses], answers[:n_hypotheses], found[:n_hypotheses], n_parsed
 
 
 def run_batch1(
@@ -587,42 +508,6 @@ def _judge_same_answer(
     return result
 
 
-def _generate_rephrased_questions(
-    llm, tokenizer, cls_q: str, vprompts: dict, rephrase_count: int, rephrase_temperature: float,
-    call_stats: dict | None, agml_dataset: str, class_label: str, log_path: Path | None,
-) -> list[str]:
-    """--rephrase only. ONE text-only call (no image — rephrasing a
-    question is a pure text task) sampled rephrase_count times, producing
-    rephrase_count alternate wordings of cls_q — made once per (dataset,
-    class) group, before round 1 (see run_group_rounds's docstring for
-    why not per-round/per-image). Falls back to cls_q itself (unmodified)
-    for any sample that comes back empty after cleanup, so the caller
-    always gets exactly rephrase_count usable strings, never fewer."""
-    text = vprompts["question_rephrase_prompt"].format(question=cls_q)
-    prompt = {"prompt": render_chat_template(tokenizer, [{"role": "user", "content": text}])}
-    params = SamplingParams(temperature=rephrase_temperature, max_tokens=100, n=rephrase_count)
-    outputs = llm.generate([prompt], sampling_params=params)
-    if call_stats is not None:
-        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
-        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + 1
-
-    results: list[str] = []
-    for comp in outputs[0].outputs:
-        rq = comp.text.strip().strip('"').strip()
-        rq = rq.splitlines()[0].strip() if rq else ""
-        if not rq:
-            rq = cls_q
-        results.append(rq)
-        _log_verifier_call(
-            log_path, agml_dataset=agml_dataset, class_label=class_label,
-            image_name="", round=0, call_type="question_rephrase",
-            user_prompt=text, raw_response=comp.text, rephrased_question=rq,
-            prompt_tokens=len(getattr(outputs[0], "prompt_token_ids", None) or []),
-            completion_tokens=len(getattr(comp, "token_ids", None) or []),
-        )
-    return results
-
-
 def _process_round_belief(
     llm, tokenizer, images: list, active: list[int], candidate_lists: list[list[str]],
     answer_lists: list[list[str]], state: list[dict], prompts: dict, vprompts: dict, cls_q: str, rubric: str,
@@ -900,15 +785,12 @@ def _process_round_argmax(
 
 
 def run_group_rounds(
-    llm, tokenizer, images: list, cls_q: str, rubric: str, prompts: dict, vprompts: dict,
+    llm, tokenizer, images: list, cls_q: str, gen_template: str, rubric: str, prompts: dict, vprompts: dict,
     mode: str, k_candidates: int, min_round: int, max_round: int,
     beta: float, high: float, medium: float, gen_temperature: float, k_pivots: int, rng: random.Random,
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None,
     floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
-    rephrase: bool = False, rephrase_count: int = 4, rephrase_temperature: float = 1.3,
-    multi_hypothesis: bool = False, n_hypotheses: int = 6, hypothesis_samples: int = 1,
-    multi_hypothesis_max_tokens: int = 700,
 ) -> list[list[dict]]:
     """Run the full round loop for every image in one (dataset, class) group
     in parallel, each image stopping independently once its own stopping
@@ -926,60 +808,23 @@ def run_group_rounds(
     through; this function never creates them itself, so a caller that
     doesn't want logging/counting can simply omit them.
 
-    rephrase/rephrase_count/rephrase_temperature: when rephrase is True,
-    vprompts["question_rephrase_prompt"] is used ONCE per group (text-only,
-    before round 1 — the classification question is the same across every
-    image/round in this group, so there's no reason to re-rephrase it
-    per-image or per-round) to produce rephrase_count alternate wordings
-    of cls_q at rephrase_temperature. EVERY round thereafter ALSO
-    generates one extra candidate per rephrased-question variant (on top
-    of the base k_candidates at gen_temperature), merged into the same
-    pool — see question_rephrase_prompt's comment in verifier_prompts.yaml
-    for why rephrasing the QUESTION (not asking the model to "reconsider"
-    its own answer) is the mechanism here. Applies uniformly to every
-    active image every round (not conditional on measured diversity) so
-    pool_size stays uniform across the batch, which the ring-pass/pivot
-    tournament requires. Off by default — zero behavior change unless
-    enabled.
-
-    multi_hypothesis/n_hypotheses/hypothesis_samples: when True, REPLACES
-    the default "sample the same question k_candidates times" generation
-    with vprompts["multi_hypothesis_prompt"] — one response carrying
-    n_hypotheses distinct candidate answers, split by _parse_hypotheses
-    into that many trajectories. hypothesis_samples draws that many
-    independent responses (pool = n_hypotheses * hypothesis_samples), the
-    lever for scaling trajectory count. k_candidates is IGNORED in this
-    mode (run_model warns). Everything downstream — the PPT tournament,
-    scoring, belief update, selection by argmax win-rate — is unchanged;
-    only how the pool gets populated differs."""
+    gen_template: the candidate-generation prompt for this group's task
+    type — vprompts["structured_templates"][rubric_key], resolved by the
+    caller (run_model already looks up rubric_key to select `rubric`, so
+    it resolves gen_template the same way). Filled with {question}=cls_q
+    and sampled k_candidates times at gen_temperature every round — same
+    generation call shape as before this existed, just a different prompt
+    (fill-in-the-blank fields mirroring the rubric's own criteria, ending
+    in the same <answer></answer> convention extract_answer_tag already
+    depends on) in place of a bare "answer directly" instruction. See
+    structured_templates' comment in verifier_prompts.yaml for why (two
+    earlier alternatives — rephrasing the question, and asking for several
+    different hypotheses in one response — were tried and reverted)."""
     n = len(images)
-    if multi_hypothesis:
-        gen_q = vprompts["multi_hypothesis_prompt"].format(
-            question=cls_q, n_hypotheses=n_hypotheses,
-        )
-    else:
-        gen_q = cls_q + _ANSWER_TAG_INSTRUCTION
+    gen_q = gen_template.format(question=cls_q)
     base_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
         {"type": "image"}, {"type": "text", "text": gen_q},
     ]}] for _ in range(n)]
-
-    rephrased_questions: list[str] = []
-    gen_q_variants: list[str] = []
-    base_hist_variants: list[list[list[dict]]] = []
-    if rephrase and rephrase_count > 0:
-        rephrased_questions = _generate_rephrased_questions(
-            llm, tokenizer, cls_q, vprompts, rephrase_count, rephrase_temperature, call_stats,
-            agml_dataset, class_label, log_path,
-        )
-        gen_q_variants = [rq + _ANSWER_TAG_INSTRUCTION for rq in rephrased_questions]
-        base_hist_variants = [
-            [_sys_msg(prompts) + [{"role": "user", "content": [
-                {"type": "image"}, {"type": "text", "text": gq},
-            ]}] for _ in range(n)]
-            for gq in gen_q_variants
-        ]
-    base_pool = n_hypotheses * hypothesis_samples if multi_hypothesis else k_candidates
-    effective_k_candidates = base_pool + len(rephrased_questions)
 
     state = [{"C_best": "", "answer": "", "belief": None, "anchor": None, "best_score": 0,
               "feedback": "", "transcript": [], "pairwise_winner": "",
@@ -998,60 +843,21 @@ def run_group_rounds(
             state[i]["round_completion_tokens"] = 0
 
         gen_hists = _gen_histories_for_round(base_hist, state, active, round_idx, gen_q)
-        if multi_hypothesis:
-            # ONE response per sample carrying n_hypotheses distinct answers,
-            # split into that many trajectories — not n_hypotheses separate
-            # calls. hypothesis_samples>1 draws that many independent
-            # responses (needs temperature>0 to differ), so the pool is
-            # n_hypotheses * hypothesis_samples.
-            gen_params = SamplingParams(
-                temperature=gen_temperature, max_tokens=multi_hypothesis_max_tokens,
-                repetition_penalty=1.1, n=hypothesis_samples,
-            )
-        else:
-            gen_params = SamplingParams(
-                temperature=gen_temperature, max_tokens=180,
-                repetition_penalty=1.1, n=k_candidates,
-            )
+        gen_params = SamplingParams(
+            temperature=gen_temperature, max_tokens=180,
+            repetition_penalty=1.1, n=k_candidates,
+        )
         gen_out = run_batch_n(llm, tokenizer, [images[i] for i in active], gen_hists, gen_params, call_stats)
-
-        if multi_hypothesis:
-            candidate_lists, answer_lists, answer_found_lists = [], [], []
-            for local_j, i in enumerate(active):
-                trajs, answers, founds = [], [], []
-                for sample_idx, c in enumerate(gen_out[local_j]):
-                    t_s, a_s, f_s, n_parsed = _parse_hypotheses(c["text"], n_hypotheses)
-                    trajs.extend(t_s)
-                    answers.extend(a_s)
-                    founds.extend(f_s)
-                    # Auditable parse record — n_parsed is what the model
-                    # ACTUALLY produced before padding/truncation, and
-                    # n_distinct shows how much real hypothesis spread we
-                    # got (the whole point of this mode). Both checkable
-                    # from the log later rather than assumed.
-                    _log_verifier_call(
-                        log_path, agml_dataset=agml_dataset, class_label=class_label,
-                        image_name=image_names[i], round=round_idx,
-                        call_type="hypothesis_set", sample_index=sample_idx,
-                        raw_text=c["text"], n_requested=n_hypotheses, n_parsed=n_parsed,
-                        n_distinct=len({a.strip().lower() for a in a_s}),
-                        parsed_answers=a_s,
-                        prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"],
-                    )
-                candidate_lists.append(trajs)
-                answer_lists.append(answers)
-                answer_found_lists.append(founds)
-        else:
-            candidate_lists = [[c["text"] for c in cands] for cands in gen_out]
-            answer_lists, answer_found_lists = [], []
-            for cands in gen_out:
-                answers, founds = [], []
-                for c in cands:
-                    a, f = extract_answer_tag(c["text"])
-                    answers.append(a)
-                    founds.append(f)
-                answer_lists.append(answers)
-                answer_found_lists.append(founds)
+        candidate_lists = [[c["text"] for c in cands] for cands in gen_out]
+        answer_lists, answer_found_lists = [], []
+        for cands in gen_out:
+            answers, founds = [], []
+            for c in cands:
+                a, f = extract_answer_tag(c["text"])
+                answers.append(a)
+                founds.append(f)
+            answer_lists.append(answers)
+            answer_found_lists.append(founds)
 
         for local_j, i in enumerate(active):
             state[i]["round_prompt_tokens"] += gen_out[local_j][0]["prompt_tokens"]
@@ -1070,34 +876,29 @@ def run_group_rounds(
                     answer_tag_found=answer_found_lists[local_j][cand_idx],
                     prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"],
                 )
-
-        for slot, gq in enumerate(gen_q_variants):
-            gen_hists_r = _gen_histories_for_round(base_hist_variants[slot], state, active, round_idx, gq)
-            gen_params_r = SamplingParams(
-                temperature=rephrase_temperature, max_tokens=180,
-                repetition_penalty=1.1, n=1,
+            # Round-level diversity summary — one record per image per round,
+            # separate from the per-candidate ones above, so "how much do
+            # this round's k_candidates actually vary" is a single readable
+            # field instead of something you have to reconstruct by
+            # re-grouping every "candidate" row yourself. Distinct count
+            # normalizes the extracted answer (lowercased/stripped) the
+            # same way the earlier rephrase/multi_hypothesis diagnostics
+            # did, so this is directly comparable to those measurements
+            # (e.g. the 35.6%-of-image-rounds-collapsed finding that
+            # originally motivated looking at this at all).
+            round_answers = answer_lists[local_j]
+            _log_verifier_call(
+                log_path, agml_dataset=agml_dataset, class_label=class_label,
+                image_name=image_names[i], round=round_idx, call_type="round_diversity",
+                n_candidates=len(round_answers),
+                n_distinct_answers=len({a.strip().lower() for a in round_answers if a}),
+                answers=round_answers,
             )
-            gen_out_r = run_batch_n(llm, tokenizer, [images[i] for i in active], gen_hists_r, gen_params_r, call_stats)
-            for local_j, i in enumerate(active):
-                c = gen_out_r[local_j][0]
-                state[i]["round_prompt_tokens"] += c["prompt_tokens"]
-                state[i]["round_completion_tokens"] += c["completion_tokens"]
-                a, f = extract_answer_tag(c["text"])
-                candidate_lists[local_j].append(c["text"])
-                answer_lists[local_j].append(a)
-                answer_found_lists[local_j].append(f)
-                _log_verifier_call(
-                    log_path, agml_dataset=agml_dataset, class_label=class_label,
-                    image_name=image_names[i], round=round_idx, call_type="candidate_rephrase",
-                    candidate_index=slot, rephrased_question=rephrased_questions[slot],
-                    raw_text=c["text"], extracted_answer=a, answer_tag_found=f,
-                    prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"],
-                )
 
         if mode == "belief":
             _process_round_belief(
                 llm, tokenizer, images, active, candidate_lists, answer_lists, state, prompts, vprompts,
-                cls_q, rubric, effective_k_candidates, round_idx, beta, k_pivots, rng,
+                cls_q, rubric, k_candidates, round_idx, beta, k_pivots, rng,
                 agml_dataset, class_label, image_names, log_path, call_stats,
                 floor_threshold, margin_ref, max_beta,
             )
@@ -1274,24 +1075,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [random_classes_per_task={args.random_classes_per_task}, seed={args.seed}] "
               f"{len(all_groups)} (dataset, class) group(s) selected: {dict(by_task_counts)}")
 
-    if args.multi_hypothesis:
-        pool = args.n_hypotheses * args.hypothesis_samples
-        print(f"  [multi_hypothesis] pool = n_hypotheses({args.n_hypotheses}) x "
-              f"hypothesis_samples({args.hypothesis_samples}) = {pool} trajectories/round"
-              + (f" + {args.rephrase_count} rephrase" if args.rephrase else ""))
-        # k_candidates does nothing in this mode — say so rather than let it
-        # be tuned silently with no effect.
-        print(f"  [multi_hypothesis] --k_candidates ({args.k_candidates}) is IGNORED in this mode; "
-              f"scale trajectories with --hypothesis_samples instead")
-        if args.hypothesis_samples > 1 and args.temperature <= 0:
-            print(f"  [warn] hypothesis_samples={args.hypothesis_samples} with temperature="
-                  f"{args.temperature}: greedy decoding returns identical samples — raise "
-                  f"--temperature above 0 or the extra samples are wasted compute")
-        if args.rephrase:
-            print("  [warn] --rephrase with --multi_hypothesis mixes trajectory styles in one pool "
-                  "(multi-hypothesis entries carry ~1-2 sentences each; rephrase candidates carry "
-                  "full-length reasoning) — longer trajectories get more chances to satisfy rubric "
-                  "criteria regardless of correctness. Prefer scaling --hypothesis_samples.")
+    if args.k_candidates > 1 and args.temperature <= 0:
+        print(f"  [warn] k_candidates={args.k_candidates} with temperature={args.temperature}: "
+              f"greedy decoding returns identical samples — raise --temperature above 0 or the "
+              f"extra candidates are wasted compute")
 
     groups = []
     for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in all_groups:
@@ -1338,9 +1125,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             cls_q = _cls_question(task_type, crop_val, prompts)
             rubric_key = vprompts["task_type_to_rubric"].get(task_type, "disease_pest")
             rubric = vprompts["rubrics"][rubric_key]
+            gen_template = vprompts["structured_templates"][rubric_key]
 
             per_image_rounds = run_group_rounds(
-                llm, tokenizer, images, cls_q, rubric, prompts, vprompts,
+                llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
                 mode=args.baseline, k_candidates=args.k_candidates,
                 min_round=args.min_round, max_round=args.max_round,
                 beta=args.beta, high=args.high_conf, medium=args.med_conf,
@@ -1348,11 +1136,6 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
                 log_path=log_path, call_stats=call_stats,
                 floor_threshold=args.floor_threshold, margin_ref=args.margin_ref, max_beta=args.max_beta,
-                rephrase=args.rephrase, rephrase_count=args.rephrase_count,
-                rephrase_temperature=args.rephrase_temperature,
-                multi_hypothesis=args.multi_hypothesis, n_hypotheses=args.n_hypotheses,
-                hypothesis_samples=args.hypothesis_samples,
-                multi_hypothesis_max_tokens=args.multi_hypothesis_max_tokens,
             )
 
             for name, entries in zip(names, per_image_rounds):
@@ -1488,48 +1271,9 @@ if __name__ == "__main__":
     parser.add_argument("--min_round", type=int, default=3)
     parser.add_argument("--max_round", type=int, default=10)
     parser.add_argument("--temperature", type=float, default=1.0,
-                         help="Sampling temperature for the K per-round candidates.")
-    parser.add_argument("--rephrase", action="store_true",
-                         help="Also generate one extra candidate per round from each of "
-                              "--rephrase_count model-generated alternate wordings of the "
-                              "classification question (via vprompts['question_rephrase_prompt'], "
-                              "generated once per group before round 1 — not per round/image) — "
-                              "targets low candidate diversity found on a real run (~36%% of "
-                              "image-rounds collapsed to 1-2 distinct answers among K=8 candidates "
-                              "at temperature=1.0). See run_group_rounds's docstring. Off by default "
-                              "— zero behavior change unless passed.")
-    parser.add_argument("--rephrase_count", type=int, default=4,
-                         help="--rephrase only. How many alternate question wordings to generate "
-                              "(and how many extra candidates per round that adds to the pool).")
-    parser.add_argument("--rephrase_temperature", type=float, default=1.3,
-                         help="--rephrase only. Sampling temperature for BOTH the question-rephrasing "
-                              "call and the extra candidates generated from each rephrased question — "
-                              "deliberately hotter than --temperature's default (1.0) since the whole "
-                              "point of this mechanism is more diversity, not just a different prompt "
-                              "sampled at the same temperature as the base K candidates.")
-    parser.add_argument("--multi_hypothesis", action="store_true",
-                         help="Replace the default 'sample the same question --k_candidates times at "
-                              "temperature' generation with ONE response carrying --n_hypotheses "
-                              "distinct candidate answers (multi_hypothesis_prompt in "
-                              "verifier_prompts.yaml), split into that many trajectories. Targets the "
-                              "measured failure where plain sampling collapsed 35.6%% of image-rounds "
-                              "onto 1-2 distinct answers and never proposed the correct diagnosis at "
-                              "all. --k_candidates is IGNORED in this mode; scale with "
-                              "--hypothesis_samples. Everything downstream (PPT tournament, scoring, "
-                              "belief, argmax-win-rate selection) is unchanged.")
-    parser.add_argument("--n_hypotheses", type=int, default=6,
-                         help="--multi_hypothesis only. Distinct candidate answers requested per "
-                              "response. Parsed pool is padded/truncated to exactly this many, since "
-                              "the tournament needs one uniform pool size across the batch.")
-    parser.add_argument("--hypothesis_samples", type=int, default=1,
-                         help="--multi_hypothesis only. Independent responses drawn per round; total "
-                              "pool = --n_hypotheses x this. The lever for scaling trajectory count. "
-                              "Needs --temperature > 0 to produce differing samples (greedy decoding "
-                              "returns identical copies).")
-    parser.add_argument("--multi_hypothesis_max_tokens", type=int, default=700,
-                         help="--multi_hypothesis only. Generation budget for the multi-hypothesis "
-                              "response — needs to fit --n_hypotheses justified entries, unlike the "
-                              "single-answer path's 180.")
+                         help="Sampling temperature for the K per-round candidates. Needs to be > 0 "
+                              "for --k_candidates > 1 to actually produce differing candidates — "
+                              "greedy decoding (temperature=0) returns identical copies.")
     parser.add_argument("--beta", type=float, default=0.5,
                          help="Bradley-Terry per-comparison noise (doc Sec. 5) — --baseline belief only. "
                               "This is the FLOOR value used for a high-confidence win; the actual "
