@@ -146,23 +146,13 @@ same_answer_prompt: |
 # text is truncated to ~500 chars by _truncate_keep_answer before this
 # template is filled (never mid-<answer>-tag).
 #
-# Requires a per-criterion walkthrough (added after a real run showed the
-# open-ended "compare A and B" version let a trajectory satisfy easy
-# criteria — crop ID, affected part — while silently ignoring a harder
-# one (symptom color/pattern) and still score well overall; e.g. two
-# Sigatoka trajectories both scored fine while neither ever engaged with
-# the yellow-vs-black discoloration detail that's the actual
-# distinguishing feature between the two diseases). Forcing an explicit
-# per-item check surfaces exactly that kind of omission, and doubles as
-# richer feedback fed back into the next round's re-ask (verifier_feedback
-# — src/verifier_cot.py's first_analysis mechanism) — this is still ONE
-# holistic score per trajectory, not a true separable per-criterion score
-# (that would need one scoring call per criterion, C times the compute);
-# see docs/verifier_score_belief_update.md Section 13.1's neighboring
-# discussion for the cheaper-vs-real-per-criterion tradeoff this settles
-# for now. analysis_params's max_tokens raised (150 -> 280,
-# src/verifier_cot.py) to give a multi-criterion walkthrough room to
-# actually fit before the score-forcing continuation appends.
+# A per-criterion walkthrough version (requiring the analysis to check
+# each rubric item individually before scoring, longer analysis_params
+# max_tokens) was tried and reverted — real-run comparison showed no
+# measurable improvement in final judged accuracy over this simpler
+# version, so it wasn't worth the extra generation time. See
+# docs/verifier_score_belief_update.md Section 13.1 for that experiment's
+# numbers if revisiting this decision later.
 # Params: {rubric} {question} {trajectory_a} {trajectory_b}
 pairwise_prompt: |
   You are an expert agricultural scientist reviewer. You will see a task description and two trajectories.
@@ -174,7 +164,7 @@ pairwise_prompt: |
   Trajectory A: {trajectory_a}
   Trajectory B: {trajectory_b}
 
-  For EACH numbered criterion above, briefly state whether Trajectory A addresses it and whether Trajectory B addresses it — name the specific visual detail each trajectory does or does not mention (e.g. exact color, pattern, or texture described), not just whether it "seems reasonable." A trajectory only gets credit for a criterion if it engages with that SPECIFIC detail — generic disease-sounding language does not count as addressing a criterion like symptom color or pattern just because it sounds plausible. After walking through every criterion, summarize in 1-2 sentences which trajectory is stronger overall and why. Do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
+  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
 
   Analysis:
 
@@ -189,3 +179,36 @@ question_rephrase_prompt: |
   Question: {question}
 
   Rephrased question:
+
+# --multi_hypothesis only. Params: {question} {n_hypotheses}. Replaces the
+# default "sample the same question K times at temperature" generation with
+# ONE response carrying n_hypotheses DISTINCT candidate answers, each with
+# its own brief visual justification. Motivation (measured on a real run):
+# plain temperature sampling collapsed 35.6% of image-rounds onto only 1-2
+# distinct answers among K=8 candidates, and a traced failure case drifted
+# through 10 rounds of generic "Leaf Spot" variants without ever proposing
+# the correct "Sigatoka" family at all — i.e. the right hypothesis was
+# never in the pool for the tournament to rank. Explicitly demanding
+# several MUTUALLY DIFFERENT diagnoses puts a real hypothesis spread in
+# front of the verifier instead of hoping sampling stumbles onto it.
+#
+# Each block needs its own visual justification (not a bare class name):
+# the pairwise verifier scores trajectories against rubric criteria
+# (symptom color, pattern, texture), so an unjustified label would score
+# uninformatively. The <answer></answer> tag convention matches the
+# single-answer path, so extract_answer_tag works per block unchanged —
+# and _parse_hypotheses anchors on those tags rather than the list
+# numbering, which is why the numbering style here is not load-bearing.
+multi_hypothesis_prompt: |
+  You are an expert agricultural scientist examining this image.
+
+  Question: {question}
+
+  Propose {n_hypotheses} DIFFERENT plausible answers to that question — genuinely distinct possibilities, not restatements of the same conclusion in different words. Include the possibilities you consider most likely as well as ones that are plausible but less obvious, so that a reviewer comparing them has a real range to weigh.
+
+  Format your response as a numbered list with exactly {n_hypotheses} entries. For each entry, write one or two sentences naming the SPECIFIC visual evidence in the image that would support that answer — cite the actual colors, patterns, shapes, or textures you observe — then close the entry by restating that single answer wrapped in <answer></answer> tags.
+
+  Example of the required format for one entry:
+  1. The leaf shows irregular dark brown lesions ringed with yellow haloes, concentrated along the leaf margin. <answer>Early Blight</answer>
+
+  Give exactly {n_hypotheses} entries, each with a different answer.

@@ -31,6 +31,7 @@ STAGES = {
     "cot-yaml-step-report": "src.cot_yaml_step_report",
     "cot-compare":   "src.cot_compare",
     "verifier-cot":  "src.verifier_cot",
+    "verifier-summary": "src.verifier_summary",
     "collate":       "src.collate_results",
 }
 
