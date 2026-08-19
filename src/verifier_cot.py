@@ -333,10 +333,24 @@ def _gen_histories_for_round(
             continue
         hist = list(base_hist[i])
         for winner_text, feedback_text in state[i]["history"]:
+            # Neutral framing, not an instruction to change anything: this
+            # used to say "Given this feedback, provide an IMPROVED
+            # answer" every round unconditionally — even on rounds the
+            # tournament flagged as "defended" (the same answer winning
+            # again, nothing wrong with it). That standing "improve"
+            # instruction, replayed cumulatively across every prior round
+            # by round 6, was found to be actively driving semantic drift
+            # away from correct-but-plain answers (e.g. "Fungal Leaf Spot
+            # Disease" -> "Foliar Necrosis from Pathogenic Fungus" ->
+            # "Leaf Spot Disorder" over rounds) rather than converging.
+            # Presenting the verifier's own reasoning as INFORMATION
+            # (why this trajectory won over its alternative) rather than
+            # a directive to revise leaves it to the model to decide
+            # whether anything actually needs to change.
             reask = (
-                f"Feedback on the previous answer: {feedback_text}\n\n"
-                f"Given this feedback, provide an improved answer to the same "
-                f"question: {gen_q}"
+                f"For context, here is the verifier's analysis of why this "
+                f"trajectory was selected over its alternative in the "
+                f"previous round: {feedback_text}\n\n{gen_q}"
             )
             hist.append({"role": "assistant", "content": winner_text})
             hist.append({"role": "user", "content": reask})
