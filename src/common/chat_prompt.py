@@ -51,12 +51,19 @@ def _inject_no_think(messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": "/no_think"}] + out
 
 
-def render_chat_template(tokenizer, messages: list[dict]) -> str:
+def render_chat_template(tokenizer, messages: list[dict], enable_thinking: bool = False) -> str:
     """Render a full chat `messages` list (system/user/assistant turns,
     already built by the caller — a user turn may carry an image content
     block, e.g. [{"type": "image"}, {"type": "text", "text": ...}]) via the
-    tokenizer's chat template, attempting to disable extended thinking —
-    see module docstring for why this matters and the three-tier fallback."""
+    tokenizer's chat template, attempting to disable extended thinking by
+    default — see module docstring for why this matters and the
+    three-tier fallback. enable_thinking=True skips both the
+    enable_thinking=False kwarg and the "/no_think" injection, letting
+    whatever the tokenizer's chat template does by default (thinking ON
+    for Qwen3) through unchanged — for callers deliberately A/B testing
+    thinking vs. no-thinking (e.g. verifier_cot.py's --enable_thinking)."""
+    if enable_thinking:
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     try:
         return tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,

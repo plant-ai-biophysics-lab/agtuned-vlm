@@ -37,6 +37,16 @@ min_round: 3
 max_round: 1              # 1 = single-round (generate -> tournament -> argmax; belief inert)
 temperature: 0.8        # sampling temperature for the K per-round candidates; needs to be > 0
                          # for k_candidates > 1 to actually differ (greedy decoding repeats itself)
+enable_thinking: false  # model-being-tested's own extended thinking for the k_candidates
+                         # generation step only (not the verifier's own pairwise/same-answer
+                         # calls) — off by default, matching every other generation script in
+                         # this repo (src/common/chat_prompt.py). Set true to A/B test whether
+                         # reasoning before committing to a diagnosis reduces generic-category
+                         # hedging (e.g. "leaf spot disease" instead of naming the specific
+                         # disease) found in judge-leniency analysis. Raise gen_max_tokens well
+                         # above its default when this is true, or thinking traces get truncated
+                         # before the model reaches its actual answer.
+gen_max_tokens: 180      # max_tokens for the k_candidates generation step
 
 # Candidate generation prompt is now ALWAYS the fill-in-the-blank
 # structured_templates entry for the group's task type (verifier_prompts.yaml)

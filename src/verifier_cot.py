@@ -184,7 +184,7 @@ def extract_answer_tag(text: str) -> tuple[str, bool]:
 
 def run_batch_n(
     llm, tokenizer, images: list, histories: list[list[dict]], params,
-    call_stats: dict | None = None,
+    call_stats: dict | None = None, enable_thinking: bool = False,
 ) -> list[list[dict]]:
     """n completions per prompt. Returns one list of {"text", "prompt_tokens",
     "completion_tokens"} dicts per prompt. `call_stats` (a plain dict shared
@@ -192,8 +192,17 @@ def run_batch_n(
     n_calls += 1 (this is the single choke point every verifier/generation
     call in this module passes through, so counting invocations here is
     the true, unambiguous "how many separate vLLM calls did this run make"
-    — batch size doesn't inflate it), n_prompts += len(prompts)."""
-    prompts = [{"prompt": render_chat_template(tokenizer, h), "multi_modal_data": {"image": img}}
+    — batch size doesn't inflate it), n_prompts += len(prompts).
+
+    enable_thinking: this is the ONLY generation call in this module that
+    takes it — the verifier's pairwise-duel analysis and same-answer check
+    (_score_pairs_batch/_judge_same_answer) always render with thinking
+    off, since they're not what --enable_thinking is meant to test and
+    turning thinking on for every verifier call too would multiply cost
+    across k_candidates x max_round x pairwise-comparisons for no benefit
+    to the actual question (does the MODEL BEING TESTED reason better)."""
+    prompts = [{"prompt": render_chat_template(tokenizer, h, enable_thinking=enable_thinking),
+                "multi_modal_data": {"image": img}}
                for img, h in zip(images, histories)]
     outputs = llm.generate(prompts, sampling_params=params)
     if call_stats is not None:
@@ -699,7 +708,7 @@ def run_group_rounds(
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None,
     floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
-    seed: int | None = None,
+    seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
 ) -> list[list[dict]]:
     """Run the full round loop for every image in one (dataset, class) group
     in parallel, each image stopping independently once its own stopping
@@ -741,7 +750,18 @@ def run_group_rounds(
     belief-tracking mechanism itself). run_model passes args.seed (the
     same seed already used for rng's pivot-selection/incumbent-slot
     randomization) — pass None to opt back into vLLM's own unseeded
-    default."""
+    default.
+
+    enable_thinking/gen_max_tokens: --enable_thinking (default off, matches
+    every other generation script in this repo — see chat_prompt.py's
+    module docstring) turns on the model-being-tested's own extended
+    thinking for the k_candidates generation step ONLY (run_batch_n's
+    call below) — not the verifier's own pairwise/same-answer calls, see
+    run_batch_n's docstring for why. gen_max_tokens defaults to 180 (fits
+    a direct fill-in-the-blank answer with no thinking); raise it via
+    config when enabling thinking or a <think>...</think> block will
+    routinely get truncated before the model ever reaches its actual
+    filled-in template / <answer> tag."""
     n = len(images)
     gen_q = gen_template.format(question=cls_q)
     base_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
@@ -772,10 +792,11 @@ def run_group_rounds(
 
         gen_hists = _gen_histories_for_round(base_hist, state, active, round_idx, gen_q)
         gen_params = SamplingParams(
-            temperature=gen_temperature, max_tokens=180,
+            temperature=gen_temperature, max_tokens=gen_max_tokens,
             repetition_penalty=1.1, n=k_candidates, seed=seed,
         )
-        gen_out = run_batch_n(llm, tokenizer, [images[i] for i in active], gen_hists, gen_params, call_stats)
+        gen_out = run_batch_n(llm, tokenizer, [images[i] for i in active], gen_hists, gen_params, call_stats,
+                               enable_thinking=enable_thinking)
         candidate_lists = [[c["text"] for c in cands] for cands in gen_out]
         answer_lists, answer_found_lists = [], []
         for cands in gen_out:
@@ -1064,7 +1085,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
                 log_path=log_path, call_stats=call_stats,
                 floor_threshold=args.floor_threshold, margin_ref=args.margin_ref, max_beta=args.max_beta,
-                seed=args.seed,
+                seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
             )
 
             for name, entries in zip(names, per_image_rounds):
@@ -1205,6 +1226,23 @@ if __name__ == "__main__":
                          help="Sampling temperature for the K per-round candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "
                               "greedy decoding (temperature=0) returns identical copies.")
+    parser.add_argument("--enable_thinking", action="store_true",
+                         help="Turn on the model-being-tested's own extended thinking "
+                              "(<think>...</think>) for the k_candidates generation step only — every "
+                              "other generation script in this repo disables it by default (see "
+                              "src/common/chat_prompt.py's module docstring: it compounds badly across "
+                              "multi-turn pipelines). Off by default to match that convention; this "
+                              "flag exists to A/B test whether reasoning before committing to a "
+                              "diagnosis reduces the generic-category hedging found in judge-leniency "
+                              "analysis (e.g. answering 'leaf spot disease' instead of naming the "
+                              "specific disease). Does NOT affect the verifier's own pairwise-duel or "
+                              "same-answer calls — see run_batch_n's docstring. Raise --gen_max_tokens "
+                              "when using this, or thinking traces will routinely get truncated before "
+                              "the model reaches its actual answer.")
+    parser.add_argument("--gen_max_tokens", type=int, default=180,
+                         help="max_tokens for the k_candidates generation step. 180 fits a direct "
+                              "fill-in-the-blank answer with no thinking; raise substantially (e.g. "
+                              "600-1000) when --enable_thinking is set.")
     parser.add_argument("--beta", type=float, default=0.5,
                          help="Bradley-Terry per-comparison noise (doc Sec. 5) — --baseline belief only. "
                               "This is the FLOOR value used for a high-confidence win; the actual "
