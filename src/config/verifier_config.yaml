@@ -4,12 +4,13 @@
 # overrides whatever is set here — see docs/verifier_score_belief_update.md
 # for what each of these actually controls.
 #
-# You run this per model (--model overrides "model" below) and per baseline
-# (--baseline belief/argmax), one invocation per (model, baseline).
+# You run this per model (--model overrides "model" below).
 
 # ── Model / baseline ─────────────────────────────────────────────────────────
 model: google/gemma-4-26B-A4B-it
-baseline: belief  # "belief" (our contribution) or "argmax" (basic-PPT-score ablation)
+baseline: belief  # only valid value — kept for output-path naming (ckpt_belief_*.csv etc.),
+                   # consumed by cot_compare.py/verifier_summary.py. --max_round 1 is now the
+                   # argmax-equivalent baseline (see verifier_cot.py's module docstring).
 
 # ── Data sources ─────────────────────────────────────────────────────────────
 config: src/config/datasets.yaml
@@ -21,7 +22,11 @@ output_dir: outputs_final/verifier_cot/
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
 n_samples: 10  # images/class to evaluate
-seed: 42       # seeds the incumbent-A/B-slot randomization in --baseline belief's pairwise scoring
+seed: 42       # seeds incumbent-A/B-slot randomization AND every generation SamplingParams
+               # (k-candidate sampling, pairwise-duel analysis) so runs over the same images/
+               # config are reproducible rather than drawing fresh randomness each time — was
+               # previously unseeded, which made run-to-run comparisons (e.g. 1 round vs 6
+               # rounds) hard to trust since round 1 alone could swing between runs
 
 # ── Round loop / belief-tracking hyperparameters (Sec. 13 of the design doc) ─
 k_candidates: 4        # K -- candidates generated per round via temperature sampling

@@ -1,71 +1,67 @@
 """
-Stage 4 — Verifier-CoT: round-based belief tracking (our contribution) and
-its basic-PPT-score ablation, per docs/verifier_score_belief_update.md.
+Stage 4 — Verifier-CoT: round-based belief tracking (our contribution),
+per docs/verifier_score_belief_update.md.
 
 One evolving thread per image (see the doc's Section 13 + flow chart for
-the full derivation). --baseline belief and --baseline argmax diverge
-completely in HOW a round's K new candidates get turned into this round's
-answer — everything else (generation, re-ask feedback loop, stopping
-rule) is shared:
+the full derivation). The FULL Probabilistic Pivot Tournament from the
+paper (arXiv:2607.05391 Section 3.2 — ring pass, pivot selection, pivot
+rounds, via llm_verifier.pivot_tournament, UNMODIFIED, the same library
+src/verifier_lmv.py uses) runs fresh each round over this round's
+POOL = [the incumbent from the previous round, if any] + the K new
+candidates — the incumbent participates AS A POOL MEMBER, not as a
+privileged always-compared anchor. Every scheduled pair is scored via the
+PPT paper's own dual-trajectory logprob mechanism (src/common/
+ppt_scoring.py — the exact same scoring the full-tournament baseline
+uses), aggregated into Bradley-Terry win-mass to rank the pool. Our
+contribution is ENTIRELY the stopping rule layered on top of this
+unmodified tournament — nothing about PPT itself is changed. Exactly ONE
+persistent-belief update happens per round (verifier scores are
+ephemeral/per-comparison; the belief is persistent): the round's top-1
+(from the tournament's own win-rate ranking — defined for every pool
+member, since ring-pass alone already compares each of them at least
+once) becomes the winner against the incumbent, or, if the incumbent IS
+top-1 (survived), against the strongest actual challenger instead.
+pairwise_update() only ever needs the winner/loser IDENTITY, never a raw
+score, so this needs no specific pair to have been directly scored under
+PPT's O(Nk) budget. That single win/loss folds into the running belief
+(mu, sigma^2) via Bradley-Terry moment matching (Sec. 5). Round 1 has no
+incumbent, so it uses (top-1, runner-up) the same way — no special-cased
+seeding step. Identity for persistence is the ANSWER, not the pool slot:
+every candidate's free generation also carries an open-ended
+<answer>...</answer> tag (extract_answer_tag — no closed-set vocabulary),
+and when a NEW candidate outranks the incumbent's own slot, a lightweight
+text-only judge (_judge_same_answer — just the two extracted answers, no
+image) decides whether it's a genuine answer change (belief resets) or a
+reworded restatement of the same conclusion (belief carries forward onto
+the new text). `incumbent_survived` tracks whether the ANSWER (not the
+literal text) won again this round. Top-1 only for now (a single
+incumbent carried forward, not a pool of k) — see
+_process_round_belief's docstring.
 
-  --baseline belief (our contribution) — the FULL Probabilistic Pivot
-  Tournament from the paper (arXiv:2607.05391 Section 3.2 — ring pass,
-  pivot selection, pivot rounds, via llm_verifier.pivot_tournament,
-  UNMODIFIED, the same library src/verifier_lmv.py uses), run fresh each
-  round over this round's POOL = [the incumbent from the previous round,
-  if any] + the K new candidates — the incumbent participates AS A POOL
-  MEMBER, not as a privileged always-compared anchor. Every scheduled pair
-  is scored via the PPT paper's own dual-trajectory logprob mechanism
-  (src/common/ppt_scoring.py — the exact same scoring the full-tournament
-  baseline uses), aggregated into Bradley-Terry win-mass to rank the pool.
-  Our contribution is ENTIRELY the stopping rule layered on top of this
-  unmodified tournament — nothing about PPT itself is changed. Exactly ONE
-  persistent-belief update happens per round (verifier scores are
-  ephemeral/per-comparison; the belief is persistent): the round's top-1
-  (from the tournament's own win-rate ranking — defined for every pool
-  member, since ring-pass alone already compares each of them at least
-  once) becomes the winner against the incumbent, or, if the incumbent IS
-  top-1 (survived), against the strongest actual challenger instead.
-  pairwise_update() only ever needs the winner/loser IDENTITY, never a raw
-  score, so this needs no specific pair to have been directly scored under
-  PPT's O(Nk) budget. That single win/loss folds into the running belief
-  (mu, sigma^2) via Bradley-Terry moment matching (Sec. 5). Round 1 has no
-  incumbent, so it uses (top-1, runner-up) the same way — no special-cased
-  seeding step. Identity for persistence is the ANSWER, not the pool slot:
-  every candidate's free generation also carries an open-ended
-  <answer>...</answer> tag (extract_answer_tag — no closed-set vocabulary),
-  and when a NEW candidate outranks the incumbent's own slot, a lightweight
-  text-only judge (_judge_same_answer — just the two extracted answers, no
-  image) decides whether it's a genuine answer change (belief resets) or a
-  reworded restatement of the same conclusion (belief carries forward onto
-  the new text). `incumbent_survived` tracks whether the ANSWER (not the
-  literal text) won again this round. Top-1 only for now (a single
-  incumbent carried forward, not a pool of k) — see
-  _process_round_belief's docstring.
-  --baseline argmax (basic-PPT-score ablation) — every candidate scored
-  INDEPENDENTLY 1-20 (score_prompt, no reference, no pairwise call), keeps
-  whichever has scored highest across all rounds so far. Isolates what the
-  tournament/belief-tracking machinery buys over naive repeated
-  argmax-scoring at an equal round budget.
-  Stopping (belief mode): checked from round 3, hard cap at round 10 —
-  Phi((mu-mu_1)/sqrt(sigma^2+sigma_1^2+2*beta^2)) >= 0.85 stops early
-  ("high confidence"); otherwise runs to the cap and reports whichever
-  confidence bin (high/medium/low) it lands in. argmax mode uses the same
-  round bounds/bins on its own raw-score-derived confidence.
+A single round (--max_round 1) IS the argmax-selection baseline: with no
+incumbent and nothing to persist, the round's own tournament win-rate
+argmax is the entire result — no separate scoring mechanism or code path
+needed (an earlier, separate --baseline argmax mode — independent 1-20
+scoring per candidate, no pairwise comparison — was tried and removed;
+--max_round 1 through this same pipeline supersedes it).
+
+Stopping: checked from round 3, hard cap at round 10 (config: min_round/
+max_round) — Phi((mu-mu_1)/sqrt(sigma^2+sigma_1^2+2*beta^2)) >= 0.85 stops
+early ("high confidence"); otherwise runs to the cap and reports whichever
+confidence bin (high/medium/low) it lands in.
 
 Checkpoint (one row per (image, round), STEP_CKPT_FIELDS-shaped like
 cot_yaml.py's --per_step/--swap_datasets so cot_yaml_step_report.py-style
 per-round F1 works the same way via compute_step_metrics — see the doc's
 "What gets stored" section):
-  <output_dir>/<safe_model_name>/<baseline>/ckpt_<safe_model_name>.csv
-  <output_dir>/<safe_model_name>/<baseline>/metrics.json  (final-round rows only)
-  <output_dir>/<safe_model_name>/<baseline>/belief_by_round_<baseline>.png
+  <output_dir>/<safe_model_name>/ckpt_belief_<safe_model_name>.csv
+  <output_dir>/<safe_model_name>/metrics_belief.json  (final-round rows only)
+  <output_dir>/<safe_model_name>/belief_by_round_belief.png
 
 Usage:
     uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it
-    uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --baseline argmax
 
-Collate after all models/modes have run:
+Collate after all models have run:
     uv run python main.py verifier-cot --collate
 """
 from __future__ import annotations
@@ -114,21 +110,13 @@ from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_l
 
 try:
     from vllm import SamplingParams
-    _SCORE_PARAMS = SamplingParams(temperature=0.0, max_tokens=150)
     _SAME_ANSWER_PARAMS = SamplingParams(temperature=0.0, max_tokens=40)
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
-    _SCORE_PARAMS = None
     _SAME_ANSWER_PARAMS = None
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
-
-# 1-20, matching the PPT paper's G=20 granularity (arXiv:2607.05391 Section
-# 4.1) — not itself logprob-extracted here (this is a JSON-parsed text
-# score, not a forced-decode letter scale; see src/verifier_lmv.py for the
-# logprob-based version), just kept on the same scale for consistency.
-SCORE_SCALE_MAX = 20
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 
 _VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.yaml"
@@ -194,40 +182,17 @@ def extract_answer_tag(text: str) -> tuple[str, bool]:
     return text.strip(), False
 
 
-def run_batch1(
+def run_batch_n(
     llm, tokenizer, images: list, histories: list[list[dict]], params,
     call_stats: dict | None = None,
-) -> list[dict]:
-    """One completion per prompt. Returns one {"text", "prompt_tokens",
-    "completion_tokens"} dict per prompt. `call_stats` (a plain dict shared
+) -> list[list[dict]]:
+    """n completions per prompt. Returns one list of {"text", "prompt_tokens",
+    "completion_tokens"} dicts per prompt. `call_stats` (a plain dict shared
     across a whole run — see run_model), if given, is incremented in place:
     n_calls += 1 (this is the single choke point every verifier/generation
     call in this module passes through, so counting invocations here is
     the true, unambiguous "how many separate vLLM calls did this run make"
     — batch size doesn't inflate it), n_prompts += len(prompts)."""
-    prompts = [{"prompt": render_chat_template(tokenizer, h), "multi_modal_data": {"image": img}}
-               for img, h in zip(images, histories)]
-    outputs = llm.generate(prompts, sampling_params=params)
-    if call_stats is not None:
-        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
-        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(prompts)
-    results = []
-    for o in outputs:
-        comp = o.outputs[0]
-        results.append({
-            "text": _clean(comp.text),
-            "prompt_tokens": len(getattr(o, "prompt_token_ids", None) or []),
-            "completion_tokens": len(getattr(comp, "token_ids", None) or []),
-        })
-    return results
-
-
-def run_batch_n(
-    llm, tokenizer, images: list, histories: list[list[dict]], params,
-    call_stats: dict | None = None,
-) -> list[list[dict]]:
-    """n completions per prompt. Returns one list of the above dicts per
-    prompt. See run_batch1 for call_stats."""
     prompts = [{"prompt": render_chat_template(tokenizer, h), "multi_modal_data": {"image": img}}
                for img, h in zip(images, histories)]
     outputs = llm.generate(prompts, sampling_params=params)
@@ -259,32 +224,13 @@ def _log_verifier_call(log_path: Path | None, **fields) -> None:
 
 # ── Verifier response parsing ───────────────────────────────────────────────
 
-def _parse_score(text: str) -> tuple[int, str]:
-    text = _THINK_RE.sub("", text).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end != -1:
-        try:
-            data = json.loads(text[start:end + 1])
-            score = max(1, min(SCORE_SCALE_MAX, int(data.get("score", 1))))
-            feedback = str(data.get("feedback", ""))[:300]
-            return score, feedback
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    m = re.search(r'"score"\s*:\s*(\d+)', text)
-    score = max(1, min(SCORE_SCALE_MAX, int(m.group(1)))) if m else 1
-    m2 = re.search(r'"feedback"\s*:\s*"([^"]+)"', text)
-    feedback = m2.group(1)[:300] if m2 else ""
-    return score, feedback
-
-
 def _parse_same(text: str) -> bool:
     """Parse the same_answer_prompt's {"same": true/false} verdict.
     Defaults to False (treat as a genuine answer change) on any parse
     failure — the conservative choice, since defaulting True would let a
     malformed judge response silently carry a persistent belief forward
     onto what might be an unrelated answer, while defaulting False only
-    costs an unnecessary belief reset (mirrors _parse_score's own
-    conservative default of the lowest score on failure)."""
+    costs an unnecessary belief reset."""
     text = _THINK_RE.sub("", text).strip()
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end != -1:
@@ -362,24 +308,30 @@ def _gen_histories_for_round(
     base_hist: list[list[dict]], state: list[dict], active: list[int], round_idx: int, gen_q: str,
 ) -> list[list[dict]]:
     """History each active image's K candidates get generated from this
-    round — round 1 asks gen_q (cls_q + the <answer>-tag instruction) cold;
-    round k>=2 feeds back the current incumbent + the feedback from
-    whatever most recently updated it and asks for an improved answer.
-    Shared by both modes."""
+    round — round 1 asks gen_q (the structured template) cold; round
+    k>=2 replays EVERY prior round's (winning trajectory, feedback) pair
+    in order — not just the immediately preceding one — as alternating
+    assistant/user turns on top of base_hist, so round k's generation
+    sees the model's own full history of winning answers and what the
+    verifier said about each of them, not just the last exchange.
+    state[i]["history"] holds that list, appended once per round in
+    run_group_rounds right after _process_round_belief finalizes that
+    round's C_best/feedback (see the docstring there)."""
     hists = []
     for i in active:
         if round_idx == 1:
             hists.append(base_hist[i])
-        else:
+            continue
+        hist = list(base_hist[i])
+        for winner_text, feedback_text in state[i]["history"]:
             reask = (
-                f"Feedback on the previous answer: {state[i]['feedback']}\n\n"
+                f"Feedback on the previous answer: {feedback_text}\n\n"
                 f"Given this feedback, provide an improved answer to the same "
                 f"question: {gen_q}"
             )
-            hists.append(base_hist[i] + [
-                {"role": "assistant", "content": state[i]["C_best"]},
-                {"role": "user", "content": reask},
-            ])
+            hist.append({"role": "assistant", "content": winner_text})
+            hist.append({"role": "user", "content": reask})
+        hists.append(hist)
     return hists
 
 
@@ -515,6 +467,7 @@ def _process_round_belief(
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None, call_stats: dict | None,
     floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
+    seed: int | None = None,
 ) -> None:
     """The full Probabilistic Pivot Tournament (arXiv:2607.05391 Section
     3.2), via llm_verifier.pivot_tournament's own ring_cycle/select_pivots/
@@ -558,6 +511,14 @@ def _process_round_belief(
     incumbent_survived, transcript, round_prompt_tokens,
     round_completion_tokens.
 
+    seed: fixes analysis_params' (temperature=1.0) sampling RNG so the
+    pairwise duel's free-text analysis is reproducible run-to-run for
+    identical inputs — without it, two runs with identical images/config
+    can genuinely diverge in which candidate wins a round's tournament
+    purely from unseeded sampling noise, on top of gen_params' own
+    unseeded noise (see run_group_rounds). None (vLLM's own default,
+    unseeded) if not given.
+
     floor_threshold/margin_ref/max_beta — evidence_scaled_beta's params
     (see its docstring): the belief update's effective beta gets scaled
     per-call by how decisive AND how absolutely good the winner/loser's
@@ -591,7 +552,7 @@ def _process_round_belief(
     # since ring_cycle touches every index at least once.
     first_analysis: dict[int, dict[int, str]] = {i: {} for i in active}
 
-    analysis_params = SamplingParams(temperature=1.0, max_tokens=150)
+    analysis_params = SamplingParams(temperature=1.0, max_tokens=150, seed=seed)
     score_params = score_prefill_params()
 
     def _accumulate(pair_by_image: dict[int, tuple[int, int]]) -> None:
@@ -731,66 +692,14 @@ def _process_round_belief(
         )
 
 
-def _process_round_argmax(
-    llm, tokenizer, images: list, active: list[int], candidate_lists: list[list[str]],
-    state: list[dict], prompts: dict, vprompts: dict, cls_q: str, rubric: str, round_idx: int,
-    agml_dataset: str, class_label: str, image_names: list[str],
-    log_path: Path | None, call_stats: dict | None,
-) -> None:
-    """Independent 1-20 scoring of every candidate — no reference, no
-    pairwise call, no belief object — the basic-PPT-score ablation. Keeps
-    whichever candidate has scored highest across all rounds so far.
-    Mutates state[i] in place: C_best, best_score, feedback, transcript,
-    round_prompt_tokens, round_completion_tokens.
-    """
-    score_texts_in, score_owner = [], []
-    for local_j, i in enumerate(active):
-        for cand in candidate_lists[local_j]:
-            score_text = vprompts["score_prompt"].format(
-                rubric=rubric, question=cls_q, candidate=cand[:500],
-            )
-            score_texts_in.append(score_text)
-            score_owner.append((i, cand, score_text))
-    score_hists = [_sys_msg(prompts) + [{"role": "user", "content": [
-        {"type": "image"}, {"type": "text", "text": sp},
-    ]}] for sp in score_texts_in]
-    score_images = [images[i] for (i, _, _) in score_owner]
-    score_out = run_batch1(llm, tokenizer, score_images, score_hists, _SCORE_PARAMS, call_stats)
-
-    champions: dict[int, tuple[str, int, str]] = {}
-    for (i, cand, score_text), out in zip(score_owner, score_out):
-        raw = out["text"]
-        score, fb = _parse_score(raw)
-        state[i]["round_prompt_tokens"] += out["prompt_tokens"]
-        state[i]["round_completion_tokens"] += out["completion_tokens"]
-        _log_verifier_call(
-            log_path, agml_dataset=agml_dataset, class_label=class_label,
-            image_name=image_names[i], round=round_idx, duel_index="",
-            call_type="score", candidate_text=cand, user_prompt=score_text,
-            raw_response=raw, parsed_score=score, parsed_feedback=fb,
-            prompt_tokens=out["prompt_tokens"], completion_tokens=out["completion_tokens"],
-        )
-        cur = champions.get(i)
-        if cur is None or score > cur[1]:
-            champions[i] = (cand, score, fb)
-
-    for i in active:
-        challenger_text, challenger_score, challenger_fb = champions[i]
-        s = state[i]
-        if round_idx == 1 or challenger_score >= s["best_score"]:
-            s["best_score"] = challenger_score
-            s["C_best"] = challenger_text
-        s["feedback"] = challenger_fb
-        s["transcript"].append(f"Round {round_idx}: {challenger_text}\n(verifier: {challenger_fb})")
-
-
 def run_group_rounds(
     llm, tokenizer, images: list, cls_q: str, gen_template: str, rubric: str, prompts: dict, vprompts: dict,
-    mode: str, k_candidates: int, min_round: int, max_round: int,
+    k_candidates: int, min_round: int, max_round: int,
     beta: float, high: float, medium: float, gen_temperature: float, k_pivots: int, rng: random.Random,
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None,
     floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
+    seed: int | None = None,
 ) -> list[list[dict]]:
     """Run the full round loop for every image in one (dataset, class) group
     in parallel, each image stopping independently once its own stopping
@@ -803,8 +712,8 @@ def run_group_rounds(
     in full (prompt + raw response + parsed result) to this JSONL file —
     same convention as run_judge_phase's judge_log.jsonl.
     call_stats: if given, a shared dict incremented in place with n_calls/
-    n_prompts across every run_batch1/run_batch_n call this function makes
-    — see run_batch1's docstring. Both are run_model()'s to own and pass
+    n_prompts across every run_batch_n call this function makes — see
+    run_batch_n's docstring. Both are run_model()'s to own and pass
     through; this function never creates them itself, so a caller that
     doesn't want logging/counting can simply omit them.
 
@@ -819,17 +728,36 @@ def run_group_rounds(
     depends on) in place of a bare "answer directly" instruction. See
     structured_templates' comment in verifier_prompts.yaml for why (two
     earlier alternatives — rephrasing the question, and asking for several
-    different hypotheses in one response — were tried and reverted)."""
+    different hypotheses in one response — were tried and reverted).
+
+    seed: fixes the RNG for every SamplingParams this function and
+    _process_round_belief create (gen_params' k-candidate sampling,
+    analysis_params' pairwise-duel analysis) so two runs over identical
+    images/config are reproducible rather than genuinely re-drawing
+    different candidates/tournament outcomes each time — this was the
+    root cause of a real 1-round-vs-6-round comparison looking misleading
+    (round 1 alone swung between two runs from unseeded generation noise
+    plus judge-side batching nondeterminism, not any change in the
+    belief-tracking mechanism itself). run_model passes args.seed (the
+    same seed already used for rng's pivot-selection/incumbent-slot
+    randomization) — pass None to opt back into vLLM's own unseeded
+    default."""
     n = len(images)
     gen_q = gen_template.format(question=cls_q)
     base_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
         {"type": "image"}, {"type": "text", "text": gen_q},
     ]}] for _ in range(n)]
 
-    state = [{"C_best": "", "answer": "", "belief": None, "anchor": None, "best_score": 0,
+    state = [{"C_best": "", "answer": "", "belief": None, "anchor": None,
               "feedback": "", "transcript": [], "pairwise_winner": "",
               "pool_size": 0, "n_comparisons": 0, "top1_win_rate": 0.0, "incumbent_survived": 0,
-              "round_prompt_tokens": 0, "round_completion_tokens": 0}
+              "round_prompt_tokens": 0, "round_completion_tokens": 0,
+              # (winning_trajectory, feedback) appended once per round —
+              # replayed IN FULL by _gen_histories_for_round so round k's
+              # generation sees every prior round's winner + feedback, not
+              # just the immediately preceding one. See run_group_rounds'
+              # docstring.
+              "history": []}
              for _ in range(n)]
     per_image_rounds: list[list[dict]] = [[] for _ in range(n)]
     active = list(range(n))
@@ -845,7 +773,7 @@ def run_group_rounds(
         gen_hists = _gen_histories_for_round(base_hist, state, active, round_idx, gen_q)
         gen_params = SamplingParams(
             temperature=gen_temperature, max_tokens=180,
-            repetition_penalty=1.1, n=k_candidates,
+            repetition_penalty=1.1, n=k_candidates, seed=seed,
         )
         gen_out = run_batch_n(llm, tokenizer, [images[i] for i in active], gen_hists, gen_params, call_stats)
         candidate_lists = [[c["text"] for c in cands] for cands in gen_out]
@@ -893,44 +821,45 @@ def run_group_rounds(
                 n_candidates=len(round_answers),
                 n_distinct_answers=len({a.strip().lower() for a in round_answers if a}),
                 answers=round_answers,
+                # Prompt tokens are shared across all k_candidates of this
+                # round (same gen_hists[i] input), so this IS the size of
+                # that round's replayed cumulative history — watch this
+                # grow round-over-round to see the accumulated-history
+                # feature (run_group_rounds' docstring) actually costing
+                # tokens, since the 300-char feedback truncation was
+                # removed and now nothing caps how far it can grow.
+                round_prompt_tokens=state[i]["round_prompt_tokens"],
+                round_completion_tokens=state[i]["round_completion_tokens"],
             )
 
-        if mode == "belief":
-            _process_round_belief(
-                llm, tokenizer, images, active, candidate_lists, answer_lists, state, prompts, vprompts,
-                cls_q, rubric, k_candidates, round_idx, beta, k_pivots, rng,
-                agml_dataset, class_label, image_names, log_path, call_stats,
-                floor_threshold, margin_ref, max_beta,
-            )
-        else:
-            _process_round_argmax(
-                llm, tokenizer, images, active, candidate_lists, state, prompts, vprompts,
-                cls_q, rubric, round_idx,
-                agml_dataset, class_label, image_names, log_path, call_stats,
-            )
+        _process_round_belief(
+            llm, tokenizer, images, active, candidate_lists, answer_lists, state, prompts, vprompts,
+            cls_q, rubric, k_candidates, round_idx, beta, k_pivots, rng,
+            agml_dataset, class_label, image_names, log_path, call_stats,
+            floor_threshold, margin_ref, max_beta, seed,
+        )
 
         round_elapsed = time.perf_counter() - t_round_start
 
-        # ── Stopping check + row build (shared) ─────────────────────────────
+        # ── Stopping check + row build ───────────────────────────────────────
         still_active = []
         for i in active:
             s = state[i]
-            if mode == "belief":
-                if round_idx == 1:
-                    s["anchor"] = s["belief"]
-                    p = 0.5  # anchor compared to itself — not meaningful, see doc Sec. 13
-                else:
-                    p = stop_probability(s["belief"], s["anchor"], beta)
-                mu, sigma2 = s["belief"].mu, s["belief"].sigma2
-                pool_size, n_comparisons = s["pool_size"], s["n_comparisons"]
-                top1_win_rate, incumbent_survived = s["top1_win_rate"], s["incumbent_survived"]
-                pairwise_winner = s["pairwise_winner"]
-                verifier_answer = s["answer"]
+            if round_idx == 1:
+                s["anchor"] = s["belief"]
+                p = 0.5  # anchor compared to itself — not meaningful, see doc Sec. 13
             else:
-                p = (s["best_score"] - 1) / (SCORE_SCALE_MAX - 1)
-                mu = sigma2 = pairwise_winner = ""
-                pool_size = n_comparisons = top1_win_rate = incumbent_survived = ""
-                verifier_answer = ""
+                p = stop_probability(s["belief"], s["anchor"], beta)
+            mu, sigma2 = s["belief"].mu, s["belief"].sigma2
+            pool_size, n_comparisons = s["pool_size"], s["n_comparisons"]
+            top1_win_rate, incumbent_survived = s["top1_win_rate"], s["incumbent_survived"]
+            pairwise_winner = s["pairwise_winner"]
+            verifier_answer = s["answer"]
+            # Append THIS round's (winner, feedback) for the NEXT round's
+            # _gen_histories_for_round to replay — after this point s["C_best"]/
+            # s["feedback"] are this round's final values (set inside
+            # _process_round_belief above).
+            s["history"].append((s["C_best"], s["feedback"]))
 
             stop_now = should_stop(round_idx, p, min_round, max_round, high)
             per_image_rounds[i].append({
@@ -987,14 +916,14 @@ def _round_row(entry: dict, ds, clean_label: str, crop_val, task_type: str, name
 
 # ── Plot: belief per round, with bootstrap CI ───────────────────────────────
 
-def plot_belief_by_round(model_dir: Path, rows: list[dict], mode: str) -> None:
-    """Mean (+ bootstrap 95% CI) of the belief/confidence signal per round,
-    one line per task_type plus overall — the belief-tracking analogue of
+def plot_belief_by_round(model_dir: Path, rows: list[dict]) -> None:
+    """Mean (+ bootstrap 95% CI) of the belief mean (mu) per round, one line
+    per task_type plus overall — the belief-tracking analogue of
     cot_yaml_step_report.py's step_f1_overall.png (doc Section 14)."""
     import numpy as np
     import matplotlib.pyplot as plt
 
-    y_key = "mu" if mode == "belief" else "stop_confidence"
+    y_key = "mu"
     by_group: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
     for r in rows:
         val = r.get(y_key, "")
@@ -1029,12 +958,12 @@ def plot_belief_by_round(model_dir: Path, rows: list[dict], mode: str) -> None:
         ax.fill_between(rounds, lo, hi, alpha=0.15)
 
     ax.set_xlabel("Round")
-    ax.set_ylabel("Belief mean (mu)" if mode == "belief" else "Confidence (score / 10)")
-    ax.set_title(f"Verifier-CoT ({mode}) — belief per round, 95% CI")
+    ax.set_ylabel("Belief mean (mu)")
+    ax.set_title("Verifier-CoT (belief) — belief per round, 95% CI")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     plt.tight_layout()
-    out = model_dir / f"belief_by_round_{mode}.png"
+    out = model_dir / "belief_by_round_belief.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {out}")
@@ -1047,9 +976,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     vprompts = _load_yaml(Path(args.verifier_prompts))
     manifest = load_manifest(Path(args.manifest))
 
-    # Flat <output_dir>/<model>/ layout (not nested by --baseline) so this
-    # stays compatible with the rest of the repo's load_all_rows()-style
-    # loaders — belief vs argmax are disambiguated by filename instead.
+    # Flat <output_dir>/<model>/ layout so this stays compatible with the
+    # rest of the repo's load_all_rows()-style loaders.
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{args.baseline}_{safe_model_name(model_id)}.csv"
     # verifier_log_<baseline>.jsonl is this script's own raw per-call log
@@ -1129,13 +1057,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
             per_image_rounds = run_group_rounds(
                 llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
-                mode=args.baseline, k_candidates=args.k_candidates,
+                k_candidates=args.k_candidates,
                 min_round=args.min_round, max_round=args.max_round,
                 beta=args.beta, high=args.high_conf, medium=args.med_conf,
                 gen_temperature=args.temperature, k_pivots=args.k_pivots, rng=rng,
                 agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
                 log_path=log_path, call_stats=call_stats,
                 floor_threshold=args.floor_threshold, margin_ref=args.margin_ref, max_beta=args.max_beta,
+                seed=args.seed,
             )
 
             for name, entries in zip(names, per_image_rounds):
@@ -1185,7 +1114,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
           f"{compute_summary['cumulative_all_rows']['total_completion_tokens']} prompt+completion "
           f"tokens across all rows — full verifier call log: {log_path.name}")
 
-    plot_belief_by_round(model_dir, rows, args.baseline)
+    plot_belief_by_round(model_dir, rows)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -1225,11 +1154,13 @@ if __name__ == "__main__":
              "passed on the command line overrides this file.",
     )
     parser.add_argument("--model", default=None, help="Single model to run. Not needed with --collate.")
-    parser.add_argument("--baseline", choices=["belief", "argmax"], default="belief",
-                         help="belief = our contribution (pairwise Bradley-Terry belief tracking, "
-                              "docs/verifier_score_belief_update.md); argmax = basic-PPT-score "
-                              "ablation — same round budget, no pairwise/belief math, just keeps "
-                              "the best-scored candidate seen so far.")
+    parser.add_argument("--baseline", choices=["belief"], default="belief",
+                         help="Pairwise Bradley-Terry belief tracking (docs/verifier_score_"
+                              "belief_update.md). Kept as a flag (rather than removed outright) "
+                              "so output paths (ckpt_belief_*.csv, verifier_log_belief.jsonl, "
+                              "etc.) stay stable for cot_compare.py/verifier_summary.py, which "
+                              "parameterize on this value. --max_round 1 is now the "
+                              "argmax-equivalent baseline — see module docstring.")
     parser.add_argument("--config", default="src/config/datasets.yaml")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
     parser.add_argument("--verifier_prompts", default=str(_VERIFIER_PROMPTS_PATH))

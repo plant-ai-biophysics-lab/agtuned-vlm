@@ -192,7 +192,7 @@ if __name__ == "__main__":
     p.add_argument("--verifier_dir", default="outputs_final/verifier_cot_fasttest/",
                    help="verifier_cot.py's --output_dir for the run being summarized.")
     p.add_argument("--model", default="google/gemma-4-E4B-it")
-    p.add_argument("--baseline", choices=["belief", "argmax"], default="belief")
+    p.add_argument("--baseline", choices=["belief"], default="belief")
     p.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CIs.")
     p.add_argument("--seed", type=int, default=42)
     main(p.parse_args())

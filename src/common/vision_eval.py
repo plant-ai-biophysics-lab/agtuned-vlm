@@ -266,13 +266,24 @@ def archive_ckpt_if_rerun(
 # across experiments and a fix here (like the blank-judge_gt_hint bug) only
 # ever needs to happen in one place. Do not re-implement this per-script.
 
-def _judge_row_key(row: dict) -> tuple[str, str, str, str, str]:
-    """(dataset, class, image[, step_idx, rotation]) — the last two are ""
-    for every CKPT_FIELDS row (one prediction per image) and only meaningful
-    for cot_yaml.py's STEP_CKPT_FIELDS rows (multiple predictions per image,
-    one per chain position/rotation), so that case doesn't collapse distinct
-    steps of the same image onto the same judged_correct value."""
+def _judge_row_key(row: dict) -> tuple[str, str, str, str, str, str]:
+    """(dataset, class, image[, step_idx, rotation, round]) — the last three
+    are "" for every CKPT_FIELDS row (one prediction per image). step_idx/
+    rotation are only meaningful for cot_yaml.py's STEP_CKPT_FIELDS rows
+    (multiple predictions per image, one per chain position/rotation);
+    round is only meaningful for verifier_cot.py's VERIFIER_STEP_FIELDS rows
+    (multiple predictions per image, one per round). Without `round` here,
+    every round of the same image shared one key, so merge_judged's
+    last-write-wins dict silently overwrote every earlier round's real
+    judged_correct with whichever round happened to be judged last for that
+    image — a real bug (each round WAS independently judged, correctly;
+    only the write-back collapsed them). Because verifier_cot.py writes rows
+    image-major/round-ascending, the round that "won" was always the
+    image's own final round, so any chart reading only is_final_round=1
+    rows was accidentally unaffected — but anything reading per-round
+    judged_correct (e.g. a belief-vs-round judged-accuracy plot) was not."""
     return (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""),
+            row.get("round", ""),
             str(row.get("step_idx", "")), str(row.get("rotation", "")))
 
 

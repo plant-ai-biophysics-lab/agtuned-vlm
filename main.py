@@ -80,11 +80,12 @@ Stages:
                                output (no GPU needed)
     cot-compare              — win rate / mean gain / mean loss / top-5 gains & losses for
                                desc-aug-v2, self-cot, cot-yaml vs. vision-baseline (no GPU needed)
-    verifier-cot    Stage 4 — round-based verifier belief tracking (docs/verifier_score_belief_update.md);
-                               --baseline belief (our contribution, default) or --baseline argmax
-                               (basic-PPT-score ablation), same round budget for both. Compared
-                               against src/verifier_lmv.py's full PPT tournament (run separately,
-                               not wired into main.py — see its own --help) in `cot-compare`.
+    verifier-cot    Stage 4 — round-based verifier belief tracking (docs/verifier_score_belief_update.md).
+                               --max_round 1 is the argmax-selection baseline (no incumbent,
+                               round 1's own tournament win-rate argmax IS the result); higher
+                               max_round enables belief tracking + cumulative multi-round history.
+                               Compared against src/verifier_lmv.py's full PPT tournament (run
+                               separately, not wired into main.py — see its own --help) in `cot-compare`.
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:

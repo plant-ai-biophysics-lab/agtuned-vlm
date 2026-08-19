@@ -1,10 +1,6 @@
 # Verifier prompt templates for Stage 4 (verifier-cot) — round-based belief
 # tracking, see docs/verifier_score_belief_update.md.
 #
-# - score_prompt — used exclusively by --baseline argmax (the basic-PPT-score
-#   ablation: every candidate scored independently, no reference, no
-#   pairwise call, no belief object — isolates what the pairwise/belief
-#   machinery buys over naive repeated absolute-scoring).
 # - same_answer_prompt — used exclusively by --baseline belief, and only for
 #   the persistent-belief carry-forward decision (NOT for ranking the pool —
 #   that's still the PPT tournament). When a NEW candidate outranks the
@@ -141,31 +137,6 @@ task_type_to_rubric:
   weed_identification:     weed_identification
   quality_identification:  quality_identification
 
-# --baseline argmax ONLY. Independent 1-20 scorer (G=20, matching the PPT
-# paper's granularity — see src/verifier_cot.py's SCORE_SCALE_MAX; this is
-# a JSON-parsed text score, not logprob-extracted, unlike
-# src/verifier_lmv.py's letter-scale prompt). No SUPPORTED/UNSUPPORTED
-# verdict field (dropped per explicit request — not useful at this stage)
-# — just a score and a short feedback note fed back to the VLM for the
-# next round.
-# Params: {rubric} {question} {candidate}
-score_prompt: |
-  You are evaluating a classification prediction for an agricultural image.
-
-  Question asked: "{question}"
-  Prediction: "{candidate}"
-
-  Evaluate the prediction against these diagnostic dimensions:
-  {rubric}
-
-  Rate correctness on a 1-20 scale based on the diagnostic dimensions above:
-  1 = incorrect (clearly wrong or irrelevant to the image)
-  10 = borderline (plausible but vague or imprecise)
-  20 = correct (precisely correct, specific, and visually grounded)
-
-  Respond with JSON only:
-  {{ "score": <int 1-20>, "feedback": "<one sentence on what's missing or worth checking next>" }}
-
 # --baseline belief ONLY. Fired only when this round's tournament top-1 is a
 # NEW candidate, not the incumbent's own pool slot — decides whether the
 # persistent belief carries forward (same underlying answer, just
@@ -214,6 +185,6 @@ pairwise_prompt: |
   Trajectory A: {trajectory_a}
   Trajectory B: {trajectory_b}
 
-  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
+  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. If either trajectory's stated answer has a visually similar but distinct condition it could easily be confused with (e.g. Black Sigatoka vs. Yellow Sigatoka, or two look-alike species), explicitly check whether the trajectory's cited evidence actually distinguishes between them — not just whether it names a plausible general category. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
 
   Analysis:
