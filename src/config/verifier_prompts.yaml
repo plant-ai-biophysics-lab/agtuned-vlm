@@ -145,6 +145,24 @@ same_answer_prompt: |
 # separately via src/common/ppt_scoring.py::build_score_prompt. Trajectory
 # text is truncated to ~500 chars by _truncate_keep_answer before this
 # template is filled (never mid-<answer>-tag).
+#
+# Requires a per-criterion walkthrough (added after a real run showed the
+# open-ended "compare A and B" version let a trajectory satisfy easy
+# criteria — crop ID, affected part — while silently ignoring a harder
+# one (symptom color/pattern) and still score well overall; e.g. two
+# Sigatoka trajectories both scored fine while neither ever engaged with
+# the yellow-vs-black discoloration detail that's the actual
+# distinguishing feature between the two diseases). Forcing an explicit
+# per-item check surfaces exactly that kind of omission, and doubles as
+# richer feedback fed back into the next round's re-ask (verifier_feedback
+# — src/verifier_cot.py's first_analysis mechanism) — this is still ONE
+# holistic score per trajectory, not a true separable per-criterion score
+# (that would need one scoring call per criterion, C times the compute);
+# see docs/verifier_score_belief_update.md Section 13.1's neighboring
+# discussion for the cheaper-vs-real-per-criterion tradeoff this settles
+# for now. analysis_params's max_tokens raised (150 -> 280,
+# src/verifier_cot.py) to give a multi-criterion walkthrough room to
+# actually fit before the score-forcing continuation appends.
 # Params: {rubric} {question} {trajectory_a} {trajectory_b}
 pairwise_prompt: |
   You are an expert agricultural scientist reviewer. You will see a task description and two trajectories.
@@ -156,7 +174,7 @@ pairwise_prompt: |
   Trajectory A: {trajectory_a}
   Trajectory B: {trajectory_b}
 
-  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
+  For EACH numbered criterion above, briefly state whether Trajectory A addresses it and whether Trajectory B addresses it — name the specific visual detail each trajectory does or does not mention (e.g. exact color, pattern, or texture described), not just whether it "seems reasonable." A trajectory only gets credit for a criterion if it engages with that SPECIFIC detail — generic disease-sounding language does not count as addressing a criterion like symptom color or pattern just because it sounds plausible. After walking through every criterion, summarize in 1-2 sentences which trajectory is stronger overall and why. Do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. You will be asked for a numeric score for each trajectory (1-20 scale: 1 = incorrect, 10 = borderline, 20 = correct) immediately after this analysis, so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
 
   Analysis:
 

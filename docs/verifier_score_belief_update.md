@@ -36,15 +36,15 @@ That's what this document walks through:
 
 For each candidate i, we track two numbers:
 
-- **μᵢ** ("mu") — our current best guess at candidate i's quality.
-- **σᵢ²** ("sigma squared") — how uncertain we are about that guess. Small σᵢ² means we're fairly sure; large σᵢ² means we're still unsure.
+- **$\mu_i$** ("mu") — our current best guess at candidate i's quality.
+- **$\sigma_i^2$** ("sigma squared") — how uncertain we are about that guess. Small $\sigma_i^2$ means we're fairly sure; large $\sigma_i^2$ means we're still unsure.
 
-Together, (μᵢ, σᵢ²) describe a bell curve (a Gaussian / normal distribution) centered at μᵢ, with
-a width controlled by σᵢ². Think of it as a smeared-out guess: "I think this candidate's quality
-is around μᵢ, but it could plausibly be a bit higher or lower, and σᵢ² tells you how much room
+Together, $(\mu_i, \sigma_i^2)$ describe a bell curve (a Gaussian / normal distribution) centered at $\mu_i$, with
+a width controlled by $\sigma_i^2$. Think of it as a smeared-out guess: "I think this candidate's quality
+is around $\mu_i$, but it could plausibly be a bit higher or lower, and $\sigma_i^2$ tells you how much room
 I'm leaving for that."
 
-Every candidate starts with some initial belief (a "prior") — for instance, μᵢ = 0, σᵢ² = 1 for
+Every candidate starts with some initial belief (a "prior") — for instance, $\mu_i = 0$, $\sigma_i^2 = 1$ for
 everyone, meaning "no information yet, wide open uncertainty." Each verifier comparison
 then narrows and shifts this bell curve.
 
@@ -66,7 +66,7 @@ Intuition: if i is much better than j, the difference is a big positive number, 
 pushes it close to 1, and the verifier almost always picks i. If they're equally good, the
 difference is 0, sigmoid gives 0.5, and it's a coin flip.
 
-We don't know the true R values — that's exactly what μᵢ is estimating. So each verifier
+We don't know the true R values — that's exactly what $\mu_i$ is estimating. So each verifier
 comparison is a noisy peek at the gap between two unknown numbers, and we want to use
 that peek to sharpen our belief.
 
@@ -328,14 +328,20 @@ This section pins down the exact mechanics decided on after the Section 9–12 d
 this is what gets implemented, not a hypothetical. One evolving thread per image, not a
 one-shot tournament over a static pool.
 
-**Belief vs. verifier score — these are two different things.** The verifier score (`R_a`,
-`R_b` from the logit extraction below) is per-comparison and ephemeral — it exists only to
-decide who wins *that one* pairwise comparison, then gets discarded. The belief `(μ, σ²)` is
-persistent — it survives across rounds and drives the stopping rule. A win/loss outcome
-doesn't average scores into it; it moves the belief by an amount that depends on how
-*surprising* the outcome was given the belief's own existing uncertainty (`z`/`v(z)`/`w(z)`,
-Section 5) — the raw score value is only ever used to decide the winner of a single
-comparison, never fed into the belief arithmetic directly.
+**Belief vs. verifier score — these are two different things, but the score still shapes the
+update.** The verifier score (`R_a`, `R_b` from the logit extraction below) is per-comparison
+and ephemeral — it exists to decide who wins *that one* pairwise comparison, and is discarded
+once that's decided. The belief `(μ, σ²)` is persistent — it survives across rounds and drives
+the stopping rule. A win/loss outcome doesn't average scores into it; it moves the belief by an
+amount that depends on how *surprising* the outcome was given the belief's own existing
+uncertainty (`z`/`v(z)`/`w(z)`, Section 5). This part is unchanged. What changed (see "Evidence-
+scaled beta" below): early versions of this design fed a flat, fixed `β` into that formula
+regardless of how decisive or how absolutely good the winning score actually was — so a
+"best of two mediocre candidates" win and a genuinely decisive win produced *identical* belief
+shifts, since `pairwise_update` never saw `R_a`/`R_b` at all, only categorical win/loss. That's
+now fixed: `β` is computed per-comparison from the winner's and loser's raw scores before
+`pairwise_update` runs, so the raw score value *does* now shape the belief arithmetic — just
+indirectly, through how much the comparison is trusted, not by being averaged in directly.
 
 **Why every comparison is pairwise, and why the incumbent enters the pool instead of being a
 fixed anchor.** Absolute 1–20 scoring (still used by the `--baseline argmax` ablation) asks
@@ -380,7 +386,10 @@ adds at most one small, cheap call per round, not one per pool member.
 ```
 ROUND k (k=1 has no incumbent; k>=2 does)
   generate K candidates (image + question, temperature sampling — see
-  Section 9(a); rephrasing is still deferred, not implemented)
+  Section 9(a)); --rephrase (off by default) ALSO adds one candidate per
+  model-generated alternate wording of the question (generated once per
+  group, before round 1 — see "Rephrase step" below), so pool size is
+  K + rephrase_count when enabled, not just K
         |
   pool = [incumbent from round k-1, if k>=2] + [K new candidates]
   (the incumbent is a POOL MEMBER, not a fixed always-compared anchor)
@@ -423,13 +432,16 @@ ROUND k (k=1 has no incumbent; k>=2 does)
                 (genuine answer change -- fresh prior for the winner,
                 incumbent's persistent belief discarded)
         |
-  Section 5 moment-matching update needs only WHICH SIDE WON, not a raw
-  score (pairwise_update(winner: Belief, loser: Belief, beta) takes
-  belief objects, never a score) -- so no lookup of a specific pair's
-  score is needed, even though PPT's O(nk) schedule doesn't guarantee
-  (incumbent, top1) or (incumbent, runner_up) was ever directly
-  compared; the tournament's own aggregate win-rate ranking decides who
-  won, the same-answer check (or triviality) decides who's PERSISTENT
+  Section 5 moment-matching update needs WHICH SIDE WON (pairwise_update
+  (winner: Belief, loser: Belief, beta) still takes belief objects, not a
+  score) plus the winner's/loser's OWN raw scores this round, averaged
+  across whichever comparisons they were part of, to compute an
+  evidence-scaled beta (see below) before calling pairwise_update -- no
+  lookup of one SPECIFIC pair's score is needed (PPT's O(nk) schedule
+  doesn't guarantee (incumbent, top1) or (incumbent, runner_up) was ever
+  directly compared), just each side's own average; the tournament's own
+  aggregate win-rate ranking decides who won, the same-answer check (or
+  triviality) decides who's PERSISTENT
         |
   Section 5 update: winner's belief (persistent (mu, sigma^2) if
   "defended", else fresh (0,1)) vs loser's belief (persistent if
@@ -492,11 +504,13 @@ Bradley-Terry win-mass per pool member (`P(i≻j) = σ(R_i − R_j)`, accumulate
 `c_i += 1` for every pair `i` appears in, across both the ring pass and the pivot round) and
 take `top1 = argmax(win_i/count_i)`.
 
-Exactly ONE persistent-belief update happens per round — not one per pair — using only the
-**identity** of a winner and a loser, never a raw score: `pairwise_update(winner: Belief,
-loser: Belief, beta)` (Section 5) takes belief objects, not scores, so nothing about the
-schedule's coverage matters here — PPT's O(nk) budget doesn't guarantee the specific pair the
-update cares about was ever directly compared, and it doesn't need to be. The tournament's own
+Exactly ONE persistent-belief update happens per round — not one per pair — using the
+**identity** of a winner and a loser (`pairwise_update(winner: Belief, loser: Belief, beta)`,
+Section 5, still takes belief objects, not scores) plus each side's own average raw score this
+round, fed through evidence_scaled_beta (below) to compute `beta` before the call. Nothing
+about the schedule's *coverage* matters here — PPT's O(nk) budget doesn't guarantee the
+specific pair the update cares about was ever directly compared, and it doesn't need to be,
+since each side's average is taken across whichever comparisons it happened to be part of. The tournament's own
 aggregate win-rate ranking (`top1`, `runner_up` — both guaranteed defined for every pool
 member, since the ring pass alone touches every index at least once) decides *which trajectory
 wins*; whether that trajectory's belief is treated as PERSISTENT is a separate question,
@@ -544,6 +558,105 @@ If round 10 is reached without clearing 0.85, stop anyway and report whichever b
 falls into — the bin is always reported, never withheld pending more rounds. `β` is the
 comparison-noise hyperparameter; 0.85/0.6 are starting defaults, easy to move once real
 score distributions are in hand.
+
+### 13.1 Evidence-scaled beta — making the update sensitive to score quality
+
+**The problem, found on a real run.** Bradley-Terry's win probability,
+$P(a \succ b) = \sigma(R_a - R_b)$, is *translation-invariant* to the absolute level of
+$R_a$/$R_b$ — a winner scoring 0.40 against a 0.05 loser (both weak) produces the same win
+probability as a 0.95-vs-0.60 winner (both strong), if the gap is similar. Combined with
+Section 5's `pairwise_update(winner, loser, beta)` never even receiving `R_a`/`R_b` (only the
+categorical winner/loser identity, plus a *flat, fixed* `β`), this meant a "best of several
+weak candidates" win produced an **identical** belief shift to a genuinely decisive win. On a
+real 160-image run this showed up concretely: `stop_confidence` at the final round averaged
+0.800 for images whose final answer was judged *correct* and 0.779 for images judged
+*incorrect* — a gap of 0.02, close to noise. The belief signal wasn't tracking correctness
+because it wasn't sensitive to how good the winning score actually was, only to *whether* it
+won.
+
+**Why the fix scales beta up, not down.** The natural first instinct — divide the flat `β`
+down for a decisive win, up for a weak one — turns out to be numerically almost inert, because
+`pairwise_update`'s moment-matching formula is close to flat/saturated for any `β` below
+roughly 1.0: `c` (Section 5) grows with `β` in the denominator, but the resulting smaller `z`
+pushes `v(z)`/`w(z)` up almost enough to cancel that growth, so the belief shift barely moves
+across the whole `β ∈ [0.05, 0.5]` range. It only becomes meaningfully sensitive to `β` once
+`β` climbs toward roughly 2–10. So instead of scaling `β` *down* from a 0.5 baseline (still
+inside the flat zone), the fix blends `β` *up* toward a much larger `max_beta` as evidence
+weakens — the only direction with real sensitivity.
+
+**The formula.** Let $\bar R_w$, $\bar R_\ell$ be the winner's and loser's own raw scores this
+round, each averaged across whichever comparisons that pool member happened to be part of
+(the O(nk) tournament schedule doesn't guarantee the winner and loser were ever directly
+compared to each other — see the flow chart above):
+
+$$
+\text{floor\_factor} = \min\!\left(1,\ \frac{\bar R_w}{\tau}\right)
+\qquad
+\text{margin\_factor} = \min\!\left(1,\ \frac{\max(0,\ \bar R_w - \bar R_\ell)}{m}\right)
+\qquad
+\text{confidence} = \text{floor\_factor} \times \text{margin\_factor}
+$$
+
+$$
+\beta_{\text{eff}} = \beta + (\beta_{\max} - \beta)\,(1 - \text{confidence})
+$$
+
+- **floor_factor** — is the winner *itself* any good, independent of what it beat? $\tau$
+  (`--floor_threshold`, default 0.5) is the "good enough on its own" bar. A winner scoring 0.4
+  only clears 80% of that bar even if it demolished its opponent.
+- **margin_factor** — how decisive was the win? $m$ (`--margin_ref`, default 0.3) is the gap
+  that counts as "decisive enough" to saturate this factor at 1.
+- **confidence = floor_factor × margin_factor** — both must be satisfied. A big margin between
+  two *weak* candidates (e.g. 0.40 vs. 0.05 — margin 0.35, well past $m$) still gets capped by
+  a low floor_factor (0.8), so "best of two bad options" can't fake full confidence just by
+  having a wide gap.
+- **$\beta_{\text{eff}} = \beta$** when confidence = 1 (today's unchanged default, near-maximal
+  update strength — the flat zone means shrinking further wouldn't help). **$\beta_{\text{eff}}
+  = \beta_{\max}$** (`--max_beta`, default 4.0) when confidence = 0 — verified to produce a
+  visibly smaller shift, not a cosmetic one: on a representative belief state, a decisive
+  good-vs-good win shifts $\mu$ by 0.123, while a same-margin bad-vs-bad win only shifts it by
+  0.113; a narrow win (margin under $m$ regardless of absolute quality) drops to about 0.062 —
+  roughly half the unscaled shift.
+
+Implementation: `evidence_scaled_beta` (`src/common/belief_update.py`), called from
+`_process_round_belief` (`src/verifier_cot.py`) right before `pairwise_update`, using
+`score_sum[i][k]`/`score_n[i][k]` accumulated alongside the existing win-rate tracking during
+the round's ring-pass/pivot comparisons. Config: `beta`, `floor_threshold`, `margin_ref`,
+`max_beta` in `src/config/verifier_config.yaml`.
+
+### 13.2 Rephrase step — question diversity, not answer diversity
+
+**The problem.** Temperature sampling alone doesn't guarantee the K candidates a round
+generates actually say different things. On a real run (K=8, temperature=1.0), **35.6%** of
+image-rounds produced only 1–2 distinct `<answer>` tags among the 8 candidates — the model
+often collapses onto (near-)the same conclusion regardless of resampling.
+
+**Why rephrase the question, not the answer.** An earlier design considered asking the model
+to explicitly "reconsider from a fresh angle" on the *same* question — i.e. rephrasing the
+answer-generation instruction while leaving the question itself untouched. Rejected: a model
+asked to introspect on its own just-stated conclusion, given the exact same prompt, tends to
+produce shallow hedging ("it's most likely X, but could also be Y") rather than genuinely
+different reasoning. Varying the **question's own wording** instead changes what the model
+actually anchors on — a different literal prompt can surface different vocabulary and framing,
+which is closer to how prompt-ensembling is normally used to get real diversity, not just
+paraphrased confidence.
+
+**Mechanism.** Once per (dataset, class) group, before round 1 — not per round, not per image,
+since the classification question is identical across the whole group — one text-only call
+(`vprompts["question_rephrase_prompt"]`, `src/config/verifier_prompts.yaml`) is sampled
+`rephrase_count` times at `rephrase_temperature` to produce that many alternate wordings of the
+question, meaning-preserving by instruction. Every round thereafter, each rephrased-question
+variant additionally generates exactly one candidate (one separate `generate()` call per
+variant, not `n` samples of one prompt — each candidate must come from a genuinely different
+prompt), merged into the same tournament pool as the base K candidates. Pool size becomes
+`K + rephrase_count` (plus the incumbent from round 2 on), not just `K` — `effective_k_
+candidates` is threaded into `_process_round_belief` so the ring-pass/pivot tournament sees the
+correct pool size.
+
+Off by default (`--rephrase`, config `rephrase: false`); `--rephrase_count` (default 4) and
+`--rephrase_temperature` (default 1.3, deliberately hotter than the base K candidates'
+`--temperature` default of 1.0 — the whole point is more diversity, not the same prompt
+resampled at the same temperature) are both in `src/config/verifier_config.yaml`.
 
 ## 14. What gets stored
 
@@ -758,19 +871,43 @@ columns (Section 14) make this measured, not just bounded — see also `compute_
 <baseline>.json`'s `n_llm_calls`, which will show belief mode running noticeably more calls
 per round than argmax at the same K, the direct cost of the more reliable scoring mechanism.
 
+**`--rephrase`'s added cost** (Section 13.2, off by default): one extra text-only call *per
+group* (not per round) — the question-rephrasing call, sampled `rephrase_count` times in one
+`generate()` — plus, *every* round, `rephrase_count` additional single-candidate generate calls
+(one per rephrased-question variant; deliberately not batched as `n` samples of one prompt,
+since each candidate must come from a genuinely different question). Pool size grows from `K`
+to `K + rephrase_count`, so the tournament's O(nk) term grows accordingly too (`n` in Section
+13's cost formula becomes `K + rephrase_count`, or `+1` from round 2 on). With the current
+defaults (`K=8`, `rephrase_count=4`), that's a 1.5× increase in per-round generation calls and
+a `12/8 = 1.5×` (round 1) to `13/9 ≈ 1.44×` (round $\geq$ 2) increase in tournament pool size —
+bounded and known ahead of time, same reasoning as the base cost above, not open-ended.
+
 ## 18. Config file for the verifier prompt template
 
 `src/config/verifier_prompts.yaml` — `src/config/prompts.yaml` and `src/config/cot_prompts.yaml`
 cover classification/description prompts and the CoT step chains respectively, but neither
-owns the verifier's own prompt templates. Holds the rubrics (shared by both `--baseline`
-modes), the per-candidate 1–20 scorer prompt (parameterized by rubric + question + candidate,
-adapting `verifier_vision.py`'s inline `_verifier_text` out into config, dropping the
-SUPPORTED/UNSUPPORTED field) — used only by `--baseline argmax` — and `same_answer_prompt`
-(Section 13's class-identity check, `--baseline belief` only, parameterized by question +
-the two extracted `<answer>` strings). `--baseline belief`'s *tournament-ranking* duels still
-have no prompt template here: they use the PPT paper's fixed dual-trajectory template, which
-lives as a Python function in `src/common/ppt_scoring.py` instead of YAML — same convention
-`src/verifier_lmv.py` already used for this exact template, since it's a citable reproduction
-of the paper's prompt (arXiv:2607.05391 Section 3.2), not something meant to be edited
-per-project the way a task rubric (or the same-answer check, which is our own addition, not
-part of the paper) is.
+owns the verifier's own prompt templates. Holds:
+- **`rubrics`** / **`task_type_to_rubric`** — diagnostic reference material shown to the
+  verifier only, shared by both `--baseline` modes.
+- **`score_prompt`** — the per-candidate 1–20 scorer (rubric + question + candidate),
+  `--baseline argmax` only.
+- **`same_answer_prompt`** — Section 13's class-identity check, `--baseline belief` only
+  (question + the two extracted `<answer>` strings).
+- **`pairwise_prompt`** — `--baseline belief`'s tournament-ranking duels AND `src/verifier_
+  lmv.py`'s own PPT baseline. Originally lived as a fixed Python string in `src/common/
+  ppt_scoring.py` ("a citable reproduction of the paper's prompt, not meant to be edited") —
+  moved here after a real run showed the paper's own template needed two fixes: (1) it showed
+  the literal `<score_A>`/`<score_B>` tags right after the "analyze, then score" instruction,
+  which caused the model to skip analysis almost entirely (99.6% empty analysis on a 20k-pair
+  sample) rather than write free text first — the tags are no longer shown in this prompt at
+  all, only ever supplied by pass 2's forced continuation (`src/common/ppt_scoring.py::
+  build_score_prompt`); (2) the rating rule was lenient enough that 80.6% of a real sample
+  scored *both* trajectories above 0.9 — added an explicit anti-tie instruction. So this is now
+  an adapted version of the paper's template, not a verbatim reproduction — exactly why it now
+  belongs in config (edit-without-redeploy, one citable record) rather than staying hardcoded.
+  `src/common/ppt_scoring.py::pairwise_scoring_prompt` still keeps an internal fallback copy of
+  this text for a caller that hasn't been wired up to load the YAML, but every real caller
+  passes the YAML version explicitly.
+- **`question_rephrase_prompt`** — Section 13.2's rephrase step, `--baseline belief` only,
+  text-only (question in, reworded question out, no image — rephrasing text needs no visual
+  input).

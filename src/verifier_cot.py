@@ -639,7 +639,12 @@ def _process_round_belief(
     # since ring_cycle touches every index at least once.
     first_analysis: dict[int, dict[int, str]] = {i: {} for i in active}
 
-    analysis_params = SamplingParams(temperature=1.0, max_tokens=150)
+    # 150 -> 280: pairwise_prompt (verifier_prompts.yaml) now requires an
+    # explicit per-criterion walkthrough (typically 4-6 rubric items) before
+    # the overall verdict — 150 tokens was tuned for the old open-ended
+    # "compare A and B" version and would truncate a real multi-criterion
+    # analysis mid-list.
+    analysis_params = SamplingParams(temperature=1.0, max_tokens=280)
     score_params = score_prefill_params()
 
     def _accumulate(pair_by_image: dict[int, tuple[int, int]]) -> None:
@@ -756,7 +761,17 @@ def _process_round_belief(
         s["belief"] = new_winner
         s["C_best"] = pool_texts[winner_idx]
         s["answer"] = pool_answers[i][winner_idx]
-        s["feedback"] = first_analysis[i].get(winner_idx, "")[:300]
+        # No truncation here — the analysis is already hard-capped at
+        # generation time (analysis_params.max_tokens, currently 280), so
+        # a second, tighter [:N] cut on top of that only loses information
+        # without providing any real additional bound. This used to be
+        # [:300], which — now that pairwise_prompt requires a full
+        # per-criterion walkthrough before its 1-2 sentence summary
+        # verdict — would have cut off well before the walkthrough even
+        # finished, discarding exactly the specific, actionable detail
+        # (e.g. "never mentions the yellow discoloration") that makes
+        # this feedback useful for the next round's re-ask.
+        s["feedback"] = first_analysis[i].get(winner_idx, "")
         s["pool_size"] = pool_size
         s["n_comparisons"] = n_comparisons[i]
         s["top1_win_rate"] = round(win_rate[top1], 4)
