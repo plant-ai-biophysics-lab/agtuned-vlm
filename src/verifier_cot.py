@@ -318,14 +318,15 @@ def _gen_histories_for_round(
 ) -> list[list[dict]]:
     """History each active image's K candidates get generated from this
     round — round 1 asks gen_q (the structured template) cold; round
-    k>=2 replays EVERY prior round's (winning trajectory, feedback) pair
-    in order — not just the immediately preceding one — as alternating
-    assistant/user turns on top of base_hist, so round k's generation
-    sees the model's own full history of winning answers and what the
-    verifier said about each of them, not just the last exchange.
-    state[i]["history"] holds that list, appended once per round in
-    run_group_rounds right after _process_round_belief finalizes that
-    round's C_best/feedback (see the docstring there)."""
+    k>=2 replays EVERY prior round's winning trajectory in order — not
+    just the immediately preceding one — as alternating assistant/user
+    turns on top of base_hist, each followed by a plain reask of gen_q
+    (no feedback text — see the reask assignment below for why that was
+    dropped). state[i]["history"] holds the (winner, feedback) list,
+    appended once per round in run_group_rounds right after
+    _process_round_belief finalizes that round's C_best/feedback (see the
+    docstring there) — feedback is still carried in that list and still
+    logged to the CSV, just not injected into the prompt here anymore."""
     hists = []
     for i in active:
         if round_idx == 1:
@@ -333,25 +334,24 @@ def _gen_histories_for_round(
             continue
         hist = list(base_hist[i])
         for winner_text, feedback_text in state[i]["history"]:
-            # Neutral framing, not an instruction to change anything: this
-            # used to say "Given this feedback, provide an IMPROVED
-            # answer" every round unconditionally — even on rounds the
-            # tournament flagged as "defended" (the same answer winning
-            # again, nothing wrong with it). That standing "improve"
-            # instruction, replayed cumulatively across every prior round
-            # by round 6, was found to be actively driving semantic drift
-            # away from correct-but-plain answers (e.g. "Fungal Leaf Spot
-            # Disease" -> "Foliar Necrosis from Pathogenic Fungus" ->
-            # "Leaf Spot Disorder" over rounds) rather than converging.
-            # Presenting the verifier's own reasoning as INFORMATION
-            # (why this trajectory won over its alternative) rather than
-            # a directive to revise leaves it to the model to decide
-            # whether anything actually needs to change.
-            reask = (
-                f"For context, here is the verifier's analysis of why this "
-                f"trajectory was selected over its alternative in the "
-                f"previous round: {feedback_text}\n\n{gen_q}"
-            )
+            # Feedback text dropped entirely (was: neutral "for context,
+            # here is the verifier's analysis..." framing — see git history
+            # "no improved in feedback"). That neutral framing fixed the
+            # worst of the drift (regression dropped from 26/160 to 9/160
+            # at 6 rounds) but a real 10-round run still showed net
+            # regression (23 vs. 11 recovered) — the hypothesis being
+            # tested now is that even NEUTRAL analysis text, replayed
+            # cumulatively every round, still reads as "something to react
+            # to" and nudges the model to keep commenting/adjusting. This
+            # version reasks with NOTHING but the winning trajectories
+            # themselves in history plus the plain original question — no
+            # feedback content at all — to isolate whether it's the
+            # feedback TEXT itself (not just its old "improve" framing)
+            # driving residual drift. feedback_text is still unpacked from
+            # state[i]["history"] (still logged to verifier_feedback in the
+            # CSV — useful for analysis) but no longer makes it into the
+            # prompt.
+            reask = gen_q
             hist.append({"role": "assistant", "content": winner_text})
             hist.append({"role": "user", "content": reask})
         hists.append(hist)

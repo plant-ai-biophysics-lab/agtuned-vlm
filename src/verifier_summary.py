@@ -113,6 +113,166 @@ def collect(verifier_dir: Path, model_safe: str, baseline: str, n_boot: int, see
     return out, len(keys)
 
 
+def _boot_ci(vals, rng, n_boot: int = 2000):
+    """(mean, ci_low, ci_high) — same percentile-bootstrap convention as
+    plot_belief_by_round in verifier_cot.py, duplicated here (not imported)
+    since this module is deliberately GPU/model-free and this is a ~10
+    line helper, not worth a shared-module round-trip for."""
+    import numpy as np
+    arr = np.asarray(vals, dtype=float)
+    if len(arr) < 2:
+        v = float(arr[0]) if len(arr) else 0.0
+        return v, v, v
+    boot = np.array([rng.choice(arr, size=len(arr), replace=True).mean() for _ in range(n_boot)])
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    return float(arr.mean()), float(lo), float(hi)
+
+
+def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, out_dir: Path) -> None:
+    """Four per-round diagnostic charts read directly from the verifier's
+    own round-shaped checkpoint (every round's own row, not just
+    is_final_round==1 — unlike collect()/plot() above, which only care
+    about the final answer). No-ops with a note if the checkpoint is
+    single-round (max_round=1: a belief/confidence trend needs >1 round to
+    say anything).
+
+    Built to answer three questions that came up tuning min_round/
+    max_round/high_conf on a real run: (1) is stop_confidence actually
+    calibrated to correctness, or just to "this survived a lot of duels"
+    (diag_confidence_calibration.png) — on a real run this came back FLAT
+    (~35% judged-correct in every confidence bin from 0.4-0.9), meaning
+    stop_confidence is not a correctness signal, only a compute-saving
+    lever; (2) where does stop_confidence actually sit relative to
+    high_conf round by round, so you can pick a threshold instead of
+    guessing (diag_round_vs_stop_confidence.png); (3) how much of the
+    round budget is spent AFTER the answer already stopped changing
+    (diag_answer_settle_round.png) — on that same run all 40/40 images'
+    final answer was locked in by round 3, yet confidence was still only
+    ~0.76 by round 10, meaning most of the round budget bought confidence
+    in an already-decided answer, not new correctness."""
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ckpt = verifier_dir / model_safe / f"ckpt_{baseline}_{model_safe}.csv"
+    if not ckpt.exists():
+        return
+    with open(ckpt, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    max_round = max(int(r["round"]) for r in rows)
+    if max_round <= 1:
+        print("  [round-diagnostics] skip — single-round checkpoint (max_round=1), nothing to trend")
+        return
+
+    by_img: dict[tuple, dict[int, dict]] = {}
+    for r in rows:
+        key = (r["agml_dataset"], r["class_label"], r["image_name"])
+        by_img.setdefault(key, {})[int(r["round"])] = r
+    n_images = len(by_img)
+    rng = np.random.default_rng(42)
+
+    # ── diag_confidence_calibration.png: stop_confidence bin -> judged accuracy
+    bins = np.arange(0.0, 1.01, 0.1)
+    bin_labels = [f"{bins[i]:.1f}-{bins[i+1]:.1f}" for i in range(len(bins) - 1)]
+    bin_acc, bin_n, bin_lo, bin_hi = [], [], [], []
+    for i in range(len(bins) - 1):
+        lo_b, hi_b = bins[i], bins[i + 1]
+        sub = [r for r in rows if lo_b <= float(r["stop_confidence"]) < hi_b
+               or (hi_b >= 1.0 and float(r["stop_confidence"]) == 1.0)]
+        if not sub:
+            bin_acc.append(np.nan); bin_n.append(0); bin_lo.append(np.nan); bin_hi.append(np.nan)
+            continue
+        m, lo, hi = _boot_ci([1.0 if r["judged_correct"] == "1" else 0.0 for r in sub], rng)
+        bin_acc.append(m); bin_n.append(len(sub)); bin_lo.append(m - lo); bin_hi.append(hi - m)
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    x = np.arange(len(bin_labels))
+    valid = [i for i in x if bin_n[i] > 0]
+    ax.bar([x[i] for i in valid], [bin_acc[i] for i in valid], color="#e06b00",
+           edgecolor="black", linewidth=0.6,
+           yerr=[[bin_lo[i] for i in valid], [bin_hi[i] for i in valid]], capsize=3)
+    for i in valid:
+        ax.annotate(f"n={bin_n[i]}", (x[i], 0.02), ha="center", fontsize=8,
+                     color="white" if bin_acc[i] > 0.08 else "black")
+    ax.plot([-0.5, len(bins) - 1.5], [0, 1], color="gray", linestyle=":", linewidth=1,
+            alpha=0.5, label="perfect calibration (identity)")
+    ax.set_xticks(x); ax.set_xticklabels(bin_labels, rotation=30, ha="right")
+    ax.set_xlabel("stop_confidence bin"); ax.set_ylabel("judged_correct rate")
+    ax.set_title(f"Calibration: stop_confidence vs. judged accuracy — {model_safe}\n"
+                 f"(all rounds pooled, n={len(rows)} rows, {n_images} images x {max_round} rounds)")
+    ax.set_ylim(0, 1); ax.grid(True, axis="y", alpha=0.25); ax.legend(fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_dir / "diag_confidence_calibration.png", dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_dir / 'diag_confidence_calibration.png'}")
+
+    # ── diag_round_vs_stop_confidence.png
+    by_round_conf: dict[int, list[float]] = {}
+    for r in rows:
+        by_round_conf.setdefault(int(r["round"]), []).append(float(r["stop_confidence"]))
+    rr = sorted(by_round_conf)
+    means, lo_e, hi_e = [], [], []
+    for k in rr:
+        m, lo, hi = _boot_ci(by_round_conf[k], rng)
+        means.append(m); lo_e.append(m - lo); hi_e.append(hi - m)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(rr, means, marker="o", color="#e06b00", linewidth=2)
+    ax.fill_between(rr, np.array(means) - np.array(lo_e), np.array(means) + np.array(hi_e),
+                     alpha=0.15, color="#e06b00")
+    ax.set_xlabel("Round"); ax.set_ylabel("stop_confidence")
+    ax.set_title(f"Round vs. stop_confidence, 95% CI — {model_safe}")
+    ax.set_ylim(0.4, 1.0); ax.grid(alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(out_dir / "diag_round_vs_stop_confidence.png", dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_dir / 'diag_round_vs_stop_confidence.png'}")
+
+    # ── diag_round_vs_accuracy.png: judged_correct + contains_match by round
+    by_round_rows: dict[int, list[dict]] = {}
+    for r in rows:
+        by_round_rows.setdefault(int(r["round"]), []).append(r)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for key, label, color in [("judged_correct", "judged_correct", "#1f77b4"),
+                               ("contains_match", "contains_match", "#2ca02c")]:
+        means, lo_e, hi_e = [], [], []
+        for k in rr:
+            m, lo, hi = _boot_ci([1.0 if r[key] == "1" else 0.0 for r in by_round_rows[k]], rng)
+            means.append(m); lo_e.append(m - lo); hi_e.append(hi - m)
+        ax.plot(rr, means, marker="o", label=label, color=color, linewidth=2)
+        ax.fill_between(rr, np.array(means) - np.array(lo_e), np.array(means) + np.array(hi_e),
+                         alpha=0.15, color=color)
+    ax.set_xlabel("Round"); ax.set_ylabel("Rate")
+    ax.set_title(f"Round vs. judged/contains-match accuracy, 95% CI — {model_safe}")
+    ax.grid(alpha=0.3); ax.legend(fontsize=9)
+    plt.tight_layout()
+    fig.savefig(out_dir / "diag_round_vs_accuracy.png", dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_dir / 'diag_round_vs_accuracy.png'}")
+
+    # ── diag_answer_settle_round.png: last round with a real (non-"defended") change
+    last_change = []
+    for key, r in by_img.items():
+        lc = 1
+        for i in range(2, max_round + 1):
+            if i in r and r[i]["pairwise_winner"] != "defended":
+                lc = i
+        last_change.append(lc)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.hist(last_change, bins=np.arange(0.5, max_round + 1.5, 1), color="#9467bd",
+            edgecolor="black", linewidth=0.6)
+    ax.set_xlabel("Last round with a real answer change (stable afterward)")
+    ax.set_ylabel("# images")
+    ax.set_title(f"When do answers settle? — {model_safe}\n(n={n_images} images, max_round={max_round})")
+    ax.set_xticks(range(1, max_round + 1))
+    ax.grid(True, axis="y", alpha=0.25)
+    plt.tight_layout()
+    fig.savefig(out_dir / "diag_answer_settle_round.png", dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_dir / 'diag_answer_settle_round.png'}")
+
+
 def plot(results, n_images: int, model_safe: str, out_path: Path) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -169,6 +329,7 @@ def main(args: argparse.Namespace) -> None:
     out_dir = verifier_dir / model_safe
     out_dir.mkdir(parents=True, exist_ok=True)
     plot(results, n_images, model_safe, out_dir / "verifier_summary.png")
+    plot_round_diagnostics(verifier_dir, model_safe, args.baseline, out_dir)
 
     csv_path = out_dir / "verifier_summary.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
