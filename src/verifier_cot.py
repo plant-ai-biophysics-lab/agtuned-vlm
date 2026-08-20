@@ -1358,7 +1358,22 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         destroy_llm(llm)
         del tokenizer
 
-    rows = run_judge_phase(rows, ckpt_path, args, prompts, fields=VERIFIER_STEP_FIELDS)
+    judge_filter = None
+    if args.judge_scope == "first_and_final":
+        # Round 1's generation is identical regardless of --max_round (a
+        # standalone --max_round 1 run reproduces it exactly, at full
+        # extra compute cost), so a round-1-vs-final ablation only needs
+        # THESE two rounds judged, not every intermediate one — cuts
+        # judge compute roughly in proportion to max_round (e.g. ~5x
+        # fewer judge calls at max_round=10 judging only round 1 + final
+        # vs. every round).
+        # str() on both sides: freshly-generated rows this run carry
+        # "round" as an int (see _round_row), while rows resumed from an
+        # existing checkpoint carry it as a str (csv.DictReader) — same
+        # mixed-type situation the rest of this file already guards
+        # against elsewhere (e.g. is_final_round checks).
+        judge_filter = lambda r: str(r.get("round")) == "1" or str(r.get("is_final_round")) == "1"  # noqa: E731
+    rows = run_judge_phase(rows, ckpt_path, args, prompts, fields=VERIFIER_STEP_FIELDS, judge_filter=judge_filter)
 
     final_rows = [r for r in rows if str(r.get("is_final_round")) == "1"]
     metrics = compute_model_metrics(final_rows)
@@ -1555,6 +1570,15 @@ if __name__ == "__main__":
     parser.add_argument("--judge_chunk_size", type=int, default=200)
     parser.add_argument("--rejudge", action="store_true")
     parser.add_argument("--skip_judge", action="store_true")
+    parser.add_argument("--judge_scope", choices=["all", "first_and_final"], default="all",
+                         help="'first_and_final' judges only round==1 and is_final_round==1 rows "
+                              "— every intermediate round's judged_correct stays blank. For a "
+                              "round-1-vs-final ablation without paying full round-by-round judge "
+                              "compute (round 1's own data is identical to a standalone "
+                              "--max_round 1 run, so nothing is lost by reading it out of a "
+                              "--max_round 10 checkpoint instead of re-running it separately). "
+                              "'all' (default) judges every round, needed for the per-round "
+                              "diagnostic charts (diag_round_vs_accuracy.png etc.).")
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/<baseline>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")

@@ -287,8 +287,20 @@ def _judge_row_key(row: dict) -> tuple[str, str, str, str, str, str]:
             str(row.get("step_idx", "")), str(row.get("rotation", "")))
 
 
-def rows_needing_judge(rows: list[dict]) -> list[dict]:
-    return [r for r in rows if not r.get("judged_correct")]
+def rows_needing_judge(rows: list[dict], judge_filter=None) -> list[dict]:
+    """`judge_filter`, if given, is an additional predicate a row must pass
+    to be judged — e.g. verifier_cot.py's --judge_scope first_and_final
+    restricts judging to round==1 / is_final_round==1 rows only, leaving
+    every intermediate round's judged_correct blank (never judged) to
+    save judge compute when only a round-1-vs-final ablation is needed,
+    not a full round-by-round trend. Rows a filter excludes are simply
+    left unjudged (blank judged_correct), same as any other never-judged
+    row — no other caller passes this, so every existing call site's
+    behavior (judge everything not yet judged) is unchanged."""
+    todo = [r for r in rows if not r.get("judged_correct")]
+    if judge_filter is not None:
+        todo = [r for r in todo if judge_filter(r)]
+    return todo
 
 
 def merge_judged(rows: list[dict], judged_new: list[dict]) -> list[dict]:
@@ -358,9 +370,16 @@ def _destroy_judge_llm(llm) -> None:
 
 
 def run_judge_phase(
-    rows: list[dict], ckpt_path: Path, args, prompts: dict, fields: list[str] = CKPT_FIELDS
+    rows: list[dict], ckpt_path: Path, args, prompts: dict, fields: list[str] = CKPT_FIELDS,
+    judge_filter=None,
 ) -> list[dict]:
     """Shared judge phase — see module-level note above.
+
+    judge_filter: passed straight through to rows_needing_judge — an
+    additional predicate restricting which rows get judged this call
+    (everything else is left with a blank judged_correct, same as any
+    other not-yet-judged row). None (default) judges every row missing a
+    verdict, unchanged from every existing caller's behavior.
 
     `args` (any argparse.Namespace-like object — vision_baseline.py,
     desc_augmented_vision_v2.py, self_cot.py, and cot_yaml.py all define
@@ -408,7 +427,7 @@ def run_judge_phase(
         print(f"  [judge] backfilled judge_gt_hint (from class_label) on {n_backfilled} row(s) "
               f"missing it — likely a checkpoint written before that column existed")
 
-    todo = rows_needing_judge(rows)
+    todo = rows_needing_judge(rows, judge_filter=judge_filter)
     if not todo:
         if rows:
             print(f"  [judge] all {len(rows)} row(s) already judged")
