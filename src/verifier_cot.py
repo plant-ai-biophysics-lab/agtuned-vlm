@@ -264,11 +264,47 @@ def _parse_same(text: str) -> bool:
 
 # ── Dataset grouping (same shape as cot_yaml.py's _build_groups) ───────────
 
-def _build_groups(args: argparse.Namespace, manifest: dict, dataset_filter: set[str] | None = None):
+def _load_reference_images(path: Path) -> dict[tuple[str, str], list[str]]:
+    """Read an existing single-prediction-per-row checkpoint (e.g.
+    vision_baseline.py's ckpt_<model>.csv) and group its image_name column
+    by (agml_dataset, class_label), preserving each name's first-seen row
+    order — that row order IS that script's own sample_class_images draw,
+    so replaying it in order (then capping to --n_samples) selects a true
+    PREFIX of that run's own sample, not a fresh independent draw. Used by
+    --match_images_from so a smaller verifier-cot run (e.g. 25/class) is
+    guaranteed to overlap 100% with an existing larger run (e.g. 50/class)
+    of vision_baseline/desc_aug/self_cot/cot_yaml — sample_class_images'
+    own np.random.Generator.choice(N, size=n) is NOT nested across
+    different n with the same seed (confirmed empirically: only ~64%
+    overlap between independent 25- and 50-image draws), so two scripts
+    independently sampling different n from the same seed do NOT produce
+    a paper-consistent, apples-to-apples image set on their own."""
+    import csv as _csv
+    out: dict[tuple[str, str], list[str]] = {}
+    with open(path, encoding="utf-8") as f:
+        for r in _csv.DictReader(f):
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
+            names = out.setdefault(key, [])
+            name = r.get("image_name", "")
+            if name and name not in names:
+                names.append(name)
+    return out
+
+
+def _build_groups(
+    args: argparse.Namespace, manifest: dict, dataset_filter: set[str] | None = None,
+    reference_images: dict[tuple[str, str], list[str]] | None = None,
+):
     """dataset_filter (--subsample) restricts to just these agml_name(s) —
     same convention as cot_yaml.py's --swap_datasets, meant for fast
     testing against a small, deliberate set (e.g. cot-compare's own
-    top gain/loss cot_yaml_swap_datasets.txt) instead of the whole config."""
+    top gain/loss cot_yaml_swap_datasets.txt) instead of the whole config.
+
+    reference_images (--match_images_from, see _load_reference_images):
+    when given, per-class image selection replays THAT run's own sampled
+    image names (capped to --n_samples) instead of drawing independently
+    via sample_class_images — falls back to an independent draw with a
+    warning for any (dataset, class) the reference has no rows for."""
     groups = []
     for ds in active_datasets(Path(args.config)):
         if ds.skip or not ds.task_type:
@@ -287,8 +323,17 @@ def _build_groups(args: argparse.Namespace, manifest: dict, dataset_filter: set[
             by_label.setdefault(s["label"], []).append(s)
         for raw_label, items in by_label.items():
             path_by_name = {Path(it["path"]).name: it["path"] for it in items}
-            names = sample_class_images(list(path_by_name.keys()), args.n_samples)
             crop_val, clean_label = parse_class_label(raw_label, ds.crop)
+            if reference_images is not None:
+                ref_names = [n for n in reference_images.get((ds.agml_name, clean_label), []) if n in path_by_name]
+                if ref_names:
+                    names = ref_names[: args.n_samples]
+                else:
+                    print(f"  [warn] --match_images_from: no overlapping images for "
+                          f"{ds.agml_name}/{clean_label} — falling back to an independent sample")
+                    names = sample_class_images(list(path_by_name.keys()), args.n_samples)
+            else:
+                names = sample_class_images(list(path_by_name.keys()), args.n_samples)
             task_type = ds.effective_task_type(raw_label)
             aliases = ds.effective_search_terms(raw_label)[1:]
             gt_hint = judge_gt_hint(clean_label, aliases)
@@ -1205,7 +1250,31 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
               f"({len(finished)} image(s) complete)")
 
     dataset_filter = set(args.subsample) if args.subsample else None
-    all_groups = list(_build_groups(args, manifest, dataset_filter=dataset_filter))
+    match_images_from = args.match_images_from
+    if match_images_from is None:
+        # Auto-detected default: vision_baseline.py's own checkpoint for
+        # THIS model — every apples-to-apples comparison in verifier-
+        # summary is against vision_baseline (Lower Bound) anyway, so
+        # defaulting to its image set means a bare verifier-cot invocation
+        # (no --match_images_from typed) still gets a guaranteed-overlap
+        # sample rather than sample_class_images' own independent draw.
+        # Falls back to that independent draw (with a note) if no
+        # vision_baseline run exists yet for this model.
+        _candidate = Path("outputs_final/vision_baseline") / safe_model_name(model_id) / f"ckpt_{safe_model_name(model_id)}.csv"
+        if _candidate.exists():
+            match_images_from = str(_candidate)
+            print(f"  [match_images_from] auto-detected {match_images_from} (pass --match_images_from "
+                  f"to override, or an empty/nonexistent path to force an independent sample)")
+        else:
+            print(f"  [match_images_from] no vision_baseline checkpoint found at {_candidate} — "
+                  f"sampling independently via sample_class_images instead")
+
+    reference_images = None
+    if match_images_from and Path(match_images_from).exists():
+        reference_images = _load_reference_images(Path(match_images_from))
+        print(f"  [match_images_from] {sum(len(v) for v in reference_images.values())} image name(s) "
+              f"loaded across {len(reference_images)} (dataset, class) group(s) from {match_images_from}")
+    all_groups = list(_build_groups(args, manifest, dataset_filter=dataset_filter, reference_images=reference_images))
     if args.random_classes_per_task:
         all_groups = _sample_random_classes_per_task(all_groups, args.random_classes_per_task, args.seed)
         by_task_counts = Counter(g[3] for g in all_groups)
@@ -1377,6 +1446,17 @@ if __name__ == "__main__":
     parser.add_argument("--images_root", default="dataset/images")
     parser.add_argument("--output_dir", default="outputs_final/verifier_cot/")
     parser.add_argument("--n_samples", type=int, default=10, help="Images/class to evaluate.")
+    parser.add_argument("--match_images_from", default=None,
+                         help="Path to an existing single-prediction-per-row checkpoint (e.g. "
+                              "outputs_final/vision_baseline/<model>/ckpt_<model>.csv) — per-class "
+                              "image selection replays THAT run's own sampled image names (capped "
+                              "to --n_samples) instead of an independent sample_class_images draw, "
+                              "so a smaller run here is guaranteed 100%% image overlap with a larger "
+                              "existing run for paper-consistent comparisons. sample_class_images' "
+                              "own seeded draw is NOT nested across different --n_samples values "
+                              "(confirmed: only ~64%% overlap between independent 25- and 50-image "
+                              "draws from the same seed), so this is the only way to guarantee "
+                              "overlap without re-running the larger baseline.")
     parser.add_argument("--subsample", nargs="+", default=None,
                          help="Restrict to these dataset(s) only (agml_name, space-separated) "
                               "instead of the whole active config — for fast testing. Same "

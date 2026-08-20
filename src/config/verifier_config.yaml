@@ -21,7 +21,10 @@ images_root: dataset/images
 output_dir: outputs_final/verifier_cot/
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-n_samples: 10  # images/class to evaluate
+n_samples: 25  # images/class to evaluate — bumped from 10 for the paper-deadline full run
+                # (2026-08-27 target); tighter than 10 without paying --n_samples 50's ~5x cost.
+                # --match_images_from (default: auto-detected per --model, see run_model) makes
+                # this a guaranteed subset of vision_baseline's own 50/class sample.
 seed: 42       # seeds incumbent-A/B-slot randomization AND every generation SamplingParams
                # (k-candidate sampling, pairwise-duel analysis) so runs over the same images/
                # config are reproducible rather than drawing fresh randomness each time — was
@@ -71,8 +74,12 @@ floor_threshold: 0.5      # winner's own raw score must clear this, or the updat
 margin_ref: 0.3           # winner-vs-loser score gap counted as "decisive enough" for full confidence
 max_beta: 4.0             # beta used for the weakest possible evidence (winner_score<=0 or margin<=0)
 
-high_conf: 0.85          # stop-early / "high" confidence-bin threshold
-med_conf: 0.6            # "medium" vs "low" confidence-bin threshold
+high_conf: 0.7           # stop-early / "high" confidence-bin threshold — lowered from 0.85; the
+                         # answer settles well before stop_confidence gets anywhere near 0.85 on
+                         # real runs, so 0.85 mostly just burned rounds confirming an already-
+                         # decided answer. No effect at --max_round 1 (always hits the round cap
+                         # before this can matter).
+med_conf: 0.4            # "medium" vs "low" confidence-bin threshold
 
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"
