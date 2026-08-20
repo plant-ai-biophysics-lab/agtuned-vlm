@@ -16,13 +16,19 @@ baseline: belief  # only valid value — kept for output-path naming (ckpt_belie
 config: src/config/datasets.yaml
 prompts: src/config/prompts.yaml
 verifier_prompts: src/config/verifier_prompts.yaml
-manifest: dataset/selected_images.json
+manifest: dataset/selected_images_10.json  # reproducible 10/class prefix of the original 50/class
+                                            # manifest (scripts/agml_hf/truncate_manifest.py) — n=10
+                                            # vs n=25 gave nearly identical bound/CoT numbers
+                                            # (within ~0.002-0.004 judge_f1_macro), so this is the
+                                            # cheaper option for the full run
 images_root: dataset/images
 output_dir: outputs_final/verifier_cot/
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-n_samples: 25  # images/class to evaluate — bumped from 10 for the paper-deadline full run
-                # (2026-08-27 target); tighter than 10 without paying --n_samples 50's ~5x cost.
+n_samples: 10  # images/class to evaluate — dropped back from 25 after confirming 10/class gives
+                # nearly identical bound/CoT numbers (n=25 vs n=10 differed by ~0.002-0.004
+                # judge_f1_macro across Lower/Self-CoT/Manual-CoT/Upper Bound), so the cheaper
+                # option is worth it for the paper-deadline full run (2026-08-27 target).
                 # --match_images_from (default: auto-detected per --model, see run_model) makes
                 # this a guaranteed subset of vision_baseline's own 50/class sample.
 seed: 42       # seeds incumbent-A/B-slot randomization AND every generation SamplingParams
@@ -74,12 +80,15 @@ floor_threshold: 0.5      # winner's own raw score must clear this, or the updat
 margin_ref: 0.3           # winner-vs-loser score gap counted as "decisive enough" for full confidence
 max_beta: 4.0             # beta used for the weakest possible evidence (winner_score<=0 or margin<=0)
 
-high_conf: 0.7           # stop-early / "high" confidence-bin threshold — lowered from 0.85; the
-                         # answer settles well before stop_confidence gets anywhere near 0.85 on
-                         # real runs, so 0.85 mostly just burned rounds confirming an already-
-                         # decided answer. No effect at --max_round 1 (always hits the round cap
-                         # before this can matter).
-med_conf: 0.4            # "medium" vs "low" confidence-bin threshold
+high_conf: 0.6           # stop-early / "high" confidence-bin threshold — lowered again from 0.7
+                         # (was 0.85 originally). The answer settles well before stop_confidence
+                         # gets anywhere near 0.85 on real runs, so 0.85 mostly just burned rounds
+                         # confirming an already-decided answer; 0.7 still needed ~round 7-8 to
+                         # trigger on a 10-round test, so pushed lower to actually let early-stop
+                         # fire meaningfully sooner. No effect at --max_round 1 (always hits the
+                         # round cap before this can matter).
+med_conf: 0.3            # "medium" vs "low" confidence-bin threshold — lowered from 0.4 to stay
+                         # proportionally below the new high_conf=0.6
 
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"

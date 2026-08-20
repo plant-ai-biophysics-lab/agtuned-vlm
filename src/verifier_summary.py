@@ -75,18 +75,45 @@ def verifier_image_keys(verifier_dir: Path, model_safe: str, baseline: str) -> s
     return keys
 
 
-def collect(verifier_dir: Path, model_safe: str, baseline: str, n_boot: int, seed: int):
-    """[(label, color, stats_or_None, n_rows)] for every condition, filtered
-    to the verifier run's own image set."""
-    keys = verifier_image_keys(verifier_dir, model_safe, baseline)
-    print(f"  Verifier run scored {len(keys)} image(s) — filtering every condition to exactly those")
+def reference_image_keys(reference_ckpt: Path, n_samples: int) -> set[tuple[str, str, str]]:
+    """The SAME deterministic 'first n_samples image_names per (dataset,
+    class), in that checkpoint's own row order' selection verifier_cot.py's
+    --match_images_from uses (_load_reference_images there) — duplicated
+    here rather than imported, since this module is deliberately GPU/
+    model-free and verifier_cot.py pulls in vllm at import time.
+
+    Exists so a comparison report can be built BEFORE a verifier-cot run
+    exists at all: since --match_images_from makes verifier-cot's own
+    image selection a deterministic function of an existing baseline
+    checkpoint (e.g. vision_baseline's), that same image set is already
+    fully determined right now — no need to wait for the verifier run to
+    finish just to know which images it WILL use."""
+    by_group: dict[tuple[str, str], list[str]] = {}
+    with open(reference_ckpt, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
+            names = by_group.setdefault(key, [])
+            name = r.get("image_name", "")
+            if name and name not in names:
+                names.append(name)
+    return {(ds, cl, name) for (ds, cl), names in by_group.items() for name in names[:n_samples]}
+
+
+def collect(keys: set[tuple[str, str, str]], model_safe: str, n_boot: int, seed: int,
+            conditions: list[tuple[str, str | None, str]] = _CONDITIONS,
+            verifier_dir: Path | None = None, baseline: str = "belief"):
+    """[(label, color, stats_or_None, n_rows)] for every condition in
+    `conditions`, filtered to `keys` (agml_dataset, class_label,
+    image_name triples). verifier_dir/baseline only needed if `conditions`
+    includes the Verifier-Belief entry (dirname=None)."""
+    print(f"  Filtering every condition to exactly {len(keys)} image(s)")
 
     def _filt(rows):
         return [r for r in rows
                 if (r.get("agml_dataset"), r.get("class_label"), r.get("image_name")) in keys]
 
     out = []
-    for label, dirname, color in _CONDITIONS:
+    for label, dirname, color in conditions:
         if dirname is None:
             rows_map = load_verifier_cot_rows(verifier_dir, baseline)
         else:
@@ -371,7 +398,8 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     print(f"  Saved: {out_dir / 'diag_regression_recovery.png'}")
 
 
-def plot(results, n_images: int, model_safe: str, out_path: Path) -> None:
+def plot(results, n_images: int, model_safe: str, out_path: Path,
+         title: str = "Verifier vs. bounds and CoT methods") -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -409,7 +437,7 @@ def plot(results, n_images: int, model_safe: str, out_path: Path) -> None:
 
     ax.set_ylabel("Judged F1 Macro", fontsize=11)
     ax.set_ylim(0, max(v + h for v, h in zip(vals, hi_err)) * 1.18)
-    ax.set_title(f"Verifier vs. bounds and CoT methods — {model_safe}\n"
+    ax.set_title(f"{title} — {model_safe}\n"
                  f"same {n_images} images, 95% CI", fontsize=11)
     ax.grid(True, axis="y", alpha=0.25)
     plt.xticks(rotation=12, ha="right")
@@ -420,16 +448,34 @@ def plot(results, n_images: int, model_safe: str, out_path: Path) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
-    verifier_dir = Path(args.verifier_dir)
     model_safe = args.model.replace("/", "_")
-    results, n_images = collect(verifier_dir, model_safe, args.baseline, args.n_boot, args.seed)
 
-    out_dir = verifier_dir / model_safe
-    out_dir.mkdir(parents=True, exist_ok=True)
-    plot(results, n_images, model_safe, out_dir / "verifier_summary.png")
-    plot_round_diagnostics(verifier_dir, model_safe, args.baseline, out_dir)
-
-    csv_path = out_dir / "verifier_summary.csv"
+    if args.match_images_from:
+        # Baseline-only mode: no verifier-cot run needed at all — the
+        # image set is already fully determined by an existing checkpoint
+        # (see reference_image_keys' docstring). Verifier-Belief is
+        # dropped from the condition list since there's nothing to plot.
+        keys = reference_image_keys(Path(args.match_images_from), args.n_samples)
+        conditions = [c for c in _CONDITIONS if c[0] != "Verifier-Belief"]
+        results, n_images = collect(keys, model_safe, args.n_boot, args.seed, conditions=conditions)
+        out_dir = Path(args.out_dir) / model_safe
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # n_samples in the filename — otherwise a --n_samples 10 run
+        # silently overwrites a --n_samples 25 run's chart/csv at the
+        # same path (a real mistake made once during development).
+        plot(results, n_images, model_safe, out_dir / f"baseline_summary_n{args.n_samples}.png",
+             title="Bounds and CoT methods (pre-verifier)")
+        csv_path = out_dir / f"baseline_summary_n{args.n_samples}.csv"
+    else:
+        verifier_dir = Path(args.verifier_dir)
+        keys = verifier_image_keys(verifier_dir, model_safe, args.baseline)
+        results, n_images = collect(keys, model_safe, args.n_boot, args.seed,
+                                     verifier_dir=verifier_dir, baseline=args.baseline)
+        out_dir = verifier_dir / model_safe
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plot(results, n_images, model_safe, out_dir / "verifier_summary.png")
+        plot_round_diagnostics(verifier_dir, model_safe, args.baseline, out_dir)
+        csv_path = out_dir / "verifier_summary.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["condition", "judge_f1_macro", "judge_ci_low", "judge_ci_high",
@@ -449,9 +495,26 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--verifier_dir", default="outputs_final/verifier_cot_fasttest/",
-                   help="verifier_cot.py's --output_dir for the run being summarized.")
+                   help="verifier_cot.py's --output_dir for the run being summarized. Ignored if "
+                        "--match_images_from is given (baseline-only mode, no verifier run needed).")
     p.add_argument("--model", default="google/gemma-4-E4B-it")
     p.add_argument("--baseline", choices=["belief"], default="belief")
     p.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CIs.")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--match_images_from", default=None,
+                   help="Baseline-only mode (no verifier-cot run required): path to an existing "
+                        "single-prediction-per-row checkpoint (e.g. vision_baseline's own "
+                        "ckpt_<model>.csv) to derive the image set from — same deterministic "
+                        "'first --n_samples image_names per (dataset, class)' selection "
+                        "verifier_cot.py's own --match_images_from uses, so this shows exactly "
+                        "what a not-yet-run verifier-cot invocation with the same "
+                        "--match_images_from/--n_samples WILL compare against. Skips the "
+                        "Verifier-Belief bar and the per-round diagnostic charts entirely.")
+    p.add_argument("--n_samples", type=int, default=25,
+                   help="--match_images_from only: images/class to take from the reference "
+                        "checkpoint's own row order.")
+    p.add_argument("--out_dir", default="outputs_final/baseline_summary/",
+                   help="--match_images_from only: where to write baseline_summary.png/.csv "
+                        "(nested under <out_dir>/<model_safe>/, same convention as "
+                        "--verifier_dir/<model_safe>/verifier_summary.png).")
     main(p.parse_args())
