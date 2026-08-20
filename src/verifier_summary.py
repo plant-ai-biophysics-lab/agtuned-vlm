@@ -307,6 +307,69 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     plt.close(fig)
     print(f"  Saved: {out_dir / 'diag_answer_settle_round.png'}")
 
+    # ── diag_regression_recovery.png/csv: round-1 vs. final-round
+    # judged_correct, bucketed into stayed_correct / stayed_wrong /
+    # regressed (right->wrong) / recovered (wrong->right) — the same
+    # by-hand check used repeatedly this session to tell whether extra
+    # rounds are net helping or net hurting, now a standing chart. Uses
+    # is_final_round==1 (not literally round==max_round) so this stays
+    # correct once early-stopping means different images finish at
+    # different rounds.
+    _CATS = ["stayed_correct", "stayed_wrong", "regressed", "recovered"]
+    _CAT_COLOR = {"stayed_correct": "#2ca02c", "stayed_wrong": "#7f7f7f",
+                  "regressed": "#d62728", "recovered": "#1f77b4"}
+
+    def _bucket(group_rows: dict[tuple, dict[int, dict]]) -> dict[str, int]:
+        counts = dict.fromkeys(_CATS, 0)
+        for rr in group_rows.values():
+            if 1 not in rr:
+                continue
+            final = next((rr[i] for i in rr if str(rr[i].get("is_final_round")) == "1"), None)
+            if final is None:
+                continue
+            r1_correct = rr[1]["judged_correct"] == "1"
+            rf_correct = final["judged_correct"] == "1"
+            if r1_correct and rf_correct:
+                counts["stayed_correct"] += 1
+            elif not r1_correct and not rf_correct:
+                counts["stayed_wrong"] += 1
+            elif r1_correct and not rf_correct:
+                counts["regressed"] += 1
+            else:
+                counts["recovered"] += 1
+        return counts
+
+    overall_counts = _bucket(by_img)
+    by_task_counts = {}
+    for tt in task_types:
+        by_task_counts[tt] = _bucket({k: v for k, v in by_img.items() if v[1].get("task_type") == tt})
+
+    csv_path = out_dir / "diag_regression_recovery.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["scope", *_CATS, "n"])
+        w.writerow(["overall", *[overall_counts[c] for c in _CATS], sum(overall_counts.values())])
+        for tt in task_types:
+            w.writerow([tt, *[by_task_counts[tt][c] for c in _CATS], sum(by_task_counts[tt].values())])
+    print(f"  Saved: {csv_path}")
+
+    fig, ax = plt.subplots(figsize=(max(7, (1 + len(task_types)) * 1.8), 5.5))
+    scopes = ["overall"] + task_types
+    x = np.arange(len(scopes))
+    width = 0.2
+    for j, cat in enumerate(_CATS):
+        vals = [overall_counts[cat]] + [by_task_counts[tt][cat] for tt in task_types]
+        ax.bar(x + (j - 1.5) * width, vals, width, label=cat, color=_CAT_COLOR[cat],
+               edgecolor="black", linewidth=0.5)
+    ax.set_xticks(x); ax.set_xticklabels(scopes, rotation=12, ha="right")
+    ax.set_ylabel("# images")
+    ax.set_title(f"Round 1 -> final round: stayed/regressed/recovered — {model_safe}\n(n={n_images} images)")
+    ax.grid(True, axis="y", alpha=0.25); ax.legend(fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_dir / "diag_regression_recovery.png", dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out_dir / 'diag_regression_recovery.png'}")
+
 
 def plot(results, n_images: int, model_safe: str, out_path: Path) -> None:
     import matplotlib
