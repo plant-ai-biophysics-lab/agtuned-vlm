@@ -129,6 +129,16 @@ VERIFIER_EXTRA_FIELDS = [
     "pool_size", "n_comparisons", "top1_win_rate", "incumbent_survived",
     "verifier_answer", "verifier_feedback", "pairwise_winner", "is_final_round",
     "prompt_tokens", "completion_tokens", "elapsed_s",
+    # Per-trajectory belief tracking (see _process_round_belief) — how many
+    # DISTINCT answer-clusters this image has accumulated by this round.
+    # Visible directly in the checkpoint CSV for a quick eyeball sanity
+    # check (e.g. a cluster count that only ever grows and never merges
+    # would suggest the same-answer check is too strict now that it's
+    # checking every round's winner/loser against many more candidates
+    # than the old single-incumbent design did) without cross-referencing
+    # the full membership detail in verifier_log_<baseline>.jsonl's
+    # "belief_clusters" entries.
+    "n_clusters",
 ]
 VERIFIER_STEP_FIELDS = (
     CKPT_FIELDS[: CKPT_FIELDS.index("image_name") + 1]
@@ -318,15 +328,32 @@ def _gen_histories_for_round(
 ) -> list[list[dict]]:
     """History each active image's K candidates get generated from this
     round — round 1 asks gen_q (the structured template) cold; round
-    k>=2 replays EVERY prior round's winning trajectory in order — not
-    just the immediately preceding one — as alternating assistant/user
-    turns on top of base_hist, each followed by a plain reask of gen_q
-    (no feedback text — see the reask assignment below for why that was
-    dropped). state[i]["history"] holds the (winner, feedback) list,
-    appended once per round in run_group_rounds right after
-    _process_round_belief finalizes that round's C_best/feedback (see the
-    docstring there) — feedback is still carried in that list and still
-    logged to the CSV, just not injected into the prompt here anymore."""
+    k>=2 replays EVERY prior round's (winning trajectory, feedback) pair
+    in order — not just the immediately preceding one — as alternating
+    assistant/user turns on top of base_hist, so round k's generation
+    sees the model's own full history of winning answers and what the
+    verifier said about each of them, not just the last exchange.
+    state[i]["history"] holds that list, appended once per round in
+    run_group_rounds right after _process_round_belief finalizes that
+    round's C_best/feedback (see the docstring there).
+
+    Reverted (2026-08-20) back to this "neutral analysis" framing after
+    the fully-feedback-stripped version (git "remove feedback") was
+    A/B tested and came back WORSE, not better: on a 240-image/10-round
+    run, dropping feedback text entirely produced 33 regressed vs. 12
+    recovered (net -21), worse than this version's own 23-vs-11 (net -12)
+    on the same size run. This version (git "no improved in feedback")
+    is the best-measured state so far — it's what produced the 0.514
+    judged-F1 6-round result — so it's the baseline to build from, even
+    though it does NOT fully eliminate round-over-round regression on
+    longer runs. Separately: a chunk of the apparent regression at ANY
+    of these reask variants turned out to be judge-verdict noise, not
+    real answer drift — contains_match (judge-free) stayed flat across
+    rounds even when judged_correct declined, and a literal byte-identical
+    prediction was seen to flip judged_correct between rounds. So don't
+    keep re-deriving reask variants expecting this number to fully
+    stabilize — the judge's own instability on vague answers is a real
+    confound in every one of these comparisons."""
     hists = []
     for i in active:
         if round_idx == 1:
@@ -334,24 +361,25 @@ def _gen_histories_for_round(
             continue
         hist = list(base_hist[i])
         for winner_text, feedback_text in state[i]["history"]:
-            # Feedback text dropped entirely (was: neutral "for context,
-            # here is the verifier's analysis..." framing — see git history
-            # "no improved in feedback"). That neutral framing fixed the
-            # worst of the drift (regression dropped from 26/160 to 9/160
-            # at 6 rounds) but a real 10-round run still showed net
-            # regression (23 vs. 11 recovered) — the hypothesis being
-            # tested now is that even NEUTRAL analysis text, replayed
-            # cumulatively every round, still reads as "something to react
-            # to" and nudges the model to keep commenting/adjusting. This
-            # version reasks with NOTHING but the winning trajectories
-            # themselves in history plus the plain original question — no
-            # feedback content at all — to isolate whether it's the
-            # feedback TEXT itself (not just its old "improve" framing)
-            # driving residual drift. feedback_text is still unpacked from
-            # state[i]["history"] (still logged to verifier_feedback in the
-            # CSV — useful for analysis) but no longer makes it into the
-            # prompt.
-            reask = gen_q
+            # Neutral framing, not an instruction to change anything: this
+            # used to say "Given this feedback, provide an IMPROVED
+            # answer" every round unconditionally — even on rounds the
+            # tournament flagged as "defended" (the same answer winning
+            # again, nothing wrong with it). That standing "improve"
+            # instruction, replayed cumulatively across every prior round
+            # by round 6, was found to be actively driving semantic drift
+            # away from correct-but-plain answers (e.g. "Fungal Leaf Spot
+            # Disease" -> "Foliar Necrosis from Pathogenic Fungus" ->
+            # "Leaf Spot Disorder" over rounds) rather than converging.
+            # Presenting the verifier's own reasoning as INFORMATION
+            # (why this trajectory won over its alternative) rather than
+            # a directive to revise leaves it to the model to decide
+            # whether anything actually needs to change.
+            reask = (
+                f"For context, here is the verifier's analysis of why this "
+                f"trajectory was selected over its alternative in the "
+                f"previous round: {feedback_text}\n\n{gen_q}"
+            )
             hist.append({"role": "assistant", "content": winner_text})
             hist.append({"role": "user", "content": reask})
         hists.append(hist)
@@ -443,10 +471,11 @@ def _judge_same_answer(
     deliberately no image and no full trajectory (the tournament has
     already judged trajectory quality; this call only asks "is this the
     same underlying answer as before"). `pairs` = {image_idx: (answer_a,
-    answer_b)} for images where round_idx>=2 and this round's tournament
-    top-1 is a NEW candidate, not the incumbent's own pool slot — the only
-    case this check is needed (the incumbent's own slot winning again, or
-    round 1 with no incumbent yet, are both trivial and never call this).
+    answer_b)}. Originally called only when round_idx>=2 and this round's
+    tournament top-1 was a NEW candidate outranking the sole incumbent
+    slot; now also the core primitive _resolve_clusters uses to match a
+    candidate against each of an image's known answer-clusters (per-
+    trajectory belief tracking — see _process_round_belief's docstring).
     Returns {image_idx: (same, prompt_tokens, completion_tokens)}."""
     if not pairs:
         return {}
@@ -483,6 +512,91 @@ def _judge_same_answer(
     return result
 
 
+def _resolve_clusters(
+    llm, tokenizer, cls_q: str, vprompts: dict, call_stats: dict | None,
+    agml_dataset: str, class_label: str, image_names: list[str], round_idx: int, log_path: Path | None,
+    state: list[dict], candidates: dict[int, tuple[str, str]],
+) -> dict[int, int]:
+    """Per-trajectory belief tracking's core primitive: match each active
+    image's candidate (answer, trajectory) against that image's own
+    state[i]["clusters"] — a list of {"answer", "trajectory", "belief",
+    "members"} dicts, one per DISTINCT diagnosis this image has ever
+    proposed across all rounds so far — creating a new cluster only if it
+    matches none of them. This is what replaces the old design's single
+    "the incumbent's belief, wiped on any genuine answer change" with each
+    distinct answer keeping its own persistent (mu, sigma2), regardless of
+    whether it's currently winning.
+
+    Matching is cheap-first: an exact case-insensitive string match short-
+    circuits with no LLM call (common — most rounds' winner/loser answers
+    are byte-identical to something already seen); anything left checks
+    against existing clusters IN ORDER via _judge_same_answer (paraphrase-
+    tolerant — "Leaf Spot Disease" vs "Foliar Leaf Spot Disorder" should
+    cluster together, "Yellow Sigatoka" vs "Black Sigatoka" should not),
+    one batched LLM call per cluster-index across every image that still
+    needs to check that index — so cost scales with how many distinct
+    clusters an image has accumulated (typically small), not with round
+    count.
+
+    Every resolution — matched to an existing cluster OR a brand new one
+    — appends the candidate's raw answer string to that cluster's
+    "members" list (deduped) and refreshes "trajectory" to the freshest
+    wording, so state[i]["clusters"] is a complete, inspectable record of
+    every answer ever assigned to each belief score (logged verbatim by
+    _process_round_belief's "belief_clusters" call_type — this is the
+    "log that somewhere so we can check all the answers that belong to
+    the same belief score" record).
+
+    Returns {image_idx: cluster_idx} for every key in `candidates`."""
+    result: dict[int, int] = {}
+    pending: dict[int, tuple[str, str]] = {}
+    for i, (ans, traj) in candidates.items():
+        norm = (ans or "").strip().lower()
+        match_idx = next((k for k, cl in enumerate(state[i]["clusters"])
+                           if cl["answer"].strip().lower() == norm), None)
+        if match_idx is not None:
+            result[i] = match_idx
+        else:
+            pending[i] = (ans, traj)
+
+    k = 0
+    while pending:
+        need_check = {i: (ans, state[i]["clusters"][k]["answer"])
+                       for i, (ans, _traj) in pending.items() if k < len(state[i]["clusters"])}
+        if not need_check:
+            break  # every still-pending image has fewer than k+1 clusters — nothing left to check
+        same_result = _judge_same_answer(
+            llm, tokenizer, cls_q, vprompts, need_check, call_stats,
+            agml_dataset, class_label, image_names, round_idx, log_path,
+        )
+        for i, (same, p_tok, c_tok) in same_result.items():
+            state[i]["round_prompt_tokens"] += p_tok
+            state[i]["round_completion_tokens"] += c_tok
+            if same:
+                result[i] = k
+                del pending[i]
+        k += 1
+
+    for i, (ans, traj) in pending.items():
+        state[i]["clusters"].append({"answer": ans, "trajectory": traj, "belief": Belief(0.0, 1.0), "members": []})
+        result[i] = len(state[i]["clusters"]) - 1
+
+    for i, (ans, traj) in candidates.items():
+        cl = state[i]["clusters"][result[i]]
+        if ans and ans not in cl["members"]:
+            cl["members"].append(ans)
+        cl["trajectory"] = traj  # freshest wording represents the cluster in next round's pool
+    return result
+
+
+def _leader_idx(clusters: list[dict]) -> int:
+    """argmax cluster by accumulated belief mean — the per-trajectory
+    analogue of the old design's single incumbent. Ties broken toward the
+    earliest-created cluster (stability: an established answer isn't
+    displaced by a brand-new one it's merely tied with)."""
+    return max(range(len(clusters)), key=lambda k: (clusters[k]["belief"].mu, -k))
+
+
 def _process_round_belief(
     llm, tokenizer, images: list, active: list[int], candidate_lists: list[list[str]],
     answer_lists: list[list[str]], state: list[dict], prompts: dict, vprompts: dict, cls_q: str, rubric: str,
@@ -515,24 +629,50 @@ def _process_round_belief(
     budget-efficient schedule; top1's identity from the tournament's own
     aggregate output is sufficient.
 
-    Persistence is keyed off the ANSWER, not the pool slot. Every
-    candidate's free-generated text also carries an open-ended
-    <answer>...</answer> tag (extract_answer_tag — no closed-set
-    vocabulary, real answers aren't a fixed label set); when this round's
-    tournament top-1 is the incumbent's own pool slot, "same answer" is
-    trivial. When top-1 is a NEW candidate, a lightweight text-only judge
-    (_judge_same_answer — just the two extracted answer strings, no image,
-    no full trajectory) decides whether it's a genuine answer change or
-    just a reworded restatement of the same conclusion — only in the
-    former case does the persistent belief reset to a fresh prior; in the
-    latter it carries forward onto the new (better-worded) winning text.
-    This avoids the belief getting wiped out by cosmetic rephrasing that
-    doesn't actually change the answer.
+    Belief is tracked PER TRAJECTORY (2026-08-20 redesign), not one
+    persistent belief for whichever answer currently holds the incumbent
+    slot. state[i]["clusters"] is a list of every DISTINCT diagnosis this
+    image has ever proposed, each with its own (mu, sigma2) that only
+    ever accumulates — it's never wiped just because a different answer
+    won a later round. Every round, this round's tournament winner AND
+    runner-up (not just the winner) get resolved into a cluster via
+    _resolve_clusters (exact-match short-circuit, then a paraphrase-
+    tolerant same-answer LLM check against each existing cluster in
+    order — so "Leaf Spot Disease" and "Foliar Leaf Spot Disorder" pool
+    into one belief while "Yellow Sigatoka" and "Black Sigatoka" stay
+    separate), and pairwise_update() is applied to THOSE two clusters'
+    beliefs directly.
+
+    The reported "current answer" for this round (s["C_best"]/s["answer"]/
+    s["belief"], and therefore next round's pool "incumbent" slot too,
+    via the existing pool-construction code below which reads those same
+    fields) is whichever cluster has the HIGHEST accumulated belief.mu
+    overall (_leader_idx) — not necessarily this round's own raw
+    tournament winner. This is the fix for a real failure mode measured
+    on live runs: a trajectory that won 8 of 9 rounds and built real
+    accumulated belief could still lose the LAST round's tournament and
+    have that one upset overwrite everything as the final answer under
+    the old single-belief design. Per-trajectory tracking means a
+    historically strong answer keeps its accumulated case even after
+    briefly losing a round, and can only be dethroned by another
+    cluster's belief genuinely overtaking it, not by momentarily winning
+    one round's duel.
+
+    "pairwise_winner" status now means whether the LEADER cluster changed
+    this round ("defended" = same leader, "replaced" = a different
+    cluster overtook it), not whether this round's raw top1 beat pool
+    slot 0 the way the old single-incumbent design read it.
+
+    Every cluster's full membership (every raw answer string ever
+    assigned to it) is logged verbatim every round via a "belief_clusters"
+    call_type entry in verifier_log_<baseline>.jsonl — the auditable
+    record of which answers share a belief score, per the user's request.
 
     Mutates state[i] in place: C_best, answer, belief, feedback,
     pairwise_winner, pool_size, n_comparisons, top1_win_rate,
     incumbent_survived, transcript, round_prompt_tokens,
-    round_completion_tokens.
+    round_completion_tokens, clusters (append-only, entries' belief/
+    trajectory/members mutate in place).
 
     seed: fixes analysis_params' (temperature=1.0) sampling RNG so the
     pairwise duel's free-text analysis is reproducible run-to-run for
@@ -627,54 +767,37 @@ def _process_round_belief(
             top1 = max(range(pool_size), key=lambda k: (win_rate[k], -k))
         ranked[i] = (win_rate, top1)
 
-    # ── Pass 2: same-answer check, only where a NEW candidate outranked
-    # the incumbent's own pool slot (round>=2, top1 != 0) — decides whether
-    # the persistent belief carries forward (reworded, same conclusion) or
-    # resets (genuine answer change). Trivial/skipped everywhere else.
-    need_judge = {
-        i: (pool_answers[i][0], pool_answers[i][ranked[i][1]])
-        for i in active if round_idx >= 2 and ranked[i][1] != 0
-    }
-    same_result = _judge_same_answer(
-        llm, tokenizer, cls_q, vprompts, need_judge, call_stats,
-        agml_dataset, class_label, image_names, round_idx, log_path,
-    )
-    for i, (_same, p_tok, c_tok) in same_result.items():
-        state[i]["round_prompt_tokens"] += p_tok
-        state[i]["round_completion_tokens"] += c_tok
+    # ── Pass 2: resolve this round's tournament winner AND runner-up into
+    # per-trajectory belief clusters. Winner resolved first so a
+    # same-round runner-up that happens to be a paraphrase of the winner
+    # correctly matches the same (freshly-created, if new) cluster rather
+    # than spawning a duplicate.
+    def _runner_up_of(i: int, exclude: int) -> int:
+        win_rate = ranked[i][0]
+        return max((k for k in range(pool_size) if k != exclude), key=lambda k: (win_rate[k], -k))
 
-    # ── Pass 3: finalize this round's winner/loser and persistent update.
+    winner_idx_by_i = {i: ranked[i][1] for i in active}
+    loser_idx_by_i = {i: (_runner_up_of(i, winner_idx_by_i[i]) if pool_size > 1 else winner_idx_by_i[i])
+                       for i in active}
+    old_leader_by_i = {i: (_leader_idx(state[i]["clusters"]) if state[i]["clusters"] else -1) for i in active}
+
+    winner_cluster = _resolve_clusters(
+        llm, tokenizer, cls_q, vprompts, call_stats, agml_dataset, class_label, image_names, round_idx, log_path,
+        state, {i: (pool_answers[i][winner_idx_by_i[i]], pools[i][winner_idx_by_i[i]]) for i in active},
+    )
+    loser_cluster = _resolve_clusters(
+        llm, tokenizer, cls_q, vprompts, call_stats, agml_dataset, class_label, image_names, round_idx, log_path,
+        state, {i: (pool_answers[i][loser_idx_by_i[i]], pools[i][loser_idx_by_i[i]]) for i in active},
+    )
+
+    # ── Pass 3: update the resolved clusters' persistent belief, then
+    # report whichever cluster now leads overall.
     for i in active:
         s = state[i]
         pool_texts = pools[i]
         win_rate, top1 = ranked[i]
-
-        def _runner_up(exclude: int, win_rate=win_rate) -> int:
-            return max((k for k in range(pool_size) if k != exclude), key=lambda k: (win_rate[k], -k))
-
-        if round_idx == 1:  # no incumbent yet
-            winner_idx = top1
-            loser_idx = _runner_up(top1) if pool_size > 1 else top1
-            status = "seed"
-            class_match = False
-        elif top1 == 0:  # incumbent's own pool slot won again — trivially the same answer
-            winner_idx = 0
-            loser_idx = _runner_up(0) if pool_size > 1 else 0
-            status = "defended"
-            class_match = True
-        else:  # a NEW candidate outranked the incumbent — same_result decides which
-            class_match = same_result.get(i, (False, 0, 0))[0]
-            if class_match:
-                winner_idx = top1
-                loser_idx = _runner_up(top1) if pool_size > 1 else top1
-                status = "defended"
-            else:
-                winner_idx, loser_idx, status = top1, 0, "replaced"
-
-        persistent_is_winner = round_idx >= 2 and class_match
-        persistent_is_loser = round_idx >= 2 and status == "replaced"
-        winner_belief = s["belief"] if persistent_is_winner else Belief(0.0, 1.0)
-        loser_belief = s["belief"] if persistent_is_loser else Belief(0.0, 1.0)
+        winner_idx, loser_idx = winner_idx_by_i[i], loser_idx_by_i[i]
+        wc_idx, lc_idx = winner_cluster[i], loser_cluster[i]
 
         # Evidence-scaled beta: how decisive AND how absolutely good this
         # round's winner/loser raw scores were, not just a flat beta for
@@ -687,11 +810,29 @@ def _process_round_belief(
             eff_beta = evidence_scaled_beta(beta, winner_score, loser_score, floor_threshold, margin_ref, max_beta)
         else:
             eff_beta = beta
-        new_winner, _new_loser = pairwise_update(winner=winner_belief, loser=loser_belief, beta=eff_beta)
 
-        s["belief"] = new_winner
-        s["C_best"] = pool_texts[winner_idx]
-        s["answer"] = pool_answers[i][winner_idx]
+        if wc_idx == lc_idx:
+            # This round's top1 and runner-up turned out to be the SAME
+            # underlying answer, reworded — no informative comparison
+            # between two clusters exists this round, so leave that
+            # cluster's belief untouched rather than comparing it to
+            # itself (pairwise_update assumes winner != loser).
+            pass
+        else:
+            new_winner, new_loser = pairwise_update(
+                winner=s["clusters"][wc_idx]["belief"], loser=s["clusters"][lc_idx]["belief"], beta=eff_beta,
+            )
+            s["clusters"][wc_idx]["belief"] = new_winner
+            s["clusters"][lc_idx]["belief"] = new_loser
+
+        leader_idx = _leader_idx(s["clusters"])
+        leader = s["clusters"][leader_idx]
+        old_leader = old_leader_by_i[i]
+        status = "seed" if round_idx == 1 else ("defended" if leader_idx == old_leader else "replaced")
+
+        s["belief"] = leader["belief"]
+        s["C_best"] = leader["trajectory"]
+        s["answer"] = leader["answer"]
         # No truncation here — the analysis is already hard-capped at
         # generation time (analysis_params.max_tokens, currently 280), so
         # a second, tighter [:N] cut on top of that only loses information
@@ -706,12 +847,26 @@ def _process_round_belief(
         s["pool_size"] = pool_size
         s["n_comparisons"] = n_comparisons[i]
         s["top1_win_rate"] = round(win_rate[top1], 4)
-        s["incumbent_survived"] = int(round_idx >= 2 and class_match)
+        s["incumbent_survived"] = int(round_idx >= 2 and leader_idx == old_leader)
         s["pairwise_winner"] = status
+        s["n_clusters"] = len(s["clusters"])
         s["transcript"].append(
             f"Round {round_idx} ({status}, pool={pool_size}, comparisons={n_comparisons[i]}, "
-            f"top1_win_rate={win_rate[top1]:.3f}): winner={pool_texts[winner_idx]} "
-            f"[answer={s['answer']!r}]"
+            f"top1_win_rate={win_rate[top1]:.3f}): round winner={pool_texts[winner_idx]} "
+            f"[leader_cluster={leader['answer']!r} mu={leader['belief'].mu:.3f}]"
+        )
+        _log_verifier_call(
+            log_path, agml_dataset=agml_dataset, class_label=class_label,
+            image_name=image_names[i], round=round_idx, call_type="belief_clusters",
+            n_clusters=len(s["clusters"]), leader_answer=leader["answer"],
+            # Every distinct answer ever mapped to each cluster, with that
+            # cluster's current (mu, sigma2) — the full auditable record of
+            # which answers share a belief score.
+            clusters=[
+                {"answer": cl["answer"], "mu": round(cl["belief"].mu, 4), "sigma2": round(cl["belief"].sigma2, 4),
+                 "n_members": len(cl["members"]), "members": cl["members"]}
+                for cl in s["clusters"]
+            ],
         )
 
 
@@ -785,13 +940,21 @@ def run_group_rounds(
     state = [{"C_best": "", "answer": "", "belief": None, "anchor": None,
               "feedback": "", "transcript": [], "pairwise_winner": "",
               "pool_size": 0, "n_comparisons": 0, "top1_win_rate": 0.0, "incumbent_survived": 0,
+              "n_clusters": 0,
               "round_prompt_tokens": 0, "round_completion_tokens": 0,
               # (winning_trajectory, feedback) appended once per round —
               # replayed IN FULL by _gen_histories_for_round so round k's
               # generation sees every prior round's winner + feedback, not
               # just the immediately preceding one. See run_group_rounds'
               # docstring.
-              "history": []}
+              "history": [],
+              # Per-trajectory belief tracking (2026-08-20) — one entry
+              # per DISTINCT diagnosis ever proposed for this image,
+              # {"answer", "trajectory", "belief", "members"}, populated
+              # by _resolve_clusters/_process_round_belief. Starts empty;
+              # round 1 always creates at least one. See
+              # _process_round_belief's docstring for the full design.
+              "clusters": []}
              for _ in range(n)]
     per_image_rounds: list[list[dict]] = [[] for _ in range(n)]
     active = list(range(n))
@@ -889,6 +1052,7 @@ def run_group_rounds(
             pool_size, n_comparisons = s["pool_size"], s["n_comparisons"]
             top1_win_rate, incumbent_survived = s["top1_win_rate"], s["incumbent_survived"]
             pairwise_winner = s["pairwise_winner"]
+            n_clusters = s["n_clusters"]
             verifier_answer = s["answer"]
             # Append THIS round's (winner, feedback) for the NEXT round's
             # _gen_histories_for_round to replay — after this point s["C_best"]/
@@ -903,7 +1067,8 @@ def run_group_rounds(
                 "reasoning": "\n\n".join(s["transcript"]),
                 "pool_size": pool_size, "n_comparisons": n_comparisons,
                 "top1_win_rate": top1_win_rate, "incumbent_survived": incumbent_survived,
-                "pairwise_winner": pairwise_winner, "verifier_answer": verifier_answer,
+                "pairwise_winner": pairwise_winner, "n_clusters": n_clusters,
+                "verifier_answer": verifier_answer,
                 "verifier_feedback": s["feedback"],
                 "mu": mu, "sigma2": sigma2,
                 "stop_confidence": round(p, 4),
@@ -939,7 +1104,8 @@ def _round_row(entry: dict, ds, clean_label: str, crop_val, task_type: str, name
         "pool_size": entry["pool_size"], "n_comparisons": entry["n_comparisons"],
         "top1_win_rate": entry["top1_win_rate"], "incumbent_survived": entry["incumbent_survived"],
         "verifier_answer": entry["verifier_answer"], "verifier_feedback": entry["verifier_feedback"],
-        "pairwise_winner": entry["pairwise_winner"], "is_final_round": entry["is_final_round"],
+        "pairwise_winner": entry["pairwise_winner"], "n_clusters": entry["n_clusters"],
+        "is_final_round": entry["is_final_round"],
         "prompt_tokens": entry["prompt_tokens"], "completion_tokens": entry["completion_tokens"],
         "elapsed_s": entry["elapsed_s"],
         "prediction": entry["prediction"], "resolved_class": resolved or "",
