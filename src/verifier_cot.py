@@ -128,7 +128,7 @@ VERIFIER_EXTRA_FIELDS = [
     "round", "mu", "sigma2", "stop_confidence", "confidence_bin",
     "pool_size", "n_comparisons", "top1_win_rate", "incumbent_survived",
     "verifier_answer", "verifier_feedback", "pairwise_winner", "is_final_round",
-    "prompt_tokens", "completion_tokens", "elapsed_s",
+    "prompt_tokens", "completion_tokens", "elapsed_s", "avg_time_per_sample_s",
     # Per-trajectory belief tracking (see _process_round_belief) — how many
     # DISTINCT answer-clusters this image has accumulated by this round.
     # Visible directly in the checkpoint CSV for a quick eyeball sanity
@@ -1038,6 +1038,13 @@ def run_group_rounds(
         )
 
         round_elapsed = time.perf_counter() - t_round_start
+        # Cheap derivation, not a new profiling pass: this round's whole
+        # batch (generation + tournament + cluster resolution) already
+        # takes one wall-clock measurement shared across every active
+        # image (elapsed_s); dividing by how many images were actually
+        # active this round gives a genuine per-sample time without any
+        # extra instrumentation.
+        avg_time_per_sample_s = round_elapsed / len(active) if active else 0.0
 
         # ── Stopping check + row build ───────────────────────────────────────
         still_active = []
@@ -1082,6 +1089,7 @@ def run_group_rounds(
                 # batched. Still informative for "does cost grow with round
                 # depth" even though it double-counts across images.
                 "elapsed_s": round(round_elapsed, 3),
+                "avg_time_per_sample_s": round(avg_time_per_sample_s, 3),
             })
             if not stop_now:
                 still_active.append(i)
@@ -1107,7 +1115,7 @@ def _round_row(entry: dict, ds, clean_label: str, crop_val, task_type: str, name
         "pairwise_winner": entry["pairwise_winner"], "n_clusters": entry["n_clusters"],
         "is_final_round": entry["is_final_round"],
         "prompt_tokens": entry["prompt_tokens"], "completion_tokens": entry["completion_tokens"],
-        "elapsed_s": entry["elapsed_s"],
+        "elapsed_s": entry["elapsed_s"], "avg_time_per_sample_s": entry["avg_time_per_sample_s"],
         "prediction": entry["prediction"], "resolved_class": resolved or "",
         "ground_truth": clean_label, "correct": int(correct), "contains_match": int(c_match),
         "resolvable": int(resolved is not None), "reasoning": entry["reasoning"],

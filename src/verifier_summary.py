@@ -229,27 +229,62 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     plt.close(fig)
     print(f"  Saved: {out_dir / 'diag_round_vs_stop_confidence.png'}")
 
-    # ── diag_round_vs_accuracy.png: judged_correct + contains_match by round
+    # ── diag_round_vs_accuracy.png: judged_correct by round, overall + per
+    # task_type. contains_match deliberately dropped (per explicit
+    # request) — agricultural disease naming varies enough internationally
+    # that strict string match undercounts correct answers systematically;
+    # judged_correct is the metric actually being optimized here.
     by_round_rows: dict[int, list[dict]] = {}
     for r in rows:
         by_round_rows.setdefault(int(r["round"]), []).append(r)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for key, label, color in [("judged_correct", "judged_correct", "#1f77b4"),
-                               ("contains_match", "contains_match", "#2ca02c")]:
+    task_types = sorted({r.get("task_type", "") for r in rows} - {""})
+    _task_colors = ["#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    groups = [("overall", None, "#1f77b4", 2.5)] + [
+        (tt, tt, _task_colors[k % len(_task_colors)], 1.3) for k, tt in enumerate(task_types)
+    ]
+    for label, tt_filter, color, lw in groups:
         means, lo_e, hi_e = [], [], []
         for k in rr:
-            m, lo, hi = _boot_ci([1.0 if r[key] == "1" else 0.0 for r in by_round_rows[k]], rng)
+            sub = by_round_rows[k] if tt_filter is None else [r for r in by_round_rows[k] if r.get("task_type") == tt_filter]
+            if not sub:
+                means.append(np.nan); lo_e.append(0.0); hi_e.append(0.0)
+                continue
+            m, lo, hi = _boot_ci([1.0 if r["judged_correct"] == "1" else 0.0 for r in sub], rng)
             means.append(m); lo_e.append(m - lo); hi_e.append(hi - m)
-        ax.plot(rr, means, marker="o", label=label, color=color, linewidth=2)
+        line, = ax.plot(rr, means, marker="o", label=label, color=color, linewidth=lw)
         ax.fill_between(rr, np.array(means) - np.array(lo_e), np.array(means) + np.array(hi_e),
-                         alpha=0.15, color=color)
-    ax.set_xlabel("Round"); ax.set_ylabel("Rate")
-    ax.set_title(f"Round vs. judged/contains-match accuracy, 95% CI — {model_safe}")
-    ax.grid(alpha=0.3); ax.legend(fontsize=9)
+                         alpha=0.12, color=line.get_color())
+    ax.set_xlabel("Round"); ax.set_ylabel("judged_correct rate")
+    ax.set_title(f"Round vs. judged accuracy, 95% CI — {model_safe}")
+    ax.grid(alpha=0.3); ax.legend(fontsize=8)
     plt.tight_layout()
     fig.savefig(out_dir / "diag_round_vs_accuracy.png", dpi=150)
     plt.close(fig)
     print(f"  Saved: {out_dir / 'diag_round_vs_accuracy.png'}")
+
+    # ── diag_round_vs_timing.png: avg_time_per_sample_s by round — cost
+    # side of the round-count tradeoff, next to the accuracy chart above.
+    if all("avg_time_per_sample_s" in r for r in rows[:1]):
+        fig, ax = plt.subplots(figsize=(8, 5))
+        means, lo_e, hi_e = [], [], []
+        for k in rr:
+            vals = [float(r["avg_time_per_sample_s"]) for r in by_round_rows[k] if r.get("avg_time_per_sample_s")]
+            if not vals:
+                means.append(np.nan); lo_e.append(0.0); hi_e.append(0.0)
+                continue
+            m, lo, hi = _boot_ci(vals, rng)
+            means.append(m); lo_e.append(m - lo); hi_e.append(hi - m)
+        ax.plot(rr, means, marker="o", color="#d62728", linewidth=2)
+        ax.fill_between(rr, np.array(means) - np.array(lo_e), np.array(means) + np.array(hi_e),
+                         alpha=0.15, color="#d62728")
+        ax.set_xlabel("Round"); ax.set_ylabel("avg time per sample (s)")
+        ax.set_title(f"Round vs. per-sample wall-clock time, 95% CI — {model_safe}")
+        ax.grid(alpha=0.3)
+        plt.tight_layout()
+        fig.savefig(out_dir / "diag_round_vs_timing.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {out_dir / 'diag_round_vs_timing.png'}")
 
     # ── diag_answer_settle_round.png: last round with a real (non-"defended") change
     last_change = []
