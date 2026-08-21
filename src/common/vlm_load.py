@@ -68,6 +68,29 @@ def _best_supported_dtype() -> str:
     return "float16"
 
 
+def normalize_quantization(quantization: str | None) -> tuple[str | None, str | None]:
+    """(quantization, load_format) kwargs actually valid for vLLM's LLM(...).
+
+    Every --quantize/--judge_quantize flag in this repo has offered "4bit"/
+    "8bit" as choices since early on, passed straight through to
+    LLM(quantization=...) with no translation — vLLM has never accepted
+    those literal strings (confirmed on a real run: "Unknown quantization
+    method: 4bit. Must be one of ['awq', 'fp8', ..., 'bitsandbytes', ...]").
+    On-the-fly bnb quantization in vLLM needs BOTH quantization=
+    "bitsandbytes" and load_format="bitsandbytes" together; vLLM's bnb
+    integration doesn't expose 4-bit vs. 8-bit as an independent choice the
+    way the CLI flag implies, so both "4bit" and "8bit" map to the same
+    "bitsandbytes" mechanism here — kept as two CLI choices only so
+    existing --quantize 4bit/8bit invocations across every script (self_cot,
+    vision_baseline, desc_augmented_vision_v2, cot_yaml, verifier_cot, ...)
+    keep working unchanged rather than needing every call site updated.
+    "awq"/"gptq" are real vLLM quantization method names already and pass
+    through as-is, load_format untouched (None = vLLM's own default)."""
+    if quantization in ("4bit", "8bit"):
+        return "bitsandbytes", "bitsandbytes"
+    return quantization, None
+
+
 def load_llm(
     model_id: str,
     quantization: str | None = None,
@@ -87,12 +110,14 @@ def load_llm(
     kwargs = mm_processor_kwargs_for(model_id, vision_token_budget) if vision_token_budget else {}
     tag = f"[{caller_tag}] " if caller_tag else ""
     dtype = _best_supported_dtype()
+    quantization, load_format = normalize_quantization(quantization)
     print(f"\n{tag}Loading {model_id} via vLLM (dtype={dtype})"
           + (f" (mm_processor_kwargs={kwargs})" if kwargs else ""))
     llm = LLM(
         model=model_id,
         dtype=dtype,
         quantization=quantization,
+        load_format=load_format or "auto",
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
         max_num_seqs=max_num_seqs,
