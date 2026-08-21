@@ -124,19 +124,23 @@ def collect(keys: set[tuple[str, str, str]], model_safe: str, n_boot: int, seed:
             print(f"  [skip] {label}: no rows for {model_safe} on these images")
             out.append((label, color, None, 0))
             continue
-        stats = compute_condition_stats(rows, n_boot, seed).get("overall", {})
+        # Full dict — {"overall": {...}, "<task_type>": {...}, ...} — kept
+        # in full (not just ["overall"]) so plot_by_task can break the same
+        # bar chart out per task_type without a second bootstrap pass.
+        stats = compute_condition_stats(rows, n_boot, seed)
+        overall = stats.get("overall", {})
         # A condition whose overlapping rows were never JUDGED reports
         # judge_f1_macro=0.0 — which is missing data, not a score of zero.
         # Plotting that as a real bar would be actively misleading (E4B-it's
         # self_cot rows are exactly this case: present but unjudged), so
         # treat it the same as "no rows at all".
-        if not stats.get("judge_n_classes"):
+        if not overall.get("judge_n_classes"):
             print(f"  [skip] {label}: {len(rows)} row(s) overlap but none are judged "
                   f"(judge_f1_macro would be a meaningless 0.0)")
             out.append((label, color, None, len(rows)))
             continue
         out.append((label, color, stats, len(rows)))
-        print(f"  {label:16s} judge_f1_macro={stats.get('judge_f1_macro'):.4f}  n={len(rows)}")
+        print(f"  {label:16s} judge_f1_macro={overall.get('judge_f1_macro'):.4f}  n={len(rows)}")
     return out, len(keys)
 
 
@@ -410,13 +414,14 @@ def plot(results, n_images: int, model_safe: str, out_path: Path,
         return
 
     labels = [lbl for lbl, _, _, _ in present]
-    vals = [st.get("judge_f1_macro") or 0.0 for _, _, st, _ in present]
+    vals = [st.get("overall", {}).get("judge_f1_macro") or 0.0 for _, _, st, _ in present]
     colors = [c for _, c, _, _ in present]
     lo_err, hi_err = [], []
     for _, _, st, _ in present:
-        m = st.get("judge_f1_macro") or 0.0
-        lo_err.append(max(0.0, m - (st.get("judge_ci_low") or m)))
-        hi_err.append(max(0.0, (st.get("judge_ci_high") or m) - m))
+        o = st.get("overall", {})
+        m = o.get("judge_f1_macro") or 0.0
+        lo_err.append(max(0.0, m - (o.get("judge_ci_low") or m)))
+        hi_err.append(max(0.0, (o.get("judge_ci_high") or m) - m))
 
     fig, ax = plt.subplots(figsize=(max(7, len(present) * 1.6), 5.5))
     bars = ax.bar(labels, vals, color=colors, edgecolor="black", linewidth=0.6,
@@ -447,6 +452,62 @@ def plot(results, n_images: int, model_safe: str, out_path: Path,
     print(f"  Saved: {out_path}")
 
 
+def plot_by_task(results, n_images: int, model_safe: str, out_path: Path,
+                  title: str = "Verifier vs. bounds and CoT methods") -> None:
+    """Grouped bar chart — same conditions as plot(), but one bar per
+    task_type per condition instead of one overall bar. Reuses the full
+    per-condition stats dict collect() already returns (task_type keys
+    computed by compute_condition_stats alongside "overall"), so no
+    second bootstrap pass over the rows is needed."""
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    present = [(lbl, color, st, n) for lbl, color, st, n in results if st]
+    if not present:
+        print("  [skip] nothing to plot")
+        return
+
+    task_types = sorted({k for _, _, st, _ in present for k in st if k != "overall"})
+    if not task_types:
+        print("  [skip] no task_type breakdown available")
+        return
+
+    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 1.8), 5.5))
+    n_cond = len(present)
+    width = 0.8 / n_cond
+    x = np.arange(len(task_types))
+    for j, (label, color, st, _n) in enumerate(present):
+        vals, lo_err, hi_err = [], [], []
+        for tt in task_types:
+            sub = st.get(tt, {})
+            # No rows (or none judged) for this condition/task combo —
+            # leave the bar out entirely (NaN height) rather than drawing
+            # a misleading 0.0 bar, same reasoning as collect()'s overall
+            # "unjudged is missing data, not a score of zero" guard.
+            if not sub.get("judge_n_classes"):
+                vals.append(np.nan); lo_err.append(0.0); hi_err.append(0.0)
+                continue
+            m = sub.get("judge_f1_macro") or 0.0
+            vals.append(m)
+            lo_err.append(max(0.0, m - (sub.get("judge_ci_low") or m)))
+            hi_err.append(max(0.0, (sub.get("judge_ci_high") or m) - m))
+        offset = (j - (n_cond - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=label, color=color, edgecolor="black", linewidth=0.5,
+               yerr=[lo_err, hi_err], capsize=2, error_kw={"elinewidth": 0.8, "alpha": 0.7})
+
+    ax.set_xticks(x); ax.set_xticklabels(task_types, rotation=12, ha="right")
+    ax.set_ylabel("Judged F1 Macro", fontsize=11)
+    ax.set_title(f"{title} (by task) — {model_safe}\nsame {n_images} images, 95% CI", fontsize=11)
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
 def main(args: argparse.Namespace) -> None:
     model_safe = args.model.replace("/", "_")
 
@@ -465,6 +526,8 @@ def main(args: argparse.Namespace) -> None:
         # same path (a real mistake made once during development).
         plot(results, n_images, model_safe, out_dir / f"baseline_summary_n{args.n_samples}.png",
              title="Bounds and CoT methods (pre-verifier)")
+        plot_by_task(results, n_images, model_safe, out_dir / f"baseline_summary_n{args.n_samples}_by_task.png",
+                     title="Bounds and CoT methods (pre-verifier)")
         csv_path = out_dir / f"baseline_summary_n{args.n_samples}.csv"
     else:
         verifier_dir = Path(args.verifier_dir)
@@ -474,6 +537,7 @@ def main(args: argparse.Namespace) -> None:
         out_dir = verifier_dir / model_safe
         out_dir.mkdir(parents=True, exist_ok=True)
         plot(results, n_images, model_safe, out_dir / "verifier_summary.png")
+        plot_by_task(results, n_images, model_safe, out_dir / "verifier_summary_by_task.png")
         plot_round_diagnostics(verifier_dir, model_safe, args.baseline, out_dir)
         csv_path = out_dir / "verifier_summary.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -482,8 +546,9 @@ def main(args: argparse.Namespace) -> None:
                     "n_rows", "n_images", "status"])
         for label, _c, st, n in results:
             if st:
-                w.writerow([label, st.get("judge_f1_macro"), st.get("judge_ci_low"),
-                            st.get("judge_ci_high"), n, n_images, "ok"])
+                o = st.get("overall", {})
+                w.writerow([label, o.get("judge_f1_macro"), o.get("judge_ci_low"),
+                            o.get("judge_ci_high"), n, n_images, "ok"])
             else:
                 # Keep the real overlap count: n>0 here means the rows exist
                 # but weren't judged (very different from having no data).
