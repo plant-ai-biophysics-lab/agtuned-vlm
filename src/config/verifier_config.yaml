@@ -43,7 +43,10 @@ k_pivots: 2             # k -- pivot-set size for the full PPT tournament (--bas
                          # matches llm_verifier.pivot_tournament.DEFAULT_PIVOTS, repeated here as a
                          # literal rather than imported so this file has no Python-side dependency
 min_round: 3
-max_round: 1              # 1 = single-round (generate -> tournament -> argmax; belief inert)
+max_round: 6              # 1 = single-round (generate -> tournament -> argmax; belief inert).
+                           # Bumped from 1 now that lock_after_n_defends=3 caps most of the
+                           # round-over-round regression risk found on real runs — images that
+                           # settle stop early instead of continuing to roll the dice.
 temperature: 0.8        # sampling temperature for the K per-round candidates; needs to be > 0
                          # for k_candidates > 1 to actually differ (greedy decoding repeats itself)
 enable_thinking: false  # model-being-tested's own extended thinking for the k_candidates
@@ -79,6 +82,16 @@ beta: 0.5                # floor value — Bradley-Terry per-comparison noise fo
 floor_threshold: 0.5      # winner's own raw score must clear this, or the update gets discounted
 margin_ref: 0.3           # winner-vs-loser score gap counted as "decisive enough" for full confidence
 max_beta: 4.0             # beta used for the weakest possible evidence (winner_score<=0 or margin<=0)
+
+# ── Leadership stability (found on real runs to reduce round-over-round regression) ──────────
+leader_margin: 0.1        # minimum mu advantage a challenger needs over the current leader to
+                           # actually take over — real duel margins run narrow (~0.10 median), so
+                           # without this an already-correct leader could get displaced by one
+                           # noisy near-tie. 0 disables (any mu edge changes the leader).
+lock_after_n_defends: 3   # stop an image early once its leader has defended this many rounds in a
+                           # row, regardless of stop_confidence — images settle within 2-3 rounds
+                           # on real runs, so further rounds are pure flip risk with no upside.
+                           # 0 disables (only stop_confidence/max_round decide).
 
 high_conf: 0.6           # stop-early / "high" confidence-bin threshold — lowered again from 0.7
                          # (was 0.85 originally). The answer settles well before stop_confidence

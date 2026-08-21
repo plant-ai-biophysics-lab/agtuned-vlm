@@ -649,7 +649,7 @@ def _process_round_belief(
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None, call_stats: dict | None,
     floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
-    seed: int | None = None,
+    seed: int | None = None, leader_margin: float = 0.1,
 ) -> None:
     """The full Probabilistic Pivot Tournament (arXiv:2607.05391 Section
     3.2), via llm_verifier.pivot_tournament's own ring_cycle/select_pivots/
@@ -732,6 +732,13 @@ def _process_round_belief(
     per-call by how decisive AND how absolutely good the winner/loser's
     raw verifier scores were this round, instead of a flat beta for every
     win regardless of score quality.
+
+    leader_margin: minimum mu advantage a challenger cluster needs over
+    the current leader to actually take over as leader this round — see
+    the inline comment where it's applied. Separate from
+    floor_threshold/margin_ref (those scale the belief UPDATE's trust in
+    this round's evidence; this gates whether a leadership CHANGE is
+    reported at all, after that update has already happened).
     """
     pools: dict[int, list[str]] = {}
     pool_answers: dict[int, list[str]] = {}
@@ -870,9 +877,24 @@ def _process_round_belief(
             s["clusters"][wc_idx]["belief"] = new_winner
             s["clusters"][lc_idx]["belief"] = new_loser
 
-        leader_idx = _leader_idx(s["clusters"])
-        leader = s["clusters"][leader_idx]
         old_leader = old_leader_by_i[i]
+        raw_leader_idx = _leader_idx(s["clusters"])
+        # Hard margin gate: a challenger cluster only actually DETHRONES
+        # the incumbent leader if it beats it by leader_margin or more —
+        # otherwise the old leader keeps reporting as leader even though
+        # some other cluster's raw mu is technically (barely) higher this
+        # round. Without this, a leader that's been correctly "defended"
+        # for many rounds (real accumulated evidence) could still get
+        # displaced by one narrow, noisy win from a brand-new cluster
+        # (median duel margin was measured at ~0.10 on a real run — most
+        # wins are close calls, not decisive ones) — found to be a real
+        # driver of round-1-correct -> final-wrong regressions.
+        if old_leader != -1 and raw_leader_idx != old_leader:
+            gap = s["clusters"][raw_leader_idx]["belief"].mu - s["clusters"][old_leader]["belief"].mu
+            leader_idx = raw_leader_idx if gap >= leader_margin else old_leader
+        else:
+            leader_idx = raw_leader_idx
+        leader = s["clusters"][leader_idx]
         status = "seed" if round_idx == 1 else ("defended" if leader_idx == old_leader else "replaced")
 
         s["belief"] = leader["belief"]
@@ -923,6 +945,7 @@ def run_group_rounds(
     log_path: Path | None = None, call_stats: dict | None = None,
     floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
     seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
+    leader_margin: float = 0.1, lock_after_n_defends: int = 0,
 ) -> list[list[dict]]:
     """Run the full round loop for every image in one (dataset, class) group
     in parallel, each image stopping independently once its own stopping
@@ -939,6 +962,17 @@ def run_group_rounds(
     run_batch_n's docstring. Both are run_model()'s to own and pass
     through; this function never creates them itself, so a caller that
     doesn't want logging/counting can simply omit them.
+
+    leader_margin: passed straight through to _process_round_belief — see
+    its docstring.
+    lock_after_n_defends: once an image's leader has been "defended" this
+    many CONSECUTIVE rounds in a row, stop it early regardless of
+    stop_confidence (0 disables — the old behavior, only stop_confidence/
+    max_round decide). Found on real runs that images settle (no more
+    genuine leadership changes) within the first 2-3 rounds, and every
+    round after that is pure downside risk — no chance of finding a
+    better answer the model doesn't have, only a chance of an occasional
+    noisy flip overturning an already-correct, already-stable answer.
 
     gen_template: the candidate-generation prompt for this group's task
     type — vprompts["structured_templates"][rubric_key], resolved by the
@@ -985,7 +1019,7 @@ def run_group_rounds(
     state = [{"C_best": "", "answer": "", "belief": None, "anchor": None,
               "feedback": "", "transcript": [], "pairwise_winner": "",
               "pool_size": 0, "n_comparisons": 0, "top1_win_rate": 0.0, "incumbent_survived": 0,
-              "n_clusters": 0,
+              "n_clusters": 0, "consecutive_defends": 0,
               "round_prompt_tokens": 0, "round_completion_tokens": 0,
               # (winning_trajectory, feedback) appended once per round —
               # replayed IN FULL by _gen_histories_for_round so round k's
@@ -1079,7 +1113,7 @@ def run_group_rounds(
             llm, tokenizer, images, active, candidate_lists, answer_lists, state, prompts, vprompts,
             cls_q, rubric, k_candidates, round_idx, beta, k_pivots, rng,
             agml_dataset, class_label, image_names, log_path, call_stats,
-            floor_threshold, margin_ref, max_beta, seed,
+            floor_threshold, margin_ref, max_beta, seed, leader_margin,
         )
 
         round_elapsed = time.perf_counter() - t_round_start
@@ -1112,7 +1146,11 @@ def run_group_rounds(
             # _process_round_belief above).
             s["history"].append((s["C_best"], s["feedback"]))
 
-            stop_now = should_stop(round_idx, p, min_round, max_round, high)
+            s["consecutive_defends"] = s["consecutive_defends"] + 1 if pairwise_winner == "defended" else 0
+            locked = bool(lock_after_n_defends) and s["consecutive_defends"] >= lock_after_n_defends
+            stop_now = should_stop(round_idx, p, min_round, max_round, high) or (
+                round_idx >= min_round and locked
+            )
             per_image_rounds[i].append({
                 "round": round_idx,
                 "prediction": s["C_best"],
@@ -1343,6 +1381,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 log_path=log_path, call_stats=call_stats,
                 floor_threshold=args.floor_threshold, margin_ref=args.margin_ref, max_beta=args.max_beta,
                 seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
+                leader_margin=args.leader_margin, lock_after_n_defends=args.lock_after_n_defends,
             )
 
             for name, entries in zip(names, per_image_rounds):
@@ -1504,7 +1543,7 @@ if __name__ == "__main__":
                               "Section 3.2, via llm_verifier.pivot_tournament) that ranks each "
                               "round's pool — --baseline belief only.")
     parser.add_argument("--min_round", type=int, default=3)
-    parser.add_argument("--max_round", type=int, default=10)
+    parser.add_argument("--max_round", type=int, default=6)
     parser.add_argument("--temperature", type=float, default=1.0,
                          help="Sampling temperature for the K per-round candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "
@@ -1555,6 +1594,24 @@ if __name__ == "__main__":
                               "produces a visibly smaller belief shift (unlike --beta's default 0.5, "
                               "which sits in a nearly-flat/insensitive region). See "
                               "evidence_scaled_beta's docstring.")
+    parser.add_argument("--leader_margin", type=float, default=0.1,
+                         help="Minimum mu advantage a challenger cluster needs over the current "
+                              "leader to actually take over as leader this round — otherwise the "
+                              "old leader keeps reporting as leader even if some other cluster's "
+                              "raw mu is technically (barely) higher. Found on real runs that most "
+                              "duel margins are narrow (~0.10 median), so without this gate an "
+                              "already-correct, already-defended leader could get displaced by one "
+                              "noisy near-tie win. 0 disables the gate (any mu edge, however small, "
+                              "changes the leader — the old behavior).")
+    parser.add_argument("--lock_after_n_defends", type=int, default=3,
+                         help="Once an image's leader has been 'defended' this many CONSECUTIVE "
+                              "rounds in a row, stop it early regardless of stop_confidence — 0 "
+                              "disables (only stop_confidence/max_round decide, the old behavior). "
+                              "Images were found to settle (no more genuine leadership changes) "
+                              "within the first 2-3 rounds on real runs; every round after that is "
+                              "pure downside risk (a chance to noisily flip an already-stable "
+                              "answer) with no corresponding upside (the model isn't going to find "
+                              "an answer it doesn't have just by rolling again).")
     parser.add_argument("--high_conf", type=float, default=0.85, help="Stop-early / 'high' bin threshold.")
     parser.add_argument("--med_conf", type=float, default=0.6, help="'medium' vs 'low' bin threshold.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)

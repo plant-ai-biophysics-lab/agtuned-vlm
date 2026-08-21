@@ -209,8 +209,10 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     bin_acc, bin_n, bin_lo, bin_hi = [], [], [], []
     for i in range(len(bins) - 1):
         lo_b, hi_b = bins[i], bins[i + 1]
-        sub = [r for r in rows if lo_b <= float(r["stop_confidence"]) < hi_b
-               or (hi_b >= 1.0 and float(r["stop_confidence"]) == 1.0)]
+        sub = [r for r in rows if (lo_b <= float(r["stop_confidence"]) < hi_b
+               or (hi_b >= 1.0 and float(r["stop_confidence"]) == 1.0))
+               and r.get("judged_correct") in ("0", "1")]  # exclude never-judged rows (e.g.
+               # --judge_scope first_and_final leaves most rounds blank) — blank isn't a 0
         if not sub:
             bin_acc.append(np.nan); bin_n.append(0); bin_lo.append(np.nan); bin_hi.append(np.nan)
             continue
@@ -278,6 +280,12 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
         means, lo_e, hi_e = [], [], []
         for k in rr:
             sub = by_round_rows[k] if tt_filter is None else [r for r in by_round_rows[k] if r.get("task_type") == tt_filter]
+            # Exclude never-judged rows (blank judged_correct) — with
+            # --judge_scope first_and_final, every round except 1 and
+            # each image's own final round is intentionally left
+            # unjudged, and treating blank as "wrong" would fake a
+            # 0-in-the-middle dip that isn't a real accuracy trend.
+            sub = [r for r in sub if r.get("judged_correct") in ("0", "1")]
             if not sub:
                 means.append(np.nan); lo_e.append(0.0); hi_e.append(0.0)
                 continue
@@ -293,6 +301,59 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     fig.savefig(out_dir / "diag_round_vs_accuracy.png", dpi=150)
     plt.close(fig)
     print(f"  Saved: {out_dir / 'diag_round_vs_accuracy.png'}")
+
+    # ── diag_round1_vs_last.png: simple 2-bar version — Round 1 (every
+    # image's cold-start answer) vs. Last Round (is_final_round==1 — each
+    # image's own actual final answer, whether it stopped early or ran the
+    # full max_round budget; NOT literally round==max_round, so an
+    # early-stopped image's real answer still counts here). Overall +
+    # per-task grouped bars, same "exclude never-judged rows" guard.
+    stage_defs2 = [
+        ("Round 1", lambda r: str(r.get("round")) == "1"),
+        ("Last Round", lambda r: str(r.get("is_final_round")) == "1"),
+    ]
+
+    def _stage_rate(sub_rows, pred):
+        sub = [r for r in sub_rows if pred(r) and r.get("judged_correct") in ("0", "1")]
+        if not sub:
+            return None
+        return _boot_ci([1.0 if r["judged_correct"] == "1" else 0.0 for r in sub], rng)
+
+    scopes2 = ["overall"] + task_types
+    fig, ax = plt.subplots(figsize=(max(7, len(scopes2) * 1.4), 5.5))
+    x2 = np.arange(len(scopes2))
+    width2 = 0.35
+    stage_colors = ["#7f7f7f", "#e06b00"]
+    any_plotted2 = False
+    for j, (stage_label, pred) in enumerate(stage_defs2):
+        vals, lo_e, hi_e, xs = [], [], [], []
+        for i, scope in enumerate(scopes2):
+            sub_rows = rows if scope == "overall" else [r for r in rows if r.get("task_type") == scope]
+            res = _stage_rate(sub_rows, pred)
+            if res is None:
+                continue
+            m, lo, hi = res
+            xs.append(i); vals.append(m); lo_e.append(m - lo); hi_e.append(hi - m)
+        if not xs:
+            continue
+        any_plotted2 = True
+        offset = (j - 0.5) * width2
+        ax.bar(np.array(xs) + offset, vals, width2, label=stage_label, color=stage_colors[j],
+               edgecolor="black", linewidth=0.5, yerr=[lo_e, hi_e], capsize=3,
+               error_kw={"elinewidth": 0.8, "alpha": 0.7})
+    if any_plotted2:
+        ax.set_xticks(x2); ax.set_xticklabels(scopes2, rotation=12, ha="right")
+        ax.set_ylabel("judged_correct rate", fontsize=11)
+        ax.set_title(f"Round 1 vs. Last Round — {model_safe}\nmax_round={max_round}, 95% CI", fontsize=11)
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.legend(fontsize=9)
+        plt.tight_layout()
+        fig.savefig(out_dir / "diag_round1_vs_last.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {out_dir / 'diag_round1_vs_last.png'}")
+    else:
+        plt.close(fig)
+        print("  [skip] diag_round1_vs_last: no judged rows")
 
     # ── diag_round_vs_timing.png: avg_time_per_sample_s by round — cost
     # side of the round-count tradeoff, next to the accuracy chart above.
@@ -400,6 +461,93 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     fig.savefig(out_dir / "diag_regression_recovery.png", dpi=150)
     plt.close(fig)
     print(f"  Saved: {out_dir / 'diag_regression_recovery.png'}")
+
+    # ── diag_belief_vs_outcome.png: does final-round mu/std actually track
+    # correctness and the regressed/recovered/stayed outcome, or is belief
+    # just climbing regardless (the flat-calibration finding from earlier
+    # manual checks this session — stop_confidence came back uncorrelated
+    # with judged accuracy)? Per image: final mu, final std (sqrt(sigma2)),
+    # and the SAME 4-way outcome category diag_regression_recovery.png
+    # buckets by (stayed_correct/stayed_wrong/regressed/recovered).
+    per_image = []
+    for key, rr in by_img.items():
+        if 1 not in rr:
+            continue
+        final = next((rr[i] for i in rr if str(rr[i].get("is_final_round")) == "1"), None)
+        if final is None or final.get("judged_correct") not in ("0", "1") \
+                or rr[1].get("judged_correct") not in ("0", "1"):
+            continue
+        r1_correct = rr[1]["judged_correct"] == "1"
+        rf_correct = final["judged_correct"] == "1"
+        if r1_correct and rf_correct:
+            cat = "stayed_correct"
+        elif not r1_correct and not rf_correct:
+            cat = "stayed_wrong"
+        elif r1_correct and not rf_correct:
+            cat = "regressed"
+        else:
+            cat = "recovered"
+        per_image.append({
+            "cat": cat, "mu": float(final["mu"]), "std": float(final["sigma2"]) ** 0.5,
+            "correct": rf_correct,
+        })
+
+    if per_image:
+        fig, axes = plt.subplots(1, 2, figsize=(11, 5.5))
+
+        # Left: mean final mu/std by outcome category — does belief
+        # actually look different for regressed vs. recovered images, or
+        # is it blind to the difference?
+        for ax, metric, ylabel in [(axes[0], "mu", "mean final mu"), (axes[1], "std", "mean final std")]:
+            vals, lo_e, hi_e, labels_c = [], [], [], []
+            for cat in _CATS:
+                sub = [p[metric] for p in per_image if p["cat"] == cat]
+                if not sub:
+                    continue
+                m, lo, hi = _boot_ci(sub, rng)
+                vals.append(m); lo_e.append(m - lo); hi_e.append(hi - m); labels_c.append(cat)
+            colors_c = [_CAT_COLOR[c] for c in labels_c]
+            bars = ax.bar(labels_c, vals, color=colors_c, edgecolor="black", linewidth=0.6,
+                          yerr=[lo_e, hi_e], capsize=4, error_kw={"elinewidth": 1.0, "alpha": 0.75})
+            for b, v in zip(bars, vals):
+                ax.annotate(f"{v:.3f}", (b.get_x() + b.get_width() / 2, v), ha="center", va="bottom",
+                            fontsize=8, fontweight="bold", xytext=(0, 3), textcoords="offset points")
+            ax.set_ylabel(ylabel, fontsize=10)
+            ax.set_xticklabels(labels_c, rotation=15, ha="right")
+            ax.grid(True, axis="y", alpha=0.25)
+
+        fig.suptitle(f"Final belief (mu/std) vs. round-1->final outcome — {model_safe}\n"
+                     f"(n={len(per_image)} judged images) — do NOT expect these bars to differ if "
+                     f"belief isn't actually tracking correctness", fontsize=10)
+        plt.tight_layout()
+        fig.savefig(out_dir / "diag_belief_vs_outcome.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {out_dir / 'diag_belief_vs_outcome.png'}")
+
+        # Right-hand-side companion: mu vs. correct/wrong directly (not
+        # just the 4-way outcome split) — the same calibration question
+        # diag_confidence_calibration.png asks of stop_confidence, asked
+        # of mu instead, since mu is the raw signal and stop_confidence is
+        # derived from it against a frozen round-1 anchor.
+        correct_mu = [p["mu"] for p in per_image if p["correct"]]
+        wrong_mu = [p["mu"] for p in per_image if not p["correct"]]
+        if correct_mu and wrong_mu:
+            fig, ax = plt.subplots(figsize=(6, 5.5))
+            for label, vals, color in [("correct", correct_mu, "#2ca02c"), ("wrong", wrong_mu, "#d62728")]:
+                m, lo, hi = _boot_ci(vals, rng)
+                ax.bar(label, m, color=color, edgecolor="black", linewidth=0.6,
+                       yerr=[[m - lo], [hi - m]], capsize=4)
+                ax.annotate(f"{m:.3f}\n(n={len(vals)})", (label, m), ha="center", va="bottom",
+                            fontsize=9, fontweight="bold", xytext=(0, 3), textcoords="offset points")
+            ax.set_ylabel("mean final mu", fontsize=11)
+            ax.set_title(f"Final mu: judged-correct vs. judged-wrong — {model_safe}", fontsize=11)
+            ax.grid(True, axis="y", alpha=0.25)
+            plt.tight_layout()
+            fig.savefig(out_dir / "diag_mu_correct_vs_wrong.png", dpi=150)
+            plt.close(fig)
+            print(f"  Saved: {out_dir / 'diag_mu_correct_vs_wrong.png'}")
+    else:
+        print("  [skip] diag_belief_vs_outcome: no judged round-1+final pairs available")
 
 
 def plot(results, n_images: int, model_safe: str, out_path: Path,
