@@ -424,6 +424,64 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
         plt.close(fig)
         print(f"  Saved: {out_dir / 'diag_stop_round_distribution.png'}")
 
+    # ── diag_answer_diversity.png/csv: how many DISTINCT answer clusters
+    # (n_clusters, per-trajectory net-score tracking) did each image
+    # actually accumulate by the round it stopped at, and how many total
+    # pairwise verifier comparisons did that cost? Answers "is the round
+    # loop genuinely exploring competing diagnoses, or mostly just
+    # re-confirming the same one" — a run where most images sit at
+    # n_clusters==1 never had a real alternative to weigh, so any
+    # round-over-round change in mu/stop_confidence there is confidence
+    # accumulation on an uncontested answer, not evidence of deliberation.
+    final_rows = [rr[i] for rr in by_img.values() for i in rr if str(rr[i].get("is_final_round")) == "1"]
+    diversity = [int(r["n_clusters"]) for r in final_rows if r.get("n_clusters")]
+    total_cmp = {}
+    for key, rr in by_img.items():
+        fr = next((i for i in rr if str(rr[i].get("is_final_round")) == "1"), None)
+        if fr is None:
+            continue
+        total_cmp[key] = sum(int(rr[i].get("n_comparisons", 0)) for i in rr if i <= fr)
+
+    if diversity:
+        max_clusters = max(diversity)
+        counts = [diversity.count(k) for k in range(1, max_clusters + 1)]
+        single_cluster_pct = 100 * counts[0] / len(diversity)
+
+        csv_path = out_dir / "diag_answer_diversity.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["n_clusters", "n_images"])
+            for k, cnt in zip(range(1, max_clusters + 1), counts):
+                w.writerow([k, cnt])
+        print(f"  Saved: {csv_path}")
+        print(f"  [answer diversity] {counts[0]}/{len(diversity)} images ({single_cluster_pct:.1f}%) "
+              f"never formed a second distinct answer cluster; mean n_clusters="
+              f"{sum(diversity)/len(diversity):.2f}, max={max_clusters}")
+        if total_cmp:
+            cmp_vals = list(total_cmp.values())
+            print(f"  [answer diversity] total pairwise comparisons per image (through its final round): "
+                  f"mean={sum(cmp_vals)/len(cmp_vals):.1f}, min={min(cmp_vals)}, max={max(cmp_vals)}")
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        bars = ax.bar(range(1, max_clusters + 1), counts, color="#9467bd",
+                       edgecolor="black", linewidth=0.6)
+        for b, cnt in zip(bars, counts):
+            ax.annotate(str(cnt), (b.get_x() + b.get_width() / 2, cnt), ha="center", va="bottom",
+                        fontsize=9, fontweight="bold", xytext=(0, 2), textcoords="offset points")
+        ax.set_xlabel("# distinct answer clusters by the final round")
+        ax.set_ylabel("# images")
+        ax.set_xticks(range(1, max_clusters + 1))
+        ax.set_title(f"Answer diversity — {model_safe}\n"
+                     f"(n={len(diversity)} images, {single_cluster_pct:.0f}% never diverged from their "
+                     f"1st answer)", fontsize=10)
+        ax.grid(True, axis="y", alpha=0.25)
+        plt.tight_layout()
+        fig.savefig(out_dir / "diag_answer_diversity.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {out_dir / 'diag_answer_diversity.png'}")
+    else:
+        print("  [skip] diag_answer_diversity: no n_clusters data in checkpoint (older run?)")
+
     # ── diag_flip_cause.png: for images whose judged_correct changed
     # between round 1 and final (regressed OR recovered), was that because
     # a genuine leader swap happened (pairwise_winner=="replaced" at some

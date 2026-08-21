@@ -48,10 +48,19 @@ needed (an earlier, separate --baseline argmax mode — independent 1-20
 scoring per candidate, no pairwise comparison — was tried and removed;
 --max_round 1 through this same pipeline supersedes it).
 
-Stopping: checked from round 3, hard cap at round 10 (config: min_round/
-max_round) — Phi((mu-mu_1)/sqrt(sigma^2+sigma_1^2+2*beta^2)) >= 0.85 stops
-early ("high confidence"); otherwise runs to the cap and reports whichever
-confidence bin (high/medium/low) it lands in.
+Stopping (2026-08-21): only two ways a round loop ends — the leader has
+"defended" lock_after_n_defends consecutive rounds (config: min_round
+gates how early this can fire), or max_round is hit. An earlier
+confidence-threshold early-stop (Phi((mu-mu_1)/sqrt(sigma^2+sigma_1^2+
+2*beta^2)) >= high_conf) was removed: it fired on evidence as thin as a
+single round's net-score edge, before a defend-streak ever formed. That
+stop_probability value (and its high/medium/low confidence_bin) is still
+computed and logged every round — informational only, no longer a stop
+trigger. If max_round is reached without ever locking, the reported
+answer is the cluster with the LONGEST defend streak seen so far this
+run, not whatever's raw-leading that instant (see run_group_rounds'
+stopping-check loop) — an unstabilized snapshot is exactly the kind of
+noisy last-round flip this whole stopping design exists to avoid.
 
 Checkpoint (one row per (image, round), STEP_CKPT_FIELDS-shaped like
 cot_yaml.py's --per_step/--swap_datasets so cot_yaml_step_report.py-style
@@ -82,7 +91,7 @@ from collections import Counter, defaultdict
 
 from PIL import Image as PILImage
 
-from src.common.belief_update import Belief, confidence_bin, should_stop, stop_probability
+from src.common.belief_update import Belief, confidence_bin, stop_probability
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
@@ -886,6 +895,7 @@ def _process_round_belief(
         # shrinks as more comparisons accumulate for this cluster,
         # mirroring the old design's "more evidence -> tighter belief".
         s["belief"] = Belief(mu=float(leader_net), sigma2=1.0 / (1 + leader["wins"] + leader["losses"]))
+        s["leader_idx"] = leader_idx
         s["C_best"] = leader["trajectory"]
         s["answer"] = leader["answer"]
         # No truncation here — the analysis is already hard-capped at
@@ -1006,7 +1016,13 @@ def run_group_rounds(
     state = [{"C_best": "", "answer": "", "belief": None, "anchor": None,
               "feedback": "", "transcript": [], "pairwise_winner": "",
               "pool_size": 0, "n_comparisons": 0, "top1_win_rate": 0.0, "incumbent_survived": 0,
-              "n_clusters": 0, "consecutive_defends": 0,
+              "n_clusters": 0, "consecutive_defends": 0, "leader_idx": -1,
+              # Longest unbroken defend streak seen so far this run, and
+              # which cluster held it — the max_round-timeout fallback
+              # reports THIS cluster instead of whatever's currently
+              # leading, since a leader that never locked in could be a
+              # snapshot mid-flip. See the stopping-check loop below.
+              "best_streak": 0, "best_leader_idx": -1,
               "round_prompt_tokens": 0, "round_completion_tokens": 0,
               # (winning_trajectory, feedback) appended once per round —
               # replayed IN FULL by _gen_histories_for_round so round k's
@@ -1114,6 +1130,15 @@ def run_group_rounds(
         avg_time_per_sample_s = round_elapsed / len(active) if active else 0.0
 
         # ── Stopping check + row build ───────────────────────────────────────
+        # Stopping is now driven ONLY by lock_after_n_defends (a leader that
+        # has genuinely stabilized) or the hard max_round cap — the earlier
+        # confidence-threshold early-stop (stop_probability >= high_conf)
+        # was removed 2026-08-21: it was firing before a defend-streak ever
+        # formed, on evidence as thin as a single round's net-score edge,
+        # which is exactly the noisy-snapshot failure mode lock_after_n_
+        # defends exists to prevent. stop_confidence/confidence_bin are
+        # still computed and logged (informational only, unchanged CSV
+        # schema) but no longer influence stop_now.
         still_active = []
         for i in active:
             s = state[i]
@@ -1135,13 +1160,30 @@ def run_group_rounds(
             s["history"].append((s["C_best"], s["feedback"]))
 
             s["consecutive_defends"] = s["consecutive_defends"] + 1 if pairwise_winner == "defended" else 0
+            if s["consecutive_defends"] >= s["best_streak"]:
+                s["best_streak"] = s["consecutive_defends"]
+                s["best_leader_idx"] = s["leader_idx"]
             locked = bool(lock_after_n_defends) and s["consecutive_defends"] >= lock_after_n_defends
-            stop_now = should_stop(round_idx, p, min_round, max_round, high) or (
-                round_idx >= min_round and locked
-            )
+            stop_now = (round_idx >= min_round and locked) or round_idx >= max_round
+
+            if stop_now and not locked:
+                # Timed out at max_round without ever stabilizing — report
+                # the most-defended cluster seen across the whole run
+                # instead of whatever's leading THIS round (which could be
+                # a leader that flipped moments ago and never had a chance
+                # to prove itself).
+                fb_idx = s["best_leader_idx"] if s["best_leader_idx"] != -1 else s["leader_idx"]
+                fb = s["clusters"][fb_idx]
+                fb_net = fb["wins"] - fb["losses"]
+                report_C_best = fb["trajectory"]
+                verifier_answer = fb["answer"]
+                mu, sigma2 = float(fb_net), 1.0 / (1 + fb["wins"] + fb["losses"])
+            else:
+                report_C_best = s["C_best"]
+
             per_image_rounds[i].append({
                 "round": round_idx,
-                "prediction": s["C_best"],
+                "prediction": report_C_best,
                 "reasoning": "\n\n".join(s["transcript"]),
                 "pool_size": pool_size, "n_comparisons": n_comparisons,
                 "top1_win_rate": top1_win_rate, "incumbent_survived": incumbent_survived,
@@ -1570,15 +1612,24 @@ if __name__ == "__main__":
                               "entirely (any net-score edge, however small, changes the leader).")
     parser.add_argument("--lock_after_n_defends", type=int, default=3,
                          help="Once an image's leader has been 'defended' this many CONSECUTIVE "
-                              "rounds in a row, stop it early regardless of stop_confidence — 0 "
-                              "disables (only stop_confidence/max_round decide, the old behavior). "
-                              "Images were found to settle (no more genuine leadership changes) "
+                              "rounds in a row, stop it early — 0 disables early stopping entirely "
+                              "(only --max_round decides, and the timeout fallback then always applies "
+                              "since a lock never happened — see the module docstring's 'Stopping' "
+                              "section). Images were found to settle (no more genuine leadership changes) "
                               "within the first 2-3 rounds on real runs; every round after that is "
                               "pure downside risk (a chance to noisily flip an already-stable "
                               "answer) with no corresponding upside (the model isn't going to find "
                               "an answer it doesn't have just by rolling again).")
-    parser.add_argument("--high_conf", type=float, default=0.85, help="Stop-early / 'high' bin threshold.")
-    parser.add_argument("--med_conf", type=float, default=0.6, help="'medium' vs 'low' bin threshold.")
+    parser.add_argument("--high_conf", type=float, default=0.85,
+                         help="'high' confidence_bin threshold for stop_confidence — informational "
+                              "only (logged per round for diagnostics/verifier_summary.py charts). No "
+                              "longer drives early stopping — see --lock_after_n_defends and --max_round, "
+                              "the only two ways a round loop actually ends since 2026-08-21 (a "
+                              "confidence-threshold early-stop used to also exist here, but was found to "
+                              "fire on evidence as thin as a single round's net-score edge).")
+    parser.add_argument("--med_conf", type=float, default=0.6,
+                         help="'medium' vs 'low' confidence_bin threshold — informational only, see "
+                              "--high_conf.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
