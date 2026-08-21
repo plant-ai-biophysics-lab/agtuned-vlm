@@ -71,23 +71,19 @@ gen_max_tokens: 180      # max_tokens for the k_candidates generation step
 # of sharpening it). See structured_templates' comment in
 # verifier_prompts.yaml for the full rationale.
 
-# ── Belief-update evidence sensitivity (--baseline belief only) ──────────────
-# pairwise_update's moment-matching formula is nearly flat/insensitive to
-# beta below ~1.0 and only meaningfully weakens the belief shift once beta
-# climbs toward ~2-10 — so these blend the EFFECTIVE per-update beta from
-# `beta` (used for high-confidence evidence) up toward `max_beta` (used for
-# the weakest evidence) rather than scaling beta down, which barely moved
-# anything. See evidence_scaled_beta's docstring (src/common/belief_update.py).
-beta: 0.5                # floor value — Bradley-Terry per-comparison noise for a decisive, high-quality win
-floor_threshold: 0.5      # winner's own raw score must clear this, or the update gets discounted
-margin_ref: 0.3           # winner-vs-loser score gap counted as "decisive enough" for full confidence
-max_beta: 4.0             # beta used for the weakest possible evidence (winner_score<=0 or margin<=0)
+# ── Score sensitivity (--baseline belief only) ────────────────────────────────
+# Per-cluster score is a plain net win/loss count (2026-08-21 simplification —
+# the Gaussian moment-matching belief update + evidence_scaled_beta was found
+# over-engineered relative to what it bought on real runs; see
+# _process_round_belief's docstring in verifier_cot.py). beta is still used
+# directly by stop_probability's early-stop check.
+beta: 0.5                 # Bradley-Terry per-comparison noise, used by stop_probability only
 
 # ── Leadership stability (found on real runs to reduce round-over-round regression) ──────────
-leader_margin: 0.1        # minimum mu advantage a challenger needs over the current leader to
-                           # actually take over — real duel margins run narrow (~0.10 median), so
-                           # without this an already-correct leader could get displaced by one
-                           # noisy near-tie. 0 disables (any mu edge changes the leader).
+leader_margin: 2          # minimum net-score (wins - losses) advantage a challenger needs over the
+                           # current leader to actually take over — a single round only ever moves
+                           # the compared pair's net scores by 1 each, so 2 requires more than one
+                           # round's worth of edge. 0 disables (any net-score edge changes the leader).
 lock_after_n_defends: 3   # stop an image early once its leader has defended this many rounds in a
                            # row, regardless of stop_confidence — images settle within 2-3 rounds
                            # on real runs, so further rounds are pure flip risk with no upside.

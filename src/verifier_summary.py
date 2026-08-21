@@ -399,6 +399,96 @@ def plot_round_diagnostics(verifier_dir: Path, model_safe: str, baseline: str, o
     plt.close(fig)
     print(f"  Saved: {out_dir / 'diag_answer_settle_round.png'}")
 
+    # ── diag_stop_round_distribution.png: which round did each image's
+    # loop actually terminate at (is_final_round==1) — directly answers
+    # "how many locked in within the lock_after_n_defends window" (a
+    # sharp spike at that round) vs. how many kept going because a real
+    # leader change reset their consecutive-defend streak.
+    stop_rounds = [int(r) for i, rr in by_img.items() for r in rr if str(rr[r].get("is_final_round")) == "1"]
+    if stop_rounds:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.hist(stop_rounds, bins=np.arange(0.5, max_round + 1.5, 1), color="#2ca02c",
+                edgecolor="black", linewidth=0.6)
+        for r in range(1, max_round + 1):
+            n_r = stop_rounds.count(r)
+            if n_r:
+                ax.annotate(str(n_r), (r, n_r), ha="center", va="bottom", fontsize=9, fontweight="bold",
+                            xytext=(0, 2), textcoords="offset points")
+        ax.set_xlabel("Round the image's loop actually stopped at")
+        ax.set_ylabel("# images")
+        ax.set_title(f"When do images lock in / stop? — {model_safe}\n(n={len(stop_rounds)} images, max_round={max_round})")
+        ax.set_xticks(range(1, max_round + 1))
+        ax.grid(True, axis="y", alpha=0.25)
+        plt.tight_layout()
+        fig.savefig(out_dir / "diag_stop_round_distribution.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {out_dir / 'diag_stop_round_distribution.png'}")
+
+    # ── diag_flip_cause.png: for images whose judged_correct changed
+    # between round 1 and final (regressed OR recovered), was that because
+    # a genuine leader swap happened (pairwise_winner=="replaced" at some
+    # round — a challenger actually beat leader_margin) or because the
+    # leader never changed at all (every round "seed"/"defended", so any
+    # judged_correct flip is the JUDGE disagreeing with itself on the same
+    # or a reworded-but-same-cluster answer, not the mechanism doing
+    # anything)? Answers "did a margin-beaten swap cause this flip, or is
+    # this just judge noise on an unchanged answer."
+    flip_cause = {"regressed": {"swap": 0, "no_swap": 0}, "recovered": {"swap": 0, "no_swap": 0}}
+    unchanged_text_count = 0
+    total_pairs = 0
+    for key, rr in by_img.items():
+        if 1 not in rr:
+            continue
+        final = next((rr[i] for i in rr if str(rr[i].get("is_final_round")) == "1"), None)
+        if final is None or final.get("judged_correct") not in ("0", "1") \
+                or rr[1].get("judged_correct") not in ("0", "1"):
+            continue
+        total_pairs += 1
+        fr = max(rr)
+        if rr[1]["prediction"] == final["prediction"]:
+            unchanged_text_count += 1
+        r1_correct = rr[1]["judged_correct"] == "1"
+        rf_correct = final["judged_correct"] == "1"
+        if r1_correct == rf_correct:
+            continue
+        cat = "regressed" if (r1_correct and not rf_correct) else "recovered"
+        had_swap = any(rr[i].get("pairwise_winner") == "replaced" for i in range(2, fr + 1) if i in rr)
+        flip_cause[cat]["swap" if had_swap else "no_swap"] += 1
+
+    print(f"  [answer stability] {unchanged_text_count}/{total_pairs} images ({unchanged_text_count/total_pairs:.1%}) "
+          f"have BYTE-IDENTICAL prediction text at round 1 and final" if total_pairs else "")
+
+    if any(flip_cause[c][k] for c in flip_cause for k in flip_cause[c]):
+        fig, ax = plt.subplots(figsize=(6.5, 5.5))
+        cats3 = ["regressed", "recovered"]
+        x3 = np.arange(len(cats3))
+        width3 = 0.35
+        swap_vals = [flip_cause[c]["swap"] for c in cats3]
+        no_swap_vals = [flip_cause[c]["no_swap"] for c in cats3]
+        b1 = ax.bar(x3 - width3 / 2, swap_vals, width3, label="margin-beaten leader swap",
+                    color="#1f77b4", edgecolor="black", linewidth=0.5)
+        b2 = ax.bar(x3 + width3 / 2, no_swap_vals, width3, label="no swap (judge noise on same leader)",
+                    color="#7f7f7f", edgecolor="black", linewidth=0.5)
+        for bars in (b1, b2):
+            for b in bars:
+                h = b.get_height()
+                if h:
+                    ax.annotate(str(int(h)), (b.get_x() + b.get_width() / 2, h), ha="center", va="bottom",
+                                fontsize=9, fontweight="bold", xytext=(0, 2), textcoords="offset points")
+        ax.set_xticks(x3); ax.set_xticklabels(cats3)
+        ax.set_ylabel("# images")
+        ax.set_title(f"What caused each flip? — {model_safe}\n"
+                     f"({unchanged_text_count}/{total_pairs} images never changed prediction text at all)",
+                     fontsize=10)
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.legend(fontsize=8)
+        plt.tight_layout()
+        fig.savefig(out_dir / "diag_flip_cause.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved: {out_dir / 'diag_flip_cause.png'}")
+    else:
+        print("  [skip] diag_flip_cause: no regressed/recovered images to break down")
+
     # ── diag_regression_recovery.png/csv: round-1 vs. final-round
     # judged_correct, bucketed into stayed_correct / stayed_wrong /
     # regressed (right->wrong) / recovered (wrong->right) — the same

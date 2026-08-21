@@ -21,18 +21,21 @@ ephemeral/per-comparison; the belief is persistent): the round's top-1
 member, since ring-pass alone already compares each of them at least
 once) becomes the winner against the incumbent, or, if the incumbent IS
 top-1 (survived), against the strongest actual challenger instead.
-pairwise_update() only ever needs the winner/loser IDENTITY, never a raw
+The score update only ever needs the winner/loser IDENTITY, never a raw
 score, so this needs no specific pair to have been directly scored under
-PPT's O(Nk) budget. That single win/loss folds into the running belief
-(mu, sigma^2) via Bradley-Terry moment matching (Sec. 5). Round 1 has no
-incumbent, so it uses (top-1, runner-up) the same way — no special-cased
-seeding step. Identity for persistence is the ANSWER, not the pool slot:
-every candidate's free generation also carries an open-ended
-<answer>...</answer> tag (extract_answer_tag — no closed-set vocabulary),
-and when a NEW candidate outranks the incumbent's own slot, a lightweight
-text-only judge (_judge_same_answer — just the two extracted answers, no
-image) decides whether it's a genuine answer change (belief resets) or a
-reworded restatement of the same conclusion (belief carries forward onto
+PPT's O(Nk) budget. That single win/loss increments the winner/loser
+cluster's persistent win/loss counters (per-trajectory net score,
+2026-08-20 redesign, simplified from Gaussian belief tracking on
+2026-08-21 — see _process_round_belief's docstring in this file for the
+full rationale). Round 1 has no incumbent, so it uses (top-1, runner-up)
+the same way — no special-cased seeding step. Identity for persistence is
+the ANSWER, not the pool slot: every candidate's free generation also
+carries an open-ended <answer>...</answer> tag (extract_answer_tag — no
+closed-set vocabulary), and when a NEW candidate outranks the incumbent's
+own slot, a lightweight text-only judge (_judge_same_answer — just the
+two extracted answers, no image) decides whether it's a genuine answer
+change (a new/different cluster) or a reworded restatement of the same
+conclusion (score carries forward onto
 the new text). `incumbent_survived` tracks whether the ANSWER (not the
 literal text) won again this round. Top-1 only for now (a single
 incumbent carried forward, not a pool of k) — see
@@ -79,9 +82,7 @@ from collections import Counter, defaultdict
 
 from PIL import Image as PILImage
 
-from src.common.belief_update import (
-    Belief, confidence_bin, evidence_scaled_beta, pairwise_update, should_stop, stop_probability,
-)
+from src.common.belief_update import Belief, confidence_bin, should_stop, stop_probability
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
@@ -562,15 +563,15 @@ def _resolve_clusters(
     agml_dataset: str, class_label: str, image_names: list[str], round_idx: int, log_path: Path | None,
     state: list[dict], candidates: dict[int, tuple[str, str]],
 ) -> dict[int, int]:
-    """Per-trajectory belief tracking's core primitive: match each active
+    """Per-trajectory score tracking's core primitive: match each active
     image's candidate (answer, trajectory) against that image's own
-    state[i]["clusters"] — a list of {"answer", "trajectory", "belief",
-    "members"} dicts, one per DISTINCT diagnosis this image has ever
-    proposed across all rounds so far — creating a new cluster only if it
-    matches none of them. This is what replaces the old design's single
-    "the incumbent's belief, wiped on any genuine answer change" with each
-    distinct answer keeping its own persistent (mu, sigma2), regardless of
-    whether it's currently winning.
+    state[i]["clusters"] — a list of {"answer", "trajectory", "wins",
+    "losses", "members"} dicts, one per DISTINCT diagnosis this image has
+    ever proposed across all rounds so far — creating a new cluster only
+    if it matches none of them. This is what replaces the old design's
+    single "the incumbent's score, wiped on any genuine answer change"
+    with each distinct answer keeping its own persistent win/loss count,
+    regardless of whether it's currently winning.
 
     Matching is cheap-first: an exact case-insensitive string match short-
     circuits with no LLM call (common — most rounds' winner/loser answers
@@ -587,10 +588,10 @@ def _resolve_clusters(
     — appends the candidate's raw answer string to that cluster's
     "members" list (deduped) and refreshes "trajectory" to the freshest
     wording, so state[i]["clusters"] is a complete, inspectable record of
-    every answer ever assigned to each belief score (logged verbatim by
+    every answer ever assigned to each net score (logged verbatim by
     _process_round_belief's "belief_clusters" call_type — this is the
     "log that somewhere so we can check all the answers that belong to
-    the same belief score" record).
+    the same score" record).
 
     Returns {image_idx: cluster_idx} for every key in `candidates`."""
     result: dict[int, int] = {}
@@ -623,7 +624,7 @@ def _resolve_clusters(
         k += 1
 
     for i, (ans, traj) in pending.items():
-        state[i]["clusters"].append({"answer": ans, "trajectory": traj, "belief": Belief(0.0, 1.0), "members": []})
+        state[i]["clusters"].append({"answer": ans, "trajectory": traj, "wins": 0, "losses": 0, "members": []})
         result[i] = len(state[i]["clusters"]) - 1
 
     for i, (ans, traj) in candidates.items():
@@ -635,11 +636,11 @@ def _resolve_clusters(
 
 
 def _leader_idx(clusters: list[dict]) -> int:
-    """argmax cluster by accumulated belief mean — the per-trajectory
+    """argmax cluster by net score (wins - losses) — the per-trajectory
     analogue of the old design's single incumbent. Ties broken toward the
     earliest-created cluster (stability: an established answer isn't
     displaced by a brand-new one it's merely tied with)."""
-    return max(range(len(clusters)), key=lambda k: (clusters[k]["belief"].mu, -k))
+    return max(range(len(clusters)), key=lambda k: (clusters[k]["wins"] - clusters[k]["losses"], -k))
 
 
 def _process_round_belief(
@@ -648,8 +649,7 @@ def _process_round_belief(
     k_candidates: int, round_idx: int, beta: float, k_pivots: int, rng: random.Random,
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None, call_stats: dict | None,
-    floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
-    seed: int | None = None, leader_margin: float = 0.1,
+    seed: int | None = None, leader_margin: float = 2.0,
 ) -> None:
     """The full Probabilistic Pivot Tournament (arXiv:2607.05391 Section
     3.2), via llm_verifier.pivot_tournament's own ring_cycle/select_pivots/
@@ -674,34 +674,41 @@ def _process_round_belief(
     budget-efficient schedule; top1's identity from the tournament's own
     aggregate output is sufficient.
 
-    Belief is tracked PER TRAJECTORY (2026-08-20 redesign), not one
-    persistent belief for whichever answer currently holds the incumbent
-    slot. state[i]["clusters"] is a list of every DISTINCT diagnosis this
-    image has ever proposed, each with its own (mu, sigma2) that only
-    ever accumulates — it's never wiped just because a different answer
-    won a later round. Every round, this round's tournament winner AND
-    runner-up (not just the winner) get resolved into a cluster via
-    _resolve_clusters (exact-match short-circuit, then a paraphrase-
-    tolerant same-answer LLM check against each existing cluster in
-    order — so "Leaf Spot Disease" and "Foliar Leaf Spot Disorder" pool
-    into one belief while "Yellow Sigatoka" and "Black Sigatoka" stay
-    separate), and pairwise_update() is applied to THOSE two clusters'
-    beliefs directly.
+    Score is tracked PER TRAJECTORY (2026-08-20 redesign) as a plain NET
+    SCORE (wins - losses) rather than a Gaussian belief (2026-08-21
+    simplification — the moment-matching belief update was found to be
+    over-engineered relative to what it bought: on real runs the
+    evidence-scaling machinery (evidence_scaled_beta) was pinned near its
+    weakest-evidence setting almost every round because duel margins were
+    narrow, and only 2 of 12 observed leader flips were ever caused by a
+    genuine margin-beaten swap — the rest were judge noise on an
+    unchanged leader, i.e. the Gaussian machinery wasn't doing much the
+    plain win/loss count wouldn't also do). state[i]["clusters"] is a
+    list of every DISTINCT diagnosis this image has ever proposed, each
+    with its own "wins"/"losses" counters that only ever accumulate —
+    never reset just because a different answer won a later round. Every
+    round, this round's tournament winner AND runner-up (not just the
+    winner) get resolved into a cluster via _resolve_clusters (exact-
+    match short-circuit, then a paraphrase-tolerant same-answer LLM check
+    against each existing cluster in order — so "Leaf Spot Disease" and
+    "Foliar Leaf Spot Disorder" pool into one score while "Yellow
+    Sigatoka" and "Black Sigatoka" stay separate), and the winner
+    cluster's "wins" / loser cluster's "losses" are each incremented by 1.
 
     The reported "current answer" for this round (s["C_best"]/s["answer"]/
     s["belief"], and therefore next round's pool "incumbent" slot too,
     via the existing pool-construction code below which reads those same
-    fields) is whichever cluster has the HIGHEST accumulated belief.mu
-    overall (_leader_idx) — not necessarily this round's own raw
-    tournament winner. This is the fix for a real failure mode measured
-    on live runs: a trajectory that won 8 of 9 rounds and built real
-    accumulated belief could still lose the LAST round's tournament and
-    have that one upset overwrite everything as the final answer under
-    the old single-belief design. Per-trajectory tracking means a
-    historically strong answer keeps its accumulated case even after
-    briefly losing a round, and can only be dethroned by another
-    cluster's belief genuinely overtaking it, not by momentarily winning
-    one round's duel.
+    fields) is whichever cluster has the HIGHEST accumulated net score
+    (wins - losses, _leader_idx) overall — not necessarily this round's
+    own raw tournament winner. This is the fix for a real failure mode
+    measured on live runs: a trajectory that won 8 of 9 rounds and built
+    real accumulated evidence could still lose the LAST round's
+    tournament and have that one upset overwrite everything as the final
+    answer under the old single-incumbent design. Per-trajectory tracking
+    means a historically strong answer keeps its accumulated case even
+    after briefly losing a round, and can only be dethroned by another
+    cluster's net score genuinely overtaking it, not by momentarily
+    winning one round's duel.
 
     "pairwise_winner" status now means whether the LEADER cluster changed
     this round ("defended" = same leader, "replaced" = a different
@@ -711,13 +718,20 @@ def _process_round_belief(
     Every cluster's full membership (every raw answer string ever
     assigned to it) is logged verbatim every round via a "belief_clusters"
     call_type entry in verifier_log_<baseline>.jsonl — the auditable
-    record of which answers share a belief score, per the user's request.
+    record of which answers share a score, per the user's request.
 
     Mutates state[i] in place: C_best, answer, belief, feedback,
     pairwise_winner, pool_size, n_comparisons, top1_win_rate,
     incumbent_survived, transcript, round_prompt_tokens,
-    round_completion_tokens, clusters (append-only, entries' belief/
+    round_completion_tokens, clusters (append-only, entries' wins/losses/
     trajectory/members mutate in place).
+
+    s["belief"] is kept as a SYNTHETIC Belief(mu=net_score,
+    sigma2=1/(1+wins+losses)) constructed from the leader cluster's
+    counters purely so stop_probability/confidence_bin and every existing
+    CSV column (mu, sigma2, stop_confidence, confidence_bin) and
+    verifier_summary.py chart keep working unchanged — it is NOT fed back
+    into any moment-matching update, just read.
 
     seed: fixes analysis_params' (temperature=1.0) sampling RNG so the
     pairwise duel's free-text analysis is reproducible run-to-run for
@@ -727,18 +741,14 @@ def _process_round_belief(
     unseeded noise (see run_group_rounds). None (vLLM's own default,
     unseeded) if not given.
 
-    floor_threshold/margin_ref/max_beta — evidence_scaled_beta's params
-    (see its docstring): the belief update's effective beta gets scaled
-    per-call by how decisive AND how absolutely good the winner/loser's
-    raw verifier scores were this round, instead of a flat beta for every
-    win regardless of score quality.
-
-    leader_margin: minimum mu advantage a challenger cluster needs over
-    the current leader to actually take over as leader this round — see
-    the inline comment where it's applied. Separate from
-    floor_threshold/margin_ref (those scale the belief UPDATE's trust in
-    this round's evidence; this gates whether a leadership CHANGE is
-    reported at all, after that update has already happened).
+    leader_margin: minimum net-score advantage (wins - losses) a
+    challenger cluster needs over the current leader to actually take
+    over as leader this round — see the inline comment where it's
+    applied. A single round only ever moves one cluster's net score by
+    at most 1 in the pair's favor, so a margin of 1 is roughly "no gate";
+    the default of 2 requires more than one round's worth of edge before
+    a leader change is reported, filtering the same narrow/noisy swaps
+    the old mu-based gate targeted.
     """
     pools: dict[int, list[str]] = {}
     pool_answers: dict[int, list[str]] = {}
@@ -751,15 +761,6 @@ def _process_round_belief(
 
     w = {i: [0.0] * pool_size for i in active}
     c = {i: [0] * pool_size for i in active}
-    # Raw verifier scores (r_a/r_b, before the bradley_terry transform) per
-    # pool index — used only for evidence_scaled_beta's margin/floor-gate
-    # calculation at finalize time. w/c (soft win-rate) still drives
-    # ranking/top1 selection, unchanged; this is a separate signal for how
-    # ABSOLUTELY good the winner's own score was, which win-rate alone
-    # can't express (win-rate is relative to whatever this round's pool
-    # happened to contain, even if the whole pool is weak).
-    score_sum = {i: [0.0] * pool_size for i in active}
-    score_n = {i: [0] * pool_size for i in active}
     n_comparisons = {i: 0 for i in active}
     # First analysis text that ever mentioned each pool index — used as
     # this round's feedback for whichever index ends up the winner. Every
@@ -784,10 +785,6 @@ def _process_round_belief(
             c[i][a] += 1
             w[i][b] += 1.0 - p
             c[i][b] += 1
-            score_sum[i][a] += r_a
-            score_n[i][a] += 1
-            score_sum[i][b] += r_b
-            score_n[i][b] += 1
             n_comparisons[i] += 1
             first_analysis[i].setdefault(a, analysis)
             first_analysis[i].setdefault(b, analysis)
@@ -842,8 +839,8 @@ def _process_round_belief(
         state, {i: (pool_answers[i][loser_idx_by_i[i]], pools[i][loser_idx_by_i[i]]) for i in active},
     )
 
-    # ── Pass 3: update the resolved clusters' persistent belief, then
-    # report whichever cluster now leads overall.
+    # ── Pass 3: update the resolved clusters' net score, then report
+    # whichever cluster now leads overall.
     for i in active:
         s = state[i]
         pool_texts = pools[i]
@@ -851,53 +848,44 @@ def _process_round_belief(
         winner_idx, loser_idx = winner_idx_by_i[i], loser_idx_by_i[i]
         wc_idx, lc_idx = winner_cluster[i], loser_cluster[i]
 
-        # Evidence-scaled beta: how decisive AND how absolutely good this
-        # round's winner/loser raw scores were, not just a flat beta for
-        # every win. See evidence_scaled_beta's docstring. Falls back to
-        # the flat beta when there's no score data for one side (pool_size
-        # == 1 — no comparisons ever happened this round).
-        if score_n[i][winner_idx] and score_n[i][loser_idx]:
-            winner_score = score_sum[i][winner_idx] / score_n[i][winner_idx]
-            loser_score = score_sum[i][loser_idx] / score_n[i][loser_idx]
-            eff_beta = evidence_scaled_beta(beta, winner_score, loser_score, floor_threshold, margin_ref, max_beta)
-        else:
-            eff_beta = beta
-
         if wc_idx == lc_idx:
             # This round's top1 and runner-up turned out to be the SAME
             # underlying answer, reworded — no informative comparison
             # between two clusters exists this round, so leave that
-            # cluster's belief untouched rather than comparing it to
-            # itself (pairwise_update assumes winner != loser).
+            # cluster's score untouched rather than counting it as both a
+            # win and a loss against itself.
             pass
         else:
-            new_winner, new_loser = pairwise_update(
-                winner=s["clusters"][wc_idx]["belief"], loser=s["clusters"][lc_idx]["belief"], beta=eff_beta,
-            )
-            s["clusters"][wc_idx]["belief"] = new_winner
-            s["clusters"][lc_idx]["belief"] = new_loser
+            s["clusters"][wc_idx]["wins"] += 1
+            s["clusters"][lc_idx]["losses"] += 1
 
         old_leader = old_leader_by_i[i]
         raw_leader_idx = _leader_idx(s["clusters"])
         # Hard margin gate: a challenger cluster only actually DETHRONES
-        # the incumbent leader if it beats it by leader_margin or more —
-        # otherwise the old leader keeps reporting as leader even though
-        # some other cluster's raw mu is technically (barely) higher this
-        # round. Without this, a leader that's been correctly "defended"
-        # for many rounds (real accumulated evidence) could still get
-        # displaced by one narrow, noisy win from a brand-new cluster
-        # (median duel margin was measured at ~0.10 on a real run — most
-        # wins are close calls, not decisive ones) — found to be a real
-        # driver of round-1-correct -> final-wrong regressions.
+        # the incumbent leader if it beats it by leader_margin net-score
+        # points or more — otherwise the old leader keeps reporting as
+        # leader even though some other cluster's raw net score is
+        # technically (barely) higher this round. Without this, a leader
+        # that's been correctly "defended" for many rounds (real
+        # accumulated evidence) could still get displaced by one narrow,
+        # noisy win from a brand-new cluster — found to be a real driver
+        # of round-1-correct -> final-wrong regressions.
         if old_leader != -1 and raw_leader_idx != old_leader:
-            gap = s["clusters"][raw_leader_idx]["belief"].mu - s["clusters"][old_leader]["belief"].mu
-            leader_idx = raw_leader_idx if gap >= leader_margin else old_leader
+            raw_net = s["clusters"][raw_leader_idx]["wins"] - s["clusters"][raw_leader_idx]["losses"]
+            old_net = s["clusters"][old_leader]["wins"] - s["clusters"][old_leader]["losses"]
+            leader_idx = raw_leader_idx if (raw_net - old_net) >= leader_margin else old_leader
         else:
             leader_idx = raw_leader_idx
         leader = s["clusters"][leader_idx]
+        leader_net = leader["wins"] - leader["losses"]
         status = "seed" if round_idx == 1 else ("defended" if leader_idx == old_leader else "replaced")
 
-        s["belief"] = leader["belief"]
+        # Synthetic Belief purely so stop_probability/confidence_bin and
+        # every existing CSV column/chart keep reading mu/sigma2
+        # unchanged — see _process_round_belief's docstring. sigma2
+        # shrinks as more comparisons accumulate for this cluster,
+        # mirroring the old design's "more evidence -> tighter belief".
+        s["belief"] = Belief(mu=float(leader_net), sigma2=1.0 / (1 + leader["wins"] + leader["losses"]))
         s["C_best"] = leader["trajectory"]
         s["answer"] = leader["answer"]
         # No truncation here — the analysis is already hard-capped at
@@ -920,18 +908,18 @@ def _process_round_belief(
         s["transcript"].append(
             f"Round {round_idx} ({status}, pool={pool_size}, comparisons={n_comparisons[i]}, "
             f"top1_win_rate={win_rate[top1]:.3f}): round winner={pool_texts[winner_idx]} "
-            f"[leader_cluster={leader['answer']!r} mu={leader['belief'].mu:.3f}]"
+            f"[leader_cluster={leader['answer']!r} net={leader_net}]"
         )
         _log_verifier_call(
             log_path, agml_dataset=agml_dataset, class_label=class_label,
             image_name=image_names[i], round=round_idx, call_type="belief_clusters",
             n_clusters=len(s["clusters"]), leader_answer=leader["answer"],
             # Every distinct answer ever mapped to each cluster, with that
-            # cluster's current (mu, sigma2) — the full auditable record of
-            # which answers share a belief score.
+            # cluster's current wins/losses/net — the full auditable
+            # record of which answers share a score.
             clusters=[
-                {"answer": cl["answer"], "mu": round(cl["belief"].mu, 4), "sigma2": round(cl["belief"].sigma2, 4),
-                 "n_members": len(cl["members"]), "members": cl["members"]}
+                {"answer": cl["answer"], "wins": cl["wins"], "losses": cl["losses"],
+                 "net": cl["wins"] - cl["losses"], "n_members": len(cl["members"]), "members": cl["members"]}
                 for cl in s["clusters"]
             ],
         )
@@ -943,9 +931,8 @@ def run_group_rounds(
     beta: float, high: float, medium: float, gen_temperature: float, k_pivots: int, rng: random.Random,
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None,
-    floor_threshold: float = 0.5, margin_ref: float = 0.3, max_beta: float = 4.0,
     seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
-    leader_margin: float = 0.1, lock_after_n_defends: int = 0,
+    leader_margin: float = 2.0, lock_after_n_defends: int = 0,
 ) -> list[list[dict]]:
     """Run the full round loop for every image in one (dataset, class) group
     in parallel, each image stopping independently once its own stopping
@@ -964,7 +951,7 @@ def run_group_rounds(
     doesn't want logging/counting can simply omit them.
 
     leader_margin: passed straight through to _process_round_belief — see
-    its docstring.
+    its docstring. Now a net-score (wins - losses) gap, not a mu gap.
     lock_after_n_defends: once an image's leader has been "defended" this
     many CONSECUTIVE rounds in a row, stop it early regardless of
     stop_confidence (0 disables — the old behavior, only stop_confidence/
@@ -1027,10 +1014,11 @@ def run_group_rounds(
               # just the immediately preceding one. See run_group_rounds'
               # docstring.
               "history": [],
-              # Per-trajectory belief tracking (2026-08-20) — one entry
-              # per DISTINCT diagnosis ever proposed for this image,
-              # {"answer", "trajectory", "belief", "members"}, populated
-              # by _resolve_clusters/_process_round_belief. Starts empty;
+              # Per-trajectory net-score tracking (2026-08-20, simplified
+              # 2026-08-21) — one entry per DISTINCT diagnosis ever
+              # proposed for this image, {"answer", "trajectory", "wins",
+              # "losses", "members"}, populated by
+              # _resolve_clusters/_process_round_belief. Starts empty;
               # round 1 always creates at least one. See
               # _process_round_belief's docstring for the full design.
               "clusters": []}
@@ -1113,7 +1101,7 @@ def run_group_rounds(
             llm, tokenizer, images, active, candidate_lists, answer_lists, state, prompts, vprompts,
             cls_q, rubric, k_candidates, round_idx, beta, k_pivots, rng,
             agml_dataset, class_label, image_names, log_path, call_stats,
-            floor_threshold, margin_ref, max_beta, seed, leader_margin,
+            seed, leader_margin,
         )
 
         round_elapsed = time.perf_counter() - t_round_start
@@ -1379,7 +1367,6 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 gen_temperature=args.temperature, k_pivots=args.k_pivots, rng=rng,
                 agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
                 log_path=log_path, call_stats=call_stats,
-                floor_threshold=args.floor_threshold, margin_ref=args.margin_ref, max_beta=args.max_beta,
                 seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
                 leader_margin=args.leader_margin, lock_after_n_defends=args.lock_after_n_defends,
             )
@@ -1567,42 +1554,20 @@ if __name__ == "__main__":
                               "600-1000) when --enable_thinking is set.")
     parser.add_argument("--beta", type=float, default=0.5,
                          help="Bradley-Terry per-comparison noise (doc Sec. 5) — --baseline belief only. "
-                              "This is the FLOOR value used for a high-confidence win; the actual "
-                              "per-update beta is scaled UP toward --max_beta as evidence weakens "
-                              "(evidence_scaled_beta), using each round's actual winner/loser scores — "
-                              "not applied as a flat constant. See src/common/belief_update.py's "
-                              "evidence_scaled_beta docstring for why it blends toward a much larger "
-                              "max_beta rather than dividing beta down (the belief-update math is "
-                              "nearly insensitive to beta below ~1.0).")
-    parser.add_argument("--floor_threshold", type=float, default=0.5,
-                         help="--baseline belief only. Belief-update discount gate: if the winning "
-                              "candidate's own raw verifier score (averaged across its comparisons "
-                              "this round) is below this threshold, the update is weakened toward "
-                              "--max_beta regardless of how decisively it won — 'best of several bad "
-                              "candidates' shouldn't build belief just because the margin was large. "
-                              "See evidence_scaled_beta's docstring for the full rationale.")
-    parser.add_argument("--margin_ref", type=float, default=0.3,
-                         help="--baseline belief only. Winner-vs-loser score gap (out of 1.0) that "
-                              "counts as a 'decisive enough' win — margins at or above this get full "
-                              "confidence from the margin side of evidence_scaled_beta; smaller margins "
-                              "scale down proportionally. 0 disables margin-sensitivity (only the floor "
-                              "gate still applies).")
-    parser.add_argument("--max_beta", type=float, default=4.0,
-                         help="--baseline belief only. Belief-update beta used for the WEAKEST possible "
-                              "evidence (winner_score at/below 0, or margin at/below 0) — a value in "
-                              "the range where pairwise_update's moment-matching formula actually "
-                              "produces a visibly smaller belief shift (unlike --beta's default 0.5, "
-                              "which sits in a nearly-flat/insensitive region). See "
-                              "evidence_scaled_beta's docstring.")
-    parser.add_argument("--leader_margin", type=float, default=0.1,
-                         help="Minimum mu advantage a challenger cluster needs over the current "
-                              "leader to actually take over as leader this round — otherwise the "
-                              "old leader keeps reporting as leader even if some other cluster's "
-                              "raw mu is technically (barely) higher. Found on real runs that most "
-                              "duel margins are narrow (~0.10 median), so without this gate an "
-                              "already-correct, already-defended leader could get displaced by one "
-                              "noisy near-tie win. 0 disables the gate (any mu edge, however small, "
-                              "changes the leader — the old behavior).")
+                              "Used directly by stop_probability's early-stop check; no longer scaled by "
+                              "round-level evidence quality (that machinery — evidence_scaled_beta — was "
+                              "removed 2026-08-21 along with the Gaussian belief update it fed, in favor "
+                              "of plain per-cluster win/loss counts; see _process_round_belief's "
+                              "docstring for why).")
+    parser.add_argument("--leader_margin", type=float, default=2.0,
+                         help="Minimum net-score (wins - losses) advantage a challenger cluster needs "
+                              "over the current leader to actually take over as leader this round — "
+                              "otherwise the old leader keeps reporting as leader even if some other "
+                              "cluster's raw net score is technically (barely) higher. A single round "
+                              "only ever moves the compared pair's net scores by 1 each, so a margin of "
+                              "1 is roughly 'no gate'; the default of 2 requires more than one round's "
+                              "worth of edge before a leader change is reported. 0 disables the gate "
+                              "entirely (any net-score edge, however small, changes the leader).")
     parser.add_argument("--lock_after_n_defends", type=int, default=3,
                          help="Once an image's leader has been 'defended' this many CONSECUTIVE "
                               "rounds in a row, stop it early regardless of stop_confidence — 0 "
