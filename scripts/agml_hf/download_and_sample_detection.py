@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.agml_hf.download_and_sample import with_retry  # noqa: E402
 from src.common.dataset_config import active_datasets, DatasetConfig, subsample_class_balanced  # noqa: E402
+from src.common.progress import Progress  # noqa: E402
 
 
 def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
@@ -51,8 +52,11 @@ def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
     ds = load_dataset(repo_id, config, split="train")
     class_names = meta.get("class_names")
 
-    def primary_category_name(i: int) -> str | None:
-        objs = ds[i].get("objects") or {}
+    if fixed_indices is not None:
+        return repo_id, config, fixed_indices
+
+    def primary_category_name(row) -> str | None:
+        objs = row.get("objects") or {}
         # Schema key inconsistency confirmed across real Project-AgML
         # detection repos (e.g. CocoaMFDB_detection uses "categories",
         # CBDA_Cotton_Ball_Detection_Augmented uses "category") — check
@@ -65,11 +69,23 @@ def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
             return class_names[cat_id]
         return f"category_{cat_id}"
 
-    if fixed_indices is not None:
-        selected = fixed_indices
-    else:
-        annotated_indices = [i for i in range(len(ds)) if primary_category_name(i) is not None]
-        selected = subsample_class_balanced(annotated_indices, primary_category_name, n_per_class, seed)
+    # Single pass over every row (HF Dataset row access is Python-level and
+    # slow for large datasets — several run into the thousands of rows), not
+    # two: computing the label here AND caching it means
+    # subsample_class_balanced's own label_fn(item) call below is a pure
+    # dict lookup, not a second full re-scan of the dataset. Progress
+    # printed every 500 rows (rate/ETA) so a large dataset's scan doesn't
+    # look hung with zero output for minutes.
+    labels: dict[int, str] = {}
+    prog = Progress(total=len(ds), label=f"{agml_name} scan", every=500)
+    for i, row in enumerate(ds):
+        label = primary_category_name(row)
+        if label is not None:
+            labels[i] = label
+        prog.update()
+
+    annotated_indices = list(labels)
+    selected = subsample_class_balanced(annotated_indices, lambda i: labels[i], n_per_class, seed)
 
     return repo_id, config, selected
 
