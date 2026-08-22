@@ -97,6 +97,14 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 _LAYER_SELECTIONS_PATH = Path(__file__).parent / "layer_selections.yaml"
 
 
+def _display_task(t: str) -> str:
+    """task_type -> x-axis tick label — drops the "_identification" suffix
+    (quality_identification/species_identification read as just "quality"/
+    "species" on-chart) and turns remaining underscores into spaces. Mirrors
+    scripts/agml_hf/download_and_sample.py's own _display_task."""
+    return t.replace("_identification", "").replace("_", " ")
+
+
 # ── Early-exit sentinel ────────────────────────────────────────────────────────
 
 class _EarlyExit(Exception):
@@ -1228,7 +1236,7 @@ def plot_projector_task_comparison(
                     f"{v:.2f}", ha="center", va="bottom", fontsize=6)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticklabels([_display_task(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.2)
     ax.set_ylabel("F1 Macro")
     ax.set_title("Projector Separability by Task Type: Pre vs Post-Projector (FC combined)")
@@ -1443,7 +1451,7 @@ def plot_task_summary(results: dict, output_dir: Path):
                     f"{h:.2f}", ha="center", va="bottom", fontsize=7)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticklabels([_display_task(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("F1 Macro")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(backbones), 3))

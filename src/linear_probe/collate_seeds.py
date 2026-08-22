@@ -46,6 +46,14 @@ def _f1(entry) -> float:
     return entry if isinstance(entry, float) else entry.get("f1_macro", 0.0)
 
 
+def _display_task(t: str) -> str:
+    """task_type -> x-axis tick label — drops the "_identification" suffix
+    (quality_identification/species_identification read as just "quality"/
+    "species" on-chart), mirrors src/linear_probe/probe.py's own
+    _display_task."""
+    return t.replace("_identification", "").replace("_", " ")
+
+
 def load_by_task(results_path: Path) -> dict[str, dict[str, float]]:
     """{task_type: {backbone: f1_macro}} from one seed run's
     linear_probe_results.json — same by_task_lr_combined -> by_task_fc_combined
@@ -163,7 +171,7 @@ def plot_seed_collated(collated: dict[str, dict[str, dict]], output_dir: Path) -
                     f"{m:.2f}", ha="center", va="bottom", fontsize=7)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticklabels([_display_task(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel(f"F1 Macro (95% CI across {n_seeds_max} seeds)")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(backbones), 3))

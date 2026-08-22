@@ -395,11 +395,30 @@ def load_hf_detection_samples(
     config = entry["hf_config"]
     classes: dict[str, list[int]] = entry["classes"]
     names = class_names if class_names is not None else entry.get("class_names")
+    bbox_convention = entry.get("bbox_convention") or {}
+    box_scale = bbox_convention.get("scale", "pixel")
+    box_format = bbox_convention.get("format", "xywh")
 
     def _category_name(cat_id: int) -> str:
         if names and 0 <= cat_id < len(names):
             return names[cat_id]
         return f"category_{cat_id}"
+
+    def _to_pixel_xyxy(bbox: list[float], img_w: int, img_h: int) -> list[float]:
+        """Normalize this dataset's raw box into the pixel-space [x1,y1,x2,y2]
+        convention every other Stage 5 module (bbox_parse.py, bbox_metrics.py,
+        the detection prompts) assumes — catalog_detection_datasets.py MEASURED
+        (not assumed) each dataset's actual scale/format, confirmed via a real
+        64-dataset run to vary per-dataset (57 pixel / 7 normalized; 63 xywh /
+        1 xyxy). Without this conversion, a normalized [0,1]-range box would
+        get clamped down to a ~1x1 pixel region by clamp_box() downstream —
+        silently destroying it, not just scoring it wrong."""
+        x, y, a, b = bbox
+        if box_scale == "normalized":
+            x, y, a, b = x * img_w, y * img_h, a * img_w, b * img_h
+        if box_format == "xywh":
+            return [x, y, x + a, y + b]
+        return [x, y, a, b]  # already xyxy
 
     out_dir = Path(images_root) / agml_name
     samples: list[dict] = []
@@ -423,7 +442,8 @@ def load_hf_detection_samples(
                     image_col = find_image_column(ds.features)
                 out_dir.mkdir(parents=True, exist_ok=True)
                 row = ds[idx]
-                row[image_col].convert("RGB").save(img_path, format="JPEG")
+                image = row[image_col].convert("RGB")
+                image.save(img_path, format="JPEG")
                 objs = row.get("objects") or {}
                 # Schema key inconsistency confirmed across real Project-AgML
                 # detection repos (e.g. CocoaMFDB_detection uses "categories",
@@ -431,7 +451,8 @@ def load_hf_detection_samples(
                 # both rather than assuming either.
                 cat_list = objs.get("category") if objs.get("category") is not None else objs.get("categories", [])
                 boxes = [
-                    {"bbox": list(bbox), "category_id": int(cat_id), "category_name": _category_name(int(cat_id))}
+                    {"bbox": _to_pixel_xyxy(list(bbox), image.width, image.height),
+                     "category_id": int(cat_id), "category_name": _category_name(int(cat_id))}
                     for bbox, cat_id in zip(objs.get("bbox", []), cat_list)
                 ]
                 ann_path.write_text(_json.dumps(boxes))
