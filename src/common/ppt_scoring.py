@@ -3,8 +3,8 @@
 single free-generation version that collapsed onto the scale's first
 letter ("A") ~96% of the time on a real feasibility test (see
 docs/verifier_score_belief_update.md Section 15's note, and
-experiments/verifier_ppt/run_verifier_ppt.py's module docstring for the
-original test that found this) — the model's unconstrained top-20
+src/legacy/verifier_ppt/run_verifier_ppt.py's module docstring, archived
+prototype, for the original test that found this) — the model's unconstrained top-20
 logprobs at a freely-reached tag position usually aren't dominated by the
 20 target scale letters at all.
 

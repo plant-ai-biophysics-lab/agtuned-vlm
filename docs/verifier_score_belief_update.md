@@ -808,8 +808,8 @@ adaptive stopping in this baseline (per Section 10/11 — that's the point of th
 mechanism `verifier_lmv.py` originally used — one free-generation call asking the model to
 write both `<score_A>` and `<score_B>` tags inline, then reading whatever top-20 logprobs
 happened to land at wherever the tag ended up — is unreliable: a real feasibility test in this
-project (documented in `experiments/verifier_ppt/run_verifier_ppt.py`'s module docstring)
-found it collapses onto the first letter of the scale ("A") ~96% of the time, because the
+project (documented in `src/legacy/verifier_ppt/run_verifier_ppt.py`'s module docstring —
+archived prototype) found it collapses onto the first letter of the scale ("A") ~96% of the time, because the
 model's unconstrained top-20 logprobs at a freely-reached tag position usually aren't
 dominated by the 20 target scale letters at all. The fix, now applied in `verifier_lmv.py`'s
 `_score_pairs_batch`, is a genuine **two-pass teacher-forced/prefill** extraction:
