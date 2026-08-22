@@ -1,0 +1,56 @@
+# Detection analog of src/config/verifier_prompts.yaml — Stage 5d
+# (detection_verifier.py). See that file's header comment for the full
+# rationale behind each entry's shape; only what genuinely differs for a
+# spatial (box) answer instead of a free-text class label is re-explained
+# here.
+#
+# - rubric — verifier-facing localization-quality criteria (mirrors
+#   verifier_prompts.yaml's disease_pest rubric shape exactly).
+# - structured_templates — candidate GENERATION prompt: criteria filled in
+#   BEFORE boxes are reported, exactly mirroring disease_pest's
+#   fill-in-the-blank pattern (this is the explicit design requirement:
+#   "the baseline prints boxes directly with no reasoning; the verifier
+#   must answer structured localization criteria BEFORE printing boxes").
+#   The final box list is wrapped in <answer>...</answer> (with <box> tags
+#   nested inside) rather than bare <box> tags at the top level — this is
+#   NOT cosmetic: src/common/ppt_scoring.py's _truncate_keep_answer looks
+#   for a literal "<answer>" tag to preserve when a trajectory exceeds its
+#   500-char cap for pairwise scoring, so wrapping the box list in
+#   <answer></answer> gets that truncation-preservation behavior for free,
+#   the same way classification's plain <answer>ClassName</answer> does —
+#   without it, a long trajectory could get truncated mid-box-list.
+# - pairwise_prompt — reused VERBATIM from verifier_prompts.yaml (Python
+#   side loads that file's key directly; not duplicated here) — see this
+#   file's own header comment for why it needs no changes: it scores TEXT
+#   trajectories against a rubric, and a detection trajectory (criteria
+#   answers + box list) is still just text.
+# - same_answer_prompt has NO detection analog — cluster/candidate identity
+#   is resolved geometrically (IoU overlap via src/common/bbox_metrics.py),
+#   not via an LLM textual-synonymy call. See detection_verifier.py's
+#   _boxes_match().
+
+rubric: |
+  1. Does it correctly identify what class/object type is being localized?
+  2. Does it account for the correct number of distinct instances visible?
+  3. Does each box tightly bound its instance without excess background or cut-off parts?
+  4. Does it correctly separate overlapping/occluded instances rather than merging them?
+  5. Are boxes placed at locations consistent with where the object actually appears (not hallucinated)?
+  6. Is the overall box count and placement consistent with the visual evidence?
+
+# Params: {question}
+structured_templates:
+  object_detection: |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Object/class being localized:
+    Number of distinct instances visible:
+    General location(s) in the image (e.g. upper-left, center, scattered):
+    Overlapping or occluded instances, if any (or "none"):
+    Approximate size of each instance relative to the image:
+
+    After filling in every line above, wrap your final answer in <answer></answer> tags containing one <box>x1,y1,x2,y2</box> line per instance (pixel coordinates, top-left to bottom-right), e.g.:
+    <answer><box>120,45,340,210</box>
+    <box>500,100,620,300</box></answer>
+    If none are visible, write exactly: <answer><box>none</box></answer>

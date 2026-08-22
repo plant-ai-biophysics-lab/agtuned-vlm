@@ -43,6 +43,11 @@ class DatasetConfig:
                                     # like "BD70" with no visually groundable signal
                                     # to distinguish them from "BD72"), not a
                                     # generic quality filter.
+    bbox_convention: Optional[dict] = None  # detection datasets only (Stage 5) —
+                                             # {"scale": "pixel"|"normalized",
+                                             # "format": "xyxy"|"xywh"}, measured by
+                                             # catalog_detection_datasets.py. None
+                                             # for classification datasets.
 
     @property
     def clean_classes(self) -> list[str]:
@@ -92,6 +97,7 @@ def load_datasets(config_path: Path) -> list[DatasetConfig]:
             class_aliases=d.get("class_aliases", {}),
             hf_config=d.get("hf_config"),
             excluded_classes=d.get("excluded_classes", []),
+            bbox_convention=d.get("bbox_convention"),
         ))
     return result
 
@@ -339,5 +345,96 @@ def load_hf_samples(
                 label_dir.mkdir(parents=True, exist_ok=True)
                 ds[idx][image_col].convert("RGB").save(path, format="JPEG")
             samples.append({"path": str(path), "label": label})
+
+    return samples
+
+
+def load_hf_detection_samples(
+    agml_name: str, manifest: dict, images_root: Path, class_names: list[str] | None = None,
+) -> list[dict]:
+    """Detection analog of load_hf_samples() — NOT a drop-in replacement,
+    since a detection row can carry multiple boxes/categories and the
+    classification return shape ({"path", "label"}) has no room for that.
+    Returns [{"path": str, "boxes": [{"bbox": [...], "category_id": int,
+    "category_name": str}, ...]}, ...].
+
+    Caches to images_root/<agml_name>/<row_idx>.jpg (no per-label
+    subdirectory, unlike load_hf_samples — a detection image can belong to
+    several categories at once, so there's no single label to shard by)
+    plus a <row_idx>.json sidecar holding that row's full annotation list,
+    so a second run is a pure local-disk read (image + sidecar both
+    present) with no HF Hub/network involvement, same resumability
+    guarantee as load_hf_samples.
+
+    manifest["datasets"][agml_name]["classes"] maps PRIMARY category name
+    (the balancing key download_and_sample_detection.py sampled on) -> row
+    indices — used only to enumerate which rows to materialize; the actual
+    per-row annotation written to the sidecar includes EVERY box/category
+    in that row via the "objects" field, not just the primary one.
+
+    class_names: category_id -> name lookup (from detection_datasets.yaml's
+    `classes` list, i.e. catalog_detection_datasets.py's resolved names).
+    Falls back to the bare integer id (as a string) if not given or if an
+    id falls outside the list — better a visible "category_7" in a QC plot
+    than a KeyError aborting the whole run.
+
+    Raises KeyError if `agml_name` has no manifest entry — same contract
+    and same per-dataset-catch-and-continue expectation as load_hf_samples.
+    """
+    import json as _json
+
+    entry = manifest.get("datasets", {}).get(agml_name)
+    if entry is None:
+        raise KeyError(
+            f"{agml_name!r} not found in manifest's \"datasets\" — it was never "
+            f"successfully downloaded (see summary.txt, or the manifest's "
+            f"\"failed\" key, for why)."
+        )
+
+    repo_id = entry["hf_repo_id"]
+    config = entry["hf_config"]
+    classes: dict[str, list[int]] = entry["classes"]
+    names = class_names if class_names is not None else entry.get("class_names")
+
+    def _category_name(cat_id: int) -> str:
+        if names and 0 <= cat_id < len(names):
+            return names[cat_id]
+        return f"category_{cat_id}"
+
+    out_dir = Path(images_root) / agml_name
+    samples: list[dict] = []
+    ds = None
+    image_col = None
+    seen_idx: set[int] = set()
+
+    for indices in classes.values():
+        for idx in indices:
+            if idx in seen_idx:
+                continue
+            seen_idx.add(idx)
+            img_path = out_dir / f"{idx}.jpg"
+            ann_path = out_dir / f"{idx}.json"
+            if img_path.exists() and ann_path.exists():
+                boxes = _json.loads(ann_path.read_text())
+            else:
+                if ds is None:
+                    from datasets import load_dataset
+                    ds = load_dataset(repo_id, config, split="train")
+                    image_col = find_image_column(ds.features)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                row = ds[idx]
+                row[image_col].convert("RGB").save(img_path, format="JPEG")
+                objs = row.get("objects") or {}
+                # Schema key inconsistency confirmed across real Project-AgML
+                # detection repos (e.g. CocoaMFDB_detection uses "categories",
+                # CBDA_Cotton_Ball_Detection_Augmented uses "category") — check
+                # both rather than assuming either.
+                cat_list = objs.get("category") if objs.get("category") is not None else objs.get("categories", [])
+                boxes = [
+                    {"bbox": list(bbox), "category_id": int(cat_id), "category_name": _category_name(int(cat_id))}
+                    for bbox, cat_id in zip(objs.get("bbox", []), cat_list)
+                ]
+                ann_path.write_text(_json.dumps(boxes))
+            samples.append({"path": str(img_path), "boxes": boxes})
 
     return samples

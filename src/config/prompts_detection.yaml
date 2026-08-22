@@ -1,0 +1,29 @@
+# Object-detection prompts — Stage 5. Separate file from prompts.yaml since
+# the answer shape (a list of bounding boxes) is fundamentally different
+# from classification's single class-label answer; keeping them apart
+# avoids overloading one file with two incompatible answer conventions.
+
+assessment_system: "You are an expert agricultural computer vision assistant, skilled at precisely localizing plants, pests, diseases, and produce in photographs."
+
+# detection_baseline: direct box prediction, NO intermediate reasoning —
+# deliberately the spatial-task analog of prompts.yaml's
+# visual_classification_* + assessment_classification (vision_baseline.py's
+# single-turn answer), not verifier_prompts.yaml's structured_templates.
+# Coordinates are pixel [x1,y1,x2,y2] (top-left to bottom-right) —
+# confirmed as the dominant convention across Project-AgML detection
+# datasets by catalog_detection_datasets.py's empirical bbox_convention
+# measurement (most datasets: pixel/xywh from the underlying export, but
+# THIS prompt asks the model for xyxy directly since that's what
+# bbox_parse.py/bbox_metrics.py use throughout Stage 5 — ground-truth boxes
+# get converted xywh->xyxy at load time, not the model).
+# Params: {class_names}
+detection_baseline: |
+  Identify and localize every {class_names} visible in this image. For each
+  one you find, report its bounding box on its own line, using this exact
+  format:
+  <box>x1,y1,x2,y2</box>
+
+  Coordinates are pixel positions in the image as shown: (x1,y1) is the
+  top-left corner, (x2,y2) is the bottom-right corner. Report one box per
+  line, nothing else. If none are visible, respond with exactly:
+  <box>none</box>

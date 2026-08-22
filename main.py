@@ -7,6 +7,13 @@ STAGES = {
     "catalog-datasets":   "scripts.agml_hf.catalog_datasets",
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
+    "catalog-detection-datasets":  "scripts.agml_hf.catalog_detection_datasets",
+    "report-detection-catalog":    "scripts.agml_hf.report_detection_catalog",
+    "migrate-detection-datasets":  "scripts.agml_hf.migrate_detection_datasets_yaml",
+    "download-detection-datasets": "scripts.agml_hf.download_and_sample_detection",
+    "detection-baseline":          "src.detection_baseline",
+    "detection-qc-plot":           "src.detection_qc_plot",
+    "detection-verifier":          "src.detection_verifier",
     "build-reference-db": "src.data_generation.build_reference_db",
     "data-gen":           "src.data_generation.generate",
     "check-vision-towers": "src.linear_probe.check_vision_towers",
@@ -46,6 +53,12 @@ Stages:
     catalog-datasets   Stage 0a — catalog all Project-AgML datasets on HuggingFace
     migrate-datasets   Stage 0a — regenerate src/config/datasets.yaml from the HF catalog
     download-datasets  Stage 0a — download + class-balanced sample datasets, write selection manifest
+    catalog-detection-datasets  Stage 5 (prep) — resolve class_names + bbox convention for
+                               detection-type datasets already found by catalog-datasets
+    migrate-detection-datasets  Stage 5 (prep) — regenerate src/config/detection_datasets.yaml
+                               from catalog-detection-datasets' output
+    download-detection-datasets Stage 5 — download + class-balanced sample detection datasets,
+                               write selection manifest (dataset/selected_images_detection.json)
     build-reference-db Stage 0  — fetch Wikipedia + live web-search sources per class (run this first)
     data-gen           Stage 0  — synthesize agml_classification.jsonl from build-reference-db's
                                    fetched sources (no vision pass)
