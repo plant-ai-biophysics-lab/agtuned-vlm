@@ -17,7 +17,7 @@ uv sync
 | 1 | [docs/stage1_linear_probe.md](docs/stage1_linear_probe.md) | H1: test vision encoder feature separability across backbones |
 | 2 | [docs/stage2_lower_upper_bounds.md](docs/stage2_lower_upper_bounds.md) | Lower (vision-only) vs. upper (description-augmented) classification bounds |
 | 3 | [docs/stage3_cot.md](docs/stage3_cot.md) | Chain-of-thought: self-generated description vs. structured multi-step reasoning |
-| 4 | [docs/stage4_verifier.md](docs/stage4_verifier.md) | Round-based verifier belief tracking vs. an argmax ablation and a full PPT-tournament baseline |
+| 4 | [docs/stage4_verifier.md](docs/stage4_verifier.md) | Round-based verifier net-score tracking (structured criteria + PPT tournament + leader-margin stopping) vs. a full PPT-tournament baseline |
 | 5 | [docs/stage5_object_detection.md](docs/stage5_object_detection.md) | (IN PROGRESS) Object detection: same round-based verifier mechanism applied to bounding-box localization instead of classification |
 
 ## Viewers
