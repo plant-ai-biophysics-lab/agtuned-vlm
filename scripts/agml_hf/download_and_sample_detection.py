@@ -16,11 +16,10 @@ annotated instances are excluded entirely (not useful for detection).
 Reuses download_and_sample.py's HF-rate-limit retry helpers directly
 (with_retry/is_retryable/RETRYABLE_STATUS) rather than reimplementing them.
 
-Usage:
+Usage (--n_per_class defaults to 10, matching the classification pipeline):
   uv run python main.py download-detection-datasets \\
     --config src/config/detection_datasets.yaml \\
     --catalog src/config/hf_detection_catalog.json \\
-    --n_per_class 30 \\
     --output dataset/selected_images_detection.json
 """
 
@@ -79,7 +78,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="src/config/detection_datasets.yaml")
     ap.add_argument("--catalog", default="src/config/hf_detection_catalog.json")
-    ap.add_argument("--n_per_class", type=int, default=30)
+    ap.add_argument("--n_per_class", type=int, default=10,
+                     help="Images/class to sample — matches the classification pipeline's "
+                          "n=10/class default (see docs/stage0a_datasets.md's note on n=10 vs. "
+                          "n=25 giving nearly identical numbers at lower cost).")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--output", default="dataset/selected_images_detection.json")
     ap.add_argument("--only", default=None, help="Optional regex filter on agml_name.")
