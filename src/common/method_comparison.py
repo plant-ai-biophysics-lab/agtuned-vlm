@@ -59,12 +59,12 @@ CONDITION_STYLES: list[tuple[str, str]] = [
     ("Verifier-CoT (Gemma-self)",     "#bcbd22"),
     ("Verifier-CoT (Qwen-base)",      "#17a398"),
     ("Verifier-CoT (Qwen-finetuned)", "#e07b39"),
-    # Stage 4 — round-based belief tracking (src/verifier_cot.py), see
-    # docs/verifier_score_belief_update.md. The full-PPT baseline it's
-    # compared against reuses src/verifier_lmv.py's own existing PPT-Direct-N*/
-    # PPT-SelfCoT-N* entries above rather than a separate condition.
-    ("Verifier-Belief",  "#393b79"),  # --baseline belief — our contribution
-    ("Verifier-Argmax",  "#637939"),  # --baseline argmax — basic-PPT-score ablation
+    # Stage 4 — single-round K-candidate + PPT-tournament verifier
+    # (src/verifier_cot.py), see docs/stage4_verifier.md. The full-PPT
+    # baseline it's compared against reuses src/verifier_lmv.py's own
+    # existing PPT-Direct-N*/PPT-SelfCoT-N* entries above rather than a
+    # separate condition.
+    ("Verifier",  "#393b79"),  # our contribution
 ]
 
 CONDITION_COLOR: dict[str, str] = dict(CONDITION_STYLES)

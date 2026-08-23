@@ -549,7 +549,38 @@ datasets:
   location:
   - asia
   - iran
-  skip: false
+  excluded_classes:
+  - AnaHau
+  - AnaSet
+  - AtrCan
+  - AtrLen
+  - AtrLeu
+  - CerAre
+  - CheAlb
+  - CorMon
+  - GirOpp
+  - HalAmm
+  - HalBel
+  - HalPer
+  - HalStr
+  - HalSub
+  - HamSal
+  - KocSco
+  - KocSte
+  - SalAba
+  - SalDen
+  - SalInc
+  - SalKal
+  - SalKer
+  - SalPra
+  - SalTom
+  - SalTur
+  - SalYaz
+  - SeiCin
+  - SeiRos
+  - SuaAcu
+  - SuaAeg
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | classes are genus-species codes for rangeland/weed plants (e.g. SalKal=Salsola
     kali/Russian thistle, CheAlb=Chenopodium album/lambsquarters) — an achene/seed
@@ -1173,7 +1204,12 @@ datasets:
   location:
   - asia
   - iran
-  skip: false
+  excluded_classes:
+  - J
+  - L
+  - R
+  - S
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
 - agml_name: IDDMSLD_spinach_leaf_disease_classification
@@ -1579,7 +1615,24 @@ datasets:
   location:
   - asia
   - bangladesh
-  skip: false
+  excluded_classes:
+  - agnishika
+  - anantamul
+  - apang
+  - ayapan
+  - bamonhati
+  - basok
+  - betal
+  - chapalish
+  - gainura
+  - kalochitra
+  - kalodhutura
+  - kalomegh
+  - punarnava
+  - ramtulsi
+  - sarpagandha
+  - shotomuli
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review | multi-species medicinal-plant identification (Bengali common names)
   class_aliases:
@@ -3061,7 +3114,18 @@ datasets:
   location:
   - asia
   - thailand
-  skip: false
+  excluded_classes:
+  - BlackAustralia
+  - BlackOodTurkey
+  - Buriram60
+  - ChiangMai60
+  - ChiangMaiBuriram60
+  - Kamphaengsaeng42
+  - RedKing
+  - TaiwanMeacho
+  - TaiwanStraberry
+  - WhiteKing
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
 - agml_name: oil_palm_fruit_ripeness_classification
@@ -3492,14 +3556,32 @@ datasets:
   - Shampakatari
   - Shorna5
   - Subol_Lota
-  excluded_classes:
-  - BR28
-  - BR29
   hf_config: raw
   location:
   - asia
   - bangladesh
-  skip: false
+  excluded_classes:
+  - Amon
+  - BR28
+  - BR29
+  - Bashful
+  - Bashmoti
+  - Chinigura_Polao
+  - Ganjiya
+  - Gutisharna
+  - Jirashail
+  - Katari_Polao
+  - Katarivog
+  - Lal_Aush
+  - Lal_Binni
+  - Lal_Biroi
+  - Najirshail
+  - Paijam
+  - Red_Cargo
+  - Shampakatari
+  - Shorna5
+  - Subol_Lota
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
     review
 - agml_name: rice_seedling_classification

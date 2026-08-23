@@ -1,16 +1,13 @@
 # Stage 4 (verifier_cot.py) defaults — edit these directly instead of
 # remembering CLI flags. Loaded automatically (default --verifier_config
 # path is this file). Any flag you DO pass on the command line still
-# overrides whatever is set here — see docs/verifier_score_belief_update.md
-# for what each of these actually controls.
+# overrides whatever is set here — see docs/stage4_verifier.md for what
+# each of these actually controls.
 #
 # You run this per model (--model overrides "model" below).
 
-# ── Model / baseline ─────────────────────────────────────────────────────────
+# ── Model ─────────────────────────────────────────────────────────────────────
 model: google/gemma-4-26B-A4B-it
-baseline: belief  # only valid value — kept for output-path naming (ckpt_belief_*.csv etc.),
-                   # consumed by cot_compare.py/verifier_summary.py. --max_round 1 is now the
-                   # argmax-equivalent baseline (see verifier_cot.py's module docstring).
 
 # ── Data sources ─────────────────────────────────────────────────────────────
 config: src/config/datasets.yaml
@@ -31,73 +28,37 @@ n_samples: 10  # images/class to evaluate — dropped back from 25 after confirm
                 # option is worth it for the paper-deadline full run (2026-08-27 target).
                 # --match_images_from (default: auto-detected per --model, see run_model) makes
                 # this a guaranteed subset of vision_baseline's own 50/class sample.
-seed: 42       # seeds incumbent-A/B-slot randomization AND every generation SamplingParams
-               # (k-candidate sampling, pairwise-duel analysis) so runs over the same images/
-               # config are reproducible rather than drawing fresh randomness each time — was
-               # previously unseeded, which made run-to-run comparisons (e.g. 1 round vs 6
-               # rounds) hard to trust since round 1 alone could swing between runs
+seed: 42       # seeds the k-candidate sampling AND the pairwise duel's A/B-slot randomization/
+               # analysis sampling, so runs over the same images/config are reproducible rather
+               # than drawing fresh randomness each time.
 
-# ── Round loop / belief-tracking hyperparameters (Sec. 13 of the design doc) ─
-k_candidates: 4        # K -- candidates generated per round via temperature sampling
-k_pivots: 2             # k -- pivot-set size for the full PPT tournament (--baseline belief only);
+# ── Single-round K-candidate + PPT-tournament hyperparameters ────────────────
+k_candidates: 4        # K -- candidates generated per image via temperature sampling; the
+                         # tournament pool size.
+k_pivots: 2             # k -- pivot-set size for the full PPT tournament (arXiv:2607.05391
+                         # Section 3.2, via llm_verifier.pivot_tournament) that ranks the pool;
                          # matches llm_verifier.pivot_tournament.DEFAULT_PIVOTS, repeated here as a
                          # literal rather than imported so this file has no Python-side dependency
-min_round: 3
-max_round: 6              # 1 = single-round (generate -> tournament -> argmax; belief inert).
-                           # Bumped from 1 now that lock_after_n_defends=3 caps most of the
-                           # round-over-round regression risk found on real runs — images that
-                           # settle stop early instead of continuing to roll the dice.
-temperature: 0.8        # sampling temperature for the K per-round candidates; needs to be > 0
-                         # for k_candidates > 1 to actually differ (greedy decoding repeats itself)
+temperature: 0.8        # sampling temperature for the K candidates; needs to be > 0 for
+                         # k_candidates > 1 to actually differ (greedy decoding repeats itself)
 enable_thinking: false  # model-being-tested's own extended thinking for the k_candidates
-                         # generation step only (not the verifier's own pairwise/same-answer
-                         # calls) — off by default, matching every other generation script in
-                         # this repo (src/common/chat_prompt.py). Set true to A/B test whether
-                         # reasoning before committing to a diagnosis reduces generic-category
-                         # hedging (e.g. "leaf spot disease" instead of naming the specific
-                         # disease) found in judge-leniency analysis. Raise gen_max_tokens well
-                         # above its default when this is true, or thinking traces get truncated
-                         # before the model reaches its actual answer.
+                         # generation step only (not the verifier's own pairwise calls) — off by
+                         # default, matching every other generation script in this repo
+                         # (src/common/chat_prompt.py). Raise gen_max_tokens well above its
+                         # default when this is true, or thinking traces get truncated before the
+                         # model reaches its actual answer.
 gen_max_tokens: 180      # max_tokens for the k_candidates generation step
 
-# Candidate generation prompt is now ALWAYS the fill-in-the-blank
+# Candidate generation prompt is ALWAYS the fill-in-the-blank
 # structured_templates entry for the group's task type (verifier_prompts.yaml)
-# — every K candidate, every round, no separate toggle. Two earlier
-# alternatives were tried and removed: rephrasing the classification
-# question (real diversity gain, but didn't beat baseline) and asking for
-# several different hypotheses in one response (only 15.6% of wrong
-# predictions even had the correct answer among the 6 proposed — forcing
-# deliberate diversity competed against the model's own best guess instead
-# of sharpening it). See structured_templates' comment in
-# verifier_prompts.yaml for the full rationale.
-
-# ── Score sensitivity (--baseline belief only) ────────────────────────────────
-# Per-cluster score is a plain net win/loss count (2026-08-21 simplification —
-# the Gaussian moment-matching belief update + evidence_scaled_beta was found
-# over-engineered relative to what it bought on real runs; see
-# _process_round_belief's docstring in verifier_cot.py). beta is still used
-# directly by stop_probability's early-stop check.
-beta: 0.5                 # Bradley-Terry per-comparison noise, used by stop_probability only
-
-# ── Leadership stability (found on real runs to reduce round-over-round regression) ──────────
-leader_margin: 2          # minimum net-score (wins - losses) advantage a challenger needs over the
-                           # current leader to actually take over — a single round only ever moves
-                           # the compared pair's net scores by 1 each, so 2 requires more than one
-                           # round's worth of edge. 0 disables (any net-score edge changes the leader).
-lock_after_n_defends: 3   # stop an image early once its leader has defended this many rounds in a
-                           # row, regardless of stop_confidence — images settle within 2-3 rounds
-                           # on real runs, so further rounds are pure flip risk with no upside.
-                           # 0 disables (only stop_confidence/max_round decide).
-
-high_conf: 0.6           # stop-early / "high" confidence-bin threshold — lowered again from 0.7
-                         # (was 0.85 originally). The answer settles well before stop_confidence
-                         # gets anywhere near 0.85 on real runs, so 0.85 mostly just burned rounds
-                         # confirming an already-decided answer; 0.7 still needed ~round 7-8 to
-                         # trigger on a 10-round test, so pushed lower to actually let early-stop
-                         # fire meaningfully sooner. No effect at --max_round 1 (always hits the
-                         # round cap before this can matter).
-med_conf: 0.3            # "medium" vs "low" confidence-bin threshold — lowered from 0.4 to stay
-                         # proportionally below the new high_conf=0.6
+# — every K candidate, no separate toggle. Two earlier alternatives were
+# tried and removed: rephrasing the classification question (real diversity
+# gain, but didn't beat baseline) and asking for several different
+# hypotheses in one response (only 15.6% of wrong predictions even had the
+# correct answer among the 6 proposed — forcing deliberate diversity
+# competed against the model's own best guess instead of sharpening it).
+# See structured_templates' comment in verifier_prompts.yaml for the full
+# rationale.
 
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"

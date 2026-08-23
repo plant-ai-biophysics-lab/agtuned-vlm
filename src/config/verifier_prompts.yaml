@@ -1,19 +1,8 @@
-# Verifier prompt templates for Stage 4 (verifier-cot) — round-based belief
-# tracking, see docs/verifier_score_belief_update.md.
+# Verifier prompt templates for Stage 4 (verifier-cot) — single-round
+# K-candidate + PPT-tournament verifier, see docs/stage4_verifier.md.
 #
-# - same_answer_prompt — used exclusively by --baseline belief, and only for
-#   the persistent-belief carry-forward decision (NOT for ranking the pool —
-#   that's still the PPT tournament). When a NEW candidate outranks the
-#   incumbent's own pool slot, this asks whether its extracted <answer> tag
-#   is the SAME underlying class/diagnosis as the incumbent's, allowing for
-#   wording/synonym/detail differences — a "same answer, reworded" verdict
-#   carries the persistent belief forward instead of resetting it. Text-only
-#   (just the two short extracted answers, no image, no full trajectory) —
-#   deliberately open-ended, no closed-set class vocabulary, since real-world
-#   answers aren't a fixed label set (docs/verifier_score_belief_update.md's
-#   class-identity note).
-# - pairwise_prompt — used by --baseline belief's PPT tournament duels
-#   (ranking the pool) AND by src/verifier_lmv.py's own PPT baseline — the
+# - pairwise_prompt — used by the single-round verifier's PPT tournament
+#   duels (ranking the pool) AND by src/verifier_lmv.py's own PPT baseline — the
 #   dual-trajectory scoring template (arXiv:2607.05391 Section 3.2:
 #   <score_A>/<score_B> tags, two-pass teacher-forced/prefill logprob
 #   extraction via src/common/ppt_scoring.py). Originally a fixed Python
@@ -137,29 +126,7 @@ task_type_to_rubric:
   weed_identification:     weed_identification
   quality_identification:  quality_identification
 
-# --baseline belief ONLY. Fired only when this round's tournament top-1 is a
-# NEW candidate, not the incumbent's own pool slot — decides whether the
-# persistent belief carries forward (same underlying answer, just
-# re-derived/reworded) or resets to a fresh prior (a genuine answer
-# change). Text-only, no image, no full trajectory — the tournament has
-# already judged trajectory quality; this only asks "same conclusion or
-# not." No closed-set constraint on either answer string.
-# Params: {question} {answer_a} {answer_b}
-same_answer_prompt: |
-  You are comparing two short answers given to the same agricultural
-  classification question, to decide whether they refer to the same
-  underlying class, diagnosis, or condition — allowing for different
-  wording, synonyms, added or removed detail, or scientific vs. common
-  names.
-
-  Question: "{question}"
-  Answer A: "{answer_a}"
-  Answer B: "{answer_b}"
-
-  Respond with JSON only:
-  {{ "same": true or false }}
-
-# --baseline belief's PPT tournament duels AND src/verifier_lmv.py's PPT
+# The single-round verifier's PPT tournament duels AND src/verifier_lmv.py's PPT
 # baseline. This is the free-generation (pass 1) prompt only — it
 # deliberately does NOT show the <score_A>/<score_B> tags (see the header
 # comment above for why); pass 2's forced continuation supplies them
@@ -172,7 +139,7 @@ same_answer_prompt: |
 # max_tokens) was tried and reverted — real-run comparison showed no
 # measurable improvement in final judged accuracy over this simpler
 # version, so it wasn't worth the extra generation time. See
-# docs/verifier_score_belief_update.md Section 13.1 for that experiment's
+# docs/legacy/verifier_score_belief_update.md Section 13.1 for that experiment's
 # numbers if revisiting this decision later.
 # Params: {rubric} {question} {trajectory_a} {trajectory_b}
 pairwise_prompt: |

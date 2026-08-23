@@ -1,5 +1,12 @@
 # Verifier Score: Belief Update via Bradley–Terry Comparisons
 
+> **Superseded (2026-08-23).** The repo now runs a single-round K-candidate
+> + PPT-tournament verifier — the multi-round belief/net-score tracking
+> described below was removed after real-run evidence showed it didn't
+> reliably improve on stopping after round 1. See
+> [`../stage4_verifier.md`](../stage4_verifier.md) for the current design.
+> This page is kept for historical/derivation reference only.
+
 *Design reference for the Stage 4 verifier work. Source for `verifier_score_belief_update.md.pdf`.*
 
 Scope note: this version deliberately leaves out the rephrasing step and the alignment-score

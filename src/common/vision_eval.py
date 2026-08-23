@@ -268,20 +268,13 @@ def archive_ckpt_if_rerun(
 
 def _judge_row_key(row: dict) -> tuple[str, str, str, str, str, str]:
     """(dataset, class, image[, step_idx, rotation, round]) — the last three
-    are "" for every CKPT_FIELDS row (one prediction per image). step_idx/
-    rotation are only meaningful for cot_yaml.py's STEP_CKPT_FIELDS rows
-    (multiple predictions per image, one per chain position/rotation);
-    round is only meaningful for verifier_cot.py's VERIFIER_STEP_FIELDS rows
-    (multiple predictions per image, one per round). Without `round` here,
-    every round of the same image shared one key, so merge_judged's
-    last-write-wins dict silently overwrote every earlier round's real
-    judged_correct with whichever round happened to be judged last for that
-    image — a real bug (each round WAS independently judged, correctly;
-    only the write-back collapsed them). Because verifier_cot.py writes rows
-    image-major/round-ascending, the round that "won" was always the
-    image's own final round, so any chart reading only is_final_round=1
-    rows was accidentally unaffected — but anything reading per-round
-    judged_correct (e.g. a belief-vs-round judged-accuracy plot) was not."""
+    are "" for every CKPT_FIELDS row (one prediction per image), including
+    verifier_cot.py/detection_verifier.py's own checkpoints (single-round
+    design, one row per image — no `round` column). step_idx/rotation are
+    only meaningful for cot_yaml.py's STEP_CKPT_FIELDS rows (multiple
+    predictions per image, one per chain position/rotation). `round` is
+    kept in the key tuple for any future STEP_CKPT_FIELDS-shaped schema
+    that reintroduces multiple predictions per image."""
     return (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""),
             row.get("round", ""),
             str(row.get("step_idx", "")), str(row.get("rotation", "")))

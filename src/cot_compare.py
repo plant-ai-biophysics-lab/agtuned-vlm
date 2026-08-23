@@ -126,22 +126,20 @@ _BOUND_LINE_COLOR = {"desc_aug": "#d62728", "baseline": "#1f77b4"}  # red = uppe
 _DELTA_CONDITION_COLORS = {"self_cot": "#FDD835", "cot_yaml": "#E06B00", "cot_yaml_feedback": "#8c564b"}
 _DELTA_FILL_ALPHA = 0.55
 
-# Stage 4 — round-based verifier belief tracking (src/verifier_cot.py) and
-# its two baselines: verifier_cot.py's own --baseline argmax ablation, and
-# the full PPT tournament from src/verifier_lmv.py (PPT-Direct-N10 — the
-# N=10 condition since that's the closest equal-budget comparison to
-# verifier_cot's typical total candidate count across a full 3-10 round
-# run). Per docs/verifier_score_belief_update.md Sec. 16. Same lower/
-# upper-bound reference-line convention as _DELTA_CONDITIONS above; plotted
-# via the same two functions, just with a 3-condition set instead of 2 —
-# see plot_gemma_cot_deltas/plot_gemma_cot_f1_by_task's
+# Stage 4 — single-round K-candidate + PPT-tournament verifier
+# (src/verifier_cot.py) and the full PPT tournament from
+# src/verifier_lmv.py (PPT-Direct-N10 — the N=10 condition since that's
+# the closest equal-budget comparison to verifier_cot's own K candidates
+# per pool). Per docs/stage4_verifier.md. Same lower/upper-bound
+# reference-line convention as _DELTA_CONDITIONS above; plotted via the
+# same two functions, just with a 2-condition set instead of 3 — see
+# plot_gemma_cot_deltas/plot_gemma_cot_f1_by_task's
 # `conditions`/`hatch_map`/`output_name` params.
 _VERIFIER_CONDITIONS = [
-    ("verifier_belief", "Verifier-Belief"),
-    ("verifier_argmax", "Verifier-Argmax"),
+    ("verifier",        "Verifier"),
     ("ppt_direct_n10",  "PPT-Direct-N10"),
 ]
-_VERIFIER_HATCH = {"verifier_belief": "\\\\", "verifier_argmax": "oo", "ppt_direct_n10": "**"}
+_VERIFIER_HATCH = {"verifier": "\\\\", "ppt_direct_n10": "**"}
 
 
 def _filter_rows_map(rows_map: dict[str, list[dict]], dataset_filter: set[str] | None) -> dict[str, list[dict]]:
@@ -268,24 +266,21 @@ def collate_gemma_cot_delta_distributions(
     return result
 
 
-def load_verifier_cot_rows(output_dir: Path, baseline: str) -> dict[str, list[dict]]:
-    """{model: [row, ...]} for src/verifier_cot.py's --baseline
-    {belief,argmax} output — flat <output_dir>/<model>/ckpt_<baseline>_
-    <model>.csv layout, filtered to is_final_round rows only (one row per
-    image, matching every other condition's shape here) since
-    verifier_cot.py's checkpoint has one row per (image, round). Needs
-    VERIFIER_STEP_FIELDS, not plain CKPT_FIELDS, to align columns
-    correctly — see verifier_cot.py's module docstring for the schema."""
-    from src.verifier_cot import VERIFIER_STEP_FIELDS
+def load_verifier_cot_rows(output_dir: Path) -> dict[str, list[dict]]:
+    """{model: [row, ...]} for src/verifier_cot.py's single-round output —
+    flat <output_dir>/<model>/ckpt_<model>.csv layout, one row per image
+    already (no round dimension to filter). Needs VERIFIER_CKPT_FIELDS,
+    not plain CKPT_FIELDS, to align columns correctly — see
+    verifier_cot.py's module docstring for the schema."""
+    from src.verifier_cot import VERIFIER_CKPT_FIELDS
     if not output_dir.exists():
         return {}
     result: dict[str, list[dict]] = {}
     for model_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
-        ckpt_path = model_dir / f"ckpt_{baseline}_{model_dir.name}.csv"
-        rows, _ = load_ckpt(ckpt_path, fields=VERIFIER_STEP_FIELDS)
-        final_rows = [r for r in rows if str(r.get("is_final_round")) == "1"]
-        if final_rows:
-            result[model_dir.name] = final_rows
+        ckpt_path = model_dir / f"ckpt_{model_dir.name}.csv"
+        rows, _ = load_ckpt(ckpt_path, fields=VERIFIER_CKPT_FIELDS)
+        if rows:
+            result[model_dir.name] = rows
     return result
 
 
@@ -313,17 +308,16 @@ def collate_verifier_conditions(
     dataset_filter: set[str] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """{model: {condition_key: {scope: stats}}} for the Stage 4 verifier
-    conditions (belief-tracking, its argmax ablation, and the full-PPT
-    baseline) — same compute_condition_stats machinery as
+    condition (single-round K-candidate + PPT tournament) and the
+    full-PPT baseline — same compute_condition_stats machinery as
     collate_all_conditions, feeding plot_gemma_cot_f1_by_task via
-    _VERIFIER_CONDITIONS/_VERIFIER_HATCH (docs/verifier_score_belief_update.md
-    Sec. 16). Also attaches "baseline"/"desc_aug" (lower/upper bound) for
-    every model that has verifier data — plot_gemma_cot_f1_by_task reads
-    those via by_cond.get("baseline"/"desc_aug", {}) to draw its reference
-    lines, and without them here those lines silently plot at 0 rather
-    than the real bound (a real bug this fixes — the verifier chart's
-    bound lines were meaningless before). PPT-Direct-N10 rows get attached
-    to every model verifier_cot's own data identifies (in practice just
+    _VERIFIER_CONDITIONS/_VERIFIER_HATCH (docs/stage4_verifier.md). Also
+    attaches "baseline"/"desc_aug" (lower/upper bound) for every model
+    that has verifier data — plot_gemma_cot_f1_by_task reads those via
+    by_cond.get("baseline"/"desc_aug", {}) to draw its reference lines,
+    and without them here those lines silently plot at 0 rather than the
+    real bound. PPT-Direct-N10 rows get attached to every model
+    verifier_cot's own data identifies (in practice just
     gemma-4-26B-A4B-it, per this project's established single-model
     scoping for this whole line of work) rather than auto-discovered,
     since verifier_lmv.py's flat output doesn't self-identify a model —
@@ -332,19 +326,16 @@ def collate_verifier_conditions(
     dataset_filter — see collate_all_conditions (also applied here, so a
     --subsample'd verifier run's own conditions stay scoped consistently
     with the rest of this file's --filter_datasets)."""
-    belief_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "belief"), dataset_filter)
-    argmax_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "argmax"), dataset_filter)
+    verifier_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir), dataset_filter)
     ppt_rows = _filter_rows(load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10), dataset_filter)
     baseline_rows_map = _filter_rows_map(load_all_rows(baseline_dir), dataset_filter)
     aug_rows_map = _filter_rows_map(load_all_rows(aug_dir), dataset_filter)
 
     result: dict[str, dict[str, dict]] = {}
-    for model in sorted(set(belief_rows) | set(argmax_rows)):
+    for model in sorted(verifier_rows):
         by_cond: dict[str, dict] = {}
-        if model in belief_rows:
-            by_cond["verifier_belief"] = compute_condition_stats(belief_rows[model], n_boot, seed)
-        if model in argmax_rows:
-            by_cond["verifier_argmax"] = compute_condition_stats(argmax_rows[model], n_boot, seed)
+        if model in verifier_rows:
+            by_cond["verifier"] = compute_condition_stats(verifier_rows[model], n_boot, seed)
         if ppt_rows:
             by_cond["ppt_direct_n10"] = compute_condition_stats(ppt_rows, n_boot, seed)
         if by_cond:  # only attach bound reference data once there's at least one REAL
@@ -364,7 +355,7 @@ def collate_verifier_deltas(
     dataset_filter: set[str] | None = None, model_substr: tuple[str, ...] | None = None,
 ) -> dict[str, dict[str, dict]]:
     """Gemma-4-26B-A4B-it only by default, (condition - baseline) judge-F1
-    delta for the Stage 4 verifier conditions — same paired-bootstrap
+    delta for the Stage 4 verifier condition — same paired-bootstrap
     machinery as collate_gemma_cot_deltas, feeding plot_gemma_cot_deltas
     via _VERIFIER_CONDITIONS/_VERIFIER_HATCH. Also attaches "desc_aug" (the
     delta ceiling plot_gemma_cot_deltas draws as its dotted reference
@@ -376,8 +367,7 @@ def collate_verifier_deltas(
     validated 26B-A4B-it line."""
     baseline_rows_map = _filter_rows_map(load_all_rows(baseline_dir), dataset_filter)
     aug_rows_map = _filter_rows_map(load_all_rows(aug_dir), dataset_filter)
-    belief_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "belief"), dataset_filter)
-    argmax_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir, "argmax"), dataset_filter)
+    verifier_rows = _filter_rows_map(load_verifier_cot_rows(verifier_dir), dataset_filter)
     ppt_rows = _filter_rows(load_verifier_lmv_rows(verifier_lmv_ckpt, "direct", 10), dataset_filter)
 
     substr = model_substr or ("26b", "gemma")
@@ -386,10 +376,8 @@ def collate_verifier_deltas(
     for model in models:
         base_rows = baseline_rows_map[model]
         by_cond: dict[str, dict] = {}
-        if model in belief_rows:
-            by_cond["verifier_belief"] = compute_delta_stats(base_rows, belief_rows[model], n_boot, seed)
-        if model in argmax_rows:
-            by_cond["verifier_argmax"] = compute_delta_stats(base_rows, argmax_rows[model], n_boot, seed)
+        if model in verifier_rows:
+            by_cond["verifier"] = compute_delta_stats(base_rows, verifier_rows[model], n_boot, seed)
         if ppt_rows:
             by_cond["ppt_direct_n10"] = compute_delta_stats(base_rows, ppt_rows, n_boot, seed)
         if by_cond:  # only attach the ceiling once there's a REAL verifier condition —
@@ -436,10 +424,10 @@ def plot_gemma_cot_deltas(
     the bars against. `conditions`/`hatch_map`/`output_name` let this same
     function drive a second chart for a different condition set (e.g. the
     Stage 4 verifier conditions, _VERIFIER_CONDITIONS/_VERIFIER_HATCH) —
-    see docs/verifier_score_belief_update.md Sec. 16. `condition_colors`
+    see docs/stage4_verifier.md. `condition_colors`
     (defaults to _DELTA_CONDITION_COLORS — yellow Self CoT / orange Manual
     CoT) colors each condition directly instead of shading by model; a
-    condition key missing from it (e.g. the 3-way verifier set, which has
+    condition key missing from it (e.g. the 2-way verifier set, which has
     no entry here) falls back to the model's own shaded color, unaffected.
     `model_substr` overrides the hardcoded "26b"+"gemma" model filter — see
     plot_gemma_cot_f1_by_task's docstring."""
@@ -1217,10 +1205,9 @@ def main(args: argparse.Namespace) -> None:
     if species_breakdown:
         plot_species_identification_breakdown(output_dir, species_breakdown)
 
-    # ── Stage 4 — verifier belief tracking + baselines (Sec. 16 of
-    #    docs/verifier_score_belief_update.md) — no-ops until either script
-    #    has actually been run, same pattern as the `if condition_stats:` /
-    #    `if gemma_deltas:` guards above.
+    # ── Stage 4 — single-round verifier + baselines (docs/stage4_verifier.md)
+    #    — no-ops until either script has actually been run, same pattern as
+    #    the `if condition_stats:` / `if gemma_deltas:` guards above.
     verifier_model_substr = tuple(args.verifier_model_substr) if args.verifier_model_substr else None
     verifier_condition_stats = collate_verifier_conditions(
         Path(args.baseline_dir), Path(args.aug_dir), Path(args.verifier_dir), Path(args.verifier_lmv_ckpt),
@@ -1258,7 +1245,7 @@ if __name__ == "__main__":
                          help="cot_yaml.py --feedback_predictions run's --output_dir (a separate "
                               "top-level dir from --cot_yaml_dir — see that flag's help text).")
     parser.add_argument("--verifier_dir", default="outputs_final/verifier_cot/",
-                         help="src/verifier_cot.py's --output_dir (both --baseline belief/argmax).")
+                         help="src/verifier_cot.py's --output_dir.")
     parser.add_argument("--verifier_lmv_ckpt", default="outputs_final/verifier_lmv/ckpt_judged.csv",
                          help="src/verifier_lmv.py's ckpt_judged.csv (its --output_dir is flat, one "
                               "model's worth of output per run — point this at whichever model's "

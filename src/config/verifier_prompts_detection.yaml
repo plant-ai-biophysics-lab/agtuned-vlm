@@ -24,10 +24,6 @@
 #   file's own header comment for why it needs no changes: it scores TEXT
 #   trajectories against a rubric, and a detection trajectory (criteria
 #   answers + box list) is still just text.
-# - same_answer_prompt has NO detection analog — cluster/candidate identity
-#   is resolved geometrically (IoU overlap via src/common/bbox_metrics.py),
-#   not via an LLM textual-synonymy call. See detection_verifier.py's
-#   _boxes_match().
 
 rubric: |
   1. Does it correctly identify what class/object type is being localized?
