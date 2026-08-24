@@ -51,6 +51,45 @@ def extract_boxes(text: str) -> list[dict]:
     return boxes
 
 
+def denormalize_box_1000(bbox: list[float], img_w: int, img_h: int) -> list[float]:
+    """Convert a box reported on Gemma's native 0-1000 normalized grounding
+    scale (confirmed via Google's own PaliGemma/Gemma vision demo code —
+    ai.google.dev/gemma/docs/capabilities/vision/image) into real pixel
+    coordinates for `img_w` x `img_h`. This is NOT a Qwen convention —
+    Qwen2-VL-family models report boxes in real image pixels natively, so
+    this must only be applied for the model families confirmed to need it
+    (see needs_1000_scale_boxes() below), never applied unconditionally.
+
+    Root-cause note (2026-08-24): every prompt in this repo asks the model
+    for boxes as literal pixel coordinates ("Coordinates are pixel
+    positions in the image as shown"), but a full 1,844-image
+    detection_baseline run showed 100% of Gemma's predicted box
+    coordinates <= 1000 regardless of each image's actual (often much
+    larger) resolution — the unmistakable signature of the model ignoring
+    that instruction and falling back to its own trained 0-1000 scale
+    instead. clamp_box() alone cannot fix this: it only clips
+    out-of-range values into an image's bounds, it never rescales, so any
+    image larger than ~1000px on a side was scored against the wrong
+    coordinate frame regardless of how accurate the model's own internal
+    localization actually was."""
+    x1, y1, x2, y2 = bbox
+    return [x1 / 1000.0 * img_w, y1 / 1000.0 * img_h, x2 / 1000.0 * img_w, y2 / 1000.0 * img_h]
+
+
+def needs_1000_scale_boxes(model_id: str) -> bool:
+    """True for model families empirically confirmed to report boxes on
+    Gemma's native 0-1000 normalized scale rather than real pixels,
+    regardless of what the prompt asks for — see denormalize_box_1000's
+    docstring. Only "gemma" is confirmed as of this writing (measured
+    directly against real detection_baseline.py output); Qwen2-VL-family
+    models are NOT included here since they report real pixel coordinates
+    natively. If a new model family is added to this repo's detection
+    stage, verify its own box-coordinate convention the same way (compare
+    each row's max predicted coordinate against that image's actual
+    width/height across a real run) before assuming either behavior."""
+    return "gemma" in model_id.lower()
+
+
 def found_none_tag(text: str) -> bool:
     """True if the text explicitly used <box>none</box> — distinguishes
     "model correctly said nothing is here" from "model's output didn't

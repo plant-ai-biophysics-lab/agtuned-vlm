@@ -33,7 +33,7 @@ import time
 from PIL import Image as PILImage
 
 from src.common.bbox_metrics import match_boxes, precision_recall_f1
-from src.common.bbox_parse import clamp_box, extract_boxes
+from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, needs_1000_scale_boxes
 from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import active_datasets, load_hf_detection_samples, load_manifest
 from src.common.io import load_prompts
@@ -86,6 +86,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
     manifest = load_manifest(Path(args.manifest))
+    rescale_1000 = needs_1000_scale_boxes(model_id)
+    if rescale_1000:
+        print(f"  [bbox] {model_id}: rescaling predicted boxes from Gemma's native 0-1000 "
+              f"normalized scale to real pixel coordinates (see bbox_parse.needs_1000_scale_boxes)")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
@@ -149,9 +153,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             for s, img, pred in zip(samples, images, preds):
                 gt_boxes = s["boxes"]
                 pred_boxes_raw = extract_boxes(pred)
-                pred_boxes = [
-                    {**b, "bbox": clamp_box(b["bbox"], img.width, img.height)} for b in pred_boxes_raw
-                ]
+                pred_boxes = []
+                for b in pred_boxes_raw:
+                    bbox = denormalize_box_1000(b["bbox"], img.width, img.height) if rescale_1000 else b["bbox"]
+                    pred_boxes.append({**b, "bbox": clamp_box(bbox, img.width, img.height)})
                 metrics = score_row(pred_boxes, gt_boxes, iou_threshold=args.iou_threshold)
                 primary_label = gt_boxes[0]["category_name"] if gt_boxes else ""
                 row = {

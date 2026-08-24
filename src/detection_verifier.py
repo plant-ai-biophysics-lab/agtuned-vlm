@@ -44,7 +44,7 @@ import time
 from PIL import Image as PILImage
 
 from src.common.bbox_metrics import match_boxes, precision_recall_f1
-from src.common.bbox_parse import clamp_box, extract_boxes
+from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, needs_1000_scale_boxes
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import active_datasets, load_hf_detection_samples, load_manifest
 from src.common.io import append_jsonl, load_prompts
@@ -209,12 +209,17 @@ def run_group(
     gt_boxes_list: list[list[dict]], k_candidates: int, k_pivots: int, gen_temperature: float,
     rng: random.Random, agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None, seed: int | None = None,
-    gen_max_tokens: int = 220, iou_threshold: float = 0.5,
+    gen_max_tokens: int = 220, iou_threshold: float = 0.5, rescale_1000: bool = False,
 ) -> list[dict]:
     """Detection analog of verifier_cot.py's run_group — generate K
     candidates, run the existing, unmodified PPT tournament exactly once
     over that pool, report argmax(win_rate)'s boxes, and score them
-    against ground truth via IoU. Returns one result dict per image."""
+    against ground truth via IoU. Returns one result dict per image.
+
+    rescale_1000: True for model families confirmed to report boxes on
+    Gemma's native 0-1000 normalized scale rather than real pixels (see
+    bbox_parse.needs_1000_scale_boxes) — applied to every candidate's
+    boxes before clamping, same fix as detection_baseline.py."""
     t_start = time.perf_counter()
     n = len(images)
     active = list(range(n))
@@ -232,10 +237,14 @@ def run_group(
     pool_boxes: dict[int, list[list[dict]]] = {}
     for i in active:
         img = images[i]
-        pool_boxes[i] = [
-            [{**b, "bbox": clamp_box(b["bbox"], img.width, img.height)} for b in extract_boxes(c["text"])]
-            for c in gen_out[i]
-        ]
+        cand_lists = []
+        for c in gen_out[i]:
+            cand_boxes = []
+            for b in extract_boxes(c["text"]):
+                bbox = denormalize_box_1000(b["bbox"], img.width, img.height) if rescale_1000 else b["bbox"]
+                cand_boxes.append({**b, "bbox": clamp_box(bbox, img.width, img.height)})
+            cand_lists.append(cand_boxes)
+        pool_boxes[i] = cand_lists
 
     prompt_tokens = {i: gen_out[i][0]["prompt_tokens"] for i in active}
     completion_tokens = {i: sum(c["completion_tokens"] for c in gen_out[i]) for i in active}
@@ -327,6 +336,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     vprompts = _load_yaml(_VERIFIER_PROMPTS_DETECTION_PATH)
     vprompts["pairwise_prompt"] = _load_yaml(_VERIFIER_PROMPTS_PATH)["pairwise_prompt"]  # reused verbatim
     manifest = load_manifest(Path(args.manifest))
+    rescale_1000 = needs_1000_scale_boxes(model_id)
+    if rescale_1000:
+        print(f"  [bbox] {model_id}: rescaling predicted boxes from Gemma's native 0-1000 "
+              f"normalized scale to real pixel coordinates (see bbox_parse.needs_1000_scale_boxes)")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
@@ -389,6 +402,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 agml_dataset=ds.agml_name, class_label="", image_names=names,
                 log_path=log_path, call_stats=call_stats, seed=args.seed,
                 gen_max_tokens=args.gen_max_tokens, iou_threshold=args.iou_threshold,
+                rescale_1000=rescale_1000,
             )
 
             for name, label, entry in zip(names, primary_labels, results):

@@ -14,6 +14,7 @@ STAGES = {
     "detection-baseline":          "src.detection_baseline",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
+    "detection-summary":           "src.detection_summary",
     "build-reference-db": "src.data_generation.build_reference_db",
     "data-gen":           "src.data_generation.generate",
     "check-vision-towers": "src.linear_probe.check_vision_towers",
