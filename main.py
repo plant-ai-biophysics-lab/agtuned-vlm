@@ -39,6 +39,7 @@ STAGES = {
     "cot-compare":   "src.cot_compare",
     "verifier-cot":  "src.verifier_cot",
     "verifier-summary": "src.verifier_summary",
+    "verifier-scaling-summary": "src.verifier_scaling_summary",
     "filter-checkpoints": "src.filter_checkpoints",
     "collate":       "src.collate_results",
 }
