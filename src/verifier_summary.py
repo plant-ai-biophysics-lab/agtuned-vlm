@@ -74,6 +74,113 @@ def verifier_image_keys(verifier_dir: Path, model_safe: str) -> set[tuple[str, s
     return keys
 
 
+def _infer_k_candidates(verifier_dir: Path, model_safe: str) -> int | None:
+    """K (tournament pool size) isn't a CLI-known constant here — read it
+    straight off the checkpoint's own `pool_size` column instead of trusting
+    a --k_candidates flag that might not match what actually ran. Every row
+    of a single-round run shares one pool_size (no incumbent-inflated
+    round-2+ pools like the old multi-round design had), so the first
+    non-empty value is authoritative; None if the checkpoint is missing/
+    empty."""
+    ckpt = verifier_dir / model_safe / f"ckpt_{model_safe}.csv"
+    if not ckpt.exists():
+        return None
+    with open(ckpt, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            v = r.get("pool_size", "")
+            if v:
+                return int(v)
+    return None
+
+
+_K_SWEEP_DIR = Path("outputs_final/verifier_k_sweep")
+
+
+def record_k_sweep_point(
+    model_safe: str, k_candidates: int, k_pivots: int,
+    judge_f1_macro: float | None, judge_ci_low: float | None, judge_ci_high: float | None,
+    n: int, verifier_dir: Path,
+) -> Path:
+    """Upsert one (k_candidates, k_pivots) -> judge_f1_macro point into a
+    persistent CSV that survives across separate verifier-summary
+    invocations for different --verifier_dir/--k_pivots sweep runs (e.g.
+    K=4/pivots=2, then later K=8/pivots=4, K=16/pivots=6, K=24/pivots=8) —
+    each `verifier-summary` call appends/updates its own point rather than
+    requiring a separate sweep-plotting pass. Keyed on (k_candidates,
+    k_pivots) so re-running the same pair (e.g. after --rerun) overwrites
+    its old point instead of duplicating a row."""
+    _K_SWEEP_DIR.mkdir(parents=True, exist_ok=True)
+    path = _K_SWEEP_DIR / f"{model_safe}.csv"
+    fields = ["k_candidates", "k_pivots", "judge_f1_macro", "judge_ci_low", "judge_ci_high", "n", "verifier_dir"]
+
+    rows: dict[tuple[int, int], dict] = {}
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                key = (int(r["k_candidates"]), int(r["k_pivots"]))
+                rows[key] = r
+    rows[(k_candidates, k_pivots)] = {
+        "k_candidates": k_candidates, "k_pivots": k_pivots,
+        "judge_f1_macro": judge_f1_macro, "judge_ci_low": judge_ci_low, "judge_ci_high": judge_ci_high,
+        "n": n, "verifier_dir": str(verifier_dir),
+    }
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for key in sorted(rows):
+            w.writerow(rows[key])
+    print(f"  [k-sweep] recorded K={k_candidates}, pivots={k_pivots}: "
+          f"judge_f1_macro={judge_f1_macro} -> {path}")
+    return path
+
+
+def plot_k_sweep(model_safe: str) -> None:
+    """Line chart of judge_f1_macro (95% CI) vs. every (k_candidates,
+    k_pivots) point recorded so far for this model — x-axis sorted by
+    k_candidates ascending, one tick per swept configuration. Regenerated
+    from the full accumulated CSV every call, so it always reflects every
+    sweep point recorded up to now, not just the point this invocation
+    just added."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    path = _K_SWEEP_DIR / f"{model_safe}.csv"
+    if not path.exists():
+        return
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    rows = [r for r in rows if r.get("judge_f1_macro")]
+    if not rows:
+        print("  [k-sweep] no judged points yet — skipping plot")
+        return
+    rows.sort(key=lambda r: int(r["k_candidates"]))
+
+    labels = [f"K={r['k_candidates']}\npivots={r['k_pivots']}" for r in rows]
+    vals = [float(r["judge_f1_macro"]) for r in rows]
+    lo = [max(0.0, float(r["judge_f1_macro"]) - float(r["judge_ci_low"])) for r in rows]
+    hi = [max(0.0, float(r["judge_ci_high"]) - float(r["judge_f1_macro"])) for r in rows]
+    x = list(range(len(rows)))
+
+    fig, ax = plt.subplots(figsize=(max(6, len(rows) * 1.8), 5))
+    ax.errorbar(x, vals, yerr=[lo, hi], marker="o", markersize=7, linewidth=1.8,
+                color="#e06b00", ecolor="#e06b00", elinewidth=1.0, capsize=4)
+    for xi, v in zip(x, vals):
+        ax.annotate(f"{v:.3f}", (xi, v), ha="center", va="bottom", fontsize=9, fontweight="bold",
+                    xytext=(0, 8), textcoords="offset points")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("Judged F1 Macro", fontsize=11)
+    ax.set_xlabel("Candidate pool size (K) / pivot-set size", fontsize=11)
+    ax.set_title(f"Verifier scaling — {model_safe}", fontsize=12)
+    ax.grid(True, axis="y", alpha=0.25)
+    plt.tight_layout()
+    out_path = _K_SWEEP_DIR / f"{model_safe}_k_sweep.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
 def reference_image_keys(reference_ckpt: Path, n_samples: int) -> set[tuple[str, str, str]]:
     """The SAME deterministic 'first n_samples image_names per (dataset,
     class), in that checkpoint's own row order' selection verifier_cot.py's
@@ -294,6 +401,21 @@ def main(args: argparse.Namespace) -> None:
         plot(results, n_images, model_safe, out_dir / "verifier_summary.png")
         plot_by_task(results, n_images, model_safe, out_dir / "verifier_summary_by_task.png")
         csv_path = out_dir / "verifier_summary.csv"
+
+        if args.k_pivots is not None:
+            verifier_stats = next((st for lbl, _c, st, _n in results if lbl == "Verifier"), None)
+            k_candidates = _infer_k_candidates(verifier_dir, model_safe)
+            if verifier_stats is None or k_candidates is None:
+                print("  [k-sweep] skipped — no judged Verifier rows or no pool_size found in checkpoint")
+            else:
+                o = verifier_stats.get("overall", {})
+                record_k_sweep_point(
+                    model_safe, k_candidates, args.k_pivots,
+                    o.get("judge_f1_macro"), o.get("judge_ci_low"), o.get("judge_ci_high"),
+                    n=next(n for lbl, _c, _st, n in results if lbl == "Verifier"),
+                    verifier_dir=verifier_dir,
+                )
+                plot_k_sweep(model_safe)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["condition", "judge_f1_macro", "judge_ci_low", "judge_ci_high",
@@ -317,6 +439,13 @@ if __name__ == "__main__":
                    help="verifier_cot.py's --output_dir for the run being summarized. Ignored if "
                         "--match_images_from is given (baseline-only mode, no verifier run needed).")
     p.add_argument("--model", default="google/gemma-4-E4B-it")
+    p.add_argument("--k_pivots", type=int, default=None,
+                   help="The --k_pivots this verifier-cot run actually used (not recoverable from "
+                        "the checkpoint, which only records pool_size/K) — when given, this run's "
+                        "(K, k_pivots) -> judge_f1_macro point is appended to a persistent scaling-"
+                        "sweep chart at outputs_final/verifier_k_sweep/<model>_k_sweep.png, alongside "
+                        "every other point recorded so far for this model. Omit to skip sweep "
+                        "recording entirely (unaffected either way — this only adds an extra output).")
     p.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CIs.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--match_images_from", default=None,
