@@ -114,13 +114,69 @@ def _sys_msg(prompts: dict) -> list[dict]:
     return [{"role": "system", "content": s}] if s else []
 
 
+def _format_det_question(names: list[str], crop: str) -> str:
+    names_str = ", ".join(names) if names else "object"
+    return f"Identify and localize every {names_str} visible in this image of {crop}."
+
+
 def det_question(ds) -> str:
     """`ds` is the dataset's DatasetConfig — needs both its class list (with
     any configured aliases folded in, see classes_with_aliases_display) and
     its crop, same convention as detection_baseline.py's det_question."""
-    names_list = ds.classes_with_aliases_display()
-    names = ", ".join(names_list) if names_list else "object"
-    return f"Identify and localize every {names} visible in this image of {crop_display(ds.crop)}."
+    return _format_det_question(ds.classes_with_aliases_display(), crop_display(ds.crop))
+
+
+def generate_class_name_variants(
+    llm, tokenizer, class_names: list[str], n_variants: int, call_stats: dict | None = None,
+) -> list[list[str]]:
+    """One batched, text-only, no-image call asking for n_variants alternate
+    name-sets for class_names — e.g. common names, synonyms, or plainer
+    phrasings of a cryptic/coded dataset label (confirmed on real data this
+    session: labels like "b_fully_ripened", "l_green" are dataset-internal
+    codes, not always names the model's own vocabulary readily recognizes).
+    Returns a list of n_variants lists, each the same length as
+    class_names, so candidate k's own generation prompt can search using
+    variant k's names instead of every candidate sharing one static name
+    list — this DIVERSIFIES what each candidate searches for (more real
+    instances found across the pooled top_k, see run_group's docstring),
+    unlike classes_with_aliases_display's static "show every known alias to
+    every candidate" approach, which doesn't vary anything across K.
+
+    Falls back to n_variants copies of the original class_names on any
+    parse failure — never blocks generation just because this optional
+    step didn't parse."""
+    names_str = ", ".join(class_names)
+    prompt_text = (
+        f"For each of these object/class names: {names_str}\n"
+        f"Provide {n_variants} alternate ways to refer to each one — common names, "
+        f"synonyms, or a plainer description if the name looks like a coded or "
+        f"abbreviated dataset label rather than a name in common use.\n"
+        f"Respond with JSON only: a list of exactly {n_variants} lists, each containing "
+        f"one alternate name per class, in the same order as given. Example for 2 "
+        f'classes and 3 variants: [["name1a","name2a"],["name1b","name2b"],'
+        f'["name1c","name2c"]]'
+    )
+    prompt = {"prompt": render_chat_template(tokenizer, [{"role": "user", "content": prompt_text}])}
+    params = SamplingParams(temperature=0.7, max_tokens=300)
+    outputs = llm.generate([prompt], sampling_params=params)
+    if call_stats is not None:
+        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
+        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + 1
+
+    fallback = [list(class_names) for _ in range(n_variants)]
+    text = outputs[0].outputs[0].text
+    try:
+        start, end = text.find("["), text.rfind("]")
+        parsed = json.loads(text[start:end + 1])
+        variants = [
+            [str(x) for x in v] for v in parsed
+            if isinstance(v, list) and len(v) == len(class_names)
+        ]
+    except (ValueError, TypeError, json.JSONDecodeError):
+        variants = []
+    while len(variants) < n_variants:
+        variants.append(fallback[len(variants)])
+    return variants[:n_variants]
 
 
 # ── Generation (K candidates) ────────────────────────────────────────────────
@@ -228,6 +284,7 @@ def run_group(
     log_path: Path | None = None, call_stats: dict | None = None, seed: int | None = None,
     gen_max_tokens: int = 220, iou_threshold: float = 0.5, rescale_1000: bool = False,
     top_k: int = 1, nms_iou_threshold: float = 0.5,
+    dynamic_synonyms: bool = False, class_names: list[str] | None = None, crop: str | None = None,
 ) -> list[dict]:
     """Detection analog of verifier_cot.py's run_group — generate K
     candidates, run the existing, unmodified PPT tournament exactly once
@@ -252,20 +309,52 @@ def run_group(
     nms_iou_threshold: overlap threshold NMS uses to collapse duplicate
     boxes from the pooled top_k candidates — a SEPARATE knob from
     iou_threshold (which only scores the final result against ground
-    truth), since there's no reason the two need to match."""
+    truth), since there's no reason the two need to match.
+
+    dynamic_synonyms: when True (needs class_names/crop given), one extra
+    text-only call (generate_class_name_variants) produces k_candidates
+    alternate name-sets for class_names, and each candidate's OWN
+    generation prompt searches using a different variant instead of every
+    candidate sharing one static class-name list — diversifies what each
+    candidate looks for (a cryptic dataset label like "b_fully_ripened"
+    might only be recognized under one of its plainer phrasings), which
+    the existing top_k pooling + NMS step can then combine. Because each
+    candidate now has its own distinct prompt rather than one prompt
+    sampled k_candidates times, generation runs as k_candidates separate
+    n=1 calls (batched together in one llm.generate) instead of a single
+    n=k_candidates call."""
     t_start = time.perf_counter()
     n = len(images)
     active = list(range(n))
-    gen_q = gen_template.format(question=cls_q)
-    hist = [_sys_msg(prompts) + [{"role": "user", "content": [
-        {"type": "image"}, {"type": "text", "text": gen_q},
-    ]}] for _ in range(n)]
 
-    gen_params = SamplingParams(
-        temperature=gen_temperature, max_tokens=gen_max_tokens,
-        repetition_penalty=1.1, n=k_candidates, seed=seed,
-    )
-    gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats)
+    if dynamic_synonyms:
+        variants = generate_class_name_variants(llm, tokenizer, class_names or [], k_candidates, call_stats)
+        gen_qs = [gen_template.format(question=_format_det_question(v, crop or "plant")) for v in variants]
+
+        flat_images, flat_hist = [], []
+        for i in range(n):
+            for k in range(k_candidates):
+                flat_images.append(images[i])
+                flat_hist.append(_sys_msg(prompts) + [{"role": "user", "content": [
+                    {"type": "image"}, {"type": "text", "text": gen_qs[k]},
+                ]}])
+        gen_params = SamplingParams(
+            temperature=gen_temperature, max_tokens=gen_max_tokens,
+            repetition_penalty=1.1, n=1, seed=seed,
+        )
+        flat_out = run_batch_n(llm, tokenizer, flat_images, flat_hist, gen_params, call_stats)
+        gen_out = {i: [flat_out[i * k_candidates + k][0] for k in range(k_candidates)] for i in active}
+    else:
+        gen_q = gen_template.format(question=cls_q)
+        hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": gen_q},
+        ]}] for _ in range(n)]
+        gen_params = SamplingParams(
+            temperature=gen_temperature, max_tokens=gen_max_tokens,
+            repetition_penalty=1.1, n=k_candidates, seed=seed,
+        )
+        gen_out = {i: c for i, c in enumerate(run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats))}
+
     pools: dict[int, list[str]] = {i: [c["text"] for c in gen_out[i]] for i in active}
     pool_boxes: dict[int, list[list[dict]]] = {}
     for i in active:
@@ -279,7 +368,12 @@ def run_group(
             cand_lists.append(cand_boxes)
         pool_boxes[i] = cand_lists
 
-    prompt_tokens = {i: gen_out[i][0]["prompt_tokens"] for i in active}
+    # Each candidate has its own prompt_tokens in dynamic_synonyms mode
+    # (different name variants = different prompt lengths), so the total
+    # per image is a genuine sum across candidates rather than one shared
+    # prompt's token count reused k_candidates times.
+    prompt_tokens = {i: sum(c["prompt_tokens"] for c in gen_out[i]) if dynamic_synonyms
+                      else gen_out[i][0]["prompt_tokens"] for i in active}
     completion_tokens = {i: sum(c["completion_tokens"] for c in gen_out[i]) for i in active}
 
     for i in active:
@@ -447,6 +541,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 log_path=log_path, call_stats=call_stats, seed=args.seed,
                 gen_max_tokens=args.gen_max_tokens, iou_threshold=args.iou_threshold,
                 rescale_1000=rescale_1000, top_k=args.top_k, nms_iou_threshold=args.nms_iou_threshold,
+                dynamic_synonyms=args.dynamic_synonyms, class_names=ds.clean_classes, crop=crop_display(ds.crop),
             )
 
             for name, label, entry in zip(names, primary_labels, results):
@@ -519,6 +614,15 @@ if __name__ == "__main__":
                               "top_k candidates (src/common/bbox_metrics.nms) — separate from "
                               "--iou_threshold, which only scores the final deduplicated result against "
                               "ground truth.")
+    parser.add_argument("--dynamic_synonyms", action="store_true",
+                         help="One extra text-only call per (dataset, class) group generates "
+                              "--k_candidates alternate name-sets for the target classes (common names, "
+                              "synonyms, or plainer phrasings of a cryptic/coded dataset label), and each "
+                              "candidate's own generation prompt searches using a different variant "
+                              "instead of every candidate sharing one static class-name list. Diversifies "
+                              "what each candidate looks for, meant to be combined with --top_k > 1 so "
+                              "the pooled+NMS step can recover instances only found under one name "
+                              "variant. Off by default (every candidate uses the same class name list).")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--gen_max_tokens", type=int, default=220,
                          help="Larger than classification's 180 — detection trajectories carry a box "
