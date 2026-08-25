@@ -35,7 +35,7 @@ from PIL import Image as PILImage
 from src.common.bbox_metrics import match_boxes, precision_recall_f1
 from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, needs_1000_scale_boxes
 from src.common.chat_prompt import build_multimodal_prompt
-from src.common.dataset_config import active_datasets, load_hf_detection_samples, load_manifest
+from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import load_prompts
 from src.common.progress import ProgressBar
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
@@ -72,9 +72,13 @@ def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = 
     return [_clean(o.outputs[0].text) for o in outputs]
 
 
-def det_question(class_names: list[str], prompts: dict) -> str:
-    names = ", ".join(class_names) if class_names else "object"
-    return prompts["detection_baseline"].format(class_names=names)
+def det_question(ds, prompts: dict) -> str:
+    """`ds` is the dataset's DatasetConfig — needs both its class list (with
+    any configured aliases folded in, see classes_with_aliases_display) and
+    its crop for the question's {class_names}/{crop} slots."""
+    names_list = ds.classes_with_aliases_display()
+    names = ", ".join(names_list) if names_list else "object"
+    return prompts["detection_baseline"].format(class_names=names, crop=crop_display(ds.crop))
 
 
 def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float = 0.5) -> dict:
@@ -146,7 +150,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         for ds, samples in groups:
             pbar.desc = f"Datasets ({ds.agml_name})"
             images = [PILImage.open(s["path"]).convert("RGB") for s in samples]
-            question = det_question(ds.clean_classes, prompts)
+            question = det_question(ds, prompts)
 
             preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
 

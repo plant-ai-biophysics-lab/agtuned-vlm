@@ -64,6 +64,26 @@ class DatasetConfig:
                 return self.class_overrides[class_label]
         return self.task_type
 
+    def classes_with_aliases_display(self) -> list[str]:
+        """clean_classes, each optionally annotated with its class_aliases
+        (if configured) — the detection analog of effective_search_terms,
+        which resolves aliases for ONE class_label at a time (classification
+        asks about a single class per image); detection's det_question
+        lists every class the image might contain in a single combined
+        question instead, so aliases need to be folded inline per class
+        rather than returned as a separate priority-ordered list. A class
+        with no configured aliases renders unchanged."""
+        out = []
+        for c in self.clean_classes:
+            aliases = self.class_aliases.get(c) if self.class_aliases else None
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            if aliases:
+                out.append(f"{c} (also known as: {', '.join(aliases)})")
+            else:
+                out.append(c)
+        return out
+
     def effective_search_terms(self, class_label: str) -> list[str]:
         """class_label plus any curated alternate names for it, in priority
         order (class_label first, then aliases as configured). Aliases are

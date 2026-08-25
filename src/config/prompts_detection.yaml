@@ -16,9 +16,9 @@ assessment_system: "You are an expert agricultural computer vision assistant, sk
 # THIS prompt asks the model for xyxy directly since that's what
 # bbox_parse.py/bbox_metrics.py use throughout Stage 5 — ground-truth boxes
 # get converted xywh->xyxy at load time, not the model).
-# Params: {class_names}
+# Params: {class_names} {crop}
 detection_baseline: |
-  Identify and localize every {class_names} visible in this image. For each
+  Identify and localize every {class_names} visible in this image of {crop}. For each
   one you find, report its bounding box on its own line, using this exact
   format:
   <box>x1,y1,x2,y2</box>

@@ -27,11 +27,10 @@
 
 rubric: |
   1. Does it correctly identify what class/object type is being localized?
-  2. Does it account for the correct number of distinct instances visible?
-  3. Does each box tightly bound its instance without excess background or cut-off parts?
-  4. Does it correctly separate overlapping/occluded instances rather than merging them?
-  5. Are boxes placed at locations consistent with where the object actually appears (not hallucinated)?
-  6. Is the overall box count and placement consistent with the visual evidence?
+  2. Does each box tightly bound its instance without excess background or cut-off parts?
+  3. Does it correctly separate overlapping/occluded instances rather than merging them?
+  4. Are boxes placed at locations consistent with where the object actually appears (not hallucinated)?
+  5. Is the overall box count and placement consistent with the visual evidence?
 
 # Params: {question}
 structured_templates:
@@ -40,8 +39,7 @@ structured_templates:
 
     Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
 
-    Object/class being localized:
-    Number of distinct instances visible:
+    Object/class being localized (and any other names it is commonly referred to as):
     General location(s) in the image (e.g. upper-left, center, scattered):
     Overlapping or occluded instances, if any (or "none"):
     Approximate size of each instance relative to the image:

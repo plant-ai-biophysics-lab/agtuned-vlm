@@ -15,16 +15,29 @@ ranked exactly once by the FULL, unmodified Probabilistic Pivot Tournament
 (llm_verifier.pivot_tournament, same library verifier_cot.py/verifier_lmv.py
 use) via src/common/ppt_scoring.py's two-pass prefill scoring over full
 TEXT trajectories against a rubric — this needs NO changes for detection,
-since a trajectory (criteria answers + box list) is still just text. The
-reported prediction is argmax(win_rate) over that one tournament pass — no
+since a trajectory (criteria answers + box list) is still just text. No
 incumbent, no persistent clusters, no stopping rule; there is only one
 round (2026-08-23 simplification, mirroring verifier_cot.py's own — see
 that module's docstring for the evidence behind dropping the multi-round
 machinery).
 
+Unlike classification (a single scalar label — argmax over the winner is
+the whole answer), a spatial prediction benefits from POOLING evidence:
+different candidates often localize different real instances the others
+missed entirely, not just disagree about the SAME instance's box. So
+instead of reporting only the single top-ranked candidate's own box list,
+the top --top_k candidates by tournament win-rate (default 1, i.e. the
+original single-winner behavior) have their boxes pooled together and
+deduplicated via class-agnostic NMS (src/common/bbox_metrics.nms) before
+scoring — see run_group's docstring. Since these box outputs have no
+per-box confidence score (see detection_baseline.py's docstring), NMS
+priority is each box's SOURCE CANDIDATE's own tournament win-rate reused
+as a per-box proxy, not a genuine confidence value.
+
 Ground-truth IoU/precision/recall (src/common/bbox_metrics.py) is computed
-and logged for the single reported prediction — the metric that answers
-the research question, analogous to judge_f1_macro for classification.
+and logged for the final pooled+deduplicated prediction — the metric that
+answers the research question, analogous to judge_f1_macro for
+classification.
 
 Usage:
     uv run python main.py detection-verifier --model google/gemma-4-E4B-it
@@ -43,10 +56,10 @@ import time
 
 from PIL import Image as PILImage
 
-from src.common.bbox_metrics import match_boxes, precision_recall_f1
+from src.common.bbox_metrics import match_boxes, nms, precision_recall_f1
 from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, needs_1000_scale_boxes
 from src.common.chat_prompt import render_chat_template
-from src.common.dataset_config import active_datasets, load_hf_detection_samples, load_manifest
+from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import append_jsonl, load_prompts
 from src.common.ppt_scoring import (
     analysis_before_tags, build_score_prompt, extract_tag_score,
@@ -76,7 +89,7 @@ _VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.ya
 
 DET_VERIFIER_CKPT_FIELDS = [
     "agml_dataset", "class_label", "image_name",
-    "pool_size", "n_comparisons", "top1_win_rate", "verifier_feedback",
+    "pool_size", "top_k", "n_comparisons", "top1_win_rate", "verifier_feedback",
     "pred_boxes_json", "gt_boxes_json",
     "n_pred", "n_gt", "n_matched", "precision_at_iou50", "recall_at_iou50",
     "f1_at_iou50", "mean_iou_matched",
@@ -101,9 +114,13 @@ def _sys_msg(prompts: dict) -> list[dict]:
     return [{"role": "system", "content": s}] if s else []
 
 
-def det_question(class_names: list[str]) -> str:
-    names = ", ".join(class_names) if class_names else "object"
-    return f"Identify and localize every {names} visible in this image."
+def det_question(ds) -> str:
+    """`ds` is the dataset's DatasetConfig — needs both its class list (with
+    any configured aliases folded in, see classes_with_aliases_display) and
+    its crop, same convention as detection_baseline.py's det_question."""
+    names_list = ds.classes_with_aliases_display()
+    names = ", ".join(names_list) if names_list else "object"
+    return f"Identify and localize every {names} visible in this image of {crop_display(ds.crop)}."
 
 
 # ── Generation (K candidates) ────────────────────────────────────────────────
@@ -210,16 +227,32 @@ def run_group(
     rng: random.Random, agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None, seed: int | None = None,
     gen_max_tokens: int = 220, iou_threshold: float = 0.5, rescale_1000: bool = False,
+    top_k: int = 1, nms_iou_threshold: float = 0.5,
 ) -> list[dict]:
     """Detection analog of verifier_cot.py's run_group — generate K
     candidates, run the existing, unmodified PPT tournament exactly once
-    over that pool, report argmax(win_rate)'s boxes, and score them
-    against ground truth via IoU. Returns one result dict per image.
+    over that pool. Unlike classification (where argmax over one winner
+    makes sense — there's only one right label), a spatial prediction
+    benefits from POOLING evidence across candidates: different
+    candidates often catch different real instances the others missed,
+    so instead of reporting only the single top-ranked candidate's own
+    box list, the top `top_k` candidates by tournament win-rate have
+    their boxes POOLED together, then deduplicated via class-agnostic NMS
+    (src/common/bbox_metrics.nms) before being scored against ground
+    truth. top_k=1 recovers the original single-winner behavior exactly
+    (NMS over one candidate's own boxes is a no-op unless that candidate
+    duplicated a box for the same instance). Returns one result dict per
+    image.
 
     rescale_1000: True for model families confirmed to report boxes on
     Gemma's native 0-1000 normalized scale rather than real pixels (see
     bbox_parse.needs_1000_scale_boxes) — applied to every candidate's
-    boxes before clamping, same fix as detection_baseline.py."""
+    boxes before clamping, same fix as detection_baseline.py.
+
+    nms_iou_threshold: overlap threshold NMS uses to collapse duplicate
+    boxes from the pooled top_k candidates — a SEPARATE knob from
+    iou_threshold (which only scores the final result against ground
+    truth), since there's no reason the two need to match."""
     t_start = time.perf_counter()
     n = len(images)
     active = list(range(n))
@@ -300,6 +333,7 @@ def run_group(
     elapsed = time.perf_counter() - t_start
     avg_time_per_sample_s = elapsed / n if n else 0.0
 
+    effective_top_k = min(top_k, pool_size)
     results = []
     for i in active:
         if pool_size == 1:
@@ -307,12 +341,21 @@ def run_group(
         else:
             win_rate = [w[i][k] / c[i][k] if c[i][k] else 0.0 for k in range(pool_size)]
             top1 = max(range(pool_size), key=lambda k: (win_rate[k], -k))
-        report_boxes = pool_boxes[i][top1]
+        ranked = sorted(range(pool_size), key=lambda k: (-win_rate[k], k))
+        top_idx = ranked[:effective_top_k]
+
+        pooled = [
+            {**b, "priority": win_rate[k]}
+            for k in top_idx for b in pool_boxes[i][k]
+        ]
+        deduped = nms(pooled, iou_threshold=nms_iou_threshold)
+        report_boxes = [{"bbox": b["bbox"], "category_name": b.get("category_name", "")} for b in deduped]
+
         gt_boxes = gt_boxes_list[i]
         matches, unmatched_pred, unmatched_gt = match_boxes(report_boxes, gt_boxes, iou_threshold)
         iou_metrics = precision_recall_f1(matches, unmatched_pred, unmatched_gt)
         results.append({
-            "pool_size": pool_size, "n_comparisons": n_comparisons[i],
+            "pool_size": pool_size, "top_k": effective_top_k, "n_comparisons": n_comparisons[i],
             "top1_win_rate": round(win_rate[top1], 4),
             "verifier_feedback": first_analysis[i].get(top1, ""),
             "pred_boxes_json": json.dumps(report_boxes), "gt_boxes_json": json.dumps(gt_boxes),
@@ -393,7 +436,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             names = [Path(s["path"]).name for s in samples]
             gt_boxes_list = [s["boxes"] for s in samples]
             primary_labels = [s["boxes"][0]["category_name"] if s["boxes"] else "" for s in samples]
-            cls_q = det_question(ds.clean_classes)
+            cls_q = det_question(ds)
 
             results = run_group(
                 llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts, gt_boxes_list,
@@ -402,7 +445,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 agml_dataset=ds.agml_name, class_label="", image_names=names,
                 log_path=log_path, call_stats=call_stats, seed=args.seed,
                 gen_max_tokens=args.gen_max_tokens, iou_threshold=args.iou_threshold,
-                rescale_1000=rescale_1000,
+                rescale_1000=rescale_1000, top_k=args.top_k, nms_iou_threshold=args.nms_iou_threshold,
             )
 
             for name, label, entry in zip(names, primary_labels, results):
@@ -452,6 +495,19 @@ if __name__ == "__main__":
     parser.add_argument("--k_pivots", type=int, default=DEFAULT_PIVOTS,
                          help="k — pivot-set size for the full PPT tournament (arXiv:2607.05391 "
                               "Section 3.2, via llm_verifier.pivot_tournament) that ranks the pool.")
+    parser.add_argument("--top_k", type=int, default=1,
+                         help="How many of the K candidates (ranked by PPT tournament win-rate) to "
+                              "POOL together before deduplicating with NMS, instead of reporting only "
+                              "the single top-ranked candidate's own box list — different candidates "
+                              "often catch different real instances the others missed, so combining "
+                              "the top_k candidates' boxes can raise recall before NMS collapses "
+                              "duplicates. top_k=1 (default) recovers the original single-winner "
+                              "behavior exactly. Clamped to K if set higher than --k_candidates.")
+    parser.add_argument("--nms_iou_threshold", type=float, default=0.5,
+                         help="Overlap threshold NMS uses to collapse duplicate boxes from the pooled "
+                              "top_k candidates (src/common/bbox_metrics.nms) — separate from "
+                              "--iou_threshold, which only scores the final deduplicated result against "
+                              "ground truth.")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--gen_max_tokens", type=int, default=220,
                          help="Larger than classification's 180 — detection trajectories carry a box "

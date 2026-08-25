@@ -24,6 +24,34 @@ def iou(box_a: list[float], box_b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def nms(boxes: list[dict], iou_threshold: float = 0.5, priority_key: str = "priority") -> list[dict]:
+    """Class-agnostic greedy non-maximum suppression over a POOLED set of
+    boxes from multiple candidates (detection_verifier.py's top-k-combine
+    design) — not the single-detector-output NMS a real detector runs on
+    its own raw predictions. `boxes` is a list of {"bbox": [...], ...}
+    dicts; each must carry a numeric `priority_key` field. Real detectors
+    order NMS by a per-box confidence score; this project's box outputs
+    have no such score (see detection_baseline.py's module docstring on
+    why mAP itself isn't computable here either), so `priority` is
+    expected to be the box's SOURCE CANDIDATE's own PPT tournament
+    win-rate — a per-candidate score reused as a per-box priority proxy,
+    not a genuine per-box confidence.
+
+    Boxes are considered in descending priority order; a box is kept
+    unless it overlaps (IoU >= iou_threshold) an already-kept box. Two
+    boxes from the SAME source candidate are treated identically to two
+    boxes from different candidates — nothing here special-cases same-
+    candidate pairs, since a candidate proposing two overlapping boxes
+    for what's really one instance is exactly the kind of duplicate this
+    is meant to collapse too."""
+    ordered = sorted(boxes, key=lambda b: -b.get(priority_key, 0.0))
+    kept: list[dict] = []
+    for b in ordered:
+        if all(iou(b["bbox"], k["bbox"]) < iou_threshold for k in kept):
+            kept.append(b)
+    return kept
+
+
 def match_boxes(
     pred: list[dict], gt: list[dict], iou_threshold: float = 0.5,
 ) -> tuple[list[tuple[int, int, float]], list[int], list[int]]:
