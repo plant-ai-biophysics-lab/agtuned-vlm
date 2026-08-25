@@ -102,11 +102,12 @@ _DEFAULT_PAIRWISE_TEMPLATE = (
     "Sigatoka, or two look-alike species), explicitly check whether "
     "the trajectory's cited evidence actually distinguishes between "
     "them — not just whether it names a plausible general category. "
-    "You will be asked for a numeric "
-    "score for each trajectory (1-20 scale: 1 = incorrect, "
-    "10 = borderline, 20 = correct) immediately after this analysis, "
-    "so make sure your analysis actually justifies whatever gap (or "
-    "lack of gap) you're about to score.\n\n"
+    "Immediately after this analysis you will be asked to rate each "
+    "trajectory on a 20-point letter scale from A to T (A = clearly and "
+    "completely correct, T = clearly and completely incorrect, with the "
+    "letters in between spanning that range), so make sure your analysis "
+    "actually justifies whatever gap (or lack of gap) you're about to "
+    "score.\n\n"
     "Analysis:"
 )
 
