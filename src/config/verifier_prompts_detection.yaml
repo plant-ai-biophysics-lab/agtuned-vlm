@@ -32,6 +32,26 @@ rubric: |
   4. Are boxes placed at locations consistent with where the object actually appears (not hallucinated)?
   5. Is the overall box count and placement consistent with the visual evidence?
 
+# direct_template — --gen_mode direct ablation: candidate generation prints
+# boxes straight away, identical instruction shape to prompts_detection.yaml's
+# detection_baseline template, just taking the already-built {question} as
+# input rather than raw {class_names}/{crop} — no fill-in-the-blank
+# criteria step at all. The PPT tournament + rubric-based pairwise scoring
+# (below) is UNCHANGED either way; this only controls what a candidate's
+# own generation call looks like, isolating whether the structured-criteria
+# GENERATION step itself helps or hurts for detection, independent of
+# whether K-candidate sampling + tournament selection helps.
+# Params: {question}
+direct_template: |
+  {question} For each one you find, report its bounding box on its own line, using this exact
+  format:
+  <box>x1,y1,x2,y2</box>
+
+  Coordinates are pixel positions in the image as shown: (x1,y1) is the
+  top-left corner, (x2,y2) is the bottom-right corner. Report one box per
+  line, nothing else. If none are visible, respond with exactly:
+  <box>none</box>
+
 # Params: {question}
 structured_templates:
   object_detection: |

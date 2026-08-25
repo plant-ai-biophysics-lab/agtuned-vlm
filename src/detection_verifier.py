@@ -425,7 +425,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
         rng = random.Random(args.seed)
         call_stats: dict = {}
-        gen_template = vprompts["structured_templates"]["object_detection"]
+        gen_template = (vprompts["direct_template"] if args.gen_mode == "direct"
+                         else vprompts["structured_templates"]["object_detection"])
         rubric = vprompts["rubric"]
 
         t_start = time.perf_counter()
@@ -492,6 +493,16 @@ if __name__ == "__main__":
     parser.add_argument("--iou_threshold", type=float, default=0.5)
     parser.add_argument("--k_candidates", type=int, default=4,
                          help="Candidates generated per image (K) — the single tournament pool size.")
+    parser.add_argument("--gen_mode", choices=["structured", "direct"], default="structured",
+                         help="'structured' (default): each candidate answers the fill-in-the-blank "
+                              "localization criteria (verifier_prompts_detection.yaml's "
+                              "structured_templates) before printing boxes. 'direct': candidates print "
+                              "boxes straight away, same instruction shape as detection_baseline.py's "
+                              "own prompt, no criteria step at all. Either way the PPT tournament + "
+                              "rubric-based pairwise scoring is unchanged — this only controls what a "
+                              "candidate's own generation call looks like, isolating whether the "
+                              "structured-criteria GENERATION step itself helps or hurts, independent "
+                              "of whether K-candidate sampling + tournament selection helps.")
     parser.add_argument("--k_pivots", type=int, default=DEFAULT_PIVOTS,
                          help="k — pivot-set size for the full PPT tournament (arXiv:2607.05391 "
                               "Section 3.2, via llm_verifier.pivot_tournament) that ranks the pool.")
