@@ -52,6 +52,22 @@ direct_template: |
   line, nothing else. If none are visible, respond with exactly:
   <box>none</box>
 
+# Gemma-family JSON variant of direct_template above — see
+# prompts_detection.yaml's detection_baseline_json header comment for the
+# full root-cause rationale (native box_2d/y-first format vs. the <box>
+# tag's silent axis-order reversion). Selected the same way, via
+# bbox_parse.uses_json_box_format(model_id).
+# Params: {question}
+direct_template_json: |
+  {question} Respond with ONLY a JSON array, one object per instance found,
+  each with exactly these two keys:
+  "box_2d": [y_min, x_min, y_max, x_max] — coordinates on a 0-1000
+  normalized scale (top-left corner of the image is [0, 0]), in that exact
+  order.
+  "label": the class name for that instance.
+
+  If none are visible, respond with exactly: []
+
 # Params: {question}
 structured_templates:
   object_detection: |
@@ -68,3 +84,25 @@ structured_templates:
     <answer><box>120,45,340,210</box>
     <box>500,100,620,300</box></answer>
     If none are visible, write exactly: <answer><box>none</box></answer>
+
+# Gemma-family JSON variant of structured_templates.object_detection above
+# — same fill-in-the-blank criteria step, but the final answer format asks
+# for box_2d JSON instead of <box> tags (see direct_template_json above
+# for the root-cause rationale). Still wrapped in <answer></answer> around
+# the JSON array itself, for the same truncation-preservation reason
+# described in this file's header comment.
+# Params: {question}
+structured_templates_json:
+  object_detection: |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Object/class being localized (and any other names it is commonly referred to as):
+    General location(s) in the image (e.g. upper-left, center, scattered):
+    Overlapping or occluded instances, if any (or "none"):
+    Approximate size of each instance relative to the image:
+
+    After filling in every line above, wrap your final answer in <answer></answer> tags containing ONLY a JSON array, one object per instance, each with exactly these two keys: "box_2d": [y_min, x_min, y_max, x_max] (0-1000 normalized scale, top-left origin) and "label": the class name, e.g.:
+    <answer>[{"box_2d": [45, 120, 210, 340], "label": "apple"}, {"box_2d": [100, 500, 300, 620], "label": "apple"}]</answer>
+    If none are visible, write exactly: <answer>[]</answer>

@@ -33,7 +33,10 @@ import time
 from PIL import Image as PILImage
 
 from src.common.bbox_metrics import match_boxes, precision_recall_f1
-from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, needs_1000_scale_boxes
+from src.common.bbox_parse import (
+    clamp_box, denormalize_box_1000, extract_boxes, extract_boxes_json,
+    needs_1000_scale_boxes, uses_json_box_format,
+)
 from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import load_prompts
@@ -72,13 +75,18 @@ def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = 
     return [_clean(o.outputs[0].text) for o in outputs]
 
 
-def det_question(ds, prompts: dict) -> str:
+def det_question(ds, prompts: dict, use_json: bool = False) -> str:
     """`ds` is the dataset's DatasetConfig — needs both its class list (with
     any configured aliases folded in, see classes_with_aliases_display) and
-    its crop for the question's {class_names}/{crop} slots."""
+    its crop for the question's {class_names}/{crop} slots. `use_json`
+    selects Gemma's native box_2d JSON template (detection_baseline_json)
+    over the default <box> tag template — see
+    src/config/prompts_detection.yaml's detection_baseline_json header
+    comment for why; pass uses_json_box_format(model_id)."""
     names_list = ds.classes_with_aliases_display()
     names = ", ".join(names_list) if names_list else "object"
-    return prompts["detection_baseline"].format(class_names=names, crop=crop_display(ds.crop))
+    key = "detection_baseline_json" if use_json else "detection_baseline"
+    return prompts[key].format(class_names=names, crop=crop_display(ds.crop))
 
 
 def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float = 0.5) -> dict:
@@ -91,9 +99,13 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     system_prompt = prompts.get("assessment_system", "")
     manifest = load_manifest(Path(args.manifest))
     rescale_1000 = needs_1000_scale_boxes(model_id)
+    use_json = uses_json_box_format(model_id)
     if rescale_1000:
         print(f"  [bbox] {model_id}: rescaling predicted boxes from Gemma's native 0-1000 "
               f"normalized scale to real pixel coordinates (see bbox_parse.needs_1000_scale_boxes)")
+    if use_json:
+        print(f"  [bbox] {model_id}: requesting Gemma's native box_2d JSON output format "
+              f"instead of <box> tags (see bbox_parse.uses_json_box_format)")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
@@ -150,13 +162,13 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         for ds, samples in groups:
             pbar.desc = f"Datasets ({ds.agml_name})"
             images = [PILImage.open(s["path"]).convert("RGB") for s in samples]
-            question = det_question(ds, prompts)
+            question = det_question(ds, prompts, use_json=use_json)
 
             preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
 
             for s, img, pred in zip(samples, images, preds):
                 gt_boxes = s["boxes"]
-                pred_boxes_raw = extract_boxes(pred)
+                pred_boxes_raw = extract_boxes_json(pred) if use_json else extract_boxes(pred)
                 pred_boxes = []
                 for b in pred_boxes_raw:
                     bbox = denormalize_box_1000(b["bbox"], img.width, img.height) if rescale_1000 else b["bbox"]

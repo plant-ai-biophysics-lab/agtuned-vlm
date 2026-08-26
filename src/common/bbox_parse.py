@@ -7,6 +7,7 @@ model outputting NOTHING is a valid negative prediction, not a parse error
 (same "found=False, not an exception" spirit as extract_answer_tag)."""
 from __future__ import annotations
 
+import json
 import re
 
 _BOX_COORDS_RE = re.compile(
@@ -49,6 +50,79 @@ def extract_boxes(text: str) -> list[dict]:
         category = label_m.group(1).strip() if label_m else ""
         boxes.append({"bbox": [x1, y1, x2, y2], "category_name": category})
     return boxes
+
+
+_BOX_2D_ARRAY_RE = re.compile(r"\[\s*\{.*\}\s*\]", re.DOTALL)
+
+
+def extract_boxes_json(text: str) -> list[dict]:
+    """Parse Gemma's NATIVE grounding output format — a JSON array of
+    {"box_2d": [y_min, x_min, y_max, x_max], "label": str} objects, on the
+    same 0-1000 normalized scale as the <box> tag format (still needs
+    denormalize_box_1000 same as extract_boxes()'s output) but Y-FIRST,
+    not the [x1,y1,x2,y2] convention this repo's bbox_convention/
+    bbox_metrics.py otherwise use throughout.
+
+    Root-cause note (2026-08-25): Gemma's actual pretraining grounding
+    format is this exact box_2d/y-first JSON shape (see Google's Gemma
+    vision documentation) — not the free-text <box>x1,y1,x2,y2</box> tag
+    extract_boxes() parses. Asking for the tag format (see that function's
+    docstring) mostly works, but on some images the model reverts to its
+    native y,x-first ordering INSIDE the requested tag with no warning,
+    silently swapping every predicted box's axes — confirmed near-total
+    (19/20 images) on QuinceSet_detection via a direct swap-and-recompute-
+    F1 check against ground truth. Asking for the model's own native
+    format instead of fighting it removes that ambiguity. Selected at
+    runtime via uses_json_box_format(model_id) — this is Gemma-specific,
+    see that function's docstring for why other model families keep using
+    extract_boxes() instead.
+
+    Returns [{"bbox": [x1,y1,x2,y2], "category_name": str}, ...] — ALREADY
+    reordered from box_2d's y-first convention into this repo's
+    x1,y1,x2,y2 convention, still on the 0-1000 scale. A response with no
+    JSON array at all, or an individual malformed object, contributes
+    nothing rather than raising — same "don't let one bad piece break
+    everything" spirit as extract_boxes(); an empty array ("[]", the
+    format this repo's prompts ask for on a "nothing visible" answer)
+    correctly returns [] the same way "no match found" does, since both
+    mean zero predicted instances."""
+    m = _BOX_2D_ARRAY_RE.search(text)
+    if not m:
+        return []
+    try:
+        items = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(items, list):
+        return []
+    boxes = []
+    for item in items:
+        if not isinstance(item, dict) or "box_2d" not in item:
+            continue
+        coords = item["box_2d"]
+        if not isinstance(coords, (list, tuple)) or len(coords) != 4:
+            continue
+        try:
+            y1, x1, y2, x2 = (float(c) for c in coords)
+        except (TypeError, ValueError):
+            continue
+        category = str(item.get("label", ""))
+        boxes.append({"bbox": [x1, y1, x2, y2], "category_name": category})
+    return boxes
+
+
+def uses_json_box_format(model_id: str) -> bool:
+    """True for model families whose NATIVE grounding output is the
+    box_2d/y-first JSON shape extract_boxes_json() parses, rather than the
+    free-text <box>x1,y1,x2,y2</box> tag extract_boxes() parses — see
+    extract_boxes_json()'s docstring for the root-cause evidence. Same
+    "gemma" condition as needs_1000_scale_boxes() below (both stem from
+    the same underlying native training convention), kept as a separate
+    flag/function rather than reusing needs_1000_scale_boxes() directly,
+    since the two could diverge for a future model family that needs one
+    fix but not the other. Qwen2-VL-family models are NOT included —
+    unaffected by the axis-order failure mode this exists to route around."""
+    return "gemma" in model_id.lower()
 
 
 def denormalize_box_1000(bbox: list[float], img_w: int, img_h: int) -> list[float]:

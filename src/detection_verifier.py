@@ -57,7 +57,10 @@ import time
 from PIL import Image as PILImage
 
 from src.common.bbox_metrics import match_boxes, nms, precision_recall_f1
-from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, needs_1000_scale_boxes
+from src.common.bbox_parse import (
+    clamp_box, denormalize_box_1000, extract_boxes, extract_boxes_json,
+    needs_1000_scale_boxes, uses_json_box_format,
+)
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import append_jsonl, load_prompts
@@ -291,6 +294,7 @@ def run_group(
     gen_max_tokens: int = 220, iou_threshold: float = 0.5, rescale_1000: bool = False,
     top_k: int = 1, nms_iou_threshold: float = 0.5,
     dynamic_synonyms: bool = False, class_names: list[str] | None = None, crop: str | None = None,
+    use_json_boxes: bool = False,
 ) -> list[dict]:
     """Detection analog of verifier_cot.py's run_group — generate K
     candidates, run the existing, unmodified PPT tournament exactly once
@@ -328,7 +332,13 @@ def run_group(
     candidate now has its own distinct prompt rather than one prompt
     sampled k_candidates times, generation runs as k_candidates separate
     n=1 calls (batched together in one llm.generate) instead of a single
-    n=k_candidates call."""
+    n=k_candidates call.
+
+    use_json_boxes: True selects extract_boxes_json() over extract_boxes()
+    when parsing each candidate's raw text — pass
+    uses_json_box_format(model_id); gen_template must already be the
+    matching *_json prompt variant (the caller's job, since this function
+    doesn't know which vprompts key was used to build gen_template)."""
     t_start = time.perf_counter()
     n = len(images)
     active = list(range(n))
@@ -368,7 +378,8 @@ def run_group(
         cand_lists = []
         for c in gen_out[i]:
             cand_boxes = []
-            for b in extract_boxes(c["text"]):
+            raw_boxes = extract_boxes_json(c["text"]) if use_json_boxes else extract_boxes(c["text"])
+            for b in raw_boxes:
                 bbox = denormalize_box_1000(b["bbox"], img.width, img.height) if rescale_1000 else b["bbox"]
                 cand_boxes.append({**b, "bbox": clamp_box(bbox, img.width, img.height)})
             cand_lists.append(cand_boxes)
@@ -525,8 +536,15 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
         rng = random.Random(args.seed)
         call_stats: dict = {}
-        gen_template = (vprompts["direct_template"] if args.gen_mode == "direct"
-                         else vprompts["structured_templates"]["object_detection"])
+        use_json = uses_json_box_format(model_id)
+        if use_json:
+            print(f"  [bbox] {model_id}: requesting Gemma's native box_2d JSON output format "
+                  f"instead of <box> tags (see bbox_parse.uses_json_box_format)")
+        if args.gen_mode == "direct":
+            gen_template = vprompts["direct_template_json"] if use_json else vprompts["direct_template"]
+        else:
+            key = "structured_templates_json" if use_json else "structured_templates"
+            gen_template = vprompts[key]["object_detection"]
         rubric = vprompts["rubric"]
 
         t_start = time.perf_counter()
@@ -548,6 +566,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 gen_max_tokens=args.gen_max_tokens, iou_threshold=args.iou_threshold,
                 rescale_1000=rescale_1000, top_k=args.top_k, nms_iou_threshold=args.nms_iou_threshold,
                 dynamic_synonyms=args.dynamic_synonyms, class_names=ds.clean_classes, crop=crop_display(ds.crop),
+                use_json_boxes=use_json,
             )
 
             for name, label, entry in zip(names, primary_labels, results):

@@ -27,3 +27,29 @@ detection_baseline: |
   top-left corner, (x2,y2) is the bottom-right corner. Report one box per
   line, nothing else. If none are visible, respond with exactly:
   <box>none</box>
+
+# Gemma-family variant of detection_baseline above — same semantics, but
+# asks for Gemma's OWN NATIVE grounding output format (box_2d JSON,
+# y-first, 0-1000 scale) instead of the free-text <box>x1,y1,x2,y2</box>
+# tag. Root-cause note (2026-08-25): the tag-based prompt above works most
+# of the time, but Gemma's pretraining grounding convention is this exact
+# box_2d/y-first JSON shape, and on some images (confirmed near-total on
+# QuinceSet_detection, 19/20 images) the model reverts to that native
+# y,x-first ordering INSIDE the requested tag with no warning, silently
+# swapping every predicted box's axes. Asking for the model's own native
+# format removes the ambiguity instead of fighting it. Selected at runtime
+# via bbox_parse.uses_json_box_format(model_id) — non-Gemma models (e.g.
+# Qwen2-VL family) keep using detection_baseline above, since they do not
+# share this native format and were not observed to have this axis-order
+# failure mode.
+# Params: {class_names} {crop}
+detection_baseline_json: |
+  Identify and localize every {class_names} visible in this image of {crop}. Respond with
+  ONLY a JSON array, one object per instance found, each with exactly these
+  two keys:
+  "box_2d": [y_min, x_min, y_max, x_max] — coordinates on a 0-1000
+  normalized scale (top-left corner of the image is [0, 0]), in that exact
+  order.
+  "label": the class name for that instance.
+
+  If none are visible, respond with exactly: []
