@@ -154,6 +154,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
             vision_token_budget=args.vision_token_budget,
+            kv_cache_dtype=args.kv_cache_dtype,
             caller_tag="detection_baseline",
         )
 
@@ -231,5 +232,9 @@ if __name__ == "__main__":
     parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET)
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--kv_cache_dtype", choices=["auto", "fp8"], default=None,
+                         help="None keeps vLLM's default (same dtype as the model). \"fp8\" halves "
+                              "KV-cache memory -- useful for a long --max_model_len on a "
+                              "memory-constrained GPU, independent of --quantize (see vlm_load.load_llm).")
 
     main(parser.parse_args())

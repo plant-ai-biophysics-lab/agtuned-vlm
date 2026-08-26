@@ -64,19 +64,16 @@ from src.common.dataset_config import (
 )
 from src.common.io import append_jsonl, load_prompts
 from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
-from src.common.ppt_scoring import (
-    analysis_before_tags, build_score_prompt, extract_tag_score,
-    pairwise_scoring_prompt, score_prefill_params,
+from src.common.ppt_scoring import score_prefill_params
+from src.common.ppt_orchestration import (
+    PairScoreResult, run_ppt_tournament, score_pairs_batch as _shared_score_pairs_batch,
 )
 from src.common.progress import ProgressBar
 
 try:
-    from llm_verifier.pivot_tournament import (
-        DEFAULT_PIVOTS, bradley_terry, pivot_round_pairs, ring_cycle, select_pivots,
-    )
+    from llm_verifier.pivot_tournament import DEFAULT_PIVOTS
 except ImportError:
     DEFAULT_PIVOTS = 2
-    bradley_terry = pivot_round_pairs = ring_cycle = select_pivots = None  # type: ignore[assignment]
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, compute_model_metrics,
     judge_gt_hint, load_ckpt, run_judge_phase, safe_model_name, write_collated,
@@ -294,6 +291,13 @@ def _sample_random_classes_per_task(groups: list, n_per_task: int, seed: int) ->
 
 
 # ── Single-round tournament ──────────────────────────────────────────────────
+# The tournament mechanics (two-pass pairwise scoring + ring-pass/pivot-round
+# schedule/aggregation) live in src/common/ppt_orchestration.py — shared,
+# byte-for-byte identical logic with detection_verifier.py, extracted
+# 2026-08-26 so both callers (and src/ppt_verify/tournament.py) run through
+# exactly one implementation. This module only wraps that shared core to add
+# its own logging (verifier_log.jsonl's "tournament_pair" call_type/field
+# names, unchanged from before the extraction).
 
 def _score_pairs_batch(
     llm, tokenizer, images: list, active: list[int], pools: dict[int, list[str]],
@@ -302,71 +306,25 @@ def _score_pairs_batch(
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None,
 ) -> dict[int, tuple[float, float, str, list[int]]]:
-    """Score one pool-index pair PER IMAGE via src/common/ppt_scoring.py's
-    two-pass prefill mechanism, batched across every active image in one
-    set of vLLM calls — pairs may differ across images (ring-pass cycles
-    and pivot selections are randomized/ranked per image), only the COUNT
-    of pairs per pass is uniform (guaranteed by ring_cycle/
-    pivot_round_pairs depending only on pool size and k, not on which
-    specific indices end up as pivots). Positional slot (A/B) randomized
-    per (image, pair) — a coin flip via `rng` — as an extra safeguard on
-    top of the paper's own ring-pass cancellation. Returns {i: (r_a, r_b,
-    analysis, [prompt_tokens, completion_tokens])} — scores already
-    unswapped back to (pool[a], pool[b]) order."""
-    base_prompts, owners = [], []
-    for i in active:
-        a, b = pair_by_image[i]
-        text_a, text_b = pools[i][a], pools[i][b]
-        swapped = rng.random() < 0.5
-        traj_a, traj_b = (text_b, text_a) if swapped else (text_a, text_b)
-        pw_text = pairwise_scoring_prompt(rubric=rubric, question=cls_q, trajectory_a=traj_a, trajectory_b=traj_b,
-                                           template=vprompts["pairwise_prompt"])
-        msgs = _sys_msg(prompts) + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": pw_text},
-        ]}]
-        base_prompts.append({
-            "prompt": render_chat_template(tokenizer, msgs),
-            "multi_modal_data": {"image": images[i]},
-        })
-        owners.append((i, a, b, swapped, pw_text))
-
-    analysis_outputs = llm.generate(base_prompts, sampling_params=analysis_params)
-    if call_stats is not None:
-        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
-        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(base_prompts)
-    analyses = [analysis_before_tags(out.outputs[0].text) for out in analysis_outputs]
-    pass_tokens = [
-        [len(getattr(out, "prompt_token_ids", None) or []),
-         len(getattr(out.outputs[0], "token_ids", None) or [])]
-        for out in analysis_outputs
-    ]
-
-    scores_a: list[float | None] = [None] * len(owners)
-    scores_b: list[float | None] = [None] * len(owners)
-    for tag, scores in (("<score_A>", scores_a), ("<score_B>", scores_b)):
-        score_prompts = [build_score_prompt(bp, an, tag) for bp, an in zip(base_prompts, analyses)]
-        score_outputs = llm.generate(score_prompts, sampling_params=score_params)
-        if call_stats is not None:
-            call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
-            call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(score_prompts)
-        for idx, (analysis, out) in enumerate(zip(analyses, score_outputs)):
-            comp = out.outputs[0]
-            scores[idx] = extract_tag_score(analysis, tag, comp.text, comp.logprobs or [])
-            pass_tokens[idx][0] += len(getattr(out, "prompt_token_ids", None) or [])
-            pass_tokens[idx][1] += len(getattr(comp, "token_ids", None) or [])
-
+    """Thin logging wrapper around ppt_orchestration.score_pairs_batch —
+    same call shape/return shape (r_a, r_b, analysis, [prompt_tokens,
+    completion_tokens]) this module's own callers already expect, so
+    run_group below needed no changes beyond its import."""
+    results, owners = _shared_score_pairs_batch(
+        llm, tokenizer, images, active, pools, pair_by_image, prompts, vprompts, cls_q, rubric,
+        rng, analysis_params, score_params, call_stats,
+    )
     result: dict[int, tuple[float, float, str, list[int]]] = {}
-    for idx, (i, a, b, swapped, pw_text) in enumerate(owners):
-        r_swapped_a, r_swapped_b = scores_a[idx], scores_b[idx]
-        r_a, r_b = (r_swapped_b, r_swapped_a) if swapped else (r_swapped_a, r_swapped_b)
-        result[i] = (r_a, r_b, analyses[idx], pass_tokens[idx])
+    for i in active:
+        r, o = results[i], owners[i]
+        result[i] = (r.r_a, r.r_b, r.analysis, [r.prompt_tokens, r.completion_tokens])
         _log_verifier_call(
             log_path, agml_dataset=agml_dataset, class_label=class_label,
-            image_name=image_names[i], pool_pair=[a, b],
-            call_type="tournament_pair", pool_text_a=pools[i][a], pool_text_b=pools[i][b],
-            slot_swapped=swapped, user_prompt=pw_text, analysis=analyses[idx],
-            score_a=r_a, score_b=r_b,
-            prompt_tokens=pass_tokens[idx][0], completion_tokens=pass_tokens[idx][1],
+            image_name=image_names[i], pool_pair=[o.a, o.b],
+            call_type="tournament_pair", pool_text_a=pools[i][o.a], pool_text_b=pools[i][o.b],
+            slot_swapped=o.swapped, user_prompt=o.prompt_text, analysis=r.analysis,
+            score_a=r.r_a, score_b=r.r_b,
+            prompt_tokens=r.prompt_tokens, completion_tokens=r.completion_tokens,
         )
     return result
 
@@ -436,76 +394,46 @@ def run_group(
             )
 
     pool_size = k_candidates
-    w = {i: [0.0] * pool_size for i in active}
-    c = {i: [0] * pool_size for i in active}
-    n_comparisons = {i: 0 for i in active}
-    # First analysis text that ever mentioned each pool index — used as
-    # this image's feedback for whichever index ends up the winner. Every
-    # pool member is guaranteed an entry once the ring pass finishes,
-    # since ring_cycle touches every index at least once.
-    first_analysis: dict[int, dict[int, str]] = {i: {} for i in active}
-
     analysis_params = SamplingParams(temperature=1.0, max_tokens=150, seed=seed)
     score_params = score_prefill_params()
 
-    def _accumulate(pair_by_image: dict[int, tuple[int, int]]) -> None:
+    def _score_batch_fn(pair_by_image: dict[int, tuple[int, int]]):
         result = _score_pairs_batch(
             llm, tokenizer, images, active, pools, pair_by_image, prompts, vprompts, cls_q, rubric, rng,
             analysis_params, score_params, call_stats,
             agml_dataset, class_label, image_names, log_path,
         )
-        for i in active:
-            r_a, r_b, analysis, tok = result[i]
-            a, b = pair_by_image[i]
-            p = bradley_terry(r_a, r_b)
-            w[i][a] += p
-            c[i][a] += 1
-            w[i][b] += 1.0 - p
-            c[i][b] += 1
-            n_comparisons[i] += 1
-            first_analysis[i].setdefault(a, analysis)
-            first_analysis[i].setdefault(b, analysis)
-            prompt_tokens[i] += tok[0]
-            completion_tokens[i] += tok[1]
+        return {
+            i: PairScoreResult(r_a=r_a, r_b=r_b, analysis=analysis,
+                                prompt_tokens=tok[0], completion_tokens=tok[1])
+            for i, (r_a, r_b, analysis, tok) in result.items()
+        }
 
-    if pool_size > 1:
-        # ── Step 1: ring pass ────────────────────────────────────────────
-        rings = {i: ring_cycle(pool_size, rng) for i in active}
-        for t in range(pool_size):  # ring_cycle always returns pool_size pairs
-            _accumulate({i: rings[i][t] for i in active})
+    # ── The tournament itself (ring pass -> pivot selection -> pivot
+    # rounds -> Bradley-Terry aggregation -> argmax) — shared with
+    # detection_verifier.py and src/ppt_verify, see
+    # src/common/ppt_orchestration.py's module docstring.
+    tournament = run_ppt_tournament(pool_size, active, k_pivots, rng, _score_batch_fn)
 
-        # ── Step 2: pivot selection (per image, from ring-pass win rate) ──
-        pivots = {i: select_pivots(w[i], c[i], k_pivots) for i in active}
-
-        # ── Step 3: pivot rounds ───────────────────────────────────────────
-        pivot_pairs = {i: pivot_round_pairs(pool_size, pivots[i]) for i in active}
-        n_pivot_pairs = len(next(iter(pivot_pairs.values())))  # uniform across images, see docstring
-        for t in range(n_pivot_pairs):
-            _accumulate({i: pivot_pairs[i][t] for i in active})
-
-    # ── Rank each pool from the tournament's own aggregate win-rate and
-    # report argmax — this IS the whole verifier, no further steps.
     elapsed = time.perf_counter() - t_start
     avg_time_per_sample_s = elapsed / n if n else 0.0
 
     results = []
     for i in active:
-        if pool_size == 1:
-            win_rate, top1 = [0.5], 0
-        else:
-            win_rate = [w[i][k] / c[i][k] if c[i][k] else 0.0 for k in range(pool_size)]
-            top1 = max(range(pool_size), key=lambda k: (win_rate[k], -k))
-        prediction = pools[i][top1]
+        tr = tournament[i]
+        prediction = pools[i][tr.top1]
+        final_prompt_tokens = prompt_tokens[i] + tr.prompt_tokens_delta
+        final_completion_tokens = completion_tokens[i] + tr.completion_tokens_delta
         results.append({
             "prediction": prediction,
-            "reasoning": (f"pool={pool_size}, comparisons={n_comparisons[i]}, "
-                          f"top1_win_rate={win_rate[top1]:.3f}"),
+            "reasoning": (f"pool={pool_size}, comparisons={tr.n_comparisons}, "
+                          f"top1_win_rate={tr.win_rate[tr.top1]:.3f}"),
             "pool_size": pool_size,
-            "n_comparisons": n_comparisons[i],
-            "top1_win_rate": round(win_rate[top1], 4),
-            "verifier_feedback": first_analysis[i].get(top1, ""),
-            "prompt_tokens": prompt_tokens[i],
-            "completion_tokens": completion_tokens[i],
+            "n_comparisons": tr.n_comparisons,
+            "top1_win_rate": round(tr.win_rate[tr.top1], 4),
+            "verifier_feedback": tr.first_analysis.get(tr.top1, ""),
+            "prompt_tokens": final_prompt_tokens,
+            "completion_tokens": final_completion_tokens,
             "elapsed_s": round(elapsed, 3),
             "avg_time_per_sample_s": round(avg_time_per_sample_s, 3),
         })

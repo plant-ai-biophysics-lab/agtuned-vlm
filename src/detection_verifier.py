@@ -64,19 +64,16 @@ from src.common.bbox_parse import (
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import append_jsonl, load_prompts
-from src.common.ppt_scoring import (
-    analysis_before_tags, build_score_prompt, extract_tag_score,
-    pairwise_scoring_prompt, score_prefill_params,
+from src.common.ppt_scoring import score_prefill_params
+from src.common.ppt_orchestration import (
+    PairScoreResult, run_ppt_tournament, score_pairs_batch as _shared_score_pairs_batch,
 )
 from src.common.progress import ProgressBar
 
 try:
-    from llm_verifier.pivot_tournament import (
-        DEFAULT_PIVOTS, bradley_terry, pivot_round_pairs, ring_cycle, select_pivots,
-    )
+    from llm_verifier.pivot_tournament import DEFAULT_PIVOTS
 except ImportError:
     DEFAULT_PIVOTS = 2
-    bradley_terry = pivot_round_pairs = ring_cycle = select_pivots = None  # type: ignore[assignment]
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
@@ -224,62 +221,24 @@ def _score_pairs_batch(
     rng, analysis_params, score_params, call_stats, agml_dataset, class_label, image_names,
     log_path,
 ):
-    """Verbatim port of verifier_cot.py's _score_pairs_batch — scores one
-    pool-index pair per image via ppt_scoring.py's two-pass prefill
-    mechanism. Domain-agnostic over trajectory text, so no changes needed
-    for detection trajectories."""
-    base_prompts, owners = [], []
-    for i in active:
-        a, b = pair_by_image[i]
-        text_a, text_b = pools[i][a], pools[i][b]
-        swapped = rng.random() < 0.5
-        traj_a, traj_b = (text_b, text_a) if swapped else (text_a, text_b)
-        pw_text = pairwise_scoring_prompt(rubric=rubric, question=cls_q, trajectory_a=traj_a, trajectory_b=traj_b,
-                                           template=vprompts["pairwise_prompt"])
-        msgs = _sys_msg(prompts) + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": pw_text},
-        ]}]
-        base_prompts.append({
-            "prompt": render_chat_template(tokenizer, msgs),
-            "multi_modal_data": {"image": images[i]},
-        })
-        owners.append((i, a, b, swapped, pw_text))
-
-    analysis_outputs = llm.generate(base_prompts, sampling_params=analysis_params)
-    if call_stats is not None:
-        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
-        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(base_prompts)
-    analyses = [analysis_before_tags(out.outputs[0].text) for out in analysis_outputs]
-    pass_tokens = [
-        [len(getattr(out, "prompt_token_ids", None) or []),
-         len(getattr(out.outputs[0], "token_ids", None) or [])]
-        for out in analysis_outputs
-    ]
-
-    scores_a: list[float | None] = [None] * len(owners)
-    scores_b: list[float | None] = [None] * len(owners)
-    for tag, scores in (("<score_A>", scores_a), ("<score_B>", scores_b)):
-        score_prompts = [build_score_prompt(bp, an, tag) for bp, an in zip(base_prompts, analyses)]
-        score_outputs = llm.generate(score_prompts, sampling_params=score_params)
-        if call_stats is not None:
-            call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
-            call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(score_prompts)
-        for idx, (analysis, out) in enumerate(zip(analyses, score_outputs)):
-            comp = out.outputs[0]
-            scores[idx] = extract_tag_score(analysis, tag, comp.text, comp.logprobs or [])
-            pass_tokens[idx][0] += len(getattr(out, "prompt_token_ids", None) or [])
-            pass_tokens[idx][1] += len(getattr(comp, "token_ids", None) or [])
-
+    """Thin logging wrapper around src.common.ppt_orchestration's shared
+    score_pairs_batch — same call/return shape this module's own callers
+    already expect. The actual two-pass scoring mechanism lives there now
+    (shared with verifier_cot.py, byte-for-byte identical logic before
+    this extraction — see that module's docstring)."""
+    results, owners = _shared_score_pairs_batch(
+        llm, tokenizer, images, active, pools, pair_by_image, prompts, vprompts, cls_q, rubric,
+        rng, analysis_params, score_params, call_stats,
+    )
     result: dict[int, tuple[float, float, str, list[int]]] = {}
-    for idx, (i, a, b, swapped, pw_text) in enumerate(owners):
-        sa, sb = scores_a[idx], scores_b[idx]
-        r_a, r_b = (sb, sa) if swapped else (sa, sb)
-        result[i] = (r_a, r_b, analyses[idx], pass_tokens[idx])
+    for i in active:
+        r, o = results[i], owners[i]
+        result[i] = (r.r_a, r.r_b, r.analysis, [r.prompt_tokens, r.completion_tokens])
         _log_verifier_call(
             log_path, agml_dataset=agml_dataset, class_label=class_label,
             image_name=image_names[i], call_type="pairwise",
-            pool_a=a, pool_b=b, swapped=swapped, prompt=pw_text, analysis=analyses[idx],
-            score_a=r_a, score_b=r_b,
+            pool_a=o.a, pool_b=o.b, swapped=o.swapped, prompt=o.prompt_text, analysis=r.analysis,
+            score_a=r.r_a, score_b=r.r_b,
         )
     return result
 
@@ -404,42 +363,23 @@ def run_group(
             )
 
     pool_size = k_candidates
-    w = {i: [0.0] * pool_size for i in active}
-    c = {i: [0] * pool_size for i in active}
-    n_comparisons = {i: 0 for i in active}
-    first_analysis: dict[int, dict[int, str]] = {i: {} for i in active}
-
     analysis_params = SamplingParams(temperature=1.0, max_tokens=150, seed=seed)
     score_params = score_prefill_params()
 
-    def _accumulate(pair_by_image: dict[int, tuple[int, int]]) -> None:
+    def _score_batch_fn(pair_by_image: dict[int, tuple[int, int]]):
         result = _score_pairs_batch(
             llm, tokenizer, images, active, pools, pair_by_image, prompts, vprompts, cls_q, rubric, rng,
             analysis_params, score_params, call_stats, agml_dataset, class_label, image_names, log_path,
         )
-        for i in active:
-            r_a, r_b, analysis, tok = result[i]
-            a, b = pair_by_image[i]
-            p = bradley_terry(r_a, r_b)
-            w[i][a] += p
-            c[i][a] += 1
-            w[i][b] += 1.0 - p
-            c[i][b] += 1
-            n_comparisons[i] += 1
-            first_analysis[i].setdefault(a, analysis)
-            first_analysis[i].setdefault(b, analysis)
-            prompt_tokens[i] += tok[0]
-            completion_tokens[i] += tok[1]
+        return {
+            i: PairScoreResult(r_a=r_a, r_b=r_b, analysis=analysis,
+                                prompt_tokens=tok[0], completion_tokens=tok[1])
+            for i, (r_a, r_b, analysis, tok) in result.items()
+        }
 
-    if pool_size > 1:
-        rings = {i: ring_cycle(pool_size, rng) for i in active}
-        for t in range(pool_size):
-            _accumulate({i: rings[i][t] for i in active})
-        pivots = {i: select_pivots(w[i], c[i], k_pivots) for i in active}
-        pivot_pairs = {i: pivot_round_pairs(pool_size, pivots[i]) for i in active}
-        n_pivot_pairs = len(next(iter(pivot_pairs.values())))
-        for t in range(n_pivot_pairs):
-            _accumulate({i: pivot_pairs[i][t] for i in active})
+    # ── The tournament itself — shared with verifier_cot.py, see
+    # src/common/ppt_orchestration.py's module docstring.
+    tournament = run_ppt_tournament(pool_size, active, k_pivots, rng, _score_batch_fn)
 
     elapsed = time.perf_counter() - t_start
     avg_time_per_sample_s = elapsed / n if n else 0.0
@@ -447,11 +387,8 @@ def run_group(
     effective_top_k = min(top_k, pool_size)
     results = []
     for i in active:
-        if pool_size == 1:
-            win_rate, top1 = [0.5], 0
-        else:
-            win_rate = [w[i][k] / c[i][k] if c[i][k] else 0.0 for k in range(pool_size)]
-            top1 = max(range(pool_size), key=lambda k: (win_rate[k], -k))
+        tr = tournament[i]
+        win_rate, top1 = tr.win_rate, tr.top1
         ranked = sorted(range(pool_size), key=lambda k: (-win_rate[k], k))
         top_idx = ranked[:effective_top_k]
 
@@ -465,15 +402,17 @@ def run_group(
         gt_boxes = gt_boxes_list[i]
         matches, unmatched_pred, unmatched_gt = match_boxes(report_boxes, gt_boxes, iou_threshold)
         iou_metrics = precision_recall_f1(matches, unmatched_pred, unmatched_gt)
+        final_prompt_tokens = prompt_tokens[i] + tr.prompt_tokens_delta
+        final_completion_tokens = completion_tokens[i] + tr.completion_tokens_delta
         results.append({
-            "pool_size": pool_size, "top_k": effective_top_k, "n_comparisons": n_comparisons[i],
+            "pool_size": pool_size, "top_k": effective_top_k, "n_comparisons": tr.n_comparisons,
             "top1_win_rate": round(win_rate[top1], 4),
-            "verifier_feedback": first_analysis[i].get(top1, ""),
+            "verifier_feedback": tr.first_analysis.get(top1, ""),
             "pred_boxes_json": json.dumps(report_boxes), "gt_boxes_json": json.dumps(gt_boxes),
             "n_pred": iou_metrics["n_pred"], "n_gt": iou_metrics["n_gt"], "n_matched": iou_metrics["n_matched"],
             "precision_at_iou50": iou_metrics["precision"], "recall_at_iou50": iou_metrics["recall"],
             "f1_at_iou50": iou_metrics["f1"], "mean_iou_matched": iou_metrics["mean_iou_matched"],
-            "prompt_tokens": prompt_tokens[i], "completion_tokens": completion_tokens[i],
+            "prompt_tokens": final_prompt_tokens, "completion_tokens": final_completion_tokens,
             "elapsed_s": round(elapsed, 3), "avg_time_per_sample_s": round(avg_time_per_sample_s, 3),
         })
     return results
@@ -531,6 +470,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
             vision_token_budget=args.vision_token_budget,
+            kv_cache_dtype=args.kv_cache_dtype,
             caller_tag="detection_verifier",
         )
 
@@ -660,5 +600,9 @@ if __name__ == "__main__":
     parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET)
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--kv_cache_dtype", choices=["auto", "fp8"], default=None,
+                         help="None keeps vLLM's default (same dtype as the model). \"fp8\" halves "
+                              "KV-cache memory -- useful for a long --max_model_len on a "
+                              "memory-constrained GPU, independent of --quantize (see vlm_load.load_llm).")
 
     main(parser.parse_args())
