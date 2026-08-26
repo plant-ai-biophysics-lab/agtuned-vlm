@@ -100,11 +100,21 @@ def load_llm(
     enforce_eager: bool = False,
     vision_token_budget: int | None = DEFAULT_VISION_TOKEN_BUDGET,
     caller_tag: str = "",
+    kv_cache_dtype: str | None = None,
 ):
     """vision_token_budget=None or 0 skips mm_processor_kwargs entirely
     (falls back to each model's own default tokenization) — pass None for a
     text-only script, or 0 (via a --vision_token_budget CLI flag) to opt out
-    of alignment for a deliberate cheaper/faster exploratory run."""
+    of alignment for a deliberate cheaper/faster exploratory run.
+
+    kv_cache_dtype: None keeps vLLM's own default ("auto" — same dtype as
+    the model). "fp8" halves KV-cache memory, useful for a long
+    --max_model_len on a memory-constrained GPU — e.g. paired with an
+    already-quantized checkpoint (a real released quantized checkpoint like
+    nvidia/Gemma-4-31B-IT-NVFP4, NOT the on-the-fly quantization= kwarg
+    above — quantization= only applies bitsandbytes/awq/gptq to an
+    unquantized checkpoint's weights on load, it does nothing to KV-cache
+    memory, which is what kv_cache_dtype controls separately)."""
     from vllm import LLM
 
     kwargs = mm_processor_kwargs_for(model_id, vision_token_budget) if vision_token_budget else {}
@@ -112,7 +122,8 @@ def load_llm(
     dtype = _best_supported_dtype()
     quantization, load_format = normalize_quantization(quantization)
     print(f"\n{tag}Loading {model_id} via vLLM (dtype={dtype})"
-          + (f" (mm_processor_kwargs={kwargs})" if kwargs else ""))
+          + (f" (mm_processor_kwargs={kwargs})" if kwargs else "")
+          + (f" (kv_cache_dtype={kv_cache_dtype})" if kv_cache_dtype else ""))
     llm = LLM(
         model=model_id,
         dtype=dtype,
@@ -124,6 +135,7 @@ def load_llm(
         limit_mm_per_prompt={"image": 1},
         enforce_eager=enforce_eager,
         mm_processor_kwargs=kwargs or None,
+        kv_cache_dtype=kv_cache_dtype or "auto",
     )
     return llm, llm.get_tokenizer()
 
