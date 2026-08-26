@@ -27,23 +27,34 @@ SAMPLE_DATASETS = [
     "RoCoLe_disease_detection",
 ]
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--model", default="google/gemma-4-E4B-it")
-parser.add_argument("--config", default="src/config/detection_datasets.yaml")
-parser.add_argument("--k_candidates", type=int, default=6)
-args = parser.parse_args()
 
-llm, tokenizer = load_llm(args.model, caller_tag="print_synonyms")
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default="google/gemma-4-E4B-it")
+    parser.add_argument("--config", default="src/config/detection_datasets.yaml")
+    parser.add_argument("--k_candidates", type=int, default=6)
+    args = parser.parse_args()
 
-by_name = {ds.agml_name: ds for ds in active_datasets(Path(args.config))}
-for name in SAMPLE_DATASETS:
-    ds = by_name.get(name)
-    if ds is None:
-        print(f"[skip] {name} not found in {args.config}")
-        continue
-    class_names = ds.clean_classes
-    print(f"\n=== {name} (crop={crop_display(ds.crop)}) ===")
-    print(f"original class_names: {class_names}")
-    variants = generate_class_name_variants(llm, tokenizer, class_names, args.k_candidates)
-    for k, v in enumerate(variants):
-        print(f"  variant {k}: {v}")
+    llm, tokenizer = load_llm(args.model, caller_tag="print_synonyms")
+
+    by_name = {ds.agml_name: ds for ds in active_datasets(Path(args.config))}
+    for name in SAMPLE_DATASETS:
+        ds = by_name.get(name)
+        if ds is None:
+            print(f"[skip] {name} not found in {args.config}")
+            continue
+        class_names = ds.clean_classes
+        print(f"\n=== {name} (crop={crop_display(ds.crop)}) ===")
+        print(f"original class_names: {class_names}")
+        variants = generate_class_name_variants(llm, tokenizer, class_names, args.k_candidates)
+        for k, v in enumerate(variants):
+            print(f"  variant {k}: {v}")
+
+
+# vLLM spawns worker subprocesses that re-import this module -- everything
+# that actually runs (arg parsing, model loading) must live behind this
+# guard, or Python's multiprocessing "spawn" start method refuses to launch
+# the workers ("attempt has been made to start a new process before the
+# current process has finished its bootstrapping phase").
+if __name__ == "__main__":
+    main()
