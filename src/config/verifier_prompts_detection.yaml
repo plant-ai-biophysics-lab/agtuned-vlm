@@ -104,5 +104,5 @@ structured_templates_json:
     Approximate size of each instance relative to the image:
 
     After filling in every line above, wrap your final answer in <answer></answer> tags containing ONLY a JSON array, one object per instance, each with exactly these two keys: "box_2d": [y_min, x_min, y_max, x_max] (0-1000 normalized scale, top-left origin) and "label": the class name, e.g.:
-    <answer>[{"box_2d": [45, 120, 210, 340], "label": "apple"}, {"box_2d": [100, 500, 300, 620], "label": "apple"}]</answer>
+    <answer>[{{"box_2d": [45, 120, 210, 340], "label": "apple"}}, {{"box_2d": [100, 500, 300, 620], "label": "apple"}}]</answer>
     If none are visible, write exactly: <answer>[]</answer>
