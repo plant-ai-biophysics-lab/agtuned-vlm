@@ -148,9 +148,15 @@ def generate_class_name_variants(
     names_str = ", ".join(class_names)
     prompt_text = (
         f"For each of these object/class names: {names_str}\n"
-        f"Provide {n_variants} alternate ways to refer to each one — common names, "
-        f"synonyms, or a plainer description if the name looks like a coded or "
-        f"abbreviated dataset label rather than a name in common use.\n"
+        f"Provide {n_variants} DIFFERENT alternate ways to refer to each one — "
+        f"draw on whichever of these actually differ from the original and from "
+        f"each other: common/everyday names, synonyms, the scientific or "
+        f"botanical name, more specific terms (e.g. the specific part of the "
+        f"plant, like \"pod\" or \"fruit\"), or — only if the given name looks "
+        f"like a coded/abbreviated dataset label — a plainer description of it. "
+        f"Even if the given name is already a common, everyday word, still "
+        f"provide {n_variants} genuinely different alternates for it — do not "
+        f"just repeat the original name across variants.\n"
         f"Respond with JSON only: a list of exactly {n_variants} lists, each containing "
         f"one alternate name per class, in the same order as given. Example for 2 "
         f'classes and 3 variants: [["name1a","name2a"],["name1b","name2b"],'
