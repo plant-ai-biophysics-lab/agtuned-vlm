@@ -132,8 +132,24 @@ def write_summary(output_dir: Path, combined: dict[str, dict[str, dict]]) -> Non
     print(f"  Saved: {output_dir / 'stage2_summary.json'}")
 
 
+_BAR_PALETTE = ["#e06b00", "#1258a0", "#2f7a3d", "#8c564b", "#9467bd", "#17a398"]
+
+
+def _lighten(hex_color: str, amount: float = 0.35) -> tuple:
+    """Blend `hex_color` toward white by `amount` (0 = unchanged, 1 =
+    white) — _BAR_PALETTE's colors read as too saturated/bold at full-size
+    bar-fill area (fine as thin lines in verifier_scaling_summary.py's
+    charts, too heavy here)."""
+    import matplotlib.colors as mcolors
+    r, g, b = mcolors.to_rgb(hex_color)
+    return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
+
+
 def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> None:
-    models = _ordered_backbones(list(combined.keys()))
+    # Alphabetical order + a cycling palette — same convention as
+    # verifier_scaling_summary.py's charts (_model_color_map), so a model
+    # reads the same color across both figure families.
+    models = sorted(combined.keys())
     if not models:
         print("  No models to plot.")
         return
@@ -144,7 +160,7 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
     })
     scopes = task_types + ["overall"]  # overall last, everything else alphabetical
 
-    model_colors = _family_shaded_colors(models)
+    model_colors = {m: _lighten(_BAR_PALETTE[i % len(_BAR_PALETTE)]) for i, m in enumerate(models)}
     n_bars = len(models) * len(_CONDITIONS)
     width = 0.8 / n_bars
     x = np.arange(len(scopes))
@@ -179,7 +195,7 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
 
             offset = (bar_i - (n_bars - 1) / 2) * width
             label = f"{model.split('/')[-1]} ({cond_label})"
-            ax.bar(
+            bars = ax.bar(
                 x + offset, means, width, label=label,
                 color=model_colors[model],
                 # Hatch marks Upper Bound (desc_aug) — horizontal ("--"),
@@ -193,6 +209,9 @@ def plot_f1_by_task(output_dir: Path, combined: dict[str, dict[str, dict]]) -> N
                 yerr=[lo_err, hi_err], capsize=2,
                 error_kw={"elinewidth": 0.8, "alpha": 0.7},
             )
+            for bar, m, hi in zip(bars, means, hi_err):
+                ax.text(bar.get_x() + bar.get_width() / 2, m + hi + max_top * 0.01,
+                        f"{m:.2f}", ha="center", va="bottom", fontsize=7.5)
             bar_i += 1
 
     if any_unjudged:
@@ -376,8 +395,21 @@ def plot_f1_percentiles(output_dir: Path, per_class_arrays: dict[str, dict[str, 
     print(f"  Saved: {path}")
 
 
+def _drop_excluded(d: dict[str, dict], exclude_models: list[str]) -> dict[str, dict]:
+    """Filter a {model: ...} dict, dropping any model whose key contains
+    one of exclude_models' substrings (case-insensitive) — e.g.
+    --exclude_models qwen drops every Qwen variant from every downstream
+    chart/summary in one place, without touching the underlying
+    checkpoint directories."""
+    if not exclude_models:
+        return d
+    needles = [e.lower() for e in exclude_models]
+    return {model: v for model, v in d.items() if not any(n in model.lower() for n in needles)}
+
+
 def main(args: argparse.Namespace) -> None:
     combined = collate(Path(args.baseline_dir), Path(args.aug_dir), args.n_boot, args.seed)
+    combined = _drop_excluded(combined, args.exclude_models)
     if not combined:
         print(f"No checkpointed models found under {args.baseline_dir} or {args.aug_dir}")
         return
@@ -386,11 +418,13 @@ def main(args: argparse.Namespace) -> None:
     plot_f1_by_task(output_dir, combined)
 
     delta_combined = collate_deltas(Path(args.baseline_dir), Path(args.aug_dir), args.n_boot, args.seed)
+    delta_combined = _drop_excluded(delta_combined, args.exclude_models)
     if delta_combined:
         write_delta_summary(output_dir, delta_combined)
         plot_f1_delta_by_task(output_dir, delta_combined)
 
     per_class_arrays = collect_per_class_f1(Path(args.baseline_dir), Path(args.aug_dir))
+    per_class_arrays = _drop_excluded(per_class_arrays, args.exclude_models)
     plot_f1_percentiles(output_dir, per_class_arrays)
 
 
@@ -411,6 +445,9 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="outputs_final/vision_baseline_collated/")
     parser.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CI.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--exclude_models", nargs="+", default=[],
+                         help="Drop any model whose name contains one of these substrings "
+                              "(case-insensitive) from every chart/summary, e.g. --exclude_models qwen.")
 
     # Keys this script doesn't use but the shared config file also carries
     # for vision_baseline.py / desc_augmented_vision_v2.py.
