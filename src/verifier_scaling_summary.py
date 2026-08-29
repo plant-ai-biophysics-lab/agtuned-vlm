@@ -57,16 +57,18 @@ def _display_label(model_safe: str) -> str:
     return model_safe.replace("google_", "").replace("Qwen_", "")
 
 
-def load_sweep_configs() -> list[dict]:
+def load_sweep_configs(sweep_dir: Path = _K_SWEEP_DIR) -> list[dict]:
     """Every (model, K, pivots) point recorded so far, across every model's
-    own outputs_final/verifier_k_sweep/<model>.csv — each row already
-    carries its own verifier_dir (written by verifier-summary's
-    record_k_sweep_point), so no separate directory-discovery pass is
-    needed. Only judged points (non-empty judge_f1_macro) are returned."""
+    own <sweep_dir>/<model>.csv — each row already carries its own
+    verifier_dir (written by verifier-summary's record_k_sweep_point), so
+    no separate directory-discovery pass is needed. Only judged points
+    (non-empty judge_f1_macro) are returned. sweep_dir defaults to the
+    shared outputs_final/verifier_k_sweep/, but pass a different directory
+    (via --sweep_dir) to read an isolated batch of runs on its own."""
     configs = []
-    if not _K_SWEEP_DIR.exists():
+    if not sweep_dir.exists():
         return configs
-    for f in sorted(_K_SWEEP_DIR.glob("*.csv")):
+    for f in sorted(sweep_dir.glob("*.csv")):
         model_safe = f.stem
         with open(f, encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
@@ -410,9 +412,10 @@ def plot_avg_time_per_response(configs: list[dict], out_dir: Path) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
-    configs = load_sweep_configs()
+    sweep_dir = Path(args.sweep_dir)
+    configs = load_sweep_configs(sweep_dir)
     if not configs:
-        print(f"  No recorded points under {_K_SWEEP_DIR} — run `verifier-summary --k_pivots ...` "
+        print(f"  No recorded points under {sweep_dir} — run `verifier-summary --k_pivots ...` "
               f"at least once first.")
         return
     print(f"  {len(configs)} (model, K, pivots) point(s) found:")
@@ -431,6 +434,9 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--output_dir", default="outputs_final/verifier_scaling_collated/")
+    p.add_argument("--sweep_dir", default="outputs_final/verifier_k_sweep/",
+                   help="Read (model, K, pivots) points from here — must match whatever "
+                        "--sweep_dir verifier-summary recorded them into.")
     p.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the delta 95%% CIs.")
     p.add_argument("--seed", type=int, default=42)
     main(p.parse_args())

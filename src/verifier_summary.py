@@ -99,7 +99,7 @@ _K_SWEEP_DIR = Path("outputs_final/verifier_k_sweep")
 def record_k_sweep_point(
     model_safe: str, k_candidates: int, k_pivots: int,
     judge_f1_macro: float | None, judge_ci_low: float | None, judge_ci_high: float | None,
-    n: int, verifier_dir: Path,
+    n: int, verifier_dir: Path, sweep_dir: Path = _K_SWEEP_DIR,
 ) -> Path:
     """Upsert one (k_candidates, k_pivots) -> judge_f1_macro point into a
     persistent CSV that survives across separate verifier-summary
@@ -108,9 +108,15 @@ def record_k_sweep_point(
     each `verifier-summary` call appends/updates its own point rather than
     requiring a separate sweep-plotting pass. Keyed on (k_candidates,
     k_pivots) so re-running the same pair (e.g. after --rerun) overwrites
-    its old point instead of duplicating a row."""
-    _K_SWEEP_DIR.mkdir(parents=True, exist_ok=True)
-    path = _K_SWEEP_DIR / f"{model_safe}.csv"
+    its old point instead of duplicating a row.
+
+    sweep_dir: defaults to the shared outputs_final/verifier_k_sweep/, but
+    pass a different directory (via --sweep_dir) to keep an incompatible
+    batch of runs (e.g. a prompt-template fix that changes what the
+    scores mean) from being silently conflated with older points in the
+    same per-model CSV."""
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    path = sweep_dir / f"{model_safe}.csv"
     fields = ["k_candidates", "k_pivots", "judge_f1_macro", "judge_ci_low", "judge_ci_high", "n", "verifier_dir"]
 
     rows: dict[tuple[int, int], dict] = {}
@@ -134,7 +140,7 @@ def record_k_sweep_point(
     return path
 
 
-def plot_k_sweep(model_safe: str) -> None:
+def plot_k_sweep(model_safe: str, sweep_dir: Path = _K_SWEEP_DIR) -> None:
     """Line chart of judge_f1_macro (95% CI) vs. every (k_candidates,
     k_pivots) point recorded so far for this model — x-axis sorted by
     k_candidates ascending, one tick per swept configuration. Regenerated
@@ -145,7 +151,7 @@ def plot_k_sweep(model_safe: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    path = _K_SWEEP_DIR / f"{model_safe}.csv"
+    path = sweep_dir / f"{model_safe}.csv"
     if not path.exists():
         return
     with open(path, encoding="utf-8") as f:
@@ -175,7 +181,7 @@ def plot_k_sweep(model_safe: str) -> None:
     ax.set_title(f"Verifier scaling — {model_safe}", fontsize=12)
     ax.grid(True, axis="y", alpha=0.25)
     plt.tight_layout()
-    out_path = _K_SWEEP_DIR / f"{model_safe}_k_sweep.png"
+    out_path = sweep_dir / f"{model_safe}_k_sweep.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out_path}")
@@ -409,13 +415,14 @@ def main(args: argparse.Namespace) -> None:
                 print("  [k-sweep] skipped — no judged Verifier rows or no pool_size found in checkpoint")
             else:
                 o = verifier_stats.get("overall", {})
+                sweep_dir = Path(args.sweep_dir)
                 record_k_sweep_point(
                     model_safe, k_candidates, args.k_pivots,
                     o.get("judge_f1_macro"), o.get("judge_ci_low"), o.get("judge_ci_high"),
                     n=next(n for lbl, _c, _st, n in results if lbl == "Verifier"),
-                    verifier_dir=verifier_dir,
+                    verifier_dir=verifier_dir, sweep_dir=sweep_dir,
                 )
-                plot_k_sweep(model_safe)
+                plot_k_sweep(model_safe, sweep_dir=sweep_dir)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["condition", "judge_f1_macro", "judge_ci_low", "judge_ci_high",
@@ -446,6 +453,11 @@ if __name__ == "__main__":
                         "sweep chart at outputs_final/verifier_k_sweep/<model>_k_sweep.png, alongside "
                         "every other point recorded so far for this model. Omit to skip sweep "
                         "recording entirely (unaffected either way — this only adds an extra output).")
+    p.add_argument("--sweep_dir", default="outputs_final/verifier_k_sweep/",
+                   help="Where --k_pivots sweep points are recorded/read from. Point this at a "
+                        "separate directory to keep an incompatible batch of runs (e.g. after a "
+                        "prompt-template fix) from being conflated with older points in the same "
+                        "per-model CSV.")
     p.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CIs.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--match_images_from", default=None,
