@@ -1,0 +1,28 @@
+# Defaults for `python main.py ablation --step ...` — see src/ablation.py.
+# Any flag also passed on the command line overrides these.
+
+output_dir: ablation/
+config: src/config/datasets.yaml
+classification_jsonl: dataset/agml_classification.jsonl
+
+# Existing verifier_cot.py / detection_verifier.py runs to reconstruct
+# selection arms from (Q2/Q3) and pull calibration data from (Q4). Each
+# entry is a directory containing one <model>/ subfolder per model, exactly
+# like verifier_cot.py's own --output_dir layout.
+verifier_runs:
+  - outputs_final/verifier_cot_k4
+  - outputs_final/verifier_cot_k8
+
+# Existing desc_augmented_vision(_v2).py runs to join against grounding_status (Q5).
+desc_aug_runs:
+  - outputs_final/desc_augmented_vision
+  - outputs_final/desc_augmented_vision_v2
+
+n_random_seeds: 5
+n_calibration_buckets: 10
+n_risk_thresholds: 20
+
+# --step generate only (Q2's two new conditions) — see src/ablation.py --help.
+k_candidates: 4
+gen_temperature: 1.0
+gen_max_tokens: 180
