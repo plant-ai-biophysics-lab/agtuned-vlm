@@ -209,9 +209,19 @@ def run_generate(args: argparse.Namespace) -> None:
 
 # ── Step: selection (Q2 + Q3) ───────────────────────────────────────────────
 
+def _model_filter(args: argparse.Namespace) -> set[str] | None:
+    """--models (safe-name-mapped) restricts every reconstruction step to a
+    subset of models — e.g. an ablation run scoped to just one variant.
+    None (the --models flag omitted/empty) means no restriction."""
+    if not getattr(args, "models", None):
+        return None
+    return {safe_model_name(m) for m in args.models}
+
+
 def run_selection(args: argparse.Namespace) -> None:
     out_dir = Path(args.output_dir) / "selection"
     out_dir.mkdir(parents=True, exist_ok=True)
+    model_filter = _model_filter(args)
 
     all_rows: list[dict] = []
     for run_dir_str in args.verifier_runs:
@@ -222,6 +232,8 @@ def run_selection(args: argparse.Namespace) -> None:
         condition = run_dir.name
         for model_dir in sorted(run_dir.iterdir()):
             if not model_dir.is_dir():
+                continue
+            if model_filter is not None and model_dir.name not in model_filter:
                 continue
             ckpt = model_dir / f"ckpt_{model_dir.name}.csv"
             log = model_dir / "verifier_log.jsonl"
@@ -249,6 +261,8 @@ def run_selection(args: argparse.Namespace) -> None:
             if not condition_dir.is_dir():
                 continue
             for model_dir in sorted(condition_dir.iterdir()):
+                if model_filter is not None and model_dir.name not in model_filter:
+                    continue
                 jsonl_path = model_dir / "candidates.jsonl"
                 if not jsonl_path.exists():
                     continue
@@ -380,6 +394,7 @@ def run_calibration(args: argparse.Namespace) -> None:
     (out_dir / "score_direction_check.json").write_text(json.dumps(direction, indent=2))
     print(f"  score_direction_check: direction_ok={direction['direction_ok']}")
 
+    model_filter = _model_filter(args)
     summary: dict = {"score_direction_check": direction, "by_run": {}}
     for run_dir_str in args.verifier_runs:
         run_dir = Path(run_dir_str)
@@ -388,6 +403,8 @@ def run_calibration(args: argparse.Namespace) -> None:
         condition = run_dir.name
         for model_dir in sorted(run_dir.iterdir()):
             if not model_dir.is_dir():
+                continue
+            if model_filter is not None and model_dir.name not in model_filter:
                 continue
             ckpt = model_dir / f"ckpt_{model_dir.name}.csv"
             log = model_dir / "verifier_log.jsonl"
@@ -435,6 +452,7 @@ def run_oracle_leakage(args: argparse.Namespace) -> None:
     for r in tally:
         print(f"    {r['grounding_status']}: {r['n_classes']} ({r['fraction']:.1%}) leaky={r['leaky']}")
 
+    model_filter = _model_filter(args)
     breakdown_rows = []
     for run_dir_str in args.desc_aug_runs:
         run_dir = Path(run_dir_str)
@@ -442,6 +460,8 @@ def run_oracle_leakage(args: argparse.Namespace) -> None:
             continue
         for model_dir in sorted(run_dir.iterdir()):
             if not model_dir.is_dir():
+                continue
+            if model_filter is not None and model_dir.name not in model_filter:
                 continue
             ckpt_candidates = list(model_dir.glob("ckpt_*.csv"))
             if not ckpt_candidates:
@@ -555,6 +575,11 @@ if __name__ == "__main__":
                          default=["outputs_final/verifier_cot_k4", "outputs_final/verifier_cot_k8"])
     parser.add_argument("--desc_aug_runs", nargs="+",
                          default=["outputs_final/desc_augmented_vision", "outputs_final/desc_augmented_vision_v2"])
+    parser.add_argument("--models", nargs="+", default=["google/gemma-4-E4B-it"],
+                         help="Restricts selection/calibration/oracle-leakage to these models "
+                              "(matched against each run dir's model subfolder via safe_model_name, "
+                              "i.e. '/' -> '_'). Pass --models with a wider list (or set an empty "
+                              "list in --ablation_config) to lift the restriction.")
     parser.add_argument("--n_random_seeds", type=int, default=5)
     parser.add_argument("--n_calibration_buckets", type=int, default=10)
     parser.add_argument("--n_risk_thresholds", type=int, default=20)
