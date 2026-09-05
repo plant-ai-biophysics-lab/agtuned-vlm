@@ -48,7 +48,7 @@ def add_answer_only_field(rows: list[dict]) -> None:
         r["answer_only"] = answer
 
 
-def rejudge_answer_only(
+def rejudge_condition(
     rows: list[dict],
     judge_llm,
     judge_tok,
@@ -56,14 +56,28 @@ def rejudge_answer_only(
     confidence_threshold: int,
     chunk_size: int,
     log_path: Path | None,
+    pred_key: str = "answer_only",
+    template_key: str = "judge_classification_template",
     progress_desc: str = "Re-judging",
 ) -> list[dict]:
-    """Re-judges `rows` (which must already carry answer_only, via
-    add_answer_only_field) against pred_key="answer_only" instead of
-    "prediction". Preserves the ORIGINAL full-trajectory verdict under
+    """Re-judges `rows` against `pred_key` using `prompts[template_key]`
+    instead of the original "prediction"/judge_classification_template pair.
+    Preserves the ORIGINAL full-trajectory verdict under
     judged_correct_full_trajectory/judge_reasoning_full_trajectory before
     calling apply_judge, since apply_judge's return dict overwrites
-    judged_correct/judge_reasoning with the new (answer-only) result."""
+    judged_correct/judge_reasoning with the new result.
+
+    Two re-judge conditions currently use this:
+      - answer_only: pred_key="answer_only" (needs add_answer_only_field
+        first), template_key="judge_classification_template" (unchanged) —
+        strips the rubric's observational fields out entirely.
+      - strict_context: pred_key="prediction" (the full trajectory,
+        unchanged), template_key="judge_classification_strict_template" —
+        keeps the full context but explicitly instructs the judge to grade
+        only the model's own stated final diagnosis, not the narrative
+        around it, and to require taxonomic/common-name specificity rather
+        than crediting a generic symptom-shape label.
+    """
     from src.common.progress import ProgressBar
 
     for r in rows:
@@ -77,8 +91,8 @@ def rejudge_answer_only(
         judged_chunk = apply_judge(
             rows=chunk, llm=judge_llm, tokenizer=judge_tok,
             system_prompt=prompts.get("judge_system_vision", ""),
-            judge_template=prompts["judge_classification_template"],
-            gt_key="judge_gt_hint", pred_key="answer_only",
+            judge_template=prompts[template_key],
+            gt_key="judge_gt_hint", pred_key=pred_key,
             confidence_threshold=confidence_threshold,
             log_path=log_path,
         )
@@ -86,6 +100,11 @@ def rejudge_answer_only(
         pbar.update(len(chunk))
     pbar.finish()
     return out
+
+
+# Backward-compatible alias — the original name, kept so any existing
+# callers/scripts referencing it directly don't break.
+rejudge_answer_only = rejudge_condition
 
 
 def rows_with_judged_correct(rows: list[dict], key: str) -> list[dict]:

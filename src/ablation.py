@@ -71,7 +71,7 @@ from src.common.ablation_calibration import (
     score_direction_check, selective_risk_curve,
 )
 from src.common.ablation_judge_recheck import (
-    add_answer_only_field, load_ckpt_rows, rejudge_answer_only, rows_with_judged_correct, summary_table,
+    add_answer_only_field, load_ckpt_rows, rejudge_condition, rows_with_judged_correct, summary_table,
 )
 from src.common.ablation_oracle_leakage import (
     f1_by_grounding_status, join_desc_aug_rows_with_grounding, load_grounding_status_map,
@@ -538,6 +538,22 @@ def _first_existing_ckpt(run_dirs: list[str], model_safe: str) -> Path | None:
     return None
 
 
+# Re-judge modes: (mode_key, pred_key, template_key, label, progress verb).
+# "answer_only" strips the rubric's observational fields out entirely.
+# "strict_context" keeps the full trajectory but uses a template that
+# explicitly isolates the model's own stated diagnosis and requires
+# taxonomic/common-name specificity — see judge_classification_strict_
+# template's comment in src/config/prompts.yaml for why this was added
+# (the plain template + full trajectory credits a generic symptom-shape
+# label like "leaf spot disease" against unrelated conditions; answer_only
+# fixes that but loses the judge's semantic-matching ability on genuine
+# synonyms/common names — this mode keeps both).
+JUDGE_RECHECK_MODES = [
+    ("answer_only", "answer_only", "judge_classification_template", "answer only"),
+    ("strict_context", "prediction", "judge_classification_strict_template", "full trajectory, strict judge"),
+]
+
+
 def run_judge_recheck(args: argparse.Namespace) -> None:
     out_dir = Path(args.output_dir) / "judge_recheck"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -573,8 +589,8 @@ def run_judge_recheck(args: argparse.Namespace) -> None:
         return
 
     total_rows = sum(len(rows) for _, _, rows in jobs)
-    print(f"  {len(jobs)} (condition, model) job(s), {total_rows} row(s) total to re-judge "
-          f"using only the extracted <answer> tag instead of the full trajectory")
+    print(f"  {len(jobs)} (condition, model) job(s), {total_rows} row(s) total to re-judge, "
+          f"{len(JUDGE_RECHECK_MODES)} mode(s) each: {[m[0] for m in JUDGE_RECHECK_MODES]}")
 
     judge_llm, judge_tok = _load_judge_llm(
         args.judge_model, quantization=args.judge_quantize,
@@ -582,42 +598,44 @@ def run_judge_recheck(args: argparse.Namespace) -> None:
         max_model_len=args.max_model_len, enforce_eager=args.enforce_eager,
     )
 
-    rechecked_by_condition_model: dict[tuple[str, str], list[dict]] = {}
+    rechecked_by_condition_model_mode: dict[tuple[str, str, str], list[dict]] = {}
     for condition, model_safe, rows in jobs:
-        log_path = out_dir / f"{condition}__{model_safe}_judge_log.jsonl"
-        rechecked = rejudge_answer_only(
-            rows, judge_llm, judge_tok, prompts,
-            confidence_threshold=args.judge_confidence_threshold,
-            chunk_size=args.judge_chunk_size, log_path=log_path,
-            progress_desc=f"Re-judging {condition}/{model_safe}",
-        )
-        rechecked_by_condition_model[(condition, model_safe)] = rechecked
+        for mode_key, pred_key, template_key, mode_label in JUDGE_RECHECK_MODES:
+            log_path = out_dir / f"{condition}__{model_safe}__{mode_key}_judge_log.jsonl"
+            rechecked = rejudge_condition(
+                rows, judge_llm, judge_tok, prompts,
+                confidence_threshold=args.judge_confidence_threshold,
+                chunk_size=args.judge_chunk_size, log_path=log_path,
+                pred_key=pred_key, template_key=template_key,
+                progress_desc=f"Re-judging {condition}/{model_safe} ({mode_label})",
+            )
+            rechecked_by_condition_model_mode[(condition, model_safe, mode_key)] = rechecked
 
-        flip_to_correct = sum(1 for r in rechecked
-                               if not int(r["judged_correct_full_trajectory"] or 0) and int(r["judged_correct"]))
-        flip_to_wrong = sum(1 for r in rechecked
-                             if int(r["judged_correct_full_trajectory"] or 0) and not int(r["judged_correct"]))
-        print(f"  {condition}/{model_safe}: {len(rechecked)} row(s) re-judged — "
-              f"flips full-trajectory-wrong->answer-only-correct: {flip_to_correct}, "
-              f"flips full-trajectory-correct->answer-only-wrong: {flip_to_wrong}")
+            flip_to_correct = sum(1 for r in rechecked
+                                   if not int(r["judged_correct_full_trajectory"] or 0) and int(r["judged_correct"]))
+            flip_to_wrong = sum(1 for r in rechecked
+                                 if int(r["judged_correct_full_trajectory"] or 0) and not int(r["judged_correct"]))
+            print(f"  {condition}/{model_safe} [{mode_key}]: {len(rechecked)} row(s) re-judged — "
+                  f"flips full-trajectory-wrong->{mode_key}-correct: {flip_to_correct}, "
+                  f"flips full-trajectory-correct->{mode_key}-wrong: {flip_to_wrong}")
 
-        row_out_path = out_dir / f"{condition}__{model_safe}_rechecked.csv"
-        fields = ["agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
-                   "resolved_class", "correct", "prediction", "answer_only",
-                   "judged_correct_full_trajectory", "judge_reasoning_full_trajectory",
-                   "judged_correct", "judge_reasoning"]
-        with open(row_out_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-            w.writeheader()
-            for r in rechecked:
-                w.writerow(r)
-        print(f"  Saved: {row_out_path}")
+            row_out_path = out_dir / f"{condition}__{model_safe}__{mode_key}_rechecked.csv"
+            fields = ["agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
+                       "resolved_class", "correct", "prediction", "answer_only",
+                       "judged_correct_full_trajectory", "judge_reasoning_full_trajectory",
+                       "judged_correct", "judge_reasoning"]
+            with open(row_out_path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+                w.writeheader()
+                for r in rechecked:
+                    w.writerow(r)
+            print(f"  Saved: {row_out_path}")
 
     _destroy_judge_llm(judge_llm)
     del judge_tok
 
     # ── Compare against lower/upper bounds, per model ───────────────────────
-    models_seen = sorted({m for _, m in rechecked_by_condition_model})
+    models_seen = sorted({m for _, m, _ in rechecked_by_condition_model_mode})
     for model_safe in models_seen:
         rows_by_condition: dict[str, list[dict]] = {}
 
@@ -625,13 +643,23 @@ def run_judge_recheck(args: argparse.Namespace) -> None:
         if lb_ckpt is not None:
             rows_by_condition["Lower Bound"] = load_ckpt_rows(lb_ckpt)
 
-        for (condition, m), rechecked in rechecked_by_condition_model.items():
-            if m != model_safe:
-                continue
-            rows_by_condition[f"Verifier {condition} (full trajectory)"] = rows_with_judged_correct(
-                rechecked, "judged_correct_full_trajectory")
-            rows_by_condition[f"Verifier {condition} (answer only)"] = rows_with_judged_correct(
-                rechecked, "judged_correct")
+        conditions_seen = sorted({c for c, m, _ in rechecked_by_condition_model_mode if m == model_safe})
+        for condition in conditions_seen:
+            for mode_key, _, _, mode_label in JUDGE_RECHECK_MODES:
+                rechecked = rechecked_by_condition_model_mode.get((condition, model_safe, mode_key))
+                if rechecked is None:
+                    continue
+                # "full trajectory" (the original, unmodified verdict) only
+                # needs to be added once per condition, not once per mode —
+                # every mode's rechecked list carries the identical
+                # judged_correct_full_trajectory value, so the first mode
+                # processed wins and later ones are redundant.
+                full_traj_label = f"Verifier {condition} (full trajectory)"
+                if full_traj_label not in rows_by_condition:
+                    rows_by_condition[full_traj_label] = rows_with_judged_correct(
+                        rechecked, "judged_correct_full_trajectory")
+                rows_by_condition[f"Verifier {condition} ({mode_label})"] = rows_with_judged_correct(
+                    rechecked, "judged_correct")
 
         ub_ckpt = _first_existing_ckpt(args.desc_aug_runs, model_safe)
         if ub_ckpt is not None:
