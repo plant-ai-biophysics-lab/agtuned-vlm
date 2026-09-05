@@ -13,15 +13,20 @@ verifier_runs:
   - outputs_final/verifier_cot_k4
   - outputs_final/verifier_cot_k8
 
-# Existing desc_augmented_vision(_v2).py runs to join against grounding_status (Q5).
+# Existing desc_augmented_vision(_v2).py runs — joined against grounding_status
+# for Q5, and used as the "Upper Bound" comparison condition by judge-recheck.
 desc_aug_runs:
   - outputs_final/desc_augmented_vision
   - outputs_final/desc_augmented_vision_v2
 
-# Restricts selection/calibration/oracle-leakage to these models (full HF id,
-# matched via safe_model_name against each run dir's model subfolder). This
-# ablation is currently scoped to the E4B-it variant only — set to [] to lift
-# the restriction and include every model found under verifier_runs/desc_aug_runs.
+# judge-recheck's "Lower Bound" comparison condition.
+lower_bound_dir: outputs_final/vision_baseline
+
+# Restricts selection/calibration/oracle-leakage/judge-recheck to these models
+# (full HF id, matched via safe_model_name against each run dir's model
+# subfolder). This ablation is currently scoped to the E4B-it variant only —
+# set to [] to lift the restriction and include every model found under
+# verifier_runs/desc_aug_runs.
 models:
   - google/gemma-4-E4B-it
 
@@ -33,3 +38,12 @@ n_risk_thresholds: 20
 k_candidates: 4
 gen_temperature: 1.0
 gen_max_tokens: 180
+
+# --step judge-recheck only — re-judges verifier_runs' rows against just the
+# extracted <answer> tag instead of the full rubric-filled trajectory, to
+# measure how much of judged_correct is driven by the descriptive rubric
+# fields rather than the model's actual stated diagnosis.
+judge_model: google/gemma-4-26B-A4B-it
+judge_quantize: null
+judge_confidence_threshold: 1
+judge_chunk_size: 200

@@ -105,11 +105,14 @@ Stages:
                                into main.py — see its own --help) in `cot-compare`.
     ablation                 — reviewer-question ablation: isolates rubric vs. K-sampling
                                vs. verifier-selection (Q2/Q3), verifier confidence
-                               calibration/ranking accuracy (Q4), and oracle-description
-                               vision-leakage tabulation (Q5). --step {generate,selection,
-                               calibration,oracle-leakage,all}; only "generate" needs a
-                               GPU/model, the rest reconstruct from existing outputs_final/
-                               runs. Output under ablation/.
+                               calibration/ranking accuracy (Q4), oracle-description
+                               vision-leakage tabulation (Q5), and whether judged_correct
+                               is driven by the model's stated answer vs. the rubric's
+                               descriptive fields around it (judge-recheck). --step
+                               {generate,selection,calibration,oracle-leakage,judge-recheck,
+                               all}; "generate" and "judge-recheck" need a GPU/model, the
+                               rest reconstruct from existing outputs_final/ runs. Output
+                               under ablation/.
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:

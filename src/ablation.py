@@ -18,27 +18,37 @@ that the main pipeline's existing conditions can't isolate on their own:
                               is built from captions of the correct class's
                               own images (leak risk), and does that explain
                               cases where the verifier exceeds it?
+  (--step judge-recheck)     Is judged_correct actually grading the model's
+                              stated diagnosis, or is it being credited off
+                              the rubric's own descriptive fields (crop,
+                              symptom color/shape/texture, ...) that surround
+                              it? Re-judges the same rows using only the
+                              extracted <answer> tag, compared against the
+                              lower/upper bounds.
 
 --step selection and --step calibration are mostly reconstruction from data
 already on disk (existing outputs_final/verifier_cot_k*/ runs' checkpoint
 CSVs + verifier_log.jsonl sidecars) — no GPU needed. --step oracle-leakage
 is a pure join against dataset/agml_classification.jsonl — no GPU needed
-either. --step generate is the only step that loads a model (vLLM): it
-produces the two new candidate-pool conditions selection/Q2 needs that
-don't already exist anywhere in outputs_final/ (rubric-off K-candidate
-sampling, and rubric-on single-candidate generation), restricted to the
-same images an existing verifier_cot run already evaluated so every arm
-stays apples-to-apples.
+either. --step generate and --step judge-recheck are the two steps that load
+a model (vLLM): generate produces the two new candidate-pool conditions
+selection/Q2 needs that don't already exist anywhere in outputs_final/
+(rubric-off K-candidate sampling, and rubric-on single-candidate
+generation), restricted to the same images an existing verifier_cot run
+already evaluated so every arm stays apples-to-apples; judge-recheck loads
+the judge model to re-score already-judged rows.
 
 All output goes under --output_dir (default ablation/), one subfolder per
 step. See the module docstrings of src.common.ablation_selection /
-ablation_calibration / ablation_oracle_leakage for the actual logic — this
-file is just CLI plumbing + I/O wiring across existing runs.
+ablation_calibration / ablation_oracle_leakage / ablation_judge_recheck for
+the actual logic — this file is just CLI plumbing + I/O wiring across
+existing runs.
 
 Usage:
     uv run python main.py ablation --step selection
     uv run python main.py ablation --step calibration
     uv run python main.py ablation --step oracle-leakage
+    uv run python main.py ablation --step judge-recheck
     uv run python main.py ablation --step generate --model google/gemma-4-26B-A4B-it
     uv run python main.py ablation --step all --model google/gemma-4-26B-A4B-it
 """
@@ -60,6 +70,9 @@ from src.common.ablation_calibration import (
     calibration_curve, load_win_rate_rows, plot_calibration, ranking_accuracy,
     score_direction_check, selective_risk_curve,
 )
+from src.common.ablation_judge_recheck import (
+    add_answer_only_field, load_ckpt_rows, rejudge_answer_only, rows_with_judged_correct, summary_table,
+)
 from src.common.ablation_oracle_leakage import (
     f1_by_grounding_status, join_desc_aug_rows_with_grounding, load_grounding_status_map,
     rows_by_condition_for_chart, tally_grounding_status,
@@ -67,7 +80,8 @@ from src.common.ablation_oracle_leakage import (
 from src.common.ablation_selection import aggregate_arms, score_run
 from src.common.dataset_config import datasets_by_name, load_manifest
 from src.common.io import append_jsonl, load_prompts
-from src.common.method_comparison import plot_overall_judge_comparison
+from src.common.method_comparison import plot_overall_judge_comparison, plot_per_task_judge_comparison
+from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 # Reused directly, not reimplemented — same convention src/majority_vote.py
 # already uses to import private helpers from src/cot_vision.py.
@@ -505,6 +519,153 @@ def run_oracle_leakage(args: argparse.Namespace) -> None:
         print(f"  Saved: {breakdown_path}")
 
 
+# ── Step: judge-recheck (is judged_correct driven by the answer, or the
+#    rubric's descriptive fields around it?) ────────────────────────────────
+
+def _find_ckpt(run_dir: Path, model_safe: str) -> Path | None:
+    p = run_dir / model_safe / f"ckpt_{model_safe}.csv"
+    return p if p.exists() else None
+
+
+def _first_existing_ckpt(run_dirs: list[str], model_safe: str) -> Path | None:
+    """First (run_dir, model) checkpoint that actually exists, in the order
+    given — used to pick a lower/upper-bound reference per model without
+    hardcoding which of several candidate run directories has it."""
+    for run_dir_str in run_dirs:
+        p = _find_ckpt(Path(run_dir_str), model_safe)
+        if p is not None:
+            return p
+    return None
+
+
+def run_judge_recheck(args: argparse.Namespace) -> None:
+    out_dir = Path(args.output_dir) / "judge_recheck"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_filter = _model_filter(args)
+    prompts = load_prompts(Path(args.prompts))
+
+    jobs = []  # (condition, model_safe, rows)
+    for run_dir_str in args.verifier_runs:
+        run_dir = Path(run_dir_str)
+        if not run_dir.exists():
+            continue
+        condition = run_dir.name
+        for model_dir in sorted(run_dir.iterdir()):
+            if not model_dir.is_dir():
+                continue
+            if model_filter is not None and model_dir.name not in model_filter:
+                continue
+            ckpt = _find_ckpt(run_dir, model_dir.name)
+            if ckpt is None:
+                continue
+            rows = load_ckpt_rows(ckpt)
+            rows = [r for r in rows if r.get("judged_correct", "") != ""]
+            if not rows:
+                print(f"  [skip] {condition}/{model_dir.name} — no already-judged rows "
+                      f"(run the judge phase first, e.g. via verifier-cot without --skip_judge)")
+                continue
+            add_answer_only_field(rows)
+            jobs.append((condition, model_dir.name, rows))
+
+    if not jobs:
+        print("  Nothing to re-judge — check --verifier_runs/--models, and that those "
+              "checkpoints already have judged_correct populated.")
+        return
+
+    total_rows = sum(len(rows) for _, _, rows in jobs)
+    print(f"  {len(jobs)} (condition, model) job(s), {total_rows} row(s) total to re-judge "
+          f"using only the extracted <answer> tag instead of the full trajectory")
+
+    judge_llm, judge_tok = _load_judge_llm(
+        args.judge_model, quantization=args.judge_quantize,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len, enforce_eager=args.enforce_eager,
+    )
+
+    rechecked_by_condition_model: dict[tuple[str, str], list[dict]] = {}
+    for condition, model_safe, rows in jobs:
+        log_path = out_dir / f"{condition}__{model_safe}_judge_log.jsonl"
+        rechecked = rejudge_answer_only(
+            rows, judge_llm, judge_tok, prompts,
+            confidence_threshold=args.judge_confidence_threshold,
+            chunk_size=args.judge_chunk_size, log_path=log_path,
+            progress_desc=f"Re-judging {condition}/{model_safe}",
+        )
+        rechecked_by_condition_model[(condition, model_safe)] = rechecked
+
+        flip_to_correct = sum(1 for r in rechecked
+                               if not int(r["judged_correct_full_trajectory"] or 0) and int(r["judged_correct"]))
+        flip_to_wrong = sum(1 for r in rechecked
+                             if int(r["judged_correct_full_trajectory"] or 0) and not int(r["judged_correct"]))
+        print(f"  {condition}/{model_safe}: {len(rechecked)} row(s) re-judged — "
+              f"flips full-trajectory-wrong->answer-only-correct: {flip_to_correct}, "
+              f"flips full-trajectory-correct->answer-only-wrong: {flip_to_wrong}")
+
+        row_out_path = out_dir / f"{condition}__{model_safe}_rechecked.csv"
+        fields = ["agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
+                   "resolved_class", "correct", "prediction", "answer_only",
+                   "judged_correct_full_trajectory", "judge_reasoning_full_trajectory",
+                   "judged_correct", "judge_reasoning"]
+        with open(row_out_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+            w.writeheader()
+            for r in rechecked:
+                w.writerow(r)
+        print(f"  Saved: {row_out_path}")
+
+    _destroy_judge_llm(judge_llm)
+    del judge_tok
+
+    # ── Compare against lower/upper bounds, per model ───────────────────────
+    models_seen = sorted({m for _, m in rechecked_by_condition_model})
+    for model_safe in models_seen:
+        rows_by_condition: dict[str, list[dict]] = {}
+
+        lb_ckpt = _first_existing_ckpt([args.lower_bound_dir], model_safe)
+        if lb_ckpt is not None:
+            rows_by_condition["Lower Bound"] = load_ckpt_rows(lb_ckpt)
+
+        for (condition, m), rechecked in rechecked_by_condition_model.items():
+            if m != model_safe:
+                continue
+            rows_by_condition[f"Verifier {condition} (full trajectory)"] = rows_with_judged_correct(
+                rechecked, "judged_correct_full_trajectory")
+            rows_by_condition[f"Verifier {condition} (answer only)"] = rows_with_judged_correct(
+                rechecked, "judged_correct")
+
+        ub_ckpt = _first_existing_ckpt(args.desc_aug_runs, model_safe)
+        if ub_ckpt is not None:
+            rows_by_condition["Upper Bound"] = load_ckpt_rows(ub_ckpt)
+
+        model_out_dir = out_dir / model_safe
+        model_out_dir.mkdir(parents=True, exist_ok=True)
+
+        table = summary_table(rows_by_condition)
+        table_path = model_out_dir / "bounds_comparison.json"
+        table_path.write_text(json.dumps(table, indent=2))
+        print(f"  Saved: {table_path}")
+        for label, scopes in table.items():
+            overall = scopes.get("overall", {})
+            print(f"    {label}: judge_f1_macro={overall.get('judge_f1_macro')}, "
+                  f"judge_accuracy={overall.get('judge_accuracy')} (n={overall.get('n_judged')})")
+
+        order = list(rows_by_condition.keys())
+        try:
+            plot_overall_judge_comparison(
+                rows_by_condition, model_out_dir / "bounds_comparison_overall.png",
+                title=f"Judged F1 vs. bounds — {model_safe}", condition_order=order,
+            )
+        except Exception as e:
+            print(f"  [warn] overall chart failed for {model_safe}: {e}")
+        try:
+            plot_per_task_judge_comparison(
+                rows_by_condition, model_out_dir / "bounds_comparison_by_task.png",
+                title=f"Judged F1 by task vs. bounds — {model_safe}", condition_order=order,
+            )
+        except Exception as e:
+            print(f"  [warn] per-task chart failed for {model_safe}: {e}")
+
+
 # ── Step: all ────────────────────────────────────────────────────────────────
 
 def run_all(args: argparse.Namespace) -> None:
@@ -545,6 +706,7 @@ def main(args: argparse.Namespace) -> None:
         "selection": run_selection,
         "calibration": run_calibration,
         "oracle-leakage": run_oracle_leakage,
+        "judge-recheck": run_judge_recheck,
         "all": run_all,
     }[args.step]
     if args.step == "generate" and not args.model:
@@ -566,7 +728,8 @@ if __name__ == "__main__":
         help="YAML file of defaults — edit it directly for routine changes instead of "
              "passing flags every time. Any flag also passed on the command line overrides it.",
     )
-    parser.add_argument("--step", choices=["generate", "selection", "calibration", "oracle-leakage", "all"],
+    parser.add_argument("--step", choices=["generate", "selection", "calibration", "oracle-leakage",
+                                            "judge-recheck", "all"],
                          required=True)
     parser.add_argument("--output_dir", default="ablation/")
     parser.add_argument("--config", default="src/config/datasets.yaml")
@@ -575,6 +738,8 @@ if __name__ == "__main__":
                          default=["outputs_final/verifier_cot_k4", "outputs_final/verifier_cot_k8"])
     parser.add_argument("--desc_aug_runs", nargs="+",
                          default=["outputs_final/desc_augmented_vision", "outputs_final/desc_augmented_vision_v2"])
+    parser.add_argument("--lower_bound_dir", default="outputs_final/vision_baseline",
+                         help="--step judge-recheck only: unaided lower-bound run to compare bounds against.")
     parser.add_argument("--models", nargs="+", default=["google/gemma-4-E4B-it"],
                          help="Restricts selection/calibration/oracle-leakage to these models "
                               "(matched against each run dir's model subfolder via safe_model_name, "
@@ -605,6 +770,14 @@ if __name__ == "__main__":
     parser.add_argument("--max_model_len", type=int, default=24576)
     parser.add_argument("--enforce_eager", action="store_true")
     parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET)
+
+    # --step judge-recheck only
+    parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
+                         help="Same judge model every other stage uses, so the answer-only "
+                              "re-judge is comparable to the original full-trajectory judging.")
+    parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
+    parser.add_argument("--judge_confidence_threshold", type=int, default=1)
+    parser.add_argument("--judge_chunk_size", type=int, default=200)
 
     if _pre_args.ablation_config and Path(_pre_args.ablation_config).exists():
         import yaml as _yaml
