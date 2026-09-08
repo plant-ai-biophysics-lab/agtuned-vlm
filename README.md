@@ -8,7 +8,11 @@ Evaluation framework for vision-language models on agricultural image understand
 uv sync
 ```
 
-## Experiments Pipeline
+## Paper 1 (current)
+
+**Paper:** TBA (link will be added once uploaded)
+
+### Experiments Pipeline
 
 | Stage | Doc | What it does |
 |---|---|---|
@@ -20,10 +24,22 @@ uv sync
 | 4 | [docs/stage4_verifier.md](docs/stage4_verifier.md) | Single-round verifier: K structured-criteria candidates ranked by a PPT tournament, argmax reported, vs. a full PPT-tournament baseline |
 | 5 | [docs/stage5_object_detection.md](docs/stage5_object_detection.md) | (IN PROGRESS) Object detection: same single-round verifier mechanism applied to bounding-box localization instead of classification |
 
-## Viewers
+### Viewers
 
 ```bash
 streamlit run app/classification_viewer.py -- --output_dir outputs/data_generation/
 ```
 
 Browse Stage 0b's output: dataset/crop/class per record, the grounding sources fetched for it, and the synthesized description. Works right after Step 1 alone (before descriptions exist) too — see [app/README.md](app/README.md).
+
+## Paper 2 (new experiments)
+
+**Paper:** TBA
+
+### Experiments Pipeline
+
+TBD
+
+### Viewers
+
+TBD
