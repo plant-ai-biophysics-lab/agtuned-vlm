@@ -23,6 +23,7 @@ from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
+from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import datasets_by_name
 from src.common.distribution_plots import (
     gather_cls_per_class_by_dataset,
@@ -154,26 +155,9 @@ def _clean_response(text: str) -> str:
 
 def _apply_chat_template(tokenizer, question: str, prompt_template: str, system_prompt: str = "") -> str:
     messages = [{"role": "user", "content": prompt_template.format(question=question)}]
-    sys_msg = system_prompt or ""
-    try:
-        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
-        return tokenizer.apply_chat_template(
-            full, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-    except TypeError:
-        pass
-    try:
-        sys_content = " ".join(filter(None, [sys_msg, "/no_think"]))
-        return tokenizer.apply_chat_template(
-            [{"role": "system", "content": sys_content}, *messages],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-    except Exception:
-        full = ([{"role": "system", "content": sys_msg}] if sys_msg else []) + messages
-        return tokenizer.apply_chat_template(
-            full, tokenize=False, add_generation_prompt=True
-        )
+    if system_prompt:
+        messages = [{"role": "system", "content": system_prompt}] + messages
+    return render_chat_template(tokenizer, messages)
 
 
 _MAMBA_MAX_NUM_SEQS = 32

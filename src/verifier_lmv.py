@@ -17,6 +17,20 @@ Two generation strategies × N ∈ {1, 5, 10}:
 
 Condition labels: PPT-Direct-N{1,5,10}, PPT-SelfCoT-N{1,5,10}
 
+Scoring mechanism — two-pass prefill, factored into src/common/
+ppt_scoring.py (shared with src/verifier_cot.py's --baseline belief
+pairwise duel, which uses this exact same mechanism): pass 1 generates
+the comparative analysis only (temperature=1.0, max_tokens=150, no
+logprobs needed — the tag content it writes here is discarded, not
+scored). Pass 2 continues that exact prefix with "\n<score_A>" (then
+separately "\n<score_B>") appended and the very next token constrained to
+just the 20 scale letters (+ their leading-space tokenization variants)
+via a grammar mask. The resulting top-20 logprobs are then a distribution
+already renormalized over the scale itself, not competing against the
+model's full vocabulary. See ppt_scoring.py's module docstring for why
+this replaced an earlier single-free-generation-call version that
+collapsed onto "A" ~96% of the time on a real feasibility test.
+
 Usage:
   uv run python src/verifier_lmv.py \\
     --model google/gemma-4-26B-A4B-it \\
@@ -41,6 +55,7 @@ import csv
 import gc
 import json
 import random
+import functools
 import sys
 import time
 from collections import defaultdict
@@ -49,14 +64,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
+import yaml
 from PIL import Image as PILImage
-from tqdm import tqdm
 
 try:
     from vllm import LLM, SamplingParams
 except ImportError:
     LLM = None
     SamplingParams = None
+
+from src.common.ppt_scoring import (
+    analysis_before_tags, build_score_prompt, extract_tag_score,
+    pairwise_scoring_prompt, score_prefill_params,
+)
+from src.common.progress import ProgressBar
 
 try:
     from llm_verifier.pivot_tournament import (
@@ -99,14 +120,14 @@ _CRITERIA_DISEASE_C3 = {
         "specific, not generic, and visually consistent with all features in the image?"
     ),
 }
-_CRITERIA_WEED_C1 = {
+_CRITERIA_SPECIES_C1 = {
     "Visual_Match": (
-        "Does the prediction correctly identify the weed species in a way that "
+        "Does the prediction correctly identify the plant/weed species in a way that "
         "is botanically consistent with the visible leaf shape, arrangement, "
         "margins, growth habit, and any reproductive structures in the image?"
     ),
 }
-_CRITERIA_WEED_C3 = {
+_CRITERIA_SPECIES_C3 = {
     "Morphological_Features": (
         "Does the prediction match visible leaf arrangement, shape, margins, "
         "venation pattern, and stem characteristics shown in the image?"
@@ -121,13 +142,43 @@ _CRITERIA_WEED_C3 = {
         "specific and consistent with all visible features in the image?"
     ),
 }
+_CRITERIA_QUALITY_C1 = {
+    "Visual_Match": (
+        "Does the prediction correctly identify the quality, ripeness, or condition "
+        "in a way that is specific and visually consistent with the size, color, and "
+        "surface texture cues visible in the image?"
+    ),
+}
+_CRITERIA_QUALITY_C3 = {
+    "Size_and_Shape": (
+        "Does the prediction match the visible size and shape relative to a "
+        "typical mature specimen?"
+    ),
+    "Color_and_Ripeness": (
+        "Does the prediction align with the observed color and its position "
+        "between unripe and overripe/spoiled?"
+    ),
+    "Surface_Condition": (
+        "Does the prediction account for the visible surface texture and firmness "
+        "cues (bruising, wrinkling, gloss, softness), and is the stated quality/"
+        "ripeness/condition visually consistent with the image?"
+    ),
+}
+
+# task_type values as they actually appear in datasets.yaml today (DISEASE_TASK_TYPES
+# / IDENTIFICATION_TASK_TYPES in src/common/dataset_config.py) — "weed_identification"
+# was an earlier task-type name this file predates; every weed/species dataset is now
+# tagged species_identification (see _build_task_datasets's own tasks tuple below,
+# which had the same stale name and silently selected 0 datasets for it).
+_CRITERIA_BY_TASK_TYPE = {
+    "species_identification": (_CRITERIA_SPECIES_C1, _CRITERIA_SPECIES_C3),
+    "quality_identification": (_CRITERIA_QUALITY_C1, _CRITERIA_QUALITY_C3),
+}
 
 
 def _criteria_for(task_type: str, n_criteria: int) -> dict[str, str]:
-    is_weed = task_type == "weed_identification"
-    if n_criteria == 1:
-        return _CRITERIA_WEED_C1 if is_weed else _CRITERIA_DISEASE_C1
-    return _CRITERIA_WEED_C3 if is_weed else _CRITERIA_DISEASE_C3
+    c1, c3 = _CRITERIA_BY_TASK_TYPE.get(task_type, (_CRITERIA_DISEASE_C1, _CRITERIA_DISEASE_C3))
+    return c1 if n_criteria == 1 else c3
 
 
 # ── CSV helpers ────────────────────────────────────────────────────────────────
@@ -174,62 +225,11 @@ def _raw_cls_question(task_type: str, crop: str | None) -> str:
     _p = yaml.safe_load(
         (Path(__file__).parent / "config" / "prompts.yaml").read_text()
     )
-    if task_type == "weed_identification":
+    if task_type == "species_identification":
         return _p["visual_classification_weed"]
+    if task_type == "quality_identification":
+        return _p["visual_classification_quality"].format(crop=crop or "plant")
     return _p["visual_classification_disease"].format(crop=crop or "plant")
-
-
-def _pairwise_prompt_text(
-    task_type: str,
-    crop: str | None,
-    pred_a: str,
-    pred_b: str,
-    criterion_name: str,
-    criterion_desc: str,
-) -> str:
-    """Pairwise verifier prompt using <score_A>/<score_B> tags for extract_score."""
-    question = _raw_cls_question(task_type, crop)
-    return (
-        "You are evaluating two agricultural image classification predictions. "
-        "The image is attached.\n\n"
-        f"Question asked: {question}\n\n"
-        f"Prediction A:\n{pred_a[:300]}\n\n"
-        f"Prediction B:\n{pred_b[:300]}\n\n"
-        f"Criterion — {criterion_name}: {criterion_desc}\n\n"
-        "Rate each prediction on a 20-point letter scale:\n"
-        "  A = 20 (best: perfectly correct, specific, visually grounded)\n"
-        "  J = 11 (uncertain, partially correct)\n"
-        "  T = 1  (worst: completely wrong or irrelevant)\n\n"
-        "Briefly analyze both predictions against the criterion, then output:\n"
-        "<score_A>LETTER_A_TO_T</score_A>\n"
-        "<score_B>LETTER_A_TO_T</score_B>"
-    )
-
-
-# ── vLLM → extract_score format ───────────────────────────────────────────────
-
-def _vllm_to_score_format(out) -> tuple[str, list[str], list[list[tuple]]]:
-    """Convert vLLM RequestOutput to (text, tokens, position_logprobs) for extract_score.
-
-    extract_score expects:
-      text: full generated string
-      tokens: list of decoded token strings
-      position_logprobs: list of [(decoded_token, logprob)] per token position
-    """
-    text = out.outputs[0].text
-    token_ids = out.outputs[0].token_ids
-    logprobs_list = out.outputs[0].logprobs or []
-
-    tokens: list[str] = []
-    position_logprobs: list[list[tuple]] = []
-    for i, tid in enumerate(token_ids):
-        lp_dict = logprobs_list[i] if i < len(logprobs_list) else {}
-        tok_str = lp_dict[tid].decoded_token if (lp_dict and tid in lp_dict) else ""
-        tokens.append(tok_str)
-        alts = [(lp.decoded_token, lp.logprob) for lp in (lp_dict or {}).values()]
-        position_logprobs.append(alts)
-
-    return text, tokens, position_logprobs
 
 
 # ── Dataset selection (same logic as verifier_vision.py) ─────────────────────
@@ -248,7 +248,7 @@ def _build_task_datasets(config_path: str) -> dict[str, dict[str, list[str]]]:
         for task in (d.get("class_overrides") or {}).values():
             if task != d["task_type"]:
                 override[task].add(name)
-    tasks = ("disease", "pest_damage", "weed_identification")
+    tasks = ("disease", "pest_damage", "species_identification", "quality_identification")
     return {
         t: {"primary": sorted(primary.get(t, [])), "override": sorted(override.get(t, []))}
         for t in tasks
@@ -259,8 +259,27 @@ def select_datasets(
     n_per_task: int = N_DATASETS_PER_TASK,
     seed: int = SEED,
     config_path: str = "src/config/datasets.yaml",
+    subsample: set[str] | None = None,
 ) -> dict[str, list[str]]:
+    """subsample (--subsample) restricts to exactly these agml_name(s) —
+    every one of them that falls in a given task's pool, not a further
+    n_per_task-capped random draw from within them — instead of the usual
+    random n_per_task-per-task selection. Same convention as
+    cot_yaml.py's --swap_datasets / verifier_cot.py's --subsample, for
+    fast testing against a small, deliberate set (e.g. cot-compare's own
+    top gain/loss cot_yaml_swap_datasets.txt)."""
     pools = _build_task_datasets(config_path)
+    if subsample is not None:
+        selected = {
+            task: sorted((set(buckets["primary"]) | set(buckets["override"])) & subsample)
+            for task, buckets in pools.items()
+        }
+        found = {d for names in selected.values() for d in names}
+        missing = subsample - found
+        if missing:
+            print(f"  [warn] --subsample not found (skip/not in any known task pool?): {sorted(missing)}")
+        return selected
+
     rng = random.Random(seed)
     selected: dict[str, list[str]] = {}
     for task, buckets in pools.items():
@@ -280,19 +299,51 @@ def load_items(
     task_type: str,
     crop: str | None,
     n_samples: int | None,
+    manifest: dict,
+    images_root: Path,
     class_overrides: dict[str, str] | None = None,
+    excluded_classes: list[str] | None = None,
     seed: int = SEED,
     test_split: dict | None = None,
 ) -> list[dict]:
-    from src.cot_vision import load_dataset_classes, DATASET_TASK_TYPES
-    by_class = load_dataset_classes(ds_name, n_samples, test_split)
-    primary_task = DATASET_TASK_TYPES.get(ds_name, (task_type, crop))[0]
+    """Same [{"ds","task_type","crop","cls","image_path","image_name"}, ...]
+    shape as before this was migrated — now sourced from the same
+    HF-manifest pipeline every other stage uses (load_hf_samples /
+    load_manifest, src/common/dataset_config.py) instead of the legacy
+    agml pip-package loader (cot_vision.load_dataset_classes ->
+    agml.data.AgMLDataLoader), which only covers ~20% of this project's
+    current dataset corpus — most datasets were added later via
+    scripts/agml_hf/download_and_sample.py's HuggingFace-based pipeline
+    and were never registered with the old agml package at all, so the
+    old loader raised "invalid public source" for the large majority of
+    datasets select_datasets() could pick. class_overrides/excluded_classes
+    are the same raw (manifest-label-keyed) dicts/lists DatasetConfig
+    carries — see excluded_class_pairs()'s docstring for why raw form,
+    not the cleaned display form, is correct here."""
+    from src.common.dataset_config import load_hf_samples
+    from src.common.metrics import sample_class_images
+
+    samples = load_hf_samples(ds_name, manifest, images_root, excluded_classes=excluded_classes)
+    by_class: dict[str, list[Path]] = defaultdict(list)
+    for s in samples:
+        by_class[s["label"]].append(Path(s["path"]))
+
     items: list[dict] = []
+    split_cls = (test_split or {}).get(ds_name, {})
     for cls, paths in by_class.items():
-        effective = (class_overrides or {}).get(cls, primary_task)
+        effective = (class_overrides or {}).get(cls, task_type)
         if effective != task_type:
             continue
-        for p in paths:
+        if split_cls and cls in split_cls:
+            # Use test_split JSON order (same as vision_assessment) for deterministic sampling.
+            allowed_ordered = split_cls[cls]
+            path_by_name = {p.name: p for p in paths}
+            paths = [path_by_name[n] for n in allowed_ordered if n in path_by_name]
+        else:
+            paths = sorted(paths, key=lambda p: p.name)
+        path_by_name = {p.name: p for p in paths}
+        for n in sample_class_images(list(path_by_name.keys()), n_samples, seed=seed):
+            p = path_by_name[n]
             items.append({
                 "ds": ds_name, "task_type": task_type,
                 "crop": crop, "cls": cls,
@@ -322,7 +373,7 @@ def run_generate(
     rows: list[dict] = []
 
     print(f"\n[generate/direct] {len(items)} images × {n_max} candidates")
-    for start in tqdm(range(0, len(items), batch_size), desc="direct", unit="batch"):
+    for start in ProgressBar(range(0, len(items), batch_size), desc="direct"):
         batch = items[start:start + batch_size]
         prompts = [
             _build_prompt(
@@ -355,7 +406,7 @@ def run_generate(
     descriptions:   list[str]        = []
     desc_histories: list[list[dict]] = []
 
-    for start in tqdm(range(0, len(items), batch_size), desc="self_cot desc", unit="batch"):
+    for start in ProgressBar(range(0, len(items), batch_size), desc="self_cot desc"):
         batch = items[start:start + batch_size]
         prompts, hists = [], []
         for item in batch:
@@ -375,7 +426,7 @@ def run_generate(
             desc_histories.append(hist + [{"role": "assistant", "content": resp}])
         del prompts
 
-    for start in tqdm(range(0, len(items), batch_size), desc="self_cot cls", unit="batch"):
+    for start in ProgressBar(range(0, len(items), batch_size), desc="self_cot cls"):
         batch       = items[start:start + batch_size]
         batch_hists = desc_histories[start:start + batch_size]
         prompts = [
@@ -409,6 +460,17 @@ def run_generate(
 
 # ── Phase 2: PPT verification ─────────────────────────────────────────────────
 
+@functools.lru_cache(maxsize=1)
+def _pairwise_prompt_template() -> str:
+    """src/config/verifier_prompts.yaml's pairwise_prompt — same shared,
+    editable template src/verifier_cot.py's --baseline belief uses (see
+    that YAML entry's header comment for why this moved out of a hardcoded
+    Python string). Cached — this file has no other reason to load YAML,
+    so avoid re-reading it on every batch."""
+    path = Path(__file__).parent / "config" / "verifier_prompts.yaml"
+    return yaml.safe_load(path.read_text())["pairwise_prompt"]
+
+
 def _score_pairs_batch(
     pair_specs: list[tuple],              # [(key, a_idx, b_idx), ...]
     groups: dict[tuple, list[dict]],
@@ -419,13 +481,17 @@ def _score_pairs_batch(
     batch_size: int,
     desc: str = "scoring",
 ) -> list[tuple[float, float]]:
-    """Score all (key, a_idx, b_idx) pairs using inline vLLM + extract_score.
+    """Score all (key, a_idx, b_idx) pairs via src/common/ppt_scoring.py's
+    two-pass prefill scheme: pass 1 free-generates the comparative
+    analysis, pass 2 forces the very next token under a grammar mask (once
+    per tag) and reads its logprobs via extract_score.
 
-    Each pair is scored n_evals × n_criteria times; rewards averaged per pair.
-    Returns [(avg_ra, avg_rb)] in the same order as pair_specs.
+    Each pair is scored n_evals × n_criteria times; rewards averaged per
+    pair. Returns [(avg_ra, avg_rb)] in the same order as pair_specs.
     """
     (_sys_msg, _, _, _build_prompt, _, _, _) = _import_cot_helpers()
-    _PAIR_P = SamplingParams(temperature=1.0, max_tokens=150, logprobs=20)
+    _ANALYSIS_P = SamplingParams(temperature=1.0, max_tokens=150)
+    _SCORE_P = score_prefill_params()
 
     # Expand: each spec × criteria × n_evals evaluations
     requests: list[tuple[int, str, str]] = [
@@ -438,35 +504,42 @@ def _score_pairs_batch(
     rewards_a: dict[int, list[float]] = defaultdict(list)
     rewards_b: dict[int, list[float]] = defaultdict(list)
 
-    n_batches = (len(requests) + batch_size - 1) // batch_size
-    for start in tqdm(range(0, len(requests), batch_size),
-                      total=n_batches, desc=desc, unit="batch"):
+    for start in ProgressBar(range(0, len(requests), batch_size), desc=desc):
         batch = requests[start:start + batch_size]
-        prompts = []
+
+        base_prompts = []
         for spec_idx, crit_name, crit_desc in batch:
             key, a_idx, b_idx = pair_specs[spec_idx]
             row_a = groups[key][a_idx]
             row_b = groups[key][b_idx]
-            text = _pairwise_prompt_text(
-                row_a["task_type"], row_a.get("crop") or None,
-                row_a["prediction"], row_b["prediction"],
-                crit_name, crit_desc,
+            question = _raw_cls_question(row_a["task_type"], row_a.get("crop") or None)
+            text = pairwise_scoring_prompt(
+                rubric=f"{crit_name}: {crit_desc}", question=question,
+                trajectory_a=row_a["prediction"], trajectory_b=row_b["prediction"],
+                template=_pairwise_prompt_template(),
             )
             msgs = _sys_msg() + [{"role": "user", "content": [
                 {"type": "image"}, {"type": "text", "text": text},
             ]}]
-            prompts.append(_build_prompt(
+            base_prompts.append(_build_prompt(
                 msgs, tokenizer,
                 PILImage.open(row_a["image_path"]).convert("RGB"),
             ))
-        outputs = llm.generate(prompts, _PAIR_P)
-        for (spec_idx, _, _), out in zip(batch, outputs):
-            text_out, tokens, pos_lp = _vllm_to_score_format(out)
-            ra = extract_score(text_out, tokens, pos_lp, "<score_A>")
-            rb = extract_score(text_out, tokens, pos_lp, "<score_B>")
-            rewards_a[spec_idx].append(ra)
-            rewards_b[spec_idx].append(rb)
-        del prompts
+
+        # ── Pass 1: free-generate the comparative analysis ───────────────
+        analysis_outputs = llm.generate(base_prompts, _ANALYSIS_P)
+        analyses = [analysis_before_tags(out.outputs[0].text) for out in analysis_outputs]
+
+        # ── Pass 2: force each tag's very next token, once per tag ───────
+        for tag, rewards in (("<score_A>", rewards_a), ("<score_B>", rewards_b)):
+            score_prompts = [build_score_prompt(bp, an, tag)
+                             for bp, an in zip(base_prompts, analyses)]
+            score_outputs = llm.generate(score_prompts, _SCORE_P)
+            for (spec_idx, _, _), analysis, out in zip(batch, analyses, score_outputs):
+                comp = out.outputs[0]
+                reward = extract_tag_score(analysis, tag, comp.text, comp.logprobs or [])
+                rewards[spec_idx].append(reward)
+        del base_prompts
 
     return [
         (float(np.mean(rewards_a[i])), float(np.mean(rewards_b[i])))
@@ -988,9 +1061,20 @@ def main() -> None:
     parser.add_argument("--verifier_dir", default="outputs/verifier_vision/",
                         help="Dir with ckpt_judged.csv from verifier_vision.py")
     parser.add_argument("--config",       default="src/config/datasets.yaml")
+    parser.add_argument("--manifest",     default="dataset/selected_images.json",
+                        help="scripts/agml_hf/download_and_sample.py's manifest — same one "
+                             "every other stage (vision_baseline.py, cot_yaml.py, etc.) reads via "
+                             "load_hf_samples().")
+    parser.add_argument("--images_root",  default="dataset/images")
     parser.add_argument("--test_split",   default="outputs/linear_probe/test_split.json")
     parser.add_argument("--n_samples",    type=int, default=50)
     parser.add_argument("--n_datasets",   type=int, default=N_DATASETS_PER_TASK)
+    parser.add_argument("--subsample",    nargs="+", default=None,
+                        help="Restrict to these dataset(s) only (agml_name, space-separated) "
+                             "instead of the usual random n_datasets-per-task draw — for fast "
+                             "testing. Same convention as verifier_cot.py's --subsample / "
+                             "cot_yaml.py's --swap_datasets; pass the SAME list to cot-compare's "
+                             "--filter_datasets so the comparisons are scoped consistently.")
     parser.add_argument("--n_max",        type=int, default=N_MAX_DEFAULT,
                         help="N: candidates per image for PPT to select from (sliced to 1/5/10 at judge time)")
     parser.add_argument("--seed",         type=int, default=SEED)
@@ -1022,6 +1106,10 @@ def main() -> None:
         cfg = yaml.safe_load(f)
     ds_info = {d["agml_name"]: d for d in cfg["datasets"]}
 
+    from src.common.dataset_config import load_manifest
+    hf_manifest = load_manifest(Path(args.manifest))
+    images_root = Path(args.images_root)
+
     test_split: dict | None = None
     ts_path = Path(args.test_split)
     if ts_path.exists():
@@ -1032,7 +1120,8 @@ def main() -> None:
         print(f"[warn] test_split not found at {ts_path} — using all images")
 
     selected = select_datasets(n_per_task=args.n_datasets, seed=args.seed,
-                               config_path=args.config)
+                               config_path=args.config,
+                               subsample=set(args.subsample) if args.subsample else None)
     print("\n=== Selected datasets ===")
     for task, names in selected.items():
         print(f"  {task} ({len(names)}): {names}")
@@ -1066,8 +1155,11 @@ def main() -> None:
                 info            = ds_info.get(ds, {})
                 crop            = info.get("crop", "plant")
                 class_overrides = info.get("class_overrides", {})
+                excluded_classes = info.get("excluded_classes", [])
                 items           = load_items(ds, task, crop, n_samples=args.n_samples,
-                                             class_overrides=class_overrides, seed=args.seed,
+                                             manifest=hf_manifest, images_root=images_root,
+                                             class_overrides=class_overrides,
+                                             excluded_classes=excluded_classes, seed=args.seed,
                                              test_split=test_split)
                 all_items.extend(items)
                 print(f"  {ds} ({task}): {len(items)} items")

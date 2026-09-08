@@ -6,7 +6,7 @@ Sets corrected_description to "This leaf/plant is healthy." and status to
 
 Usage:
     python main.py patch-healthy   (via main.py dispatcher)
-    python src/data_generation/patch_healthy.py --csv outputs/data_generation/descriptions_corrected.csv
+    python src/legacy/data_generation/patch_healthy.py --csv outputs/data_generation/descriptions_corrected.csv
 """
 
 import sys

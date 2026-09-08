@@ -1,0 +1,114 @@
+"""Shared bar-chart styling for backbone-comparison plots — used by
+src/linear_probe/probe.py's summary_by_task.png, src/vision_baseline_collate.py's
+stage2_f1_by_task.png, and src/linear_probe/collate_seeds.py's seed-collated
+chart, so the same backbone always reads the same color across every chart
+in the pipeline rather than each script picking its own palette.
+"""
+from __future__ import annotations
+
+import colorsys
+import re
+from collections import defaultdict
+
+import matplotlib.colors as mcolors
+
+FAMILY_BASE_COLORS = {
+    "dinov3": "#1f77b4",
+    "yolo": "#ff7f0e",
+    "qwen": "#2ca02c",
+    "gemma": "#9467bd",
+}
+DEFAULT_FAMILY_COLOR = "#7f7f7f"
+
+VISION_ONLY_MARKERS = ("yolo", "dino")
+
+
+def is_vision_only(backbone: str) -> bool:
+    """No language model — a frozen classifier/self-supervised tower (YOLO,
+    DINO) rather than a VLM. Used to hatch these bars distinctly."""
+    name = backbone.lower()
+    return any(marker in name for marker in VISION_ONLY_MARKERS)
+
+
+def backbone_family(name: str) -> str:
+    """Group a backbone label into a model family so same-family variants
+    (e.g. Qwen3.5-9B / Qwen3.5-27B) get shades of the same base color."""
+    n = name.lower()
+    for family in FAMILY_BASE_COLORS:
+        if family in n:
+            return family
+    return n
+
+
+def param_count_b(name: str) -> float:
+    """Extract the largest '<number>B' parameter count in a backbone label
+    (e.g. "gemma-4-26B-A4B-it" -> 26.0), 0.0 if none found. Used to rank
+    same-family variants from smallest to largest for shading."""
+    matches = re.findall(r"(\d+(?:\.\d+)?)b", name.lower())
+    return max((float(m) for m in matches), default=0.0)
+
+
+def ordered_backbones(backbones: list[str]) -> list[str]:
+    """Vision-only backbones first (dinov3, yolo — in FAMILY_BASE_COLORS'
+    declared order), then VLM families in the same declared order, each
+    family's own members smallest-parameter-count first. This is the order
+    probe.py's original single-run chart lands in naturally (dino_model/
+    yolo_model get added to results before the models: list's VLMs) —
+    reproduced explicitly here for any chart (e.g. collate_seeds.py's
+    multi-seed chart) that doesn't build its backbone list the same way."""
+    family_rank = {family: i for i, family in enumerate(FAMILY_BASE_COLORS)}
+
+    def sort_key(b: str):
+        family = backbone_family(b)
+        return (
+            0 if is_vision_only(b) else 1,
+            family_rank.get(family, len(family_rank)),
+            param_count_b(b),
+            b,
+        )
+
+    return sorted(backbones, key=sort_key)
+
+
+def family_shaded_colors(backbones: list[str]) -> dict[str, tuple]:
+    """Assign each backbone a color: same base hue per family, with more
+    parameters -> darker shade. Single-member families get a mid shade."""
+    families: dict[str, list[str]] = defaultdict(list)
+    for b in backbones:
+        families[backbone_family(b)].append(b)
+
+    colors: dict[str, tuple] = {}
+    for family, members in families.items():
+        base_hex = FAMILY_BASE_COLORS.get(family, DEFAULT_FAMILY_COLOR)
+        h, l, s = colorsys.rgb_to_hls(*mcolors.to_rgb(base_hex))
+        params = {b: param_count_b(b) for b in members}
+        lo, hi = min(params.values()), max(params.values())
+        for b in members:
+            if hi > lo:
+                frac = (params[b] - lo) / (hi - lo)  # 0 = smallest, 1 = largest
+            else:
+                frac = 0.5  # single member (or tied params) -> mid shade
+            lightness = 0.68 - frac * 0.38  # smallest ~0.68 (light) -> largest ~0.30 (dark)
+            colors[b] = colorsys.hls_to_rgb(h, lightness, s)
+    return colors
+
+
+def legend_row_major(items: list, ncol: int) -> list:
+    """Reorder legend entries (already in the same left-to-right order the
+    bars were plotted in) so a multi-row matplotlib legend actually DISPLAYS
+    them in that order. matplotlib fills a legend column-major by default —
+    with a plotted order like (model0-cond0, model0-cond1, model1-cond0,
+    ...) and ncol=n_conditions, that default fill puts all "condition 0"
+    entries in row 0 and all "condition 1" entries in row 1, which reads as
+    "grouped by condition" rather than "left-to-right, matching the bars".
+    This computes the input permutation that makes matplotlib's own
+    column-major fill reproduce true row-major reading order instead. Used
+    by vision_baseline_collate.py and cot_compare.py's grouped bar charts."""
+    n = len(items)
+    nrows = -(-n // ncol)  # ceil division
+    padded = list(items) + [None] * (nrows * ncol - n)
+    reordered = [None] * len(padded)
+    for j in range(len(padded)):
+        r, c = j % nrows, j // nrows
+        reordered[j] = padded[r * ncol + c]
+    return [x for x in reordered if x is not None]

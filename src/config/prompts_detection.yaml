@@ -1,0 +1,55 @@
+# Object-detection prompts — Stage 5. Separate file from prompts.yaml since
+# the answer shape (a list of bounding boxes) is fundamentally different
+# from classification's single class-label answer; keeping them apart
+# avoids overloading one file with two incompatible answer conventions.
+
+assessment_system: "You are an expert agricultural computer vision assistant, skilled at precisely localizing plants, pests, diseases, and produce in photographs."
+
+# detection_baseline: direct box prediction, NO intermediate reasoning —
+# deliberately the spatial-task analog of prompts.yaml's
+# visual_classification_* + assessment_classification (vision_baseline.py's
+# single-turn answer), not verifier_prompts.yaml's structured_templates.
+# Coordinates are pixel [x1,y1,x2,y2] (top-left to bottom-right) —
+# confirmed as the dominant convention across Project-AgML detection
+# datasets by catalog_detection_datasets.py's empirical bbox_convention
+# measurement (most datasets: pixel/xywh from the underlying export, but
+# THIS prompt asks the model for xyxy directly since that's what
+# bbox_parse.py/bbox_metrics.py use throughout Stage 5 — ground-truth boxes
+# get converted xywh->xyxy at load time, not the model).
+# Params: {class_names} {crop}
+detection_baseline: |
+  Identify and localize every {class_names} visible in this image of {crop}. For each
+  one you find, report its bounding box on its own line, using this exact
+  format:
+  <box>x1,y1,x2,y2</box>
+
+  Coordinates are pixel positions in the image as shown: (x1,y1) is the
+  top-left corner, (x2,y2) is the bottom-right corner. Report one box per
+  line, nothing else. If none are visible, respond with exactly:
+  <box>none</box>
+
+# Gemma-family variant of detection_baseline above — same semantics, but
+# asks for Gemma's OWN NATIVE grounding output format (box_2d JSON,
+# y-first, 0-1000 scale) instead of the free-text <box>x1,y1,x2,y2</box>
+# tag. Root-cause note (2026-08-25): the tag-based prompt above works most
+# of the time, but Gemma's pretraining grounding convention is this exact
+# box_2d/y-first JSON shape, and on some images (confirmed near-total on
+# QuinceSet_detection, 19/20 images) the model reverts to that native
+# y,x-first ordering INSIDE the requested tag with no warning, silently
+# swapping every predicted box's axes. Asking for the model's own native
+# format removes the ambiguity instead of fighting it. Selected at runtime
+# via bbox_parse.uses_json_box_format(model_id) — non-Gemma models (e.g.
+# Qwen2-VL family) keep using detection_baseline above, since they do not
+# share this native format and were not observed to have this axis-order
+# failure mode.
+# Params: {class_names} {crop}
+detection_baseline_json: |
+  Identify and localize every {class_names} visible in this image of {crop}. Respond with
+  ONLY a JSON array, one object per instance found, each with exactly these
+  two keys:
+  "box_2d": [y_min, x_min, y_max, x_max] — coordinates on a 0-1000
+  normalized scale (top-left corner of the image is [0, 0]), in that exact
+  order.
+  "label": the class name for that instance.
+
+  If none are visible, respond with exactly: []

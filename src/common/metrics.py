@@ -80,8 +80,24 @@ def rouge_ss_score(prediction: str, reference: str) -> float:
     return round(2 * precision * recall / (precision + recall), 4)
 
 
-def rouge_scores_per_sample(prediction: str, reference: str) -> dict[str, float]:
-    """Returns {rouge1, rouge2, rougeL, rouge_ss, sem_sim} for a single prediction/reference pair."""
+def rouge_scores_per_sample(prediction: str, reference: str, include_rouge: bool = True) -> dict[str, float]:
+    """Returns {rouge1, rouge2, rougeL, rouge_ss, sem_sim} for a single
+    prediction/reference pair. include_rouge=False skips the ROUGE family
+    (rouge1/rouge2/rougeL's RougeScorer + rouge_ss's WordNet synonym
+    expansion) and returns "" for those four — used by the classification
+    scripts (vision_baseline.py, desc_augmented_vision_v2.py, self_cot.py,
+    cot_yaml.py), where ROUGE was only ever a secondary partial-credit
+    signal alongside the real metrics (F1 / judge_f1_macro) and isn't used.
+    language_assessment/assess.py and vision_assessment/assess.py (open-ended
+    QA, not classification) still call this with the default — there ROUGE-SS
+    is a primary metric, not a bonus number. sem_sim is unaffected either
+    way — aggregate_rouge() already skips "" values when averaging, so this
+    doesn't require any downstream changes."""
+    if not include_rouge:
+        return {
+            "rouge1": "", "rouge2": "", "rougeL": "", "rouge_ss": "",
+            "sem_sim": sem_sim_score(prediction, reference),
+        }
     scorer = rs_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
     s = scorer.score(reference, prediction)
     return {
@@ -141,7 +157,12 @@ def resolve_class(response: str, classes: list[str]) -> str | None:
 def compute_classification_metrics(refs: list[str], preds: list[str]) -> dict:
     """Compute accuracy, contains_accuracy, f1_macro, f1_weighted, n_total, n_resolvable."""
     labels = sorted(set(refs) | set(p for p in preds if p))
-    contains_correct = [int(contains_match(p, r)) for p, r in zip(preds, refs)]
+    # An unresolved prediction (p == "") must never count as a contains-match —
+    # contains_match("", r) is True for ANY r (an empty string is a substring
+    # of everything), which previously inflated contains_accuracy toward 100%
+    # whenever resolve_class failed on most rows (e.g. free-text CoT/verifier
+    # answers), silently masking a parsing failure as a near-perfect score.
+    contains_correct = [int(bool(p) and contains_match(p, r)) for p, r in zip(preds, refs)]
     n_resolvable = sum(1 for p in preds if p)
     return {
         "accuracy": round(accuracy_score(refs, preds), 4),
@@ -270,8 +291,19 @@ def apply_judge(
     gt_key: str,
     pred_key: str,
     confidence_threshold: int = 1,
+    log_path=None,
 ) -> list[dict]:
-    """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row."""
+    """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row.
+
+    log_path (optional, a Path): append one JSONL record per row with the
+    FULL judge conversation — system prompt, rendered chat-templated prompt,
+    untruncated raw model response — plus the row's identifying fields and
+    exactly what gt/pred text it was shown. This is for QA auditing what the
+    judge actually saw and said; the row's own judge_reasoning field is
+    truncated to 600 chars and doesn't include the prompt at all. Default
+    None (every pre-existing caller) skips logging — purely additive, no
+    behavior change for callers that don't pass it.
+    """
 
     def _fmt(text: str) -> str:
         msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
@@ -288,15 +320,42 @@ def apply_judge(
         judge_template.format(gt=str(r.get(gt_key, ""))[:400], pred=str(r.get(pred_key, ""))[:400])
         for r in rows
     ]
-    outputs = llm.generate([_fmt(p) for p in raw_prompts], sampling_params=_JUDGE_PARAMS)
+    formatted_prompts = [_fmt(p) for p in raw_prompts]
+    outputs = llm.generate(formatted_prompts, sampling_params=_JUDGE_PARAMS)
 
     updated = []
-    for row, out in zip(rows, outputs):
+    log_records = []
+    for row, raw_prompt, formatted_prompt, out in zip(rows, raw_prompts, formatted_prompts, outputs):
         raw = out.outputs[0].text
         cleaned = _THINK_RE_JUDGE.sub("", raw).strip()
+        judged_correct = _parse_judge_response(raw, threshold=confidence_threshold)
         updated.append({
             **row,
-            "judged_correct": _parse_judge_response(raw, threshold=confidence_threshold),
+            "judged_correct": judged_correct,
             "judge_reasoning": cleaned[:600],
         })
+        if log_path is not None:
+            log_records.append({
+                "agml_dataset": row.get("agml_dataset", ""),
+                "class_label": row.get("class_label", ""),
+                "image_name": row.get("image_name", ""),
+                "condition": row.get("condition", ""),
+                "gt_key": gt_key,
+                "pred_key": pred_key,
+                "gt_full": str(row.get(gt_key, "")),
+                "pred_full": str(row.get(pred_key, "")),
+                "confidence_threshold": confidence_threshold,
+                "system_prompt": system_prompt,
+                "judge_user_message": raw_prompt,
+                "rendered_prompt": formatted_prompt,
+                "raw_response": raw,
+                "judged_correct": judged_correct,
+            })
+
+    if log_path is not None and log_records:
+        from src.common.io import append_jsonl
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        for rec in log_records:
+            append_jsonl(log_path, rec)
+
     return updated

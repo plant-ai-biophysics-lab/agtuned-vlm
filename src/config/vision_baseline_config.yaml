@@ -1,0 +1,77 @@
+# Stage 2 (vision_baseline.py / desc_augmented_vision_v2.py / vision_baseline_collate.py)
+# shared defaults — edit these directly instead of remembering CLI flags.
+# Loaded automatically by all three scripts (default --vision_baseline_config
+# path is this file). Any flag you DO pass on the command line still
+# overrides whatever is set here.
+#
+# You run vision_baseline.py / desc_augmented_vision_v2.py per model
+# (--model overrides "model" below), one invocation per model per script.
+
+# ── Model ────────────────────────────────────────────────────────────────────
+# Set here for convenience, or pass --model on the command line per run —
+# whichever you pass on the CLI wins.
+model: google/gemma-4-26B-A4B-it
+
+# ── Data sources ─────────────────────────────────────────────────────────────
+config: src/config/datasets.yaml
+prompts: src/config/prompts.yaml
+classification_jsonl: dataset/agml_classification.jsonl  # ground truth + reference
+                                                            # descriptions (desc-aug only)
+manifest: dataset/selected_images.json
+images_root: dataset/images
+
+# ── Sampling ─────────────────────────────────────────────────────────────────
+# null = use every image the manifest has for that class (it was built with
+# an n_per_class=50 cap, so this means "all ~50/class", not literally
+# unbounded). Set an int here to sub-cap further for a faster/cheaper run.
+n_samples: null
+
+# ── vLLM ─────────────────────────────────────────────────────────────────────
+quantize: null  # "4bit", "8bit", "awq", "gptq"
+gpu_memory_utilization: 0.9
+# 8192/16384 weren't always enough even with vision_token_budget capping
+# both model families' per-image tokens to the same ~1120 — the question
+# text (and, for desc-aug, the reference description) still add on top, and
+# 24576 gives real headroom rather than chasing the next overflow one
+# image at a time. Applies to both Gemma and Qwen runs.
+max_model_len: 24576
+# Per-image vision token budget every model family is aligned to (see
+# src/common/vlm_load.py) — without this, Gemma defaults to 280 tokens/image
+# and Qwen scales UNCAPPED with the image's native resolution (sometimes
+# 10k+ tokens on a large/oddly-shaped image, which is what caused the
+# max_model_len overflow before this existed). Left unaligned, a Gemma vs.
+# Qwen comparison isn't just "which model understands agriculture better" —
+# it's partly "how much of the image did each model actually get to see."
+# 1120 = Gemma's own maximum supported tier; Qwen is capped to match. Set to
+# 0 to opt out (each model's own default) or lower (e.g. 280) for a
+# faster/cheaper exploratory run.
+vision_token_budget: 1120
+max_num_seqs: 64
+enforce_eager: false
+
+# ── Judge ────────────────────────────────────────────────────────────────────
+# Fixed judge model for every baseline/model being evaluated — always this
+# one, regardless of which model is being judged, so judge_accuracy is
+# comparable across all four. Runs as a separate phase after the
+# classification model for a given run is unloaded.
+# google/gemma-4-31B-it 404'd (gated/unavailable in this environment) —
+# defaulting to the 26B variant already used elsewhere in this pipeline.
+judge_model: google/gemma-4-26B-A4B-it
+judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
+judge_confidence_threshold: 1
+judge_chunk_size: 200  # rows per judge call — drives the judge progress bar
+                        # and caps how much work a kill mid-judging can lose
+
+# ── Output directories ───────────────────────────────────────────────────────
+# Kept as three separate keys (not one shared "output_dir") since the three
+# scripts each need a different folder — one shared key would make them
+# collide. Each script only actually uses its own key; the other two are
+# accepted-but-ignored so all three can share this one file without
+# "unrecognized key" warnings.
+baseline_output_dir: outputs_final/vision_baseline/
+aug_output_dir: outputs_final/desc_augmented_vision/
+collated_output_dir: outputs_final/vision_baseline_collated/
+
+# ── Collation (vision_baseline_collate.py only) ─────────────────────────────
+n_boot: 2000  # bootstrap resamples for the 95% CI
+seed: 42

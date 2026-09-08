@@ -1,0 +1,479 @@
+"""
+Stage 4-report — one-glance verifier performance reference (no GPU, no model).
+
+Answers "how did this verifier run actually do vs. the bounds and the CoT
+methods?" without touching outputs_final/cot_compare/ — that directory holds
+the full-corpus, paper-facing charts, and running `cot-compare
+--filter_datasets` to answer this question would overwrite them with a
+subsample-scoped version (a real mistake made once during development).
+Everything this writes lands in the verifier run's OWN --verifier_dir.
+
+The comparison is strictly apples-to-apples: every condition is filtered to
+the EXACT (agml_dataset, class_label, image_name) triples the verifier run
+actually scored, not merely the same datasets. That matters because
+verifier-cot defaults to --n_samples 10 while vision_baseline/desc-aug were
+run at 50/class — comparing dataset-level would silently put 160 verifier
+images against 800 baseline images.
+
+Conditions plotted (any missing one is skipped with a note rather than
+failing — e.g. cot_yaml currently exists only for gemma-4-26B-A4B-it, so an
+E4B-it run legitimately has no Manual-CoT bar):
+
+  Lower Bound      vision_baseline        — single-shot, no help
+  Self CoT         self_cot               — self-generated description, then classify
+  Manual CoT       cot_yaml               — fixed human-authored step chain
+  Verifier         <verifier_dir>         — this run (single-round K-candidate + PPT tournament)
+  Upper Bound      desc_augmented_vision  — oracle class description supplied in-prompt
+
+judge_f1_macro is the metric (not strict f1_macro): free-text verifier
+answers frequently fail resolve_class's exact/substring match against the
+ground-truth vocabulary even when correct — the LLM judge is the only
+condition-comparable scorer here. 95% CIs come from the same bootstrap
+machinery cot_compare uses, so error bars mean the same thing as in the
+paper-facing charts.
+
+Usage:
+    python main.py verifier-summary \\
+        --verifier_dir outputs_final/verifier_cot_fasttest/ \\
+        --model google/gemma-4-E4B-it
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.common.vision_eval import compute_model_metrics, load_all_rows  # noqa: E402
+from src.cot_compare import compute_condition_stats, load_verifier_cot_rows  # noqa: E402
+
+# (display label, output_dir, bar color). Order = left-to-right plot order,
+# deliberately ascending in "how much help the condition gets" so the chart
+# reads as a ladder from unaided to oracle-assisted.
+_CONDITIONS = [
+    ("Lower Bound",  "outputs_final/vision_baseline/",        "#1f77b4"),
+    ("Self CoT",     "outputs_final/self_cot/",               "#2ca02c"),
+    ("Manual CoT",   "outputs_final/cot_yaml/",                "#9467bd"),
+    ("Verifier",     None,                                    "#e06b00"),  # None => --verifier_dir
+    ("Upper Bound",  "outputs_final/desc_augmented_vision/",  "#d62728"),
+]
+
+
+def verifier_image_keys(verifier_dir: Path, model_safe: str) -> set[tuple[str, str, str]]:
+    """The exact (dataset, class, image) triples this verifier run scored —
+    one row per image (single-round design, no per-round rows)."""
+    ckpt = verifier_dir / model_safe / f"ckpt_{model_safe}.csv"
+    if not ckpt.exists():
+        raise SystemExit(f"No verifier checkpoint at {ckpt}")
+    keys = set()
+    with open(ckpt, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            keys.add((r["agml_dataset"], r["class_label"], r["image_name"]))
+    return keys
+
+
+def _infer_k_candidates(verifier_dir: Path, model_safe: str) -> int | None:
+    """K (tournament pool size) isn't a CLI-known constant here — read it
+    straight off the checkpoint's own `pool_size` column instead of trusting
+    a --k_candidates flag that might not match what actually ran. Every row
+    of a single-round run shares one pool_size (no incumbent-inflated
+    round-2+ pools like the old multi-round design had), so the first
+    non-empty value is authoritative; None if the checkpoint is missing/
+    empty."""
+    ckpt = verifier_dir / model_safe / f"ckpt_{model_safe}.csv"
+    if not ckpt.exists():
+        return None
+    with open(ckpt, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            v = r.get("pool_size", "")
+            if v:
+                return int(v)
+    return None
+
+
+_K_SWEEP_DIR = Path("outputs_final/verifier_k_sweep")
+
+
+def record_k_sweep_point(
+    model_safe: str, k_candidates: int, k_pivots: int,
+    judge_f1_macro: float | None, judge_ci_low: float | None, judge_ci_high: float | None,
+    n: int, verifier_dir: Path, sweep_dir: Path = _K_SWEEP_DIR,
+) -> Path:
+    """Upsert one (k_candidates, k_pivots) -> judge_f1_macro point into a
+    persistent CSV that survives across separate verifier-summary
+    invocations for different --verifier_dir/--k_pivots sweep runs (e.g.
+    K=4/pivots=2, then later K=8/pivots=4, K=16/pivots=6, K=24/pivots=8) —
+    each `verifier-summary` call appends/updates its own point rather than
+    requiring a separate sweep-plotting pass. Keyed on (k_candidates,
+    k_pivots) so re-running the same pair (e.g. after --rerun) overwrites
+    its old point instead of duplicating a row.
+
+    sweep_dir: defaults to the shared outputs_final/verifier_k_sweep/, but
+    pass a different directory (via --sweep_dir) to keep an incompatible
+    batch of runs (e.g. a prompt-template fix that changes what the
+    scores mean) from being silently conflated with older points in the
+    same per-model CSV."""
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    path = sweep_dir / f"{model_safe}.csv"
+    fields = ["k_candidates", "k_pivots", "judge_f1_macro", "judge_ci_low", "judge_ci_high", "n", "verifier_dir"]
+
+    rows: dict[tuple[int, int], dict] = {}
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                key = (int(r["k_candidates"]), int(r["k_pivots"]))
+                rows[key] = r
+    rows[(k_candidates, k_pivots)] = {
+        "k_candidates": k_candidates, "k_pivots": k_pivots,
+        "judge_f1_macro": judge_f1_macro, "judge_ci_low": judge_ci_low, "judge_ci_high": judge_ci_high,
+        "n": n, "verifier_dir": str(verifier_dir),
+    }
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for key in sorted(rows):
+            w.writerow(rows[key])
+    print(f"  [k-sweep] recorded K={k_candidates}, pivots={k_pivots}: "
+          f"judge_f1_macro={judge_f1_macro} -> {path}")
+    return path
+
+
+def plot_k_sweep(model_safe: str, sweep_dir: Path = _K_SWEEP_DIR) -> None:
+    """Line chart of judge_f1_macro (95% CI) vs. every (k_candidates,
+    k_pivots) point recorded so far for this model — x-axis sorted by
+    k_candidates ascending, one tick per swept configuration. Regenerated
+    from the full accumulated CSV every call, so it always reflects every
+    sweep point recorded up to now, not just the point this invocation
+    just added."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    path = sweep_dir / f"{model_safe}.csv"
+    if not path.exists():
+        return
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    rows = [r for r in rows if r.get("judge_f1_macro")]
+    if not rows:
+        print("  [k-sweep] no judged points yet — skipping plot")
+        return
+    rows.sort(key=lambda r: int(r["k_candidates"]))
+
+    labels = [f"K={r['k_candidates']}\npivots={r['k_pivots']}" for r in rows]
+    vals = [float(r["judge_f1_macro"]) for r in rows]
+    lo = [max(0.0, float(r["judge_f1_macro"]) - float(r["judge_ci_low"])) for r in rows]
+    hi = [max(0.0, float(r["judge_ci_high"]) - float(r["judge_f1_macro"])) for r in rows]
+    x = list(range(len(rows)))
+
+    fig, ax = plt.subplots(figsize=(max(6, len(rows) * 1.8), 5))
+    ax.errorbar(x, vals, yerr=[lo, hi], marker="o", markersize=7, linewidth=1.8,
+                color="#e06b00", ecolor="#e06b00", elinewidth=1.0, capsize=4)
+    for xi, v in zip(x, vals):
+        ax.annotate(f"{v:.3f}", (xi, v), ha="center", va="bottom", fontsize=9, fontweight="bold",
+                    xytext=(0, 8), textcoords="offset points")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("Judged F1 Macro", fontsize=11)
+    ax.set_xlabel("Candidate pool size (K) / pivot-set size", fontsize=11)
+    ax.set_title(f"Verifier scaling — {model_safe}", fontsize=12)
+    ax.grid(True, axis="y", alpha=0.25)
+    plt.tight_layout()
+    out_path = sweep_dir / f"{model_safe}_k_sweep.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
+def reference_image_keys(reference_ckpt: Path, n_samples: int) -> set[tuple[str, str, str]]:
+    """The SAME deterministic 'first n_samples image_names per (dataset,
+    class), in that checkpoint's own row order' selection verifier_cot.py's
+    --match_images_from uses (_load_reference_images there) — duplicated
+    here rather than imported, since this module is deliberately GPU/
+    model-free and verifier_cot.py pulls in vllm at import time.
+
+    Exists so a comparison report can be built BEFORE a verifier-cot run
+    exists at all: since --match_images_from makes verifier-cot's own
+    image selection a deterministic function of an existing baseline
+    checkpoint (e.g. vision_baseline's), that same image set is already
+    fully determined right now — no need to wait for the verifier run to
+    finish just to know which images it WILL use."""
+    by_group: dict[tuple[str, str], list[str]] = {}
+    with open(reference_ckpt, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""))
+            names = by_group.setdefault(key, [])
+            name = r.get("image_name", "")
+            if name and name not in names:
+                names.append(name)
+    return {(ds, cl, name) for (ds, cl), names in by_group.items() for name in names[:n_samples]}
+
+
+def collect(keys: set[tuple[str, str, str]], model_safe: str, n_boot: int, seed: int,
+            conditions: list[tuple[str, str | None, str]] = _CONDITIONS,
+            verifier_dir: Path | None = None):
+    """[(label, color, stats_or_None, n_rows)] for every condition in
+    `conditions`, filtered to `keys` (agml_dataset, class_label,
+    image_name triples). verifier_dir only needed if `conditions` includes
+    the Verifier entry (dirname=None)."""
+    print(f"  Filtering every condition to exactly {len(keys)} image(s)")
+
+    def _filt(rows):
+        return [r for r in rows
+                if (r.get("agml_dataset"), r.get("class_label"), r.get("image_name")) in keys]
+
+    out = []
+    for label, dirname, color in conditions:
+        if dirname is None:
+            rows_map = load_verifier_cot_rows(verifier_dir)
+        else:
+            d = Path(dirname)
+            rows_map = load_all_rows(d) if d.exists() else {}
+        rows = _filt(rows_map.get(model_safe, []))
+        if not rows:
+            print(f"  [skip] {label}: no rows for {model_safe} on these images")
+            out.append((label, color, None, 0))
+            continue
+        # Full dict — {"overall": {...}, "<task_type>": {...}, ...} — kept
+        # in full (not just ["overall"]) so plot_by_task can break the same
+        # bar chart out per task_type without a second bootstrap pass.
+        stats = compute_condition_stats(rows, n_boot, seed)
+        overall = stats.get("overall", {})
+        # A condition whose overlapping rows were never JUDGED reports
+        # judge_f1_macro=0.0 — which is missing data, not a score of zero.
+        # Plotting that as a real bar would be actively misleading (E4B-it's
+        # self_cot rows are exactly this case: present but unjudged), so
+        # treat it the same as "no rows at all".
+        if not overall.get("judge_n_classes"):
+            print(f"  [skip] {label}: {len(rows)} row(s) overlap but none are judged "
+                  f"(judge_f1_macro would be a meaningless 0.0)")
+            out.append((label, color, None, len(rows)))
+            continue
+        out.append((label, color, stats, len(rows)))
+        print(f"  {label:16s} judge_f1_macro={overall.get('judge_f1_macro'):.4f}  n={len(rows)}")
+    return out, len(keys)
+
+
+def _boot_ci(vals, rng, n_boot: int = 2000):
+    """(mean, ci_low, ci_high) — same percentile-bootstrap convention
+    cot_compare.py uses, duplicated here (not imported) since this module
+    is deliberately GPU/model-free and this is a ~10 line helper, not
+    worth a shared-module round-trip for."""
+    import numpy as np
+    arr = np.asarray(vals, dtype=float)
+    if len(arr) < 2:
+        v = float(arr[0]) if len(arr) else 0.0
+        return v, v, v
+    boot = np.array([rng.choice(arr, size=len(arr), replace=True).mean() for _ in range(n_boot)])
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    return float(arr.mean()), float(lo), float(hi)
+
+
+def plot(results, n_images: int, model_safe: str, out_path: Path,
+         title: str = "Verifier vs. bounds and CoT methods") -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    present = [(lbl, color, st, n) for lbl, color, st, n in results if st]
+    if not present:
+        print("  [skip] nothing to plot")
+        return
+
+    labels = [lbl for lbl, _, _, _ in present]
+    vals = [st.get("overall", {}).get("judge_f1_macro") or 0.0 for _, _, st, _ in present]
+    colors = [c for _, c, _, _ in present]
+    lo_err, hi_err = [], []
+    for _, _, st, _ in present:
+        o = st.get("overall", {})
+        m = o.get("judge_f1_macro") or 0.0
+        lo_err.append(max(0.0, m - (o.get("judge_ci_low") or m)))
+        hi_err.append(max(0.0, (o.get("judge_ci_high") or m) - m))
+
+    fig, ax = plt.subplots(figsize=(max(7, len(present) * 1.6), 5.5))
+    bars = ax.bar(labels, vals, color=colors, edgecolor="black", linewidth=0.6,
+                  yerr=[lo_err, hi_err], capsize=4,
+                  error_kw={"elinewidth": 1.0, "alpha": 0.75})
+    for b, v in zip(bars, vals):
+        ax.annotate(f"{v:.3f}", (b.get_x() + b.get_width() / 2, v),
+                    ha="center", va="bottom", fontsize=9, fontweight="bold",
+                    xytext=(0, 3), textcoords="offset points")
+
+    # Bound reference lines make "did the verifier clear the floor / approach
+    # the ceiling" readable without eyeballing bar heights.
+    by_label = {lbl: v for lbl, v in zip(labels, vals)}
+    if "Lower Bound" in by_label:
+        ax.axhline(by_label["Lower Bound"], color="#1f77b4", linestyle=":", linewidth=1.4, alpha=0.8)
+    if "Upper Bound" in by_label:
+        ax.axhline(by_label["Upper Bound"], color="#d62728", linestyle=":", linewidth=1.4, alpha=0.8)
+
+    ax.set_ylabel("Judged F1 Macro", fontsize=11)
+    ax.set_ylim(0, max(v + h for v, h in zip(vals, hi_err)) * 1.18)
+    ax.set_title(f"{title} — {model_safe}\n"
+                 f"same {n_images} images, 95% CI", fontsize=11)
+    ax.grid(True, axis="y", alpha=0.25)
+    plt.xticks(rotation=12, ha="right")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
+def plot_by_task(results, n_images: int, model_safe: str, out_path: Path,
+                  title: str = "Verifier vs. bounds and CoT methods") -> None:
+    """Grouped bar chart — same conditions as plot(), but one bar per
+    task_type per condition instead of one overall bar. Reuses the full
+    per-condition stats dict collect() already returns (task_type keys
+    computed by compute_condition_stats alongside "overall"), so no
+    second bootstrap pass over the rows is needed."""
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    present = [(lbl, color, st, n) for lbl, color, st, n in results if st]
+    if not present:
+        print("  [skip] nothing to plot")
+        return
+
+    task_types = sorted({k for _, _, st, _ in present for k in st if k != "overall"})
+    if not task_types:
+        print("  [skip] no task_type breakdown available")
+        return
+
+    fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 1.8), 5.5))
+    n_cond = len(present)
+    width = 0.8 / n_cond
+    x = np.arange(len(task_types))
+    for j, (label, color, st, _n) in enumerate(present):
+        vals, lo_err, hi_err = [], [], []
+        for tt in task_types:
+            sub = st.get(tt, {})
+            # No rows (or none judged) for this condition/task combo —
+            # leave the bar out entirely (NaN height) rather than drawing
+            # a misleading 0.0 bar, same reasoning as collect()'s overall
+            # "unjudged is missing data, not a score of zero" guard.
+            if not sub.get("judge_n_classes"):
+                vals.append(np.nan); lo_err.append(0.0); hi_err.append(0.0)
+                continue
+            m = sub.get("judge_f1_macro") or 0.0
+            vals.append(m)
+            lo_err.append(max(0.0, m - (sub.get("judge_ci_low") or m)))
+            hi_err.append(max(0.0, (sub.get("judge_ci_high") or m) - m))
+        offset = (j - (n_cond - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=label, color=color, edgecolor="black", linewidth=0.5,
+               yerr=[lo_err, hi_err], capsize=2, error_kw={"elinewidth": 0.8, "alpha": 0.7})
+
+    ax.set_xticks(x); ax.set_xticklabels(task_types, rotation=12, ha="right")
+    ax.set_ylabel("Judged F1 Macro", fontsize=11)
+    ax.set_title(f"{title} (by task) — {model_safe}\nsame {n_images} images, 95% CI", fontsize=11)
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
+def main(args: argparse.Namespace) -> None:
+    model_safe = args.model.replace("/", "_")
+
+    if args.match_images_from:
+        # Baseline-only mode: no verifier-cot run needed at all — the
+        # image set is already fully determined by an existing checkpoint
+        # (see reference_image_keys' docstring). Verifier is dropped from
+        # the condition list since there's nothing to plot.
+        keys = reference_image_keys(Path(args.match_images_from), args.n_samples)
+        conditions = [c for c in _CONDITIONS if c[0] != "Verifier"]
+        results, n_images = collect(keys, model_safe, args.n_boot, args.seed, conditions=conditions)
+        out_dir = Path(args.out_dir) / model_safe
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # n_samples in the filename — otherwise a --n_samples 10 run
+        # silently overwrites a --n_samples 25 run's chart/csv at the
+        # same path (a real mistake made once during development).
+        plot(results, n_images, model_safe, out_dir / f"baseline_summary_n{args.n_samples}.png",
+             title="Bounds and CoT methods (pre-verifier)")
+        plot_by_task(results, n_images, model_safe, out_dir / f"baseline_summary_n{args.n_samples}_by_task.png",
+                     title="Bounds and CoT methods (pre-verifier)")
+        csv_path = out_dir / f"baseline_summary_n{args.n_samples}.csv"
+    else:
+        verifier_dir = Path(args.verifier_dir)
+        keys = verifier_image_keys(verifier_dir, model_safe)
+        results, n_images = collect(keys, model_safe, args.n_boot, args.seed, verifier_dir=verifier_dir)
+        out_dir = verifier_dir / model_safe
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plot(results, n_images, model_safe, out_dir / "verifier_summary.png")
+        plot_by_task(results, n_images, model_safe, out_dir / "verifier_summary_by_task.png")
+        csv_path = out_dir / "verifier_summary.csv"
+
+        if args.k_pivots is not None:
+            verifier_stats = next((st for lbl, _c, st, _n in results if lbl == "Verifier"), None)
+            k_candidates = _infer_k_candidates(verifier_dir, model_safe)
+            if verifier_stats is None or k_candidates is None:
+                print("  [k-sweep] skipped — no judged Verifier rows or no pool_size found in checkpoint")
+            else:
+                o = verifier_stats.get("overall", {})
+                sweep_dir = Path(args.sweep_dir)
+                record_k_sweep_point(
+                    model_safe, k_candidates, args.k_pivots,
+                    o.get("judge_f1_macro"), o.get("judge_ci_low"), o.get("judge_ci_high"),
+                    n=next(n for lbl, _c, _st, n in results if lbl == "Verifier"),
+                    verifier_dir=verifier_dir, sweep_dir=sweep_dir,
+                )
+                plot_k_sweep(model_safe, sweep_dir=sweep_dir)
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["condition", "judge_f1_macro", "judge_ci_low", "judge_ci_high",
+                    "n_rows", "n_images", "status"])
+        for label, _c, st, n in results:
+            if st:
+                o = st.get("overall", {})
+                w.writerow([label, o.get("judge_f1_macro"), o.get("judge_ci_low"),
+                            o.get("judge_ci_high"), n, n_images, "ok"])
+            else:
+                # Keep the real overlap count: n>0 here means the rows exist
+                # but weren't judged (very different from having no data).
+                w.writerow([label, "", "", "", n, n_images,
+                            "unjudged" if n else "no_rows"])
+    print(f"  Saved: {csv_path}")
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--verifier_dir", default="outputs_final/verifier_cot_fasttest/",
+                   help="verifier_cot.py's --output_dir for the run being summarized. Ignored if "
+                        "--match_images_from is given (baseline-only mode, no verifier run needed).")
+    p.add_argument("--model", default="google/gemma-4-E4B-it")
+    p.add_argument("--k_pivots", type=int, default=None,
+                   help="The --k_pivots this verifier-cot run actually used (not recoverable from "
+                        "the checkpoint, which only records pool_size/K) — when given, this run's "
+                        "(K, k_pivots) -> judge_f1_macro point is appended to a persistent scaling-"
+                        "sweep chart at outputs_final/verifier_k_sweep/<model>_k_sweep.png, alongside "
+                        "every other point recorded so far for this model. Omit to skip sweep "
+                        "recording entirely (unaffected either way — this only adds an extra output).")
+    p.add_argument("--sweep_dir", default="outputs_final/verifier_k_sweep/",
+                   help="Where --k_pivots sweep points are recorded/read from. Point this at a "
+                        "separate directory to keep an incompatible batch of runs (e.g. after a "
+                        "prompt-template fix) from being conflated with older points in the same "
+                        "per-model CSV.")
+    p.add_argument("--n_boot", type=int, default=2000, help="Bootstrap resamples for the 95%% CIs.")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--match_images_from", default=None,
+                   help="Baseline-only mode (no verifier-cot run required): path to an existing "
+                        "single-prediction-per-row checkpoint (e.g. vision_baseline's own "
+                        "ckpt_<model>.csv) to derive the image set from — same deterministic "
+                        "'first --n_samples image_names per (dataset, class)' selection "
+                        "verifier_cot.py's own --match_images_from uses, so this shows exactly "
+                        "what a not-yet-run verifier-cot invocation with the same "
+                        "--match_images_from/--n_samples WILL compare against. Skips the "
+                        "Verifier bar entirely.")
+    p.add_argument("--n_samples", type=int, default=25,
+                   help="--match_images_from only: images/class to take from the reference "
+                        "checkpoint's own row order.")
+    p.add_argument("--out_dir", default="outputs_final/baseline_summary/",
+                   help="--match_images_from only: where to write baseline_summary.png/.csv "
+                        "(nested under <out_dir>/<model_safe>/, same convention as "
+                        "--verifier_dir/<model_safe>/verifier_summary.png).")
+    main(p.parse_args())

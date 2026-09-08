@@ -20,10 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import argparse
+import csv
 import gc
 import os
 from collections import Counter, defaultdict
-from typing import Any, Dict, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,16 +38,71 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     f1_score,
+    silhouette_score,
 )
 from sklearn.model_selection import StratifiedShuffleSplit
+from scipy.stats import pearsonr, spearmanr
 from sklearn.preprocessing import LabelEncoder
-from transformers import AutoImageProcessor, AutoModel, AutoModelForImageTextToText, AutoProcessor
+import transformers
+from transformers import (
+    AutoImageProcessor,
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoProcessor,
+)
 
-from src.common.dataset_config import active_datasets, DatasetConfig, prefetch_agml_datasets
+# Kimi-VL's custom modeling code (pulled in via trust_remote_code) still does
+# `from transformers.utils.import_utils import is_torch_fx_available`, a name
+# newer transformers removed — torch.fx has been unconditionally importable
+# for a while now, so the availability check itself became dead weight and
+# was deleted upstream. Shim it back as a trivial True (matches reality: the
+# import always succeeds) rather than pinning an older transformers, which
+# would risk breaking the other, newer-architecture backbones this script
+# also loads (Qwen3.5, Gemma4). No-op for any repo that doesn't need it.
+if not hasattr(transformers.utils.import_utils, "is_torch_fx_available"):
+    import torch.fx  # noqa: F401  (import succeeding IS the check)
+    transformers.utils.import_utils.is_torch_fx_available = lambda: True
+    transformers.utils.is_torch_fx_available = lambda: True
+
+from src.common.dataset_config import (
+    active_datasets, DatasetConfig, subsample_class_balanced,
+    load_manifest, load_hf_samples, missing_from_manifest,
+)
 from src.common.io import save_json, update_pipeline_results
+from src.common.plot_style import family_shaded_colors as _family_shaded_colors, is_vision_only as _is_vision_only
+from src.common.progress import ProgressBar
 
-# Path to the layer selections config written by app/layer_explorer.py
-_LAYER_SELECTIONS_PATH = Path(__file__).parent.parent / "config" / "layer_selections.yaml"
+# This module (and check_vision_towers.py, which imports load_gemma4 from
+# here) loads several backbones one after another in the same process —
+# same repeated-reload pattern that hits a real bug on farm compute nodes
+# without reliable outbound internet: transformers/huggingface_hub still
+# issues a HEAD request on every from_pretrained call to check cache
+# freshness, even when every needed file is already local. That request
+# fails ("Network is unreachable"), and the retry path leaves the underlying
+# httpx client closed, crashing the NEXT load attempt with "Cannot send a
+# request, as the client has been closed" (see run_verifier_cot.py for the
+# same fix applied to the same bug). HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE
+# skip that check and trust the local cache — safe for any model that has
+# already been loaded successfully once (by this script or a prior run);
+# a genuinely never-downloaded model instead gets a clear "not in cache"
+# error rather than this confusing crash. setdefault() so an operator's own
+# explicit choice isn't silently overridden.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+# Path to the layer selections config written by app/layer_explorer.py — lives
+# alongside probe_config.yaml in this folder so all linear-probe-specific
+# config is in one place, easy to find/edit.
+_LAYER_SELECTIONS_PATH = Path(__file__).parent / "layer_selections.yaml"
+
+
+def _display_task(t: str) -> str:
+    """task_type -> x-axis tick label — drops the "_identification" suffix
+    (quality_identification/species_identification read as just "quality"/
+    "species" on-chart) and turns remaining underscores into spaces. Mirrors
+    scripts/agml_hf/download_and_sample.py's own _display_task."""
+    return t.replace("_identification", "").replace("_", " ")
 
 
 # ── Early-exit sentinel ────────────────────────────────────────────────────────
@@ -110,27 +165,50 @@ def _load_layer_selections() -> dict:
     return {}
 
 
+def _persist_heuristic_pre_selection(model_id: str, pre_layer_path: str) -> None:
+    """Write an auto-detected (non-default) heuristic pre-projector path back
+    to layer_selections.yaml so it becomes an explicit entry.
+
+    Needed for correctness, not just convenience: the pre-flight "is
+    everything already cached, can we skip loading this model" check (below,
+    in main()) has to decide BEFORE loading the model what cache tag to look
+    for — it does that by reading layer_selections.yaml, since resolving the
+    heuristic path (resolve_heuristic_pre_module) requires the model to
+    already be loaded. Without this persisted entry, a model whose heuristic
+    resolves to something other than the plain "default" tag (e.g. Qwen's
+    auto-detected vision_tower.blocks.N) would have its real cache tag
+    invisible to that pre-flight check forever — it would reload the model
+    on every single run despite having valid, complete cached embeddings,
+    since the check keeps looking under the wrong ("default") tag."""
+    selections = _load_layer_selections()
+    entry = selections.get(model_id, {})
+    if entry.get("pre") == pre_layer_path:
+        return  # already persisted, nothing to do
+    entry["pre"] = pre_layer_path
+    selections[model_id] = entry
+    _LAYER_SELECTIONS_PATH.write_text(
+        yaml.safe_dump(selections, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    )
+    print(f"  [layer_selections] Persisted auto-detected pre path for {model_id}: {pre_layer_path}")
+
+
 # ── Dataset loading ────────────────────────────────────────────────────────────
-
-def load_agml_samples(dataset_name: str) -> list[dict]:
-    import agml
-    loader = agml.data.AgMLDataLoader(dataset_name)
-    contents = cast(Dict[str, Any], loader.export_contents())
-    class_names = cast(list[str], loader.classes)
-
-    samples = []
-    for path, label_idx in contents.items():
-        label_text = class_names[int(label_idx)]
-        cleaned_label = label_text.replace("___", " ").replace("_", " ")
-        samples.append({"path": str(path), "label": cleaned_label})
-    return samples
+# load_hf_samples / load_manifest / missing_from_manifest now live in
+# src/common/dataset_config.py — shared across every stage that needs to
+# materialize images from a scripts/agml_hf/download_and_sample.py manifest,
+# not reimplemented per-script. The old agml-pip-package-based loader that
+# used to live here is gone; it had no knowledge of datasets.yaml's
+# HF-sourced crop/task_type/class_overrides or dataset/selected_images.json
+# at all, so it was silently loading different (or no longer available) data
+# than the rest of this pipeline uses.
 
 
 def load_dg_samples(images_dir: Path, dg_descriptions_jsonl: Path) -> list[dict]:
     """Load Digital Green samples from local image directory + JSONL metadata.
 
     Each JSONL description record maps image_names → class_label (diagnosis).
-    Returns same format as load_agml_samples: [{"path": str, "label": str}, ...]
+    Returns the same [{"path": str, "label": str}, ...] shape as
+    src.common.dataset_config.load_hf_samples().
     """
     import json
     filename_to_label: dict[str, str] = {}
@@ -155,16 +233,8 @@ def load_dg_samples(images_dir: Path, dg_descriptions_jsonl: Path) -> list[dict]
 
 def subsample_per_class(samples: list[dict], n_per_class: int, seed: int = 42) -> list[dict]:
     """Cap each class to n_per_class images (seeded shuffle) for a balanced comparison."""
-    rng = np.random.default_rng(seed)
-    by_class: dict[str, list[int]] = {}
-    for i, s in enumerate(samples):
-        by_class.setdefault(s["label"], []).append(i)
-    selected: list[int] = []
-    for indices in by_class.values():
-        if len(indices) > n_per_class:
-            indices = rng.choice(indices, size=n_per_class, replace=False).tolist()
-        selected.extend(indices)
-    selected.sort()
+    by_class = subsample_class_balanced(samples, lambda s: s["label"], n_per_class, seed)
+    selected = sorted(i for indices in by_class.values() for i in indices)
     return [samples[i] for i in selected]
 
 
@@ -189,6 +259,52 @@ def resolve_mm_root(model):
     raise AttributeError(f"Could not locate vision encoder. Top-level: {available}")
 
 
+def resolve_heuristic_pre_module(vlm, mm_root) -> tuple[torch.nn.Module, str | None, str]:
+    """Pick the heuristic (no layer_selections.yaml entry) pre-projector hook
+    module for a resolved mm_root. Returns (module, cache_layer_path, description).
+
+    cache_layer_path (when not None) is relative to vlm, not mm_root — same
+    convention as layer_selections.yaml's manual "pre" entries (e.g. Qwen's
+    "model.visual.blocks.26"), because a path returned here can end up
+    persisted into that same file (see _persist_heuristic_pre_selection) and
+    then read back and resolved via vlm.get_submodule(); mm_root is often
+    vlm.model, not vlm itself, so an mm_root-relative path would resolve
+    against the wrong object on that later read.
+
+    Default is mm_root.vision_tower's own output — correct for architectures
+    like Gemma4, whose vision_tower ends on genuine vision features with a
+    separate top-level projector afterward. cache_layer_path is None here,
+    same as before this function existed, so existing Gemma-style embedding
+    caches stay valid.
+
+    Qwen-style towers are different: root.visual (aliased to vision_tower by
+    resolve_mm_root) has both a `.blocks` (the actual transformer stack) and
+    a `.merger` (projects into the LM's embedding space) as attributes on the
+    SAME module — so hooking vision_tower's own output means hooking
+    whatever ran last inside it, which for Qwen is the merger's own final
+    Linear layer, not pre-projector vision features at all (confirmed via
+    check_vision_towers.py: both Qwen3.5-9B/27B's heuristic hook landed on
+    `merger.linear_fc2`, a raw unnormalized Linear). Auto-detected structurally
+    (has both `.blocks` and `.merger`) rather than by matching "qwen" in the
+    model name, so this also covers any future/other model sharing the same
+    tower shape without needing a name-based special case. cache_layer_path is
+    a real, distinct string here — deliberately, so any embeddings already
+    cached under the old (wrong) merger-based heuristic get invalidated
+    instead of silently reused.
+
+    A manual layer_selections.yaml entry always overrides this — this
+    function only runs when there isn't one."""
+    prefix = "" if mm_root is vlm else "model."
+    vision_tower = mm_root.vision_tower
+    if hasattr(vision_tower, "blocks") and hasattr(vision_tower, "merger"):
+        blocks = vision_tower.blocks
+        idx = len(blocks) - 1
+        path = f"{prefix}vision_tower.blocks.{idx}"
+        desc = f"{path} (auto: Qwen-style merger detected in vision_tower — using the last pre-merger transformer block instead of the merger's own output)"
+        return blocks[idx], path, desc
+    return vision_tower, None, "vision_tower"
+
+
 def extract_vlm_embeddings(
     samples, processor, model, hook_module: torch.nn.Module, desc: str = "VLM embeddings"
 ) -> tuple[np.ndarray, list[str]]:
@@ -198,12 +314,10 @@ def extract_vlm_embeddings(
     hook_module is resolved by the caller — either from layer_selections.yaml via
     model.get_submodule(path), or from the heuristic resolve_mm_root fallback.
     """
-    from tqdm import tqdm
-
     model_device = next(model.parameters()).device
     embeddings, labels = [], []
 
-    for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc=f"  {desc}"):
         image = PILImage.open(sample["path"]).convert("RGB")
 
         messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
@@ -276,12 +390,10 @@ def extract_vlm_embeddings_postproj(
     hook_module is resolved by the caller — either from layer_selections.yaml via
     model.get_submodule(path), or from the heuristic resolve_projector fallback.
     """
-    from tqdm import tqdm
-
     model_device = next(model.parameters()).device
     embeddings, labels = [], []
 
-    for sample in tqdm(samples, desc=f"  {desc}", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc=f"  {desc}"):
         image = PILImage.open(sample["path"]).convert("RGB")
 
         messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "."}]}]
@@ -322,14 +434,19 @@ def extract_vlm_embeddings_postproj(
     return np.stack(embeddings), labels
 
 
-def load_gemma4(model_id: str, device: str, quantize: str | None = None):
+def load_gemma4(model_id: str, device: str, quantize: str | None = None, trust_remote_code: bool = True):
+    """trust_remote_code defaults to True here so models that ship custom
+    modeling code on their HF repo (e.g. Kimi-VL, Nemotron) load without an
+    interactive prompt — this executes arbitrary Python from that repo, so
+    it's a deliberate default, not an oversight; pass False (--no-trust-
+    remote-code) to go back to transformers' normal opt-in-only behavior."""
     local = os.path.abspath(model_id)
     if os.path.exists(local):
         model_id = local
     print(f"Loading VLM: {model_id}" + (f" [{quantize}]" if quantize else ""))
-    processor = AutoProcessor.from_pretrained(model_id)
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
 
-    load_kwargs: dict = {"device_map": "auto"}
+    load_kwargs: dict = {"device_map": "auto", "trust_remote_code": trust_remote_code}
     if quantize == "4bit":
         from transformers import BitsAndBytesConfig
         load_kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -341,7 +458,34 @@ def load_gemma4(model_id: str, device: str, quantize: str | None = None):
     else:
         load_kwargs["dtype"] = torch.bfloat16
 
-    model = AutoModelForImageTextToText.from_pretrained(model_id, **load_kwargs)
+    # Some custom-code VLM repos (observed with Kimi-VL, Nemotron-Omni) don't
+    # register their model class under AutoModelForImageTextToText at all —
+    # the checkpoint and its custom config load fine, this auto-class just
+    # doesn't recognize that config type. Different repos land under
+    # different fallback auto-classes (generic AutoModel, or — same pattern
+    # DeepSeek-VL2 uses — AutoModelForCausalLM), so try each in turn and
+    # re-raise the FIRST (most informative) "Unrecognized configuration
+    # class" error if every tier fails, rather than whatever the last
+    # attempted auto-class produced for a genuinely incompatible checkpoint.
+    _AUTO_CLASSES = (AutoModelForImageTextToText, AutoModel, AutoModelForCausalLM)
+    model = None
+    first_error: ValueError | None = None
+    for _auto_cls in _AUTO_CLASSES:
+        try:
+            model = _auto_cls.from_pretrained(model_id, **load_kwargs)
+            if _auto_cls is not _AUTO_CLASSES[0]:
+                print(f"  [note] loaded via {_auto_cls.__name__} "
+                      f"(AutoModelForImageTextToText didn't recognize this config)")
+            break
+        except ValueError as e:
+            if "Unrecognized configuration class" not in str(e):
+                raise
+            if first_error is None:
+                first_error = e
+            continue
+    if model is None:
+        assert first_error is not None
+        raise first_error
     model.eval()
     mm_root = resolve_mm_root(model)
     vision_device = next(mm_root.vision_tower.parameters()).device
@@ -352,7 +496,6 @@ def load_gemma4(model_id: str, device: str, quantize: str | None = None):
 # ── YOLO backbone ──────────────────────────────────────────────────────────────
 
 def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.ndarray:
-    from tqdm import tqdm
     from ultralytics import YOLO
     import torchvision.transforms as T
 
@@ -377,7 +520,7 @@ def extract_yolo_embeddings(samples, yolo_model_name: str, device: str) -> np.nd
 
     embeddings = []
     with torch.no_grad():
-        for sample in tqdm(samples, desc="  YOLO embeddings", unit="img", leave=False):
+        for sample in ProgressBar(samples, desc="  YOLO embeddings"):
             captured.clear()
             image = PILImage.open(sample["path"]).convert("RGB")
             x = transform(image).unsqueeze(0).to(device)
@@ -403,9 +546,8 @@ def load_dino(model_id: str, device: str):
 
 @torch.no_grad()
 def extract_dino_embeddings(samples, processor, model, device) -> tuple[np.ndarray, list[str]]:
-    from tqdm import tqdm
     embeddings, labels = [], []
-    for sample in tqdm(samples, desc="  DINOv3 embeddings", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc="  DINOv3 embeddings"):
         image = PILImage.open(sample["path"]).convert("RGB")
         inputs = processor(images=image, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -426,9 +568,8 @@ def load_bioclip(model_id: str, device: str):
 
 @torch.no_grad()
 def extract_bioclip_embeddings(samples, model, preprocess, device) -> tuple[np.ndarray, list[str]]:
-    from tqdm import tqdm
     embeddings, labels = [], []
-    for sample in tqdm(samples, desc="  BioCLIP embeddings", unit="img", leave=False):
+    for sample in ProgressBar(samples, desc="  BioCLIP embeddings"):
         image = PILImage.open(sample["path"]).convert("RGB")
         tensor = preprocess(image).unsqueeze(0).to(device)
         features = model.encode_image(tensor)
@@ -468,6 +609,31 @@ def run_probe(
         "per_class_report_dict": report_dict,
     }
     return metrics, y_test_labels, y_pred_labels
+
+
+def compute_separability(X: np.ndarray, y_enc: np.ndarray) -> float | None:
+    """Silhouette score on raw embeddings — mean(each point's own-class
+    cohesion vs. nearest-other-class separation), in [-1, 1], higher =
+    classes sit in tighter, better-separated regions of embedding space.
+
+    Deliberately a different signal than linear-probe F1: silhouette is
+    purely geometric/unsupervised (distance-based clustering quality),
+    while F1 measures whether a LINEAR decision boundary specifically can
+    separate the classes — embeddings can cluster well but still not be
+    linearly separable, or vice versa (e.g. concentric-ring classes:
+    perfectly separable by a nonlinear boundary, terrible silhouette).
+    That's exactly the gap worth correlating against F1 for.
+
+    Returns None if there are too few classes/samples for silhouette_score
+    to be mathematically defined (needs 2 <= n_labels <= n_samples - 1) —
+    happens for small per-dataset test splits with very few classes."""
+    n_labels = len(set(y_enc.tolist()))
+    if n_labels < 2 or n_labels > len(y_enc) - 1:
+        return None
+    try:
+        return float(silhouette_score(X, y_enc))
+    except ValueError:
+        return None
 
 
 # ── FC probe ───────────────────────────────────────────────────────────────────
@@ -557,17 +723,21 @@ def get_combined_class_counts(all_embeddings: dict, backbone: str) -> Counter:
 
 
 def _split_from_labels(
-    X: np.ndarray, labels_all: list[str], n_samples: int | None = None
+    X: np.ndarray, labels_all: list[str], n_samples: int | None = None, seed: int = 42
 ) -> tuple:
     """Rebuild y_enc / train_idx / test_idx / le from X and labels_all.
 
     Used when loading embeddings from cache so that X and labels_all are
     always aligned (cache may have a different row count than _samples on a
-    different machine).
+    different machine). `seed` controls which n_samples images of each
+    class's cached pool land in train vs test — the embedding cache itself
+    is seed-independent (it holds every loaded image's embedding, not just
+    the currently-sampled subset), so varying seed here to get a different
+    train/test split never invalidates the cache or triggers re-extraction.
     """
     le = LabelEncoder()
     y_enc = le.fit_transform(labels_all)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     by_class: dict[str, list[int]] = {}
     for i, lbl in enumerate(labels_all):
         by_class.setdefault(lbl, []).append(i)
@@ -585,12 +755,14 @@ def _split_from_labels(
 
 
 def build_combined_split(
-    all_embeddings: dict, backbone: str, n_samples: int = 10,
+    all_embeddings: dict, backbone: str, n_samples: int = 10, seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder, list[str]] | None:
     """Concatenate embeddings from all datasets for one backbone into a single split.
 
     Uses n_samples per class for training (default 10), rest goes to test —
-    consistent with the per-dataset split logic.
+    consistent with the per-dataset split logic. `seed` behaves the same way
+    as in _split_from_labels — varying it changes which images land in
+    train/test without touching the (seed-independent) embedding cache.
     """
     X_parts, label_parts = [], []
     for agml_name, (X, labels_all, *_) in all_embeddings.get(backbone, {}).items():
@@ -609,7 +781,7 @@ def build_combined_split(
     label_parts = [label_parts[i] for i in range(len(label_parts)) if keep[i]]
 
     # Per-class split: n_samples → train, rest → test
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     by_class: dict[str, list[int]] = {}
     for i, lbl in enumerate(label_parts):
         by_class.setdefault(lbl, []).append(i)
@@ -745,6 +917,179 @@ def plot_per_class_f1(backbone_reports: dict[str, dict], dataset_name: str, outp
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def _collect_separability_rows(results_per_dataset: dict[str, dict]) -> list[dict]:
+    """One dict per (backbone, dataset) with both silhouette and f1_macro
+    defined — shared by plot_separability_vs_f1 (all backbones pooled) and
+    plot_separability_vs_f1_by_backbone (one subplot/correlation per
+    backbone)."""
+    rows = []
+    for agml_name, ds_data in results_per_dataset.items():
+        for backbone, m in ds_data.get("backbones", {}).items():
+            sil, f1 = m.get("silhouette"), m.get("f1_macro")
+            if sil is not None and f1 is not None:
+                rows.append({"agml_dataset": agml_name, "backbone": backbone,
+                             "silhouette": sil, "f1_macro": f1})
+    return rows
+
+
+def plot_separability_vs_f1(results_per_dataset: dict[str, dict], output_dir: Path) -> None:
+    """Does embedding separability (silhouette, computed alongside each
+    per-dataset LR probe — see compute_separability's docstring for why
+    it's a genuinely different signal than F1) predict linear-probe F1?
+    One point per (backbone, dataset) with both metrics available,
+    scatter-plotted and colored by backbone, with Pearson + Spearman
+    correlation across ALL points pooled — see
+    plot_separability_vs_f1_by_backbone for the same data split into one
+    correlation per backbone. Writes separability_vs_f1.csv alongside the
+    scatter plot; no-op if --per_dataset wasn't run (results_per_dataset
+    empty) or no point has both a defined silhouette and f1_macro (e.g.
+    every dataset's test split was too small for silhouette_score to be
+    defined)."""
+    if not results_per_dataset:
+        return
+
+    rows = _collect_separability_rows(results_per_dataset)
+    if not rows:
+        print("  [skip] plot_separability_vs_f1 — no (backbone, dataset) point had both metrics defined")
+        return
+
+    csv_path = output_dir / "separability_vs_f1.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["agml_dataset", "backbone", "silhouette", "f1_macro"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"  Saved: {csv_path}")
+
+    xs = np.array([r["silhouette"] for r in rows])
+    ys = np.array([r["f1_macro"] for r in rows])
+    backbones = sorted({r["backbone"] for r in rows})
+    cmap = plt.get_cmap("tab10", max(len(backbones), 1))
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for i, backbone in enumerate(backbones):
+        bx = [r["silhouette"] for r in rows if r["backbone"] == backbone]
+        by = [r["f1_macro"] for r in rows if r["backbone"] == backbone]
+        ax.scatter(bx, by, label=backbone, color=cmap(i), alpha=0.75, edgecolor="black", linewidth=0.4)
+
+    title = "Embedding separability (silhouette) vs. linear-probe F1"
+    if len(rows) >= 3:
+        r_pearson, p_pearson = pearsonr(xs, ys)
+        r_spearman, p_spearman = spearmanr(xs, ys)
+        title += (f"\nPearson r={r_pearson:.2f} (p={p_pearson:.3f}), "
+                  f"Spearman ρ={r_spearman:.2f} (p={p_spearman:.3f}), n={len(rows)}")
+    else:
+        title += f"\n(n={len(rows)} — too few points for a meaningful correlation)"
+
+    ax.set_xlabel("Silhouette score (embedding separability)", fontsize=10)
+    ax.set_ylabel("Linear-probe F1 macro", fontsize=10)
+    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.25)
+    plt.tight_layout()
+    path = output_dir / "separability_vs_f1.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_separability_vs_f1_by_backbone(results_per_dataset: dict[str, dict], output_dir: Path) -> None:
+    """Same silhouette-vs-F1 question as plot_separability_vs_f1, but one
+    subplot + one Pearson/Spearman correlation PER BACKBONE instead of a
+    single pooled correlation — different backbones can have very
+    different silhouette/F1 relationships (e.g. a backbone whose embedding
+    space is always well-separated vs. one where separability tracks
+    probe difficulty), which a pooled r can hide or distort. Needs >= 3
+    points per backbone for a correlation; backbones with fewer are
+    plotted (if 1+ point) without one. Writes separability_vs_f1_by_backbone.png
+    (all backbones as subplots, one figure) AND
+    separability_vs_f1_<backbone>.png (one standalone plot per backbone,
+    same scatter + title as its subplot) plus
+    separability_vs_f1_by_backbone.csv (one row per backbone); no-op under
+    the same conditions as plot_separability_vs_f1."""
+    if not results_per_dataset:
+        return
+
+    rows = _collect_separability_rows(results_per_dataset)
+    if not rows:
+        print("  [skip] plot_separability_vs_f1_by_backbone — no (backbone, dataset) "
+              "point had both metrics defined")
+        return
+
+    backbones = sorted({r["backbone"] for r in rows})
+    cmap = plt.get_cmap("tab10", max(len(backbones), 1))
+
+    per_backbone: dict[str, tuple[np.ndarray, np.ndarray, str, str, dict]] = {}
+    corr_rows = []
+    for i, backbone in enumerate(backbones):
+        bx = np.array([r["silhouette"] for r in rows if r["backbone"] == backbone])
+        by = np.array([r["f1_macro"] for r in rows if r["backbone"] == backbone])
+
+        if len(bx) >= 3:
+            r_pearson, p_pearson = pearsonr(bx, by)
+            r_spearman, p_spearman = spearmanr(bx, by)
+            r_label = f"r = {r_pearson:.2f}"
+            corr_rows.append({"backbone": backbone, "n": len(bx),
+                               "pearson_r": r_pearson, "pearson_p": p_pearson,
+                               "spearman_r": r_spearman, "spearman_p": p_spearman})
+        else:
+            r_label = f"n={len(bx)} — too few points for r"
+            corr_rows.append({"backbone": backbone, "n": len(bx),
+                               "pearson_r": "", "pearson_p": "", "spearman_r": "", "spearman_p": ""})
+        per_backbone[backbone] = (bx, by, backbone, r_label, {"color": cmap(i)})
+
+    def _annotate_r(ax, label: str) -> None:
+        ax.text(0.05, 0.95, label, transform=ax.transAxes, fontsize=10, va="top", ha="left",
+                bbox={"facecolor": "white", "edgecolor": "black", "alpha": 0.8, "boxstyle": "round,pad=0.3"})
+
+    # One combined figure, all backbones as subplots.
+    n_cols = min(3, len(backbones))
+    n_rows = -(-len(backbones) // n_cols)  # ceil div
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.5 * n_cols, 5 * n_rows), squeeze=False)
+    for i, backbone in enumerate(backbones):
+        ax = axes[i // n_cols][i % n_cols]
+        bx, by, title, r_label, style = per_backbone[backbone]
+        ax.scatter(bx, by, color=style["color"], alpha=0.75, edgecolor="black", linewidth=0.4)
+        ax.set_xlabel("Silhouette score", fontsize=9)
+        ax.set_ylabel("Linear-probe F1 macro", fontsize=9)
+        ax.set_title(title, fontsize=9)
+        _annotate_r(ax, r_label)
+        ax.grid(True, alpha=0.25)
+    # Blank out any unused grid cells (len(backbones) doesn't evenly fill n_rows*n_cols).
+    for i in range(len(backbones), n_rows * n_cols):
+        axes[i // n_cols][i % n_cols].axis("off")
+    fig.suptitle("Embedding separability (silhouette) vs. linear-probe F1 — per backbone", fontsize=12)
+    plt.tight_layout()
+    path = output_dir / "separability_vs_f1_by_backbone.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+    # One standalone figure per backbone.
+    for backbone in backbones:
+        bx, by, title, r_label, style = per_backbone[backbone]
+        fig, ax = plt.subplots(figsize=(7, 6))
+        ax.scatter(bx, by, color=style["color"], alpha=0.75, edgecolor="black", linewidth=0.4)
+        _annotate_r(ax, r_label)
+        ax.set_xlabel("Silhouette score (embedding separability)", fontsize=10)
+        ax.set_ylabel("Linear-probe F1 macro", fontsize=10)
+        ax.set_title(title, fontsize=10)
+        ax.grid(True, alpha=0.25)
+        plt.tight_layout()
+        slug = backbone.replace("/", "_")
+        bpath = output_dir / f"separability_vs_f1_{slug}.png"
+        fig.savefig(bpath, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {bpath}")
+
+    csv_path = output_dir / "separability_vs_f1_by_backbone.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["backbone", "n", "pearson_r", "pearson_p",
+                                                "spearman_r", "spearman_p"])
+        writer.writeheader()
+        writer.writerows(corr_rows)
+    print(f"  Saved: {csv_path}")
 
 
 def plot_overall_summary(results: dict, output_dir: Path):
@@ -891,7 +1236,7 @@ def plot_projector_task_comparison(
                     f"{v:.2f}", ha="center", va="bottom", fontsize=6)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticklabels([_display_task(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.2)
     ax.set_ylabel("F1 Macro")
     ax.set_title("Projector Separability by Task Type: Pre vs Post-Projector (FC combined)")
@@ -1064,17 +1409,19 @@ def plot_master_comparison(results: dict, output_dir: Path):
     print(f"  Saved: {path}")
 
 
+# Family-shaded backbone colors + vision-only hatching now live in
+# src/common/plot_style.py — shared with vision_baseline_collate.py and
+# collate_seeds.py so the same backbone reads as the same color on every
+# chart in the pipeline. Imported at the top of this file as
+# _family_shaded_colors / _is_vision_only.
+
+
 def plot_task_summary(results: dict, output_dir: Path):
     """Bar chart comparing backbone F1 per task type; LR combined preferred, FC combined fallback."""
     by_task = (
         results.get("by_task_lr_combined")
         or results.get("by_task_fc_combined")
         or results.get("by_task", {})
-    )
-    probe_label = (
-        "LR combined" if results.get("by_task_lr_combined")
-        else "FC combined" if results.get("by_task_fc_combined")
-        else "per-dataset mean"
     )
     task_types = list(by_task.keys())
     if not task_types:
@@ -1088,22 +1435,26 @@ def plot_task_summary(results: dict, output_dir: Path):
     x = np.arange(len(task_types))
     width = 0.8 / len(backbones)
 
+    backbone_colors = _family_shaded_colors(backbones)
+
     fig, ax = plt.subplots(figsize=(max(8, len(task_types) * 2), 5))
     for i, backbone in enumerate(backbones):
         vals = [_f1(by_task[tt].get(backbone, 0.0)) for tt in task_types]
         offset = (i - (len(backbones) - 1) / 2) * width
-        bars = ax.bar(x + offset, vals, width, label=backbone.split("/")[-1])
+        bars = ax.bar(x + offset, vals, width, label=backbone.split("/")[-1],
+                       color=backbone_colors[backbone],
+                       hatch="//" if _is_vision_only(backbone) else None,
+                       edgecolor="white" if _is_vision_only(backbone) else None)
         for bar in bars:
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, h + 0.005,
                     f"{h:.2f}", ha="center", va="bottom", fontsize=7)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([tt.replace("_", " ") for tt in task_types], rotation=15, ha="right")
+    ax.set_xticklabels([_display_task(tt) for tt in task_types], rotation=15, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("F1 Macro")
-    ax.set_title(f"Linear Probe — F1 by Task Type ({probe_label})")
-    ax.legend()
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=min(len(backbones), 3))
     plt.tight_layout()
 
     path = output_dir / "summary_by_task.png"
@@ -1188,6 +1539,80 @@ def _plots_only_mode(args, output_dir: Path) -> None:
     print(f"\nPlots saved to {output_dir}/")
 
 
+def _feature_sep_only_mode(args, output_dir: Path) -> None:
+    """--feature_sep: compute silhouette + the separability-vs-F1 plot from
+    ALREADY-CACHED embeddings only — no model ever gets loaded, no GPU
+    touched, and the ONLY files this writes are separability_vs_f1.csv/.png.
+    Every other output (linear_probe_results.json, test_split.json, the
+    other plots, ...) is left completely untouched, unlike a normal run or
+    even --plots_only (which does touch other files it regenerates).
+
+    A (backbone, dataset) pair with no cache hit is skipped with a
+    [skip] line — this mode NEVER falls back to loading a live model,
+    since the entire point is "never risk pulling a real backbone onto
+    the GPU." Re-run the normal command with --cache_embeddings first if
+    something's missing here."""
+    cache_dir = Path(getattr(args, "cache_dir", None) or (output_dir / "embedding_cache"))
+    if not cache_dir.exists():
+        print(f"ERROR: {cache_dir} not found — nothing is cached yet. Run the normal "
+              f"probe command with --cache_embeddings (and --per_dataset) first.")
+        return
+
+    if args.dino_model and args.dino_model.lower() == "none":
+        args.dino_model = None
+    if not hasattr(args, "models"):
+        args.models = None
+
+    manifest_path = Path(getattr(args, "manifest", None) or "dataset/selected_images.json")
+    manifest = load_manifest(manifest_path)
+    datasets = active_datasets(Path(args.config))
+    gaps = missing_from_manifest(datasets, manifest)
+    ds_names = [d.agml_name for d in datasets if d.agml_name not in gaps]
+
+    layer_selections = _load_layer_selections()
+
+    # (backbone_key, cache split-type, layer_path-for-cache-lookup) — same
+    # derivation main() itself uses for each backbone family.
+    backbone_specs: list[tuple[str, str, str | None]] = []
+    if args.dino_model:
+        backbone_specs.append((args.dino_model.split("/")[-1], "emb", None))
+    if args.yolo_model:
+        backbone_specs.append((args.yolo_model.replace(".pt", ""), "emb", None))
+    if getattr(args, "bioclip_model", None):
+        backbone_specs.append((args.bioclip_model.split("/")[-1], "emb", None))
+    for model_id in (args.models or []):
+        backbone_key = model_id.split("/")[-1]
+        pre_layer_path = layer_selections.get(model_id, {}).get("pre")
+        backbone_specs.append((backbone_key, "pre", pre_layer_path))
+
+    if not backbone_specs:
+        print("ERROR: no backbones requested (--models/--dino_model/--yolo_model/--bioclip_model all unset).")
+        return
+
+    n_samples = args.n_samples
+    seed = args.seed
+    results_per_dataset: dict[str, dict] = {}
+    n_hits = n_misses = 0
+    for backbone_key, split, layer_path in backbone_specs:
+        for agml_name in ds_names:
+            cached = load_cached_embeddings(cache_dir, backbone_key, agml_name, split, layer_path)
+            if cached is None:
+                print(f"  [skip] no cache for {backbone_key} / {agml_name} — never loading a live model here")
+                n_misses += 1
+                continue
+            n_hits += 1
+            X, cached_labels = cached
+            X, labels_all, y_enc, train_idx, test_idx, le = _split_from_labels(X, cached_labels, n_samples, seed=seed)
+            y_train, y_test = y_enc[train_idx], y_enc[test_idx]
+            metrics, _, _ = run_probe(X[train_idx], X[test_idx], y_train, y_test, le, backbone_key)
+            metrics["silhouette"] = compute_separability(X[test_idx], y_test)
+            results_per_dataset.setdefault(agml_name, {"backbones": {}})["backbones"][backbone_key] = metrics
+
+    print(f"\n  {n_hits} cache hit(s), {n_misses} miss(es) skipped")
+    plot_separability_vs_f1(results_per_dataset, output_dir)
+    plot_separability_vs_f1_by_backbone(results_per_dataset, output_dir)
+
+
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
@@ -1199,6 +1624,10 @@ def main(args):
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(args, "feature_sep", False):
+        _feature_sep_only_mode(args, output_dir)
+        return
 
     if getattr(args, "plots_only", False):
         _plots_only_mode(args, output_dir)
@@ -1223,8 +1652,16 @@ def main(args):
     n_datasets = len(datasets)
     print(f"\nActive datasets: {n_datasets}")
 
+    manifest = None
     if not use_dg:
-        prefetch_agml_datasets(datasets)
+        manifest_path = Path(getattr(args, "manifest", None) or "dataset/selected_images.json")
+        images_root = Path(getattr(args, "images_root", None) or "dataset/images")
+        manifest = load_manifest(manifest_path)
+        gaps = missing_from_manifest(datasets, manifest)
+        if gaps:
+            print(f"  [warn] {len(gaps)}/{n_datasets} active dataset(s) not in {manifest_path} "
+                  f"(never downloaded, or download failed — see that manifest's summary.txt): "
+                  f"{gaps}")
 
     # Phase 1: load each backbone once, extract embeddings for all datasets, unload
     # all_embeddings[backbone_key][agml_name] = (X, labels, train_idx, test_idx, le)
@@ -1237,7 +1674,9 @@ def main(args):
             if use_dg:
                 samples = load_dg_samples(images_dir, Path(dg_jsonl))
             else:
-                samples = load_agml_samples(agml_name)
+                samples = load_hf_samples(
+                    agml_name, manifest, images_root, excluded_classes=ds_cfg.excluded_classes,
+                )
         except Exception as e:
             print(f"  [error] {e}")
             continue
@@ -1256,7 +1695,7 @@ def main(args):
         # Default is 10 per class; pass --n_samples to override.
         # Combined probe always uses 80/20 stratified split regardless of this value.
         _n_samples_per_class = args.n_samples if args.n_samples is not None else 10
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(args.seed)
         by_class: dict[str, list[int]] = {}
         for i, s in enumerate(samples):
             by_class.setdefault(s["label"], []).append(i)
@@ -1304,7 +1743,6 @@ def main(args):
 
     # DINOv3 pass
     if args.dino_model:
-        from tqdm import tqdm
         backbone_idx += 1
         print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] DINOv3: {args.dino_model}\n{'='*60}")
         dino_key = args.dino_model.split("/")[-1].replace(".pt", "")
@@ -1318,15 +1756,15 @@ def main(args):
             print(f"  [cache] All DINOv3 embeddings cached — skipping model load")
             for agml_name, _ in ds_items:
                 X, cached_labels = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb")
-                all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
         else:
             dino_processor, dino_model = load_dino(args.dino_model, device)
-            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="DINOv3 datasets", unit="ds"):
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="DINOv3 datasets"):
                 cached = load_cached_embeddings(cache_dir, dino_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {dino_key} / {agml_name}")
-                    all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[dino_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X, _ = extract_dino_embeddings(samples, dino_processor, dino_model, device)
                     if use_embedding_cache:
@@ -1336,7 +1774,6 @@ def main(args):
 
     # YOLO pass
     if args.yolo_model:
-        from tqdm import tqdm
         backbone_idx += 1
         print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] YOLO: {args.yolo_model}\n{'='*60}")
         yolo_key = args.yolo_model.replace(".pt", "")
@@ -1350,14 +1787,14 @@ def main(args):
             print(f"  [cache] All YOLO embeddings cached — skipping model load")
             for agml_name, _ in ds_items:
                 X, cached_labels = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb")
-                all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
         else:
-            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="YOLO datasets", unit="ds"):
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="YOLO datasets"):
                 cached = load_cached_embeddings(cache_dir, yolo_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {yolo_key} / {agml_name}")
-                    all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[yolo_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X = extract_yolo_embeddings(samples, args.yolo_model, device)
                     if use_embedding_cache:
@@ -1366,7 +1803,6 @@ def main(args):
 
     # BioCLIP pass
     if args.bioclip_model:
-        from tqdm import tqdm
         backbone_idx += 1
         print(f"\n{'='*60}\n[Backbone {backbone_idx}/{n_backbones}] BioCLIP: {args.bioclip_model}\n{'='*60}")
         bioclip_key = args.bioclip_model.split("/")[-1]
@@ -1380,15 +1816,15 @@ def main(args):
             print(f"  [cache] All BioCLIP embeddings cached — skipping model load")
             for agml_name, _ in ds_items:
                 X, cached_labels = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb")
-                all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
         else:
             bioclip_model, bioclip_preprocess = load_bioclip(args.bioclip_model, device)
-            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc="BioCLIP datasets", unit="ds"):
+            for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc="BioCLIP datasets"):
                 cached = load_cached_embeddings(cache_dir, bioclip_key, agml_name, "emb") if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {bioclip_key} / {agml_name}")
-                    all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[bioclip_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X, _ = extract_bioclip_embeddings(samples, bioclip_model, bioclip_preprocess, device)
                     if use_embedding_cache:
@@ -1400,9 +1836,12 @@ def main(args):
     layer_selections = _load_layer_selections()
     postproj_embeddings: dict[str, dict] = {}   # {backbone_postproj: {agml_name: (X, labels, ...)}}
     feature_dims: dict[str, dict] = {}          # {backbone: {"pre": int, "post": int}}
+    resolved_layers: dict[str, dict] = {}       # {backbone: {"pre": path, "pre_source": "manual"|"heuristic",
+                                                 #             "post": path, "post_source": ...}} — persisted
+                                                 # into linear_probe_results.json so it's auditable after the
+                                                 # fact, not just visible in that run's console/job log.
     postproj_only_outer = getattr(args, "postproj_only", False)
     for model_id in (args.models or []):
-        from tqdm import tqdm
         backbone_idx += 1
         backbone_key = model_id.split("/")[-1]
         postproj_key = f"{backbone_key}_postproj"
@@ -1432,6 +1871,13 @@ def main(args):
             fully_cached = all_pre_cached and (all_post_cached or not post_path_known)
             if fully_cached:
                 print(f"  [cache] All embeddings cached — skipping model load for {backbone_key}")
+                resolved_layers[backbone_key] = {
+                    "pre": check_pre_path or "vision_tower (default)",
+                    "pre_source": "manual" if check_pre_path else "heuristic (assumed — model not "
+                                                                    "loaded this run, cache hit)",
+                    "post": check_post_path,
+                    "post_source": "manual" if check_post_path else None,
+                }
                 all_embeddings[backbone_key] = {}
                 postproj_embeddings[postproj_key] = {}
                 for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ds_items:
@@ -1447,7 +1893,10 @@ def main(args):
                             feature_dims[backbone_key]["post"] = int(X_post.shape[1])
                 continue
 
-        processor, vlm, mm_root = load_gemma4(model_id, device, quantize=args.quantize)
+        processor, vlm, mm_root = load_gemma4(
+            model_id, device, quantize=args.quantize,
+            trust_remote_code=getattr(args, "trust_remote_code", True),
+        )
 
         all_embeddings[backbone_key] = {}
         postproj_embeddings[postproj_key] = {}
@@ -1455,26 +1904,32 @@ def main(args):
 
         # Resolve pre-projector hook module
         model_sels = layer_selections.get(model_id, {})
+        pre_source = "manual"
         if "pre" in model_sels:
             pre_layer_path: str | None = model_sels["pre"]
             pre_module = vlm.get_submodule(pre_layer_path)
             print(f"  Pre-projector (from layer_selections.yaml): {pre_layer_path}")
         else:
-            pre_layer_path = None
-            pre_module = mm_root.vision_tower
-            print(f"  Pre-projector (heuristic fallback): vision_tower")
+            pre_source = "heuristic"
+            pre_module, pre_layer_path, pre_desc = resolve_heuristic_pre_module(vlm, mm_root)
+            print(f"  Pre-projector (heuristic fallback): {pre_desc}")
+            if pre_layer_path is not None:
+                _persist_heuristic_pre_selection(model_id, pre_layer_path)
+                layer_selections = _load_layer_selections()  # pick up what we just wrote
             if not layer_selections:
-                print(f"  Tip: run 'streamlit run app/layer_explorer.py' to pick exact layers.")
+                print(f"  Tip: add an entry to {_LAYER_SELECTIONS_PATH} to pick exact layers.")
 
         # Resolve post-projector hook module
         has_postproj = False
         post_module: torch.nn.Module | None = None
         post_layer_path: str | None = None
+        post_source: str | None = None
         if "post" in model_sels:
             try:
                 post_layer_path = model_sels["post"]
                 post_module = vlm.get_submodule(post_layer_path)
                 has_postproj = True
+                post_source = "manual"
                 print(f"  Post-projector (from layer_selections.yaml): {post_layer_path}")
             except Exception as exc:
                 print(f"  [warn] Could not resolve post-projector path '{model_sels['post']}': {exc}")
@@ -1484,19 +1939,27 @@ def main(args):
                 post_module = proj
                 post_layer_path = proj_name
                 has_postproj = True
+                post_source = "heuristic"
                 print(f"  Post-projector (heuristic fallback): {proj_name}")
             else:
                 avail = [n for n, _ in mm_root.named_children()]
                 print(f"  [warn] No post-projector found for {backbone_key}. Available: {avail}")
 
+        resolved_layers[backbone_key] = {
+            "pre": pre_layer_path or "vision_tower (default)",
+            "pre_source": pre_source,
+            "post": post_layer_path,
+            "post_source": post_source,
+        }
+
         postproj_only = getattr(args, "postproj_only", False)
-        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in tqdm(ds_items, desc=f"{backbone_key} datasets", unit="ds"):
+        for agml_name, (samples, labels_all, y_enc, train_idx, test_idx, le) in ProgressBar(ds_items, desc=f"{backbone_key} datasets"):
             if not postproj_only:
                 cached = load_cached_embeddings(cache_dir, backbone_key, agml_name, "pre", pre_layer_path) if use_embedding_cache else None
                 if cached is not None:
                     X, cached_labels = cached
                     print(f"  [cache hit] {backbone_key} / {agml_name} pre")
-                    all_embeddings[backbone_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples)
+                    all_embeddings[backbone_key][agml_name] = _split_from_labels(X, cached_labels, args.n_samples, seed=args.seed)
                 else:
                     X, _ = extract_vlm_embeddings(samples, processor, vlm, pre_module, desc=backbone_key)
                     if use_embedding_cache:
@@ -1510,7 +1973,7 @@ def main(args):
                 if cached_post is not None:
                     X_post, cached_labels_post = cached_post
                     print(f"  [cache hit] {postproj_key} / {agml_name} post")
-                    postproj_embeddings[postproj_key][agml_name] = _split_from_labels(X_post, cached_labels_post, args.n_samples)
+                    postproj_embeddings[postproj_key][agml_name] = _split_from_labels(X_post, cached_labels_post, args.n_samples, seed=args.seed)
                 else:
                     X_post, _ = extract_vlm_embeddings_postproj(samples, processor, vlm, post_module, desc=postproj_key)
                     if use_embedding_cache:
@@ -1564,6 +2027,13 @@ def main(args):
                 metrics, y_test_lbl, y_pred_lbl = run_probe(
                     X[train_idx], X[test_idx], y_train, y_test, le, backbone
                 )
+                # Same held-out split F1 is measured on, so both metrics
+                # describe the same sample — not train (would let the
+                # classifier's own memorization leak in) or all data
+                # (would mix train-time-seen geometry into a "held-out
+                # separability" number).
+                metrics["silhouette"] = compute_separability(X[test_idx], y_test)
+                print(f"  Silhouette  : {metrics['silhouette']}")
                 results_per_dataset[agml_name]["backbones"][backbone] = metrics
                 embeddings_store[agml_name][backbone] = (X[test_idx], y_test_lbl)
                 report_store[agml_name][backbone] = metrics["per_class_report_dict"]
@@ -1609,7 +2079,7 @@ def main(args):
     fc_comb_embed_store:  dict[str, tuple] = {}  # {backbone: (X_te_np, y_test_labels)}
 
     for backbone in available_backbones:
-        split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
+        split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined, seed=args.seed)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
@@ -1649,7 +2119,7 @@ def main(args):
 
     if getattr(args, "lr_combined", False):
         for backbone in available_backbones:
-            split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined)
+            split = build_combined_split(all_embeddings, backbone, n_samples=_n_combined, seed=args.seed)
             if split is None:
                 continue
             X_tr, X_te, y_tr, y_te, le_comb, label_parts = split
@@ -1669,7 +2139,7 @@ def main(args):
     postproj_lr_comb_report_store: dict[str, dict] = {} # {backbone_postproj: per_class_report}
     postproj_lr_comb_embed_store:  dict[str, tuple] = {} # {backbone_postproj: (X_all, y_all_labels)}
     for postproj_key in postproj_embeddings:
-        split = build_combined_split(postproj_embeddings, postproj_key)
+        split = build_combined_split(postproj_embeddings, postproj_key, seed=args.seed)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
@@ -1685,7 +2155,7 @@ def main(args):
     postproj_fc_combined: dict[str, dict] = {}
     postproj_fc_comb_report_store: dict[str, dict] = {}
     for postproj_key in postproj_embeddings:
-        split = build_combined_split(postproj_embeddings, postproj_key, n_samples=_n_combined)
+        split = build_combined_split(postproj_embeddings, postproj_key, n_samples=_n_combined, seed=args.seed)
         if split is None:
             continue
         X_tr, X_te, y_tr, y_te, le_comb, _ = split
@@ -1946,6 +2416,11 @@ def main(args):
             for backbone, (y_true, y_pred) in fc_pred_store[agml_name].items():
                 plot_confusion_matrix(y_true, y_pred, f"{agml_name}_{backbone}_fc", cm_dir)
 
+    # Separability (silhouette) vs. linear-probe F1 — only needs Phase 2a's
+    # --per_dataset results, not --all_experiments.
+    plot_separability_vs_f1(results_per_dataset, output_dir)
+    plot_separability_vs_f1_by_backbone(results_per_dataset, output_dir)
+
     # Update pipeline results CSV (fc_combined is default; lr_combined overrides if run)
     pipeline_csv = output_dir.parent / "pipeline_results.csv"
     _probe_results_for_csv = results["lr_combined"] or results["fc_combined"]
@@ -1979,8 +2454,22 @@ def main(args):
 
 
 if __name__ == "__main__":
+    # Pre-parse just --probe_config so its values can seed argparse's own
+    # defaults below, before the real parse happens — CLI flags a user
+    # actually types still win, since parser.set_defaults() only changes
+    # what "not passed" resolves to, not what an explicit flag resolves to.
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--probe_config", default="src/linear_probe/probe_config.yaml")
+    _pre_args, _ = _pre.parse_known_args()
+
     parser = argparse.ArgumentParser(
         description="Linear probe across all active AgML datasets."
+    )
+    parser.add_argument(
+        "--probe_config", default=_pre_args.probe_config,
+        help="YAML file of defaults (hyperparameters, backbones, paths) — edit it "
+             "directly for routine changes instead of passing flags every time. "
+             "Any flag also passed on the command line overrides this file.",
     )
     parser.add_argument(
         "--dataset_source", default="agml", choices=["agml", "digital_green"],
@@ -2003,6 +2492,16 @@ if __name__ == "__main__":
         help="Path to datasets.yaml",
     )
     parser.add_argument(
+        "--manifest", default="dataset/selected_images.json",
+        help="scripts/agml_hf/download_and_sample.py manifest to materialize images "
+             "from (used when --dataset_source agml, i.e. not digital_green).",
+    )
+    parser.add_argument(
+        "--images_root", default="dataset/images",
+        help="Local cache directory for images materialized from --manifest — "
+             "images/<dataset>/<label>/<row_idx>.jpg, reused across runs.",
+    )
+    parser.add_argument(
         "--models", type=str, nargs="+", default=None,
         help="One or more VLM models (HF ID or local path). Each is loaded, evaluated, then unloaded.",
     )
@@ -2023,12 +2522,29 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n_samples", type=int, default=None,
-        help="Max images per class for training in per-dataset split (default: 10). "
-             "Test uses all remaining images. Ignored by combined probe (always 80/20 stratified).",
+        help="Images per class used for training, in BOTH the per-dataset split and the "
+             "combined (all datasets merged) split — default 10 either way. Test uses all "
+             "remaining images in each class.",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Seed for which n_samples images of each class's pool land in train vs test. "
+             "Vary this across reruns to check probe results aren't an artifact of one "
+             "particular 10-image draw — the embedding cache is seed-independent (it holds "
+             "every loaded image's embedding, not just one sampled subset), so a different "
+             "seed re-trains the fast linear probe only, no re-extraction. Use a different "
+             "--output_dir per seed so results don't overwrite each other.",
     )
     parser.add_argument(
         "--quantize", choices=["4bit", "8bit"], default=None,
         help="Load VLMs in 4-bit or 8-bit quantization (requires bitsandbytes). Use 4bit for 48GB GPUs.",
+    )
+    parser.add_argument(
+        "--trust_remote_code", action=argparse.BooleanOptionalAction, default=True,
+        help="Allow loading models that ship custom modeling code on their HF repo "
+             "(e.g. Kimi-VL, Nemotron) — this executes arbitrary Python from that "
+             "repo. Default True; pass --no-trust_remote_code to require "
+             "transformers-native architectures only.",
     )
     parser.add_argument(
         "--fc_epochs", type=int, default=100,
@@ -2049,16 +2565,21 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--all_experiments", action="store_true",
-        help="Run all 4 probe variants (LR per-dataset, LR combined, FC per-dataset, FC combined). "
-             "Default runs LR combined only.",
+        help="Also run FC probe per-dataset (one probe per dataset), plus its plots. "
+             "Default (no flags at all) runs FC combined only. Combine with --per_dataset "
+             "and --lr_combined to get all 4 variants (LR per-dataset, LR combined, "
+             "FC per-dataset, FC combined) — these three flags are independent, not "
+             "one 'run everything' switch.",
     )
     parser.add_argument(
         "--per_dataset", action="store_true",
-        help="Also run LR probe per-dataset (one probe per dataset). Default: combined FC only.",
+        help="Also run LR probe per-dataset (one probe per dataset). Default (no flags "
+             "at all): FC combined only.",
     )
     parser.add_argument(
         "--lr_combined", action="store_true",
-        help="Also run LR probe on combined embeddings (slower, CPU-bound). Default: FC combined only.",
+        help="Also run LR probe on combined embeddings (slower, CPU-bound). Default (no "
+             "flags at all): FC combined only.",
     )
     parser.add_argument(
         "--replot", action="store_true",
@@ -2078,6 +2599,25 @@ if __name__ == "__main__":
         help="Regenerate plots from a previous run without re-extracting embeddings or retraining. "
              "Requires linear_probe_results.json, fc_comb_preds.json, and fc_comb_embeds/ in --output_dir.",
     )
+    parser.add_argument(
+        "--feature_sep", action="store_true",
+        help="Compute silhouette (embedding separability) + the separability-vs-F1 correlation "
+             "plot from ALREADY-CACHED embeddings only (needs a prior run with --cache_embeddings) "
+             "— no model is ever loaded, no GPU touched. Writes only separability_vs_f1.csv/.png; "
+             "every other file in --output_dir is left untouched. A (backbone, dataset) with no "
+             "cache hit is skipped with a [skip] line, never falls back to a live model.",
+    )
+
+    if _pre_args.probe_config and Path(_pre_args.probe_config).exists():
+        import yaml as _yaml
+        with open(_pre_args.probe_config) as f:
+            _cfg = _yaml.safe_load(f) or {}
+        _valid_dests = {a.dest for a in parser._actions}
+        _unknown = set(_cfg) - _valid_dests
+        if _unknown:
+            print(f"[warn] {_pre_args.probe_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
+        parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
+
     args = parser.parse_args()
 
     if args.yolo_model and args.yolo_model.lower() == "none":

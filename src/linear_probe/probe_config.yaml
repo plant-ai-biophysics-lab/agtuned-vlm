@@ -1,0 +1,67 @@
+# Linear probe defaults — edit these directly instead of remembering CLI flags.
+# Loaded automatically by probe.py (default --probe_config path is this file).
+# Any flag you DO pass on the command line still overrides whatever is set
+# here — this file only changes the defaults, it doesn't lock anything in.
+#
+# Values below match the paper's "Linear probing" section exactly:
+#   - single fully-connected linear layer (no hidden units), Adam, CrossEntropyLoss
+#   - frozen vision encoder, mean-pooled patch embeddings, pre-projector hook
+#   - 10 images/class, merged across all active datasets into one combined
+#     training set (not per-dataset)
+# Changing fc_epochs/fc_lr/fc_batch_size/n_samples below changes what the
+# paper's numbers would report — keep this file and the paper in sync.
+
+# ── Training hyperparameters ─────────────────────────────────────────────────
+fc_epochs: 50          # training epochs for the FC probe
+fc_lr: 0.001           # Adam learning rate
+fc_batch_size: 256     # FC probe training batch size
+n_samples: 10          # images/class for training (per-dataset AND combined split);
+                        # remaining images in each class go to test
+seed: 42                # which n_samples images of each class land in train vs test.
+                        # Vary this across reruns (with a different output_dir — see
+                        # below) to check results aren't an artifact of one particular
+                        # draw. The embedding cache does NOT depend on seed, so this
+                        # never triggers re-extraction — only the fast probe retrains.
+
+# ── What to run ───────────────────────────────────────────────────────────────
+# Default (all false) = FC combined only, matching the paper. These three are
+# independent add-ons, not a single "run everything" switch — combine them if
+# you want the other 3 probe variants (LR per-dataset, LR combined, FC per-dataset).
+all_experiments: false  # also run FC per-dataset (+ its plots)
+per_dataset: false      # also run LR (logistic regression) per-dataset
+lr_combined: false      # also run LR (logistic regression) combined
+
+# ── Data sources ─────────────────────────────────────────────────────────────
+config: src/config/datasets.yaml
+manifest: dataset/selected_images.json
+images_root: dataset/images
+
+# ── Backbones ────────────────────────────────────────────────────────────────
+# models: null means no VLM backbone — set explicitly to probe one, e.g.:
+# models: [google/gemma-4-26B-A4B-it]
+models: [Qwen/Qwen3.5-9B, Qwen/Qwen3.5-27B, google/gemma-4-E4B-it, google/gemma-4-26B-A4B-it]
+dino_model: facebook/dinov3-vitb16-pretrain-lvd1689m  # pass "none" (string) to skip
+bioclip_model: null    # e.g. imageomics/bioclip — null skips it
+yolo_model: yolo11x-cls.pt  # pass "none" (string) to skip
+
+# ── Output / caching ─────────────────────────────────────────────────────────
+output_dir: outputs_final/linear_probe/
+cache_embeddings: true  # cache extracted embeddings to .npz; reruns after a
+                          # hyperparameter tweak skip re-extraction entirely
+cache_dir: null          # defaults to <output_dir>/embedding_cache/ when null.
+                          # IMPORTANT for multi-seed runs: if you give each seed
+                          # its own --output_dir (recommended, so results don't
+                          # overwrite each other), this null default means each
+                          # seed also gets its OWN cache subfolder — defeating
+                          # cache reuse across seeds. Set this explicitly to one
+                          # shared path (e.g. outputs_final/linear_probe/embedding_cache/)
+                          # across all seed runs to actually reuse the cache.
+
+# ── Rarely-changed ───────────────────────────────────────────────────────────
+quantize: null          # "4bit" or "8bit" for large VLMs on smaller GPUs
+postproj_only: false
+trust_remote_code: true  # allow loading models that ship custom modeling code on
+                          # their HF repo (e.g. Kimi-VL, Nemotron) — this executes
+                          # arbitrary Python from that repo, so it's deliberate,
+                          # not an oversight; set false to require transformers-
+                          # native architectures only

@@ -53,12 +53,18 @@ CONDITION_STYLES: list[tuple[str, str]] = [
     ("PPT-SelfCoT-N1",  "#313695"),
     ("PPT-SelfCoT-N5",  "#4575b4"),
     ("PPT-SelfCoT-N10", "#74add1"),
-    # Prompt-only verifier-in-the-loop experiment (experiments/verifier_cot/)
+    # Prompt-only verifier-in-the-loop experiment (src/legacy/verifier_cot/, archived prototype)
     ("Verifier-CoT",    "#bcbd22"),
     # Verifier-CoT with a separate --verifier_model (cross-model verification)
     ("Verifier-CoT (Gemma-self)",     "#bcbd22"),
     ("Verifier-CoT (Qwen-base)",      "#17a398"),
     ("Verifier-CoT (Qwen-finetuned)", "#e07b39"),
+    # Stage 4 — single-round K-candidate + PPT-tournament verifier
+    # (src/verifier_cot.py), see docs/stage4_verifier.md. The full-PPT
+    # baseline it's compared against reuses src/verifier_lmv.py's own
+    # existing PPT-Direct-N*/PPT-SelfCoT-N* entries above rather than a
+    # separate condition.
+    ("Verifier",  "#393b79"),  # our contribution
 ]
 
 CONDITION_COLOR: dict[str, str] = dict(CONDITION_STYLES)

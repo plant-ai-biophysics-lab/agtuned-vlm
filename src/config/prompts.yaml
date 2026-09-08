@@ -1,18 +1,49 @@
 # Visual description questions — asked before classification (no class names in prompt)
 visual_description_disease: "Can you describe visually the disease, pest, damage type, or other stress, if any, that is exhibited in this image of {crop}?"
 visual_description_weed: "Can you describe visually the plant or weed exhibited in this image?"
+visual_description_quality: "Can you describe visually the quality, ripeness, or condition exhibited in this image of {crop}?"
 
 # Visual classification questions — OEQ, no class list
 visual_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this image of a {crop}?"
 visual_classification_weed: "What plant or weed is exhibited in this image?"
+visual_classification_quality: "What quality, ripeness, or condition is exhibited in this image of a {crop}?"
+
+# ── Stage 0 data generation (src/legacy/data_generation) ────────────────────
+# Text-only question templates for agml_descriptions.jsonl / agml_classification.jsonl
+text_description_disease: "Can you describe visually the {cls} of a {crop}?"
+text_classification_disease: "What disease, pest, damage type, or other stress, if any, is exhibited in this description of a {crop}?\n\nDescription: {description}"
+text_description_weed: "Can you describe visually the {species}?"
+text_classification_weed: "What plant or weed is exhibited in this description?\n\nDescription: {description}"
+
+# Web-source synthesis: grounded ONLY in fetched reference sources (Wikipedia
+# + live web search, see build_reference_db.py) — synthesizes across however
+# many source excerpts were found for the class. The NOT_ENOUGH_VISUAL_DETAIL
+# sentinel lets the pipeline tell "a source exists but says nothing about
+# visual appearance" apart from "no source found at all" — both fall through
+# to the vision-based description below rather than being left empty.
+synthesis_from_sources: "You are writing a visual description for crop: {crop}, ground-truth class: {class_label}. This description will later be shown to a separate model, without the class label, which must identify the class from the description alone — so your job is to supplement that assessment prompt with visual detail, not answer it. Do not name or repeat the class label ({class_label}), or any synonym, causal organism, or scientific name that would give the answer away.\n\nYou are given {n} excerpts about {class_label}, gathered from external reference sources (encyclopedia entries and web pages). Using ONLY the visual, observable details mentioned in these excerpts, write one clear 2-3 sentence description of its visual appearance (color, texture, shape, pattern, size, location on the plant). Ignore any information that is not about visual appearance, such as treatment, management, causal organism, geographic distribution, or economic impact. If the excerpts do not contain enough visual detail to write a description, respond with exactly: NOT_ENOUGH_VISUAL_DETAIL\n\nExcerpts:\n{numbered_sources}"
+
+# Vision-based fallback/supplement — used when web sources are thin or
+# missing (and merged with the web description when both exist). Per-image
+# captioning question + a no-label suffix (same "don't leak the answer"
+# principle as synthesis_from_sources), then a consensus pass across however
+# many images actually loaded for the class.
+vision_caption_question: "Can you describe visually the {cls} of a {crop}?"
+vision_caption_no_label_suffix: " Focus only on visual characteristics you can observe (color, texture, shape, pattern, size, location on plant). Do not name or repeat the disease, pest, species, or class label in your response."
+vision_synthesis_from_captions: "You are given {n} visual descriptions of {class_label} on {crop}, each written from a separate photograph. Synthesize these into one clear, representative 2-3 sentence description that captures the consensus visual features (color, texture, shape, pattern, size, location on plant). Ignore noise or one-off observations. Do not name or repeat the disease, pest, species, or class label ({class_label}) — describe only what can be visually observed.\n\nDescriptions:\n{numbered_captions}"
+
+# Merge step — only runs when BOTH a web-source description and a
+# vision-based description exist for the class; combines them into one
+# final description, same label-leakage constraint as the other two passes.
+merge_web_and_vision_description: "You are given two independently written visual descriptions of the same thing — crop: {crop}, ground-truth class: {class_label}. One is grounded in external reference sources (encyclopedia/web text); the other is grounded in actual photographs of it. Combine them into a single clear 2-3 sentence description that keeps only the visual details both sources support or that are directly observable in the photograph-based description — if the two disagree on a visual detail, prefer what the photograph-based description says. Do not name or repeat the class label ({class_label}), or any synonym, causal organism, or scientific name that would give the answer away.\n\nSource-grounded description:\n{web_description}\n\nPhotograph-grounded description:\n{vision_description}"
 
 # Description-augmented classification — prepends a reference description to the image question
-desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: {question}\n\nAnswer in one to two sentences. Clearly state the class name in your response."
+desc_augmented_classification: "A reference description of the condition to identify has been provided below. Use this description as context along with the image to answer the question.\n\nReference description: {description}\n\nQuestion: Based on the description provided, {question}\n\nAnswer in one to two sentences. Clearly state the class name in your response."
 
 # Assessment wrappers — applied to all classification and description questions
-classification_suffix: " Answer in one to two sentences. Clearly state the class name in your response."
+classification_suffix: "Answer in one to two sentences. Clearly state your answer (general or scientific name) in your response."
 assessment_descriptive: "Answer the following question in exactly one to two concise sentences describing only the visual appearance. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the sentences.\n\nQuestion: {question}\n\nAnswer:"
-assessment_classification: "Answer the following question in one to two sentences. Clearly state the class name in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
+assessment_classification: "Answer the following question in one to two sentences. Clearly state your answer (general or scientific name) in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
 
 # System prompt applied to all models during assessment
 assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."
@@ -21,4 +52,19 @@ assessment_system: "You are an expert agricultural scientist with deep knowledge
 judge_system_language: "You are an expert agricultural scientist evaluating model answers on agricultural knowledge questions."
 judge_system_vision: "You are an expert agricultural scientist evaluating model predictions on plant disease and pest identification tasks."
 judge_classification_template: "Evaluate whether the predicted label correctly identifies the plant condition in the reference.\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+# Stricter variant for predictions that include an observational narrative
+# (e.g. verifier_cot.py's rubric fill-in-the-blank fields) before a final
+# diagnosis line — added after real-run auditing found the plain template
+# above crediting matches based on the narrative's plausibility rather than
+# the model's actual stated conclusion (e.g. crediting "Leaf spot disease"
+# against Cercospora, Bacterial Spot, Downy Mildew, and even an insect pest,
+# because the surrounding symptom description sounded consistent with each).
+# This version explicitly isolates the model's own final diagnosis as the
+# only thing being graded, and requires taxonomic/common-name specificity —
+# a genus-agnostic symptom label ("leaf spot disease") must NOT be credited
+# against a specifically-named condition unless it is that condition's own
+# recognized common name (e.g. "Coffee Leaf Spot" IS an accepted match for
+# Cercospora on coffee; the bare phrase "leaf spot disease" is not, since
+# many unrelated pathogens/pests produce leaf-spot-shaped symptoms).
+judge_classification_strict_template: "You will be shown a full model response that may include an observational narrative (crop, symptom description, damage pattern, etc.) followed by a final stated diagnosis. Your job is to judge ONLY the model's explicitly stated final diagnosis/conclusion against the reference class — NOT whether the surrounding narrative sounds plausible or descriptively consistent with the reference class. If the narrative is detailed and accurate but the model's own final diagnosis is generic, vague, non-committal, or names a different condition, mark it as NOT a match — credit is based on what the model actually concluded, never on the narrative alone. A generic symptom-shape label (e.g. \"leaf spot disease\", \"nutrient deficiency\", \"viral infection\", \"fungal infection\") does NOT match a specifically-named reference class unless it is that exact condition's own recognized common name — many different, unrelated pathogens, pests, and abiotic causes can all produce similar generic symptom shapes, so a generic label must not be credited just because it is broadly consistent with the reference class's typical presentation.\n\nReference class: {gt}\nFull model response: {pred}\n\nRespond with JSON only:\n{{ \"stated_diagnosis\": \"the model's own final diagnosis, quoted or paraphrased\", \"is_match\": true/false, \"reasoning\": \"brief explanation referencing the stated diagnosis specifically\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
 judge_description_template: "Evaluate whether the predicted visual description captures the same key visual features as the reference description of a plant condition.\n\nReference: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"

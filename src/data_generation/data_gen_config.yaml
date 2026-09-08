@@ -1,0 +1,28 @@
+# Stage 1b (generate.py) defaults — edit these directly instead of remembering
+# CLI flags. Loaded automatically by generate.py (default --data_gen_config
+# path is this file). Any flag you DO pass on the command line still
+# overrides whatever is set here — this file only changes the defaults, it
+# doesn't lock anything in.
+
+# ── Model ────────────────────────────────────────────────────────────────────
+# Must be multimodal — this one model handles both the text-only web-source
+# synthesis/merge passes AND the vision captioning pass.
+model: google/gemma-4-26B-A4B-it
+
+# ── Data sources ─────────────────────────────────────────────────────────────
+reference_db: outputs_final/data_generation/reference_db.json  # from build-reference-db (Step 1)
+prompts: src/config/prompts.yaml
+manifest: dataset/selected_images.json
+images_root: dataset/images
+
+# ── Vision pass ──────────────────────────────────────────────────────────────
+n_vision_samples: 5  # images/class run through the captioning pass
+
+# ── Output ───────────────────────────────────────────────────────────────────
+output_dir: outputs_final/data_generation/
+hub_repo_classification: null  # e.g. user/agml-classification — null skips the push
+
+# ── Rarely-changed ───────────────────────────────────────────────────────────
+seed: 42
+force: false            # ignore checkpoint, regenerate every class from scratch
+backfill_images: false  # save sample images from checkpoint only, skip inference

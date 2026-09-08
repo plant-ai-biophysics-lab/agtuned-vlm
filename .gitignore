@@ -20,6 +20,7 @@ unsloth_compiled_cache
 /annotations.csv
 /outputs
 outputs_*
+/ablation
 /src/config/datasets_test.yaml
 
 # more
@@ -41,3 +42,4 @@ experiments/**/**/*.npy
 >>>>>>> Stashed changes
 /legacy/outputs/verifier_lmv
 /experiments/ag_finetune/.DS_Store
+/dataset/images

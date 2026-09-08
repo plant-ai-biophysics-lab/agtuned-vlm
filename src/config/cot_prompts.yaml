@@ -19,16 +19,33 @@ thinking_prompts:
       - "Are there any visible signs of insects or mites, such as webbing, tiny eggs, frass, or actual bodies?"
       - "Is the damage uniform across the whole plant (suggesting environmental or nutrient stress), or isolated and random (suggesting a pest or pathogen)?"
 
-  weed_identification:
+  # No dataset in the current datasets.yaml uses task_type weed_identification
+  # any more (superseded by species_identification) — reused as-is, since
+  # both are "identify the plant from its structural features" tasks, not a
+  # stress/symptom question. Kept under BOTH keys: species_identification is
+  # what src/self_cot.py / src/cot_yaml.py route to; weed_identification is
+  # kept as a backward-compat alias so the older src/cot_vision.py (still
+  # registered as the "cot" stage, hardcodes weed_identification for a few
+  # datasets) doesn't silently start getting the wrong steps.
+  species_identification: &species_identification_steps
     steps:
       - "Describe the leaf arrangement (opposite, alternate, whorled), shape (lanceolate, ovate, lobed), margins (smooth, serrated, toothed), and venation pattern (parallel, palmate, pinnate)."
       - "Is the plant erect, prostrate/creeping, or a climbing vine? Are there visible hairs, thorns, or distinct colors on the stem?"
       - "If visible, describe any flowers, seed pods, cones, or buds — noting color, petal count, and arrangement."
+  weed_identification: *species_identification_steps
+
+  quality_identification:
+    steps:
+      - "Describe the size and overall shape compared to a typical mature specimen of this type — is it smaller, larger, misshapen, or standard?"
+      - "Describe the color — is it uniform or patchy, and where does it fall between an unripe and an overripe/spoiled appearance?"
+      - "Describe the surface texture and firmness cues visible in the image (e.g., smooth, wrinkled, glossy, dull, bruised, shriveled, soft spots)."
 
 # ── Task type routing ─────────────────────────────────────────────────────────
 
-# Maps dataset task_type → thinking_prompt key above
+# Maps dataset task_type (src/config/datasets.yaml) → thinking_prompt key above
 task_type_to_cot:
-  disease:             disease_pest
-  pest_damage:         disease_pest
-  weed_identification: weed_identification
+  disease:                 disease_pest
+  pest_damage:             disease_pest
+  species_identification:  species_identification
+  quality_identification:  quality_identification
+  weed_identification:     weed_identification  # back-compat, see note above
