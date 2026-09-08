@@ -8,9 +8,9 @@ Evaluation framework for vision-language models on agricultural image understand
 uv sync
 ```
 
-## Paper 1 (current)
+## Paper 1
 
-**Paper:** TBA (link will be added once uploaded)
+**Paper:** Vision-language models know more about agriculture than they show and rubric-grounded verifications close the gap (link TBA)
 
 ### Experiments Pipeline
 
@@ -32,7 +32,7 @@ streamlit run app/classification_viewer.py -- --output_dir outputs/data_generati
 
 Browse Stage 0b's output: dataset/crop/class per record, the grounding sources fetched for it, and the synthesized description. Works right after Step 1 alone (before descriptions exist) too — see [app/README.md](app/README.md).
 
-## Paper 2 (new experiments)
+## Paper 2
 
 **Paper:** TBA
 
