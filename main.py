@@ -36,6 +36,7 @@ STAGES = {
     "verifier-scaling-summary": "src.verifier_scaling_summary",
     "filter-checkpoints": "src.filter_checkpoints",
     "ablation":      "src.ablation",
+    "judge-leniency": "src.judge_leniency",
     "collate":       "src.collate_results",
 }
 
@@ -99,6 +100,12 @@ Stages:
                                all}; "generate" and "judge-recheck" need a GPU/model, the
                                rest reconstruct from existing outputs_final/ runs. Output
                                under ablation/.
+    judge-leniency           — judge leniency baseline (no GPU): judged_correct vs. a
+                               deterministic resolve_class match, per task_type, from an
+                               existing classification checkpoint CSV. --ckpt (path/glob/dir),
+                               --output_dir, --label. Writes leniency_gap_all.png,
+                               leniency_gap_resolvable_only.png, resolve_failures.txt,
+                               leniency_gap.json.
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
