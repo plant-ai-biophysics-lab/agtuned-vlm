@@ -27,9 +27,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from src.common.metrics import apply_judge, judged_summary
+from src.common.metrics import apply_judge, extract_answer_tag, judged_summary
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
-from src.verifier_cot import extract_answer_tag
 
 
 def load_ckpt_rows(ckpt_path: Path) -> list[dict]:

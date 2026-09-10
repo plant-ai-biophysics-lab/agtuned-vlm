@@ -63,7 +63,9 @@ from src.common.dataset_config import (
     load_manifest, parse_class_label,
 )
 from src.common.io import append_jsonl, load_prompts
-from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
+from src.common.metrics import (
+    contains_match, extract_answer_tag, resolve_class, rouge_scores_per_sample, sample_class_images,
+)
 from src.common.ppt_scoring import score_prefill_params
 from src.common.ppt_orchestration import (
     PairScoreResult, run_ppt_tournament, score_pairs_batch as _shared_score_pairs_batch,
@@ -86,7 +88,6 @@ except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
-_ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 
 _VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.yaml"
@@ -132,18 +133,6 @@ def _clean(text: str) -> str:
     text = _THINK_RE.sub("", text).strip()
     m = _REPEAT_RE.search(text)
     return text[:m.start()].strip() if m else text
-
-
-def extract_answer_tag(text: str) -> tuple[str, bool]:
-    """Pull the free-form <answer>...</answer> content out of a generated
-    candidate — open-ended, no closed-set vocabulary (real-world answers
-    aren't a fixed label set). Falls back to the full cleaned text if the
-    tag is missing, so every candidate stays comparable rather than
-    empty; `found` records which case happened."""
-    m = _ANSWER_TAG_RE.search(text)
-    if m:
-        return m.group(1).strip(), True
-    return text.strip(), False
 
 
 def run_batch_n(

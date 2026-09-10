@@ -44,6 +44,15 @@ desc_augmented_classification: "A reference description of the condition to iden
 classification_suffix: "Answer in one to two sentences. Clearly state your answer (general or scientific name) in your response."
 assessment_descriptive: "Answer the following question in exactly one to two concise sentences describing only the visual appearance. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the sentences.\n\nQuestion: {question}\n\nAnswer:"
 assessment_classification: "Answer the following question in one to two sentences. Clearly state your answer (general or scientific name) in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
+# Same as assessment_classification, plus a trailing <answer></answer> tag so
+# resolve_class can match against a short, isolated class name instead of a
+# full sentence — used by vision_baseline.py / self_cot.py / cot_yaml.py.
+# NOT used by verifier_cot.py's _cls_question: that question text gets
+# embedded inside structured_templates' own rubric prompt (verifier_prompts.yaml),
+# which already appends its own separate <answer></answer> instruction after
+# the rubric fields — adding a second, earlier <answer> instruction here would
+# make extract_answer_tag's first-match regex grab the wrong (premature) tag.
+assessment_classification_tagged: "Answer the following question. Clearly state your answer (general or scientific name) in your response. Do not include greetings, headers, or bullet points. Then, on a new line, restate just the class name on its own wrapped in <answer></answer> tags — as briefly and precisely as you can state it, not a full sentence.\n\nQuestion: {question}\n\nAnswer:"
 
 # System prompt applied to all models during assessment
 assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."

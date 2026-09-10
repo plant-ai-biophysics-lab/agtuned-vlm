@@ -154,6 +154,27 @@ def resolve_class(response: str, classes: list[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+_ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_answer_tag(text: str) -> tuple[str, bool]:
+    """Pull the free-form <answer>...</answer> content out of a generated
+    response — open-ended, no closed-set vocabulary (real-world answers
+    aren't a fixed label set). Falls back to the full cleaned text if the
+    tag is missing, so every response stays comparable rather than empty;
+    `found` records which case happened. Moved here from verifier_cot.py
+    (originally written for its rubric templates) so plain-classification
+    stages (vision_baseline.py, self_cot.py, cot_yaml.py,
+    desc_augmented_vision_v2.py) can reuse the exact same convention —
+    call resolve_class on the extracted tag content instead of the raw
+    free-text prediction, which is what actually determines
+    resolved_class/correct in each of those scripts."""
+    m = _ANSWER_TAG_RE.search(text)
+    if m:
+        return m.group(1).strip(), True
+    return text.strip(), False
+
+
 def compute_classification_metrics(refs: list[str], preds: list[str]) -> dict:
     """Compute accuracy, contains_accuracy, f1_macro, f1_weighted, n_total, n_resolvable."""
     labels = sorted(set(refs) | set(p for p in preds if p))
