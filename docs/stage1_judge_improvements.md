@@ -1,14 +1,23 @@
-# Paper 2, Stage 1 — Judge Improvements (Phase 1-3)
+# Paper 2, Stage 1 — Judge Improvements (Phase 0-3)
 
 [← Back to README](../README.md)
 
 Quantifies how lenient and how stable the LLM judge is when grading plain classification predictions (`vision-baseline` / `desc-aug-v2` / `self-cot` / `cot-yaml`), then tests whether a stricter judge template fixes it.
 
+- **Phase 0 — regenerate the checkpoint**: re-run `vision-baseline` so its classification prompt is the tagged version (`assessment_classification_tagged`, `<answer></answer>` + `max_tokens=256`) that Phases 1-3 depend on for a low unresolved rate.
 - **Phase 1 — leniency**: does the judge give more credit to the model's full free-text response than to just the class name it resolves to?
 - **Phase 2 — self-consistency**: does the judge's verdict flip across repeat calls at higher temperature?
 - **Phase 3 — template sensitivity**: does a stricter/specificity-focused template, or showing the judge the full class list, reduce leniency? Re-runs Phase 1 + 2 under each template variant.
 
-All three need a checkpoint CSV that's already been through the judge phase once (e.g. `outputs_final/vision_baseline/<model>/`).
+## Phase 0 — regenerate the checkpoint
+
+```bash
+uv run python main.py vision-baseline \
+    --model google/gemma-4-E4B-it \
+    --rerun
+```
+
+`--rerun` archives any existing checkpoint as `ckpt_<model>.<timestamp>.bak.csv` and starts fresh — required here, since resuming without it would just skip every already-checkpointed row and keep their old (pre-tagged-prompt) predictions. This also runs the judge phase, so the output is ready for Phase 1 directly: `outputs_final/vision_baseline/<safe_model_name>/`.
 
 ## Phase 1 — leniency
 
@@ -47,6 +56,6 @@ Re-runs Phase 1 + 2 in full for each of 3 templates (current / specificity-stric
 
 ## Notes
 
-- All three need a judge model loaded (`--judge_model`, default `google/gemma-4-26B-A4B-it`; `--judge_quantize` for `4bit`/`8bit`/`awq`/`gptq`) — GPU required, not a local-CPU step.
+- Phases 1-3 each need a judge model loaded (`--judge_model`, default `google/gemma-4-26B-A4B-it`; `--judge_quantize` for `4bit`/`8bit`/`awq`/`gptq`) — GPU required, not a local-CPU step.
 - Every rate reported (leniency_gap, flip_rate, judged_correct_rate) carries a bootstrap 95% CI, shown as error bars on every figure — computed by resampling rows already on disk, no extra judge calls.
 - `--temperatures` (default `0.1 0.5 1.0`) and `--n_repeats` (Phase 2/3, default `5`) control cost directly — fewer/lower temperatures and fewer repeats run faster.
