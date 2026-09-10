@@ -37,7 +37,9 @@ Browse Stage 0b's output: dataset/crop/class per record, the grounding sources f
 
 ### Experiments Pipeline
 
-TBD
+| Stage | Doc | What it does |
+|---|---|---|
+| 1 | [docs/stage1_judge_improvements.md](docs/stage1_judge_improvements.md) | LLM judge leniency (Phase 1), self-consistency (Phase 2), and template sensitivity (Phase 3) on plain classification predictions |
 
 ### Viewers
 
