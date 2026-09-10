@@ -202,3 +202,47 @@ def plot_leniency_gap(results: dict, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_leniency_gap_by_temperature(results_by_temp: dict[float, dict], output_path: Path) -> None:
+    """Grouped bar chart: leniency_gap per task_type (+ overall), one group
+    of bars per temperature — the per-temperature counterpart to
+    plot_leniency_gap (which shows one temperature's full_response vs.
+    resolved_class rates directly; this shows how the GAP itself moves
+    across temperatures). Unlike plot_flip_rate_by_temperature's [0, 1]
+    axis, leniency_gap is signed (a task_type can show the judge being
+    STRICTER on the full response than on the resolved class alone, a
+    negative gap — seen for real on pest_damage in the pre-tagged-prompt
+    baseline), so the y-axis is not clipped to non-negative."""
+    import matplotlib.pyplot as plt
+
+    temperatures = sorted(results_by_temp)
+    any_result = results_by_temp[temperatures[0]]
+    task_types = [t for t in TASK_TYPE_ORDER if t in any_result]
+    task_types += [t for t in any_result if t not in TASK_TYPE_ORDER and t != "overall"]
+    task_types.append("overall")
+    labels = [TASK_TYPE_LABELS.get(t, t) if t != "overall" else "Overall" for t in task_types]
+
+    x = np.arange(len(task_types))
+    n_temps = len(temperatures)
+    width = 0.8 / n_temps
+    cmap = plt.get_cmap("Reds")
+
+    fig, ax = plt.subplots(figsize=(max(7, len(task_types) * 1.6), 5.5))
+    for i, temperature in enumerate(temperatures):
+        results = results_by_temp[temperature]
+        vals = [results.get(t, {}).get("leniency_gap", float("nan")) for t in task_types]
+        offset = (i - (n_temps - 1) / 2) * width
+        color = cmap(0.35 + 0.55 * (i / max(1, n_temps - 1)))
+        ax.bar(x + offset, vals, width, label=f"T={temperature}", color=color)
+
+    ax.set_xticks(x)
+    ns = [any_result.get(t, {}).get("n", 0) for t in task_types]
+    ax.set_xticklabels([f"{lab}\n(n={n})" for lab, n in zip(labels, ns)])
+    ax.set_ylabel("leniency_gap (full response - resolved class)")
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.legend(loc="best", fontsize=9, title="Judge temperature")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)

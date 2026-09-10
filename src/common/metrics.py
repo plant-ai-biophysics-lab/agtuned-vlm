@@ -313,6 +313,8 @@ def apply_judge(
     pred_key: str,
     confidence_threshold: int = 1,
     log_path=None,
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> list[dict]:
     """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row.
 
@@ -324,7 +326,21 @@ def apply_judge(
     truncated to 600 chars and doesn't include the prompt at all. Default
     None (every pre-existing caller) skips logging — purely additive, no
     behavior change for callers that don't pass it.
+
+    temperature/seed (both default None): override _JUDGE_PARAMS' fixed
+    temperature=0.0 for THIS call only — every existing caller leaves these
+    None and keeps the exact original deterministic behavior. Added for
+    src/common/judge_consistency.py's self-consistency sweep (Phase 2 of the
+    judge-improvements evaluation plan), which needs repeat judge calls over
+    the SAME rows to actually produce different verdicts sometimes — at
+    temperature=0.0 (greedy) every repeat call is bit-for-bit identical, so
+    there's nothing to measure a flip rate over.
     """
+    judge_params = _JUDGE_PARAMS if temperature is None and seed is None else SamplingParams(
+        temperature=_JUDGE_PARAMS.temperature if temperature is None else temperature,
+        max_tokens=_JUDGE_PARAMS.max_tokens,
+        seed=seed,
+    )
 
     def _fmt(text: str) -> str:
         msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
@@ -342,7 +358,7 @@ def apply_judge(
         for r in rows
     ]
     formatted_prompts = [_fmt(p) for p in raw_prompts]
-    outputs = llm.generate(formatted_prompts, sampling_params=_JUDGE_PARAMS)
+    outputs = llm.generate(formatted_prompts, sampling_params=judge_params)
 
     updated = []
     log_records = []

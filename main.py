@@ -37,6 +37,7 @@ STAGES = {
     "filter-checkpoints": "src.filter_checkpoints",
     "ablation":      "src.ablation",
     "judge-leniency": "src.judge_leniency",
+    "judge-consistency": "src.judge_consistency",
     "collate":       "src.collate_results",
 }
 
@@ -100,12 +101,27 @@ Stages:
                                all}; "generate" and "judge-recheck" need a GPU/model, the
                                rest reconstruct from existing outputs_final/ runs. Output
                                under ablation/.
-    judge-leniency           — judge leniency baseline (no GPU): judged_correct vs. a
-                               deterministic resolve_class match, per task_type, from an
-                               existing classification checkpoint CSV. --ckpt (path/glob/dir),
-                               --output_dir, --label. Writes leniency_gap_all.png,
-                               leniency_gap_resolvable_only.png, resolve_failures.txt,
-                               leniency_gap.json.
+    judge-leniency            — judge leniency baseline (needs judge model/GPU): at each of a
+                               swept set of temperatures, freshly re-judges every resolvable
+                               row twice (full model response vs. just the resolved_class
+                               string, same judge/template both times) and compares the two
+                               — isolates judge leniency from resolve_class's own string-
+                               matching limits, and tracks whether leniency itself grows with
+                               temperature. --ckpt (path/glob/dir), --output_dir, --label,
+                               --temperatures (default 0.1 0.5 1.0, matches judge-consistency),
+                               --judge_model. Writes leniency_gap_T<temp>.png,
+                               leniency_gap_by_temperature.png, resolve_failures.txt,
+                               rechecked_T<temp>.csv, leniency_gap.json.
+    judge-consistency         — judge self-consistency (needs judge model/GPU): repeats the
+                               current full-response judge call N times per row at each of a
+                               swept set of temperatures (judge runs at temperature=0.0
+                               normally, so this forces real sampling variance) and reports
+                               flip_rate per task_type/temperature. --temperatures,
+                               --n_repeats; --leniency_gap_json (a judge-leniency run's
+                               leniency_gap.json for the SAME checkpoint) also writes a
+                               leniency-vs-flip-rate scatter. Writes
+                               flip_rate_by_temperature.png, flip_rate.json,
+                               [leniency_vs_flip_rate.png].
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:

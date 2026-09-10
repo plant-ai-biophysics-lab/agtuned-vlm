@@ -58,6 +58,8 @@ def rejudge_condition(
     pred_key: str = "answer_only",
     template_key: str = "judge_classification_template",
     progress_desc: str = "Re-judging",
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> list[dict]:
     """Re-judges `rows` against `pred_key` using `prompts[template_key]`
     instead of the original "prediction"/judge_classification_template pair.
@@ -76,6 +78,14 @@ def rejudge_condition(
         only the model's own stated final diagnosis, not the narrative
         around it, and to require taxonomic/common-name specificity rather
         than crediting a generic symptom-shape label.
+
+    temperature/seed: forwarded to apply_judge (both default None, the
+    pipeline's normal greedy behavior). src/judge_leniency.py's
+    --temperatures sweep passes these so leniency_gap can be computed AT
+    each swept temperature (both the full-response and resolved_class
+    passes need a fresh, same-temperature call — reusing a checkpoint's
+    already-computed judged_correct only gives the T=0 case) instead of
+    only at the judge's fixed default.
     """
     from src.common.progress import ProgressBar
 
@@ -94,6 +104,7 @@ def rejudge_condition(
             gt_key="judge_gt_hint", pred_key=pred_key,
             confidence_threshold=confidence_threshold,
             log_path=log_path,
+            temperature=temperature, seed=seed,
         )
         out.extend(judged_chunk)
         pbar.update(len(chunk))
