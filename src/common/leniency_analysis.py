@@ -115,6 +115,134 @@ def compute_leniency_gap(
     return out
 
 
+def compute_disagreement_matrix(
+    rows: list[dict],
+    full_key: str = "judged_correct_full_trajectory",
+    resolved_key: str = "judged_correct",
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> dict:
+    """2x2 breakdown of the SAME rows compute_leniency_gap summarizes into
+    one net rate — the raw disagreement counts, in both directions, rather
+    than just their difference. leniency_gap only reports
+    mean(full) - mean(resolved); a row-level breakdown is needed to answer
+    "how many/which rows does this actually happen on," which is what the
+    aggregate rate can't show on its own.
+
+    Returns {task_type: {n, both_correct, both_wrong,
+    full_correct_resolved_wrong, full_wrong_resolved_correct}} + "overall".
+    Each of the four cells is {"n": count, "rate": fraction of n,
+    "rate_ci": bootstrap 95% CI on that fraction}.
+
+    full_correct_resolved_wrong is the LENIENCY-relevant disagreement — the
+    judge credits the full response but would not have credited the bare
+    resolved class name; this is the direction "leniency_gap > 0" is made
+    of. full_wrong_resolved_correct is the reverse (the judge is actually
+    STRICTER on the full response than on the class name alone) — real on
+    pest_damage in the pre-tagged-prompt baseline, where leniency_gap came
+    out negative; reporting only the leniency-direction cell would hide
+    that this can go either way.
+    """
+    from src.common.bootstrap import bootstrap_mean_ci
+
+    by_task: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_task[r.get("task_type", "")].append(r)
+
+    def _cell(trows: list[dict], full_val: int, resolved_val: int) -> dict:
+        flags = [
+            int(int(r.get(full_key, "") in ("1", 1, True)) == full_val
+                and int(r.get(resolved_key, "") in ("1", 1, True)) == resolved_val)
+            for r in trows
+        ]
+        n = len(trows)
+        rate = float(np.mean(flags)) if n else float("nan")
+        return {
+            "n": int(sum(flags)),
+            "rate": round(rate, 4),
+            "rate_ci": bootstrap_mean_ci(flags, n_boot, ci, seed),
+        }
+
+    def _summarize(trows: list[dict]) -> dict:
+        return {
+            "n": len(trows),
+            "both_correct": _cell(trows, 1, 1),
+            "both_wrong": _cell(trows, 0, 0),
+            "full_correct_resolved_wrong": _cell(trows, 1, 0),
+            "full_wrong_resolved_correct": _cell(trows, 0, 1),
+        }
+
+    out = {task_type: _summarize(trows) for task_type, trows in by_task.items()}
+    out["overall"] = _summarize(rows)
+    return out
+
+
+def disagreement_examples(
+    rows: list[dict], cell: str = "full_correct_resolved_wrong",
+    full_key: str = "judged_correct_full_trajectory", resolved_key: str = "judged_correct",
+    n: int = 20,
+) -> list[dict]:
+    """Up to `n` raw example rows from one disagreement cell (default: the
+    leniency-relevant one) — for a spot-check appendix table or manual
+    review, not aggregated. cell is one of "both_correct", "both_wrong",
+    "full_correct_resolved_wrong", "full_wrong_resolved_correct"."""
+    targets = {
+        "both_correct": (1, 1), "both_wrong": (0, 0),
+        "full_correct_resolved_wrong": (1, 0), "full_wrong_resolved_correct": (0, 1),
+    }
+    full_val, resolved_val = targets[cell]
+    matches = [
+        r for r in rows
+        if int(r.get(full_key, "") in ("1", 1, True)) == full_val
+        and int(r.get(resolved_key, "") in ("1", 1, True)) == resolved_val
+    ]
+    return matches[:n]
+
+
+def plot_disagreement_matrix(results: dict, output_path: Path) -> None:
+    """100%-stacked bar chart per task_type (+ overall): the four
+    compute_disagreement_matrix cells as fractions of that task_type's
+    rows, so the disagreement slices' relative size is visible directly
+    (not just their raw rate against the same [0,1] axis every other plot
+    in this module uses)."""
+    import matplotlib.pyplot as plt
+
+    task_types = [t for t in TASK_TYPE_ORDER if t in results]
+    task_types += [t for t in results if t not in TASK_TYPE_ORDER and t != "overall"]
+    task_types.append("overall")
+    labels = [TASK_TYPE_LABELS.get(t, t) if t != "overall" else "Overall" for t in task_types]
+    ns = [results[t]["n"] for t in task_types]
+
+    cells = [
+        ("both_correct", "Both correct", "#2ca02c"),
+        ("both_wrong", "Both wrong", "#7f7f7f"),
+        ("full_correct_resolved_wrong", "Full correct, resolved wrong (leniency)", _FULL_RESPONSE_COLOR),
+        ("full_wrong_resolved_correct", "Full wrong, resolved correct (stricter)", _RESOLVED_CLASS_COLOR),
+    ]
+
+    x = np.arange(len(task_types))
+    fig, ax = plt.subplots(figsize=(max(7, len(task_types) * 1.6), 5.5))
+    bottoms = np.zeros(len(task_types))
+    for cell_key, cell_label, color in cells:
+        vals = np.array([results[t][cell_key]["rate"] for t in task_types])
+        ax.bar(x, vals, bottom=bottoms, width=0.6, label=cell_label, color=color)
+        for xi, v, b in zip(x, vals, bottoms):
+            if v > 0.03:
+                ax.text(xi, b + v / 2, f"{v:.2f}", ha="center", va="center", fontsize=8, color="white")
+        bottoms += vals
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{lab}\n(n={n})" for lab, n in zip(labels, ns)])
+    ax.set_ylabel("Fraction of rows")
+    ax.set_ylim(0, 1.0)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), fontsize=8, ncol=2)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def resolve_failure_report(rows: list[dict]) -> dict:
     """{task_type: {n_total, n_unresolved, pct_unresolved}} + "overall".
 

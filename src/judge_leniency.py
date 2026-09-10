@@ -26,23 +26,31 @@ populated — used only to know which rows are worth including, not reused
 as a value).
 
 Writes, per checkpoint:
-  leniency_gap_T<temp>.png        — one per temperature: full-response vs.
-                                     resolved-class-only judge accuracy, per
-                                     task_type (resolvable rows only)
-  leniency_gap_by_temperature.png — leniency_gap per task_type, grouped by
-                                     temperature (signed y-axis)
-  resolve_failures.txt            — how many/which fraction of rows had no
-                                     resolved_class at all (excluded from
-                                     every temperature's comparison)
-  rechecked_T<temp>.csv           — per temperature, per-row: prediction,
-                                     resolved_class, judged_correct_full_trajectory
-                                     (full-response verdict at this T),
-                                     judged_correct (resolved-class verdict
-                                     at this T)
-  leniency_gap.json               — leniency_gap by_temperature +
-                                     resolve_failures, machine-readable —
-                                     this is what --leniency_gap_json in
-                                     src/judge_consistency.py reads
+  leniency_gap_T<temp>.png         — one per temperature: full-response vs.
+                                      resolved-class-only judge accuracy, per
+                                      task_type (resolvable rows only)
+  leniency_gap_by_temperature.png  — leniency_gap per task_type, grouped by
+                                      temperature (signed y-axis)
+  disagreement_matrix_T<temp>.png  — one per temperature: the SAME rows'
+                                      full-response/resolved-class verdicts
+                                      broken into a 2x2 (both correct/both
+                                      wrong/full-correct-resolved-wrong/
+                                      full-wrong-resolved-correct) — raw
+                                      counts behind leniency_gap's single
+                                      net rate
+  resolve_failures.txt             — how many/which fraction of rows had no
+                                      resolved_class at all (excluded from
+                                      every temperature's comparison)
+  rechecked_T<temp>.csv            — per temperature, per-row: prediction,
+                                      resolved_class, judged_correct_full_trajectory
+                                      (full-response verdict at this T),
+                                      judged_correct (resolved-class verdict
+                                      at this T)
+  leniency_gap.json                — leniency_gap_by_temperature,
+                                      disagreement_by_temperature +
+                                      resolve_failures, machine-readable —
+                                      this is what --leniency_gap_json in
+                                      src/judge_consistency.py reads
 
 Usage:
     uv run python main.py judge-leniency \\
@@ -65,7 +73,8 @@ from src.common.dataset_config import datasets_by_name
 from src.common.io import load_prompts
 from src.common.judge_template_sensitivity import add_class_list_field
 from src.common.leniency_analysis import (
-    compute_leniency_gap, plot_leniency_gap, plot_leniency_gap_by_temperature,
+    compute_disagreement_matrix, compute_leniency_gap, plot_disagreement_matrix,
+    plot_leniency_gap, plot_leniency_gap_by_temperature,
     resolve_failure_report, write_resolve_failure_report,
 )
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
@@ -157,6 +166,7 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
               "judged_correct", "judge_reasoning"]
 
     results_by_temp: dict[float, dict] = {}
+    disagreement_by_temp: dict[float, dict] = {}
     try:
         for temperature in args.temperatures:
             full_rechecked = rejudge_condition(
@@ -195,6 +205,10 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
             results_by_temp[temperature] = results
             plot_leniency_gap(results, output_dir / f"leniency_gap_T{temperature}.png")
 
+            disagreement = compute_disagreement_matrix(combined)
+            disagreement_by_temp[temperature] = disagreement
+            plot_disagreement_matrix(disagreement, output_dir / f"disagreement_matrix_T{temperature}.png")
+
             with open(output_dir / f"rechecked_T{temperature}.csv", "w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 w.writeheader()
@@ -202,8 +216,13 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
                     w.writerow(r)
 
             d = results["overall"]
+            dis = disagreement["overall"]
             print(f"  T={temperature}: leniency_gap={d['leniency_gap']:+.4f} "
-                  f"(full_response={d['full_response_rate']:.4f}, resolved_class={d['resolved_class_rate']:.4f})")
+                  f"(full_response={d['full_response_rate']:.4f}, resolved_class={d['resolved_class_rate']:.4f}) — "
+                  f"disagreements: full-correct/resolved-wrong={dis['full_correct_resolved_wrong']['n']} "
+                  f"({dis['full_correct_resolved_wrong']['rate']:.4f}), "
+                  f"full-wrong/resolved-correct={dis['full_wrong_resolved_correct']['n']} "
+                  f"({dis['full_wrong_resolved_correct']['rate']:.4f})")
     finally:
         if owns_judge_llm:
             _destroy_judge_llm(judge_llm)
@@ -215,11 +234,13 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
         {"label": label, "n_rows_total": len(rows), "n_rows_rejudged": len(resolvable_rows),
          "temperatures": args.temperatures,
          "leniency_gap_by_temperature": {str(t): d for t, d in results_by_temp.items()},
+         "disagreement_by_temperature": {str(t): d for t, d in disagreement_by_temp.items()},
          "resolve_failures": failures},
         indent=2,
     ))
 
-    print(f"Wrote leniency_gap_T<temp>.png, leniency_gap_by_temperature.png, resolve_failures.txt, "
+    print(f"Wrote leniency_gap_T<temp>.png, leniency_gap_by_temperature.png, "
+          f"disagreement_matrix_T<temp>.png, resolve_failures.txt, "
           f"rechecked_T<temp>.csv, leniency_gap.json to {output_dir}")
 
 

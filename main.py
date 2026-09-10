@@ -113,8 +113,10 @@ Stages:
                                --template_key/--class_list (re-run under a different judge
                                template — see judge-template-sensitivity), --limit, --judge_model.
                                Writes leniency_gap_T<temp>.png,
-                               leniency_gap_by_temperature.png, resolve_failures.txt,
-                               rechecked_T<temp>.csv, leniency_gap.json.
+                               leniency_gap_by_temperature.png, disagreement_matrix_T<temp>.png
+                               (the full-response/resolved-class 2x2 breakdown — raw counts in
+                               each disagreement direction, not just leniency_gap's net rate),
+                               resolve_failures.txt, rechecked_T<temp>.csv, leniency_gap.json.
     judge-consistency         — judge self-consistency (needs judge model/GPU): repeats the
                                current full-response judge call N times per row at each of a
                                swept set of temperatures (judge runs at temperature=0.0
@@ -138,9 +140,12 @@ Stages:
                                the checkpoint's own deterministic resolve_class match, and a
                                length/verbosity bias report. --temperatures, --n_repeats,
                                --n_length_buckets. Writes template_sensitivity.png,
-                               length_bias.png, template_sensitivity.json (top-level summary)
-                               plus each variant's own leniency_gap*.png / flip_rate*.png /
-                               leniency_vs_flip_rate.png underneath.
+                               length_bias.png, template_sensitivity_table.tex (LaTeX summary:
+                               leniency_gap, flip_rate, and both disagreement-direction
+                               counts/rates per variant x temperature), template_sensitivity.json
+                               (top-level summary) plus each variant's own leniency_gap*.png /
+                               disagreement_matrix*.png / flip_rate*.png / leniency_vs_flip_rate.png
+                               underneath.
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:

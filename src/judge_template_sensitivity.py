@@ -37,6 +37,10 @@ Writes, under --output_dir:
   <variant_key>/leniency/                 — Phase 1's full output for this
                                              variant (leniency_gap_T<temp>.png,
                                              leniency_gap_by_temperature.png,
+                                             disagreement_matrix_T<temp>.png —
+                                             the full-response/resolved-class
+                                             2x2 breakdown, raw counts behind
+                                             leniency_gap's single net rate —
                                              leniency_gap.json, etc.)
   <variant_key>/consistency/              — Phase 2's full output for this
                                              variant (flip_rate_by_temperature.png,
@@ -45,13 +49,17 @@ Writes, under --output_dir:
   <variant_key>/leniency_vs_flip_rate.png — copied up from consistency/ for
                                              a quick look without descending
                                              into that subfolder
+  <variant_key>/disagreement_matrix_T<temp>.png — copied up from leniency/,
+                                             same reason, one per swept
+                                             temperature
   template_sensitivity.png                — single-temperature (greedy) summary
                                              across all 3 variants vs. the
                                              deterministic baseline
   length_bias.png                         — length/verbosity bias, current template
-  template_sensitivity_table.tex          — LaTeX booktabs table: leniency_gap
-                                             and flip_rate (overall, with 95% CI)
-                                             per variant x temperature
+  template_sensitivity_table.tex          — LaTeX booktabs table: leniency_gap,
+                                             flip_rate, and both disagreement-
+                                             direction counts/rates (overall,
+                                             with 95% CI) per variant x temperature
   template_sensitivity.json               — template_sensitivity.png +
                                              length_bias.png's data, machine-readable
 
@@ -197,9 +205,19 @@ def main(args: argparse.Namespace) -> None:
                 variant_data[variant_key] = {
                     "leniency_by_temp": {float(t): d for t, d in leniency_data["leniency_gap_by_temperature"].items()},
                     "flip_by_temp": {float(t): d for t, d in flip_data["flip_rate_by_temperature"].items()},
+                    "disagreement_by_temp": {
+                        float(t): d for t, d in leniency_data.get("disagreement_by_temperature", {}).items()
+                    },
                 }
             if corr_src.exists():
                 shutil.copy(corr_src, variant_dir / "leniency_vs_flip_rate.png")
+            # Same promotion for the disagreement-matrix figures — one per
+            # swept temperature, naturally written inside leniency/ by
+            # judge_leniency.main(), copied up so this variant's own
+            # full-response/resolved-class disagreement breakdown is
+            # visible without descending into leniency/ first.
+            for dis_src in sorted(leniency_dir.glob("disagreement_matrix_T*.png")):
+                shutil.copy(dis_src, variant_dir / dis_src.name)
     finally:
         _destroy_judge_llm(judge_llm)
         del judge_tok

@@ -275,31 +275,50 @@ def _fmt_ci(value, ci) -> str:
     return f"{value:.3f} [{lo:.3f}, {hi:.3f}]"
 
 
+def _fmt_disagreement_cell(cell: dict | None) -> str:
+    if not cell or cell.get("n") is None:
+        return "--"
+    lo, hi = cell.get("rate_ci", (float("nan"), float("nan")))
+    if isinstance(lo, float) and np.isnan(lo):
+        return f"{cell['n']} ({cell['rate']:.3f})"
+    return f"{cell['n']} ({cell['rate']:.3f} [{lo:.3f}, {hi:.3f}])"
+
+
 def write_variant_temperature_latex_table(
     variant_data: dict[str, dict], output_path: Path,
-    caption: str = "Leniency gap and self-consistency flip rate (overall, pooled across "
-                   "task\\_types) per judge template variant and temperature. Bracketed "
-                   "values are bootstrap 95\\% CIs.",
+    caption: str = "Leniency gap, self-consistency flip rate, and full-response/resolved-class "
+                   "disagreement counts (overall, pooled across task\\_types) per judge template "
+                   "variant and temperature. Bracketed values are bootstrap 95\\% CIs. "
+                   "``Full$\\uparrow$/resolved$\\downarrow$'' is the leniency-relevant disagreement "
+                   "(full response credited, resolved class name would not have been); "
+                   "``full$\\downarrow$/resolved$\\uparrow$'' is the reverse.",
     label: str = "tab:judge_template_sensitivity",
 ) -> None:
     """variant_data: {variant_key: {"leniency_by_temp": {temperature:
     compute_leniency_gap(...) result}, "flip_by_temp": {temperature:
-    compute_flip_rate(...) result}}} — as assembled by
+    compute_flip_rate(...) result}, "disagreement_by_temp": {temperature:
+    compute_disagreement_matrix(...) result}}} — as assembled by
     src/judge_template_sensitivity.py's orchestrator from each variant's
-    own leniency_gap.json/flip_rate.json. Writes a LaTeX booktabs table,
-    one row per (variant, temperature), reporting the "overall" (pooled
-    across task_types) leniency_gap and flip_rate — the per-task_type
-    breakdown stays in the PNGs; this table is the compact appendix-ready
-    cross-variant summary.
+    own leniency_gap.json (which now also carries disagreement_by_temperature)
+    and flip_rate.json. Writes a LaTeX booktabs table, one row per (variant,
+    temperature), reporting the "overall" (pooled across task_types)
+    leniency_gap, flip_rate, and the two cross-diagonal disagreement cells
+    (n and rate) — the per-task_type breakdown and the full 2x2 (including
+    both_correct/both_wrong) stay in the PNGs; this table is the compact
+    appendix-ready cross-variant summary. disagreement_by_temp is optional
+    (older leniency_gap.json files won't have it) — those columns render
+    "--" rather than raising.
     """
     variant_labels = {k: lbl for k, _, _, lbl in TEMPLATE_VARIANTS}
 
     lines = [
         r"\begin{table}[ht]",
         r"\centering",
-        r"\begin{tabular}{llrr}",
+        r"\resizebox{\textwidth}{!}{%",
+        r"\begin{tabular}{llrrrr}",
         r"\toprule",
-        r"Template variant & Temperature & Leniency gap [95\% CI] & Flip rate [95\% CI] \\",
+        r"Template variant & Temperature & Leniency gap [95\% CI] & Flip rate [95\% CI] "
+        r"& Full$\uparrow$/resolved$\downarrow$ (n, rate) & Full$\downarrow$/resolved$\uparrow$ (n, rate) \\",
         r"\midrule",
     ]
 
@@ -308,6 +327,7 @@ def write_variant_temperature_latex_table(
         data = variant_data[variant_key]
         leniency_by_temp = data.get("leniency_by_temp", {})
         flip_by_temp = data.get("flip_by_temp", {})
+        disagreement_by_temp = data.get("disagreement_by_temp", {})
         temperatures = sorted(set(leniency_by_temp) | set(flip_by_temp))
         n = len(temperatures)
         variant_label = variant_labels.get(variant_key, variant_key).replace("_", r"\_")
@@ -315,15 +335,20 @@ def write_variant_temperature_latex_table(
             variant_cell = rf"\multirow{{{n}}}{{*}}{{{variant_label}}}" if ti == 0 else ""
             leniency = leniency_by_temp.get(temperature, {}).get("overall", {})
             flip = flip_by_temp.get(temperature, {}).get("overall", {})
+            disagreement = disagreement_by_temp.get(temperature, {}).get("overall", {})
             leniency_cell = _fmt_ci(leniency.get("leniency_gap"), leniency.get("leniency_gap_ci"))
             flip_cell = _fmt_ci(flip.get("flip_rate"), flip.get("flip_rate_ci"))
-            lines.append(f"{variant_cell} & T={temperature} & {leniency_cell} & {flip_cell} \\\\")
+            leniency_dis_cell = _fmt_disagreement_cell(disagreement.get("full_correct_resolved_wrong"))
+            strict_dis_cell = _fmt_disagreement_cell(disagreement.get("full_wrong_resolved_correct"))
+            lines.append(f"{variant_cell} & T={temperature} & {leniency_cell} & {flip_cell} "
+                         f"& {leniency_dis_cell} & {strict_dis_cell} \\\\")
         if vi < len(variant_keys) - 1:
             lines.append(r"\midrule")
 
     lines += [
         r"\bottomrule",
-        r"\end{tabular}",
+        r"\end{tabular}%",
+        r"}",
         rf"\caption{{{caption}}}",
         rf"\label{{{label}}}",
         r"\end{table}",
