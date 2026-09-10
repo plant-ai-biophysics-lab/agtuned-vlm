@@ -30,7 +30,7 @@ from src.common.method_comparison import (
     plot_per_task_full_comparison,
     plot_per_task_judge_comparison,
 )
-from src.desc_augmented_vision import (
+from src.legacy.desc_augmented_vision import (
     _read_csv,
     _safe_name,
     compute_cls_metrics_per_dataset,

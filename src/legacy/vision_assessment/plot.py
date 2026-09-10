@@ -21,7 +21,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.vision_assessment.assess import (
+from src.legacy.vision_assessment.assess import (
     _task_label,
     plot_cls_summary_per_dataset,
     plot_cls_summary_per_task,

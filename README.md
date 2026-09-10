@@ -10,7 +10,7 @@ uv sync
 
 ## Paper 1
 
-**Paper:** Vision-language models know more about agriculture than they show and rubric-grounded verifications close the gap (link TBA)
+**Paper:** [Vision-language models know more about agriculture than they show and rubric-grounded verifications close the gap](https://arxiv.org/abs/2609.09417)
 
 ### Experiments Pipeline
 
@@ -22,7 +22,6 @@ uv sync
 | 2 | [docs/stage2_lower_upper_bounds.md](docs/stage2_lower_upper_bounds.md) | Lower (vision-only) vs. upper (description-augmented) classification bounds |
 | 3 | [docs/stage3_cot.md](docs/stage3_cot.md) | Chain-of-thought: self-generated description vs. structured multi-step reasoning |
 | 4 | [docs/stage4_verifier.md](docs/stage4_verifier.md) | Single-round verifier: K structured-criteria candidates ranked by a PPT tournament, argmax reported, vs. a full PPT-tournament baseline |
-| 5 | [docs/stage5_object_detection.md](docs/stage5_object_detection.md) | (IN PROGRESS) Object detection: same single-round verifier mechanism applied to bounding-box localization instead of classification |
 
 ### Viewers
 

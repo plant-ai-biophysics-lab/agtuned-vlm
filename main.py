@@ -23,14 +23,7 @@ STAGES = {
     "cluster":       "src.clustering_eval.eval",
     "cluster-viz":   "src.clustering_eval.sample_viz",
     "majority-vote": "src.majority_vote",
-    "cot":           "src.cot_vision",
     "cot-step-analysis": "src.cot_step_analysis",
-    "language":      "src.language_assessment.assess",
-    "language-plot": "src.language_assessment.plot",
-    "vision":        "src.vision_assessment.assess",
-    "vision-plot":   "src.vision_assessment.plot",
-    "aug-vision":    "src.desc_augmented_vision",
-    "aug-vision-plot": "src.desc_augmented_vision_plot",
     "vision-baseline": "src.vision_baseline",
     "desc-aug-v2":   "src.desc_augmented_vision_v2",
     "vision-baseline-collate": "src.vision_baseline_collate",
@@ -72,13 +65,6 @@ Stages:
                                chart with 95% CI error bars (Student's t across seeds)
     cluster                 — unsupervised clustering eval of frozen embeddings (NMI, ARI, Silhouette)
     cluster-viz             — visualise easiest/hardest datasets per task with sample class images
-    language        Stage 2 — language assessment: text-only agricultural VQA (ROUGE-SS + F1)
-    language-plot           — regenerate language assessment charts from saved metrics JSON
-    vision          Stage 3 — vision assessment: multimodal VQA with image input (ROUGE-SS + F1)
-    vision-plot             — regenerate vision assessment charts from saved metrics JSON
-    aug-vision      Stage 4 — description-augmented vision: test if language descriptions improve vision cls
-    aug-vision-plot         — regenerate aug-vision charts from saved CSVs
-    cot             Stage 4b — chain-of-thought vision assessment (self-cot + cot-yaml)
     cot-step-analysis        — per-step CoT accuracy/anchoring analysis
     vision-baseline Stage 2a — vision lower bound: image + classification question only,
                                classification-only (F1 + ROUGE-SS), per-sample resumable
