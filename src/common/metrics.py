@@ -315,6 +315,7 @@ def apply_judge(
     log_path=None,
     temperature: float | None = None,
     seed: int | None = None,
+    extra_keys: dict[str, str] | None = None,
 ) -> list[dict]:
     """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row.
 
@@ -335,6 +336,14 @@ def apply_judge(
     the SAME rows to actually produce different verdicts sometimes — at
     temperature=0.0 (greedy) every repeat call is bit-for-bit identical, so
     there's nothing to measure a flip rate over.
+
+    extra_keys (default None): {template_placeholder_name: row_field_name}
+    — judge_template.format() only ever filled {gt}/{pred} before this; some
+    Phase 3 template variants (src/common/judge_template_sensitivity.py)
+    need a third placeholder, e.g. {class_list}, whose value varies per row
+    (each dataset's own class list) rather than being a fixed string bakeable
+    into the template itself. Every existing caller leaves this None and
+    gets the exact original gt/pred-only formatting.
     """
     judge_params = _JUDGE_PARAMS if temperature is None and seed is None else SamplingParams(
         temperature=_JUDGE_PARAMS.temperature if temperature is None else temperature,
@@ -353,8 +362,16 @@ def apply_judge(
             except Exception:
                 return text
 
+    def _extra_fmt_kwargs(r: dict) -> dict:
+        if not extra_keys:
+            return {}
+        return {placeholder: str(r.get(row_field, "")) for placeholder, row_field in extra_keys.items()}
+
     raw_prompts = [
-        judge_template.format(gt=str(r.get(gt_key, ""))[:400], pred=str(r.get(pred_key, ""))[:400])
+        judge_template.format(
+            gt=str(r.get(gt_key, ""))[:400], pred=str(r.get(pred_key, ""))[:400],
+            **_extra_fmt_kwargs(r),
+        )
         for r in rows
     ]
     formatted_prompts = [_fmt(p) for p in raw_prompts]

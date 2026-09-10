@@ -32,15 +32,22 @@ import argparse
 import json
 from pathlib import Path
 
+from src.common.dataset_config import datasets_by_name
 from src.common.io import load_prompts
 from src.common.judge_consistency import (
     compute_flip_rate, plot_flip_rate_by_temperature, plot_leniency_vs_flip_rate, repeat_judge_calls,
 )
+from src.common.judge_template_sensitivity import add_class_list_field
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 from src.judge_leniency import load_ckpt_rows
 
 
-def main(args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
+    """judge_llm/judge_tok (both default None): pass an already-loaded judge
+    model to reuse it instead of loading/destroying a fresh one — used by
+    src/judge_template_sensitivity.py's orchestrator. When None (the normal
+    single-run CLI case), behavior is unchanged: load here, destroy here."""
+    owns_judge_llm = judge_llm is None
     rows = load_ckpt_rows(args.ckpt)
     missing = [c for c in ("judged_correct", "prediction", "task_type") if c not in rows[0]]
     if missing:
@@ -58,12 +65,19 @@ def main(args: argparse.Namespace) -> None:
     print(f"  {len(rows)} row(s), {len(args.temperatures)} temperature(s) x {args.n_repeats} repeat(s) "
           f"= {len(rows) * len(args.temperatures) * args.n_repeats} judge call(s) total.")
 
+    extra_keys = None
+    if args.class_list:
+        dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
+        add_class_list_field(rows, dataset_classes)
+        extra_keys = {"class_list": "class_list_text"}
+
     prompts = load_prompts(Path(args.prompts))
-    judge_llm, judge_tok = _load_judge_llm(
-        args.judge_model, quantization=args.judge_quantize,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_model_len, enforce_eager=args.enforce_eager,
-    )
+    if owns_judge_llm:
+        judge_llm, judge_tok = _load_judge_llm(
+            args.judge_model, quantization=args.judge_quantize,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len, enforce_eager=args.enforce_eager,
+        )
     try:
         rows_by_temp = repeat_judge_calls(
             rows, judge_llm, judge_tok, prompts,
@@ -71,10 +85,12 @@ def main(args: argparse.Namespace) -> None:
             chunk_size=args.judge_chunk_size,
             temperatures=args.temperatures, n_repeats=args.n_repeats,
             log_dir=output_dir if args.save_logs else None,
+            template_key=args.template_key, extra_keys=extra_keys,
         )
     finally:
-        _destroy_judge_llm(judge_llm)
-        del judge_tok
+        if owns_judge_llm:
+            _destroy_judge_llm(judge_llm)
+            del judge_tok
 
     flip_rate_by_temp = {t: compute_flip_rate(rows_by_temp[t]) for t in args.temperatures}
     plot_flip_rate_by_temperature(flip_rate_by_temp, output_dir / "flip_rate_by_temperature.png")
@@ -124,6 +140,15 @@ if __name__ == "__main__":
     parser.add_argument("--save_logs", action="store_true",
                          help="Write one judge_log.jsonl per (temperature, repeat) — off by default, "
                               "this is n_temperatures * n_repeats files.")
+    parser.add_argument("--template_key", default="judge_classification_template",
+                         help="prompts.yaml key used for every repeat call — override to re-run this "
+                              "whole sweep under a different judge template (Phase 3's specificity/"
+                              "class_list variants, see src/judge_template_sensitivity.py).")
+    parser.add_argument("--class_list", action="store_true",
+                         help="Fill a {class_list} placeholder in --template_key from each row's own "
+                              "dataset — only meaningful if --template_key's prompt has that placeholder.")
+    parser.add_argument("--config", default="src/config/datasets.yaml",
+                         help="datasets.yaml, for each row's class list when --class_list is set.")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
     parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)

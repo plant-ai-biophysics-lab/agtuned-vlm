@@ -38,6 +38,7 @@ STAGES = {
     "ablation":      "src.ablation",
     "judge-leniency": "src.judge_leniency",
     "judge-consistency": "src.judge_consistency",
+    "judge-template-sensitivity": "src.judge_template_sensitivity",
     "collate":       "src.collate_results",
 }
 
@@ -109,7 +110,9 @@ Stages:
                                matching limits, and tracks whether leniency itself grows with
                                temperature. --ckpt (path/glob/dir), --output_dir, --label,
                                --temperatures (default 0.1 0.5 1.0, matches judge-consistency),
-                               --judge_model. Writes leniency_gap_T<temp>.png,
+                               --template_key/--class_list (re-run under a different judge
+                               template — see judge-template-sensitivity), --limit, --judge_model.
+                               Writes leniency_gap_T<temp>.png,
                                leniency_gap_by_temperature.png, resolve_failures.txt,
                                rechecked_T<temp>.csv, leniency_gap.json.
     judge-consistency         — judge self-consistency (needs judge model/GPU): repeats the
@@ -117,11 +120,27 @@ Stages:
                                swept set of temperatures (judge runs at temperature=0.0
                                normally, so this forces real sampling variance) and reports
                                flip_rate per task_type/temperature. --temperatures,
-                               --n_repeats; --leniency_gap_json (a judge-leniency run's
+                               --n_repeats, --template_key/--class_list (same as judge-leniency);
+                               --leniency_gap_json (a judge-leniency run's
                                leniency_gap.json for the SAME checkpoint) also writes a
                                leniency-vs-flip-rate scatter. Writes
                                flip_rate_by_temperature.png, flip_rate.json,
                                [leniency_vs_flip_rate.png].
+    judge-template-sensitivity — judge template sensitivity sweep (needs judge model/GPU,
+                               the most expensive step in the plan — start with --limit):
+                               for each of 3 templates (current, a specificity-strict rewrite
+                               for plain classification, and a +full-class-list variant),
+                               re-runs BOTH judge-leniency and judge-consistency's full
+                               temperature sweeps under that template, writing each variant's
+                               complete Phase 1+2 figure set to its own subfolder
+                               (<output_dir>/<variant>/leniency/, /<variant>/consistency/) —
+                               plus a cheap greedy-temperature summary of all 3 variants against
+                               the checkpoint's own deterministic resolve_class match, and a
+                               length/verbosity bias report. --temperatures, --n_repeats,
+                               --n_length_buckets. Writes template_sensitivity.png,
+                               length_bias.png, template_sensitivity.json (top-level summary)
+                               plus each variant's own leniency_gap*.png / flip_rate*.png /
+                               leniency_vs_flip_rate.png underneath.
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:

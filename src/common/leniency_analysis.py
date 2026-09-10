@@ -54,16 +54,25 @@ _FULL_RESPONSE_COLOR = "#d62728"    # judge on full response — the leniency ri
 _RESOLVED_CLASS_COLOR = "#1f77b4"   # judge on resolved_class only — the stricter reference
 
 
+
+
+def _vals(rows: list[dict], key: str) -> list[int]:
+    return [int(r.get(key, "") in ("1", 1, True)) for r in rows]
+
+
 def _rate(rows: list[dict], key: str) -> float:
     if not rows:
         return float("nan")
-    return float(np.mean([int(r.get(key, "") in ("1", 1, True)) for r in rows]))
+    return float(np.mean(_vals(rows, key)))
 
 
 def compute_leniency_gap(
     rows: list[dict],
     full_key: str = "judged_correct_full_trajectory",
     resolved_key: str = "judged_correct",
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
 ) -> dict:
     """`rows` must already be the output of
     src.common.ablation_judge_recheck.rejudge_condition(pred_key="resolved_class"),
@@ -71,31 +80,38 @@ def compute_leniency_gap(
     stores the pre-rejudge verdict under `full_key` and overwrites `judged_correct`
     with the resolved_class-only verdict, i.e. `resolved_key`).
 
-    Returns {task_type: {n, full_response_rate, resolved_class_rate, leniency_gap}}
-    plus an "overall" key pooling every task_type together.
+    Returns {task_type: {n, full_response_rate, resolved_class_rate,
+    leniency_gap, full_response_rate_ci, resolved_class_rate_ci,
+    leniency_gap_ci}} plus an "overall" key pooling every task_type
+    together. The *_ci fields are (lo, hi) bootstrap 95% CIs (see
+    src.common.bootstrap) — leniency_gap_ci is a PAIRED bootstrap (same
+    resampled row indices on both sides), not two independent CIs
+    subtracted, since full_key/resolved_key are two verdicts on the SAME
+    row.
     """
+    from src.common.bootstrap import bootstrap_diff_ci, bootstrap_mean_ci
+
     by_task: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_task[r.get("task_type", "")].append(r)
 
-    out: dict[str, dict] = {}
-    for task_type, trows in by_task.items():
-        full = _rate(trows, full_key)
-        resolved = _rate(trows, resolved_key)
-        out[task_type] = {
+    def _summarize(trows: list[dict]) -> dict:
+        full_vals = _vals(trows, full_key)
+        resolved_vals = _vals(trows, resolved_key)
+        full = float(np.mean(full_vals)) if full_vals else float("nan")
+        resolved = float(np.mean(resolved_vals)) if resolved_vals else float("nan")
+        return {
             "n": len(trows),
             "full_response_rate": round(full, 4),
             "resolved_class_rate": round(resolved, 4),
             "leniency_gap": round(full - resolved, 4),
+            "full_response_rate_ci": bootstrap_mean_ci(full_vals, n_boot, ci, seed),
+            "resolved_class_rate_ci": bootstrap_mean_ci(resolved_vals, n_boot, ci, seed),
+            "leniency_gap_ci": bootstrap_diff_ci(full_vals, resolved_vals, n_boot, ci, seed),
         }
-    full_all = _rate(rows, full_key)
-    resolved_all = _rate(rows, resolved_key)
-    out["overall"] = {
-        "n": len(rows),
-        "full_response_rate": round(full_all, 4),
-        "resolved_class_rate": round(resolved_all, 4),
-        "leniency_gap": round(full_all - resolved_all, 4),
-    }
+
+    out = {task_type: _summarize(trows) for task_type, trows in by_task.items()}
+    out["overall"] = _summarize(rows)
     return out
 
 
@@ -163,8 +179,11 @@ def write_resolve_failure_report(report: dict, output_path: Path, model_label: s
 def plot_leniency_gap(results: dict, output_path: Path) -> None:
     """Grouped bar chart: judge-on-full-response rate vs. judge-on-resolved-
     class rate, one group per task_type (+ overall) — the gap between the
-    two bars in each group IS leniency_gap."""
+    two bars in each group IS leniency_gap. Error bars are bootstrap 95%
+    CIs (compute_leniency_gap's *_rate_ci fields) when present."""
     import matplotlib.pyplot as plt
+
+    from src.common.bootstrap import yerr_pairs
 
     task_types = [t for t in TASK_TYPE_ORDER if t in results]
     task_types += [t for t in results if t not in TASK_TYPE_ORDER and t != "overall"]
@@ -175,15 +194,17 @@ def plot_leniency_gap(results: dict, output_path: Path) -> None:
     resolved = [results[t]["resolved_class_rate"] for t in task_types]
     gaps = [results[t]["leniency_gap"] for t in task_types]
     ns = [results[t]["n"] for t in task_types]
+    full_yerr = yerr_pairs(results, task_types, "full_response_rate", "full_response_rate_ci")
+    resolved_yerr = yerr_pairs(results, task_types, "resolved_class_rate", "resolved_class_rate_ci")
 
     x = np.arange(len(task_types))
     width = 0.36
 
     fig, ax = plt.subplots(figsize=(max(7, len(task_types) * 1.6), 5.5))
     b1 = ax.bar(x - width / 2, resolved, width, label="Judge on resolved class only",
-                color=_RESOLVED_CLASS_COLOR)
+                color=_RESOLVED_CLASS_COLOR, yerr=resolved_yerr, capsize=3, ecolor="#333")
     b2 = ax.bar(x + width / 2, full, width, label="Judge on full model response",
-                color=_FULL_RESPONSE_COLOR)
+                color=_FULL_RESPONSE_COLOR, yerr=full_yerr, capsize=3, ecolor="#333")
 
     for xi, gap, fv in zip(x, gaps, full):
         if not np.isnan(gap):
@@ -213,8 +234,11 @@ def plot_leniency_gap_by_temperature(results_by_temp: dict[float, dict], output_
     axis, leniency_gap is signed (a task_type can show the judge being
     STRICTER on the full response than on the resolved class alone, a
     negative gap — seen for real on pest_damage in the pre-tagged-prompt
-    baseline), so the y-axis is not clipped to non-negative."""
+    baseline), so the y-axis is not clipped to non-negative. Error bars are
+    bootstrap 95% CIs (leniency_gap_ci) when present."""
     import matplotlib.pyplot as plt
+
+    from src.common.bootstrap import yerr_pairs
 
     temperatures = sorted(results_by_temp)
     any_result = results_by_temp[temperatures[0]]
@@ -232,9 +256,11 @@ def plot_leniency_gap_by_temperature(results_by_temp: dict[float, dict], output_
     for i, temperature in enumerate(temperatures):
         results = results_by_temp[temperature]
         vals = [results.get(t, {}).get("leniency_gap", float("nan")) for t in task_types]
+        yerr = yerr_pairs(results, task_types, "leniency_gap", "leniency_gap_ci")
         offset = (i - (n_temps - 1) / 2) * width
         color = cmap(0.35 + 0.55 * (i / max(1, n_temps - 1)))
-        ax.bar(x + offset, vals, width, label=f"T={temperature}", color=color)
+        ax.bar(x + offset, vals, width, label=f"T={temperature}", color=color,
+               yerr=yerr, capsize=2, ecolor="#333", error_kw={"linewidth": 0.8})
 
     ax.set_xticks(x)
     ns = [any_result.get(t, {}).get("n", 0) for t in task_types]

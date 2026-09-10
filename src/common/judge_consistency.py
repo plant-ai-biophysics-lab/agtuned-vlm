@@ -42,6 +42,7 @@ def repeat_judge_calls(
     pred_key: str = "prediction",
     template_key: str = "judge_classification_template",
     base_seed: int = 0,
+    extra_keys: dict[str, str] | None = None,
 ) -> dict[float, list[dict]]:
     """{temperature: rows}, each row a shallow copy of the input row plus
     "judged_correct_reps": [verdict_0, ..., verdict_{n_repeats-1}] (each an
@@ -52,6 +53,11 @@ def repeat_judge_calls(
     apply_judge so vLLM's sampler actually diverges call to call at a given
     temperature, rather than (at some vLLM/backend versions) reusing an
     internal default seed across separate .generate() calls.
+
+    extra_keys: forwarded to apply_judge — {template_placeholder: row_field}
+    for template_key variants needing a third placeholder beyond {gt}/
+    {pred}, e.g. judge_classification_class_list_template's {class_list}
+    (src/common/judge_template_sensitivity.py, Phase 3's per-variant sweep).
     """
     from src.common.metrics import apply_judge
     from src.common.progress import ProgressBar
@@ -73,7 +79,7 @@ def repeat_judge_calls(
                     gt_key="judge_gt_hint", pred_key=pred_key,
                     confidence_threshold=confidence_threshold,
                     log_path=log_path,
-                    temperature=temperature, seed=base_seed + rep_idx,
+                    temperature=temperature, seed=base_seed + rep_idx, extra_keys=extra_keys,
                 )
                 for j, r in enumerate(judged_chunk):
                     reps_by_row_idx[i + j].append(int(r["judged_correct"] or 0))
@@ -89,8 +95,11 @@ def repeat_judge_calls(
     return out
 
 
-def compute_flip_rate(rows: list[dict], reps_key: str = "judged_correct_reps") -> dict:
-    """{task_type: {n, flip_rate, mean_judged_correct}} + "overall".
+def compute_flip_rate(
+    rows: list[dict], reps_key: str = "judged_correct_reps",
+    n_boot: int = 1000, ci: float = 0.95, seed: int = 42,
+) -> dict:
+    """{task_type: {n, flip_rate, flip_rate_ci, mean_judged_correct}} + "overall".
 
     A row "flips" if its N repeat verdicts are not all identical
     (len(set(reps)) > 1) — the judge disagreed with itself at least once
@@ -99,7 +108,15 @@ def compute_flip_rate(rows: list[dict], reps_key: str = "judged_correct_reps") -
     per-row mode) is reported alongside flip_rate so a high flip_rate can be
     read against whether it's centered near the leniency_gap numbers or is
     just noise around a stable-on-average verdict.
+
+    flip_rate_ci is a bootstrap 95% CI (see src.common.bootstrap), resampled
+    over ROWS — each row's own "did it flip" 0/1 outcome is the unit being
+    resampled, not the individual repeat calls (which would pseudo-
+    replicate: a row's N repeats aren't independent draws of "does this row
+    flip," they're what DEFINES whether it flipped).
     """
+    from src.common.bootstrap import bootstrap_mean_ci
+
     by_task: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_task[r.get("task_type", "")].append(r)
@@ -107,12 +124,14 @@ def compute_flip_rate(rows: list[dict], reps_key: str = "judged_correct_reps") -
     def _summarize(trows: list[dict]) -> dict:
         n = len(trows)
         if n == 0:
-            return {"n": 0, "flip_rate": float("nan"), "mean_judged_correct": float("nan")}
-        flips = sum(1 for r in trows if len(set(r[reps_key])) > 1)
+            return {"n": 0, "flip_rate": float("nan"), "flip_rate_ci": (float("nan"), float("nan")),
+                    "mean_judged_correct": float("nan")}
+        flip_flags = [int(len(set(r[reps_key])) > 1) for r in trows]
         all_reps = [v for r in trows for v in r[reps_key]]
         return {
             "n": n,
-            "flip_rate": round(flips / n, 4),
+            "flip_rate": round(float(np.mean(flip_flags)), 4),
+            "flip_rate_ci": bootstrap_mean_ci(flip_flags, n_boot, ci, seed),
             "mean_judged_correct": round(float(np.mean(all_reps)), 4) if all_reps else float("nan"),
         }
 
@@ -124,8 +143,11 @@ def compute_flip_rate(rows: list[dict], reps_key: str = "judged_correct_reps") -
 def plot_flip_rate_by_temperature(flip_rate_by_temp: dict[float, dict], output_path: Path) -> None:
     """Grouped bar chart: flip_rate per task_type (+ overall), one group of
     bars per temperature — shows whether instability grows with sampling
-    temperature, and whether that growth is uniform across task_types."""
+    temperature, and whether that growth is uniform across task_types.
+    Error bars are bootstrap 95% CIs (flip_rate_ci) when present."""
     import matplotlib.pyplot as plt
+
+    from src.common.bootstrap import yerr_pairs
 
     temperatures = sorted(flip_rate_by_temp)
     any_result = flip_rate_by_temp[temperatures[0]]
@@ -143,9 +165,11 @@ def plot_flip_rate_by_temperature(flip_rate_by_temp: dict[float, dict], output_p
     for i, temperature in enumerate(temperatures):
         results = flip_rate_by_temp[temperature]
         vals = [results.get(t, {}).get("flip_rate", float("nan")) for t in task_types]
+        yerr = yerr_pairs(results, task_types, "flip_rate", "flip_rate_ci")
         offset = (i - (n_temps - 1) / 2) * width
         color = cmap(0.35 + 0.55 * (i / max(1, n_temps - 1)))
-        ax.bar(x + offset, vals, width, label=f"T={temperature}", color=color)
+        ax.bar(x + offset, vals, width, label=f"T={temperature}", color=color,
+               yerr=yerr, capsize=2, ecolor="#333", error_kw={"linewidth": 0.8})
 
     ax.set_xticks(x)
     ns = [any_result.get(t, {}).get("n", 0) for t in task_types]
@@ -199,6 +223,8 @@ def plot_leniency_vs_flip_rate(
     import matplotlib.pyplot as plt
     from scipy.stats import pearsonr
 
+    from src.common.bootstrap import ci_to_yerr
+
     temperatures = sorted(set(leniency_by_temp) & set(flip_rate_by_temp))
     missing = (set(leniency_by_temp) ^ set(flip_rate_by_temp))
     if missing:
@@ -219,6 +245,13 @@ def plot_leniency_vs_flip_rate(
 
         for t, xv, yv in zip(task_types, tx, ty):
             marker = _TASK_TYPE_MARKERS.get(t, "x")
+            xci = leniency_results[t].get("leniency_gap_ci")
+            yci = flip_results[t].get("flip_rate_ci")
+            xerr = [[ci_to_yerr(xv, xci)[0]], [ci_to_yerr(xv, xci)[1]]] if xci is not None else None
+            yerr = [[ci_to_yerr(yv, yci)[0]], [ci_to_yerr(yv, yci)[1]]] if yci is not None else None
+            if xerr is not None or yerr is not None:
+                ax.errorbar([xv], [yv], xerr=xerr, yerr=yerr, color=color, ecolor=color,
+                            elinewidth=0.8, capsize=2, zorder=2, fmt="none")
             ax.scatter([xv], [yv], s=90, color=color, marker=marker, zorder=3,
                        edgecolors="black", linewidths=0.5)
 

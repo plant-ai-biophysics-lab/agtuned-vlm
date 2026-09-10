@@ -77,3 +77,25 @@ judge_classification_template: "Evaluate whether the predicted label correctly i
 # many unrelated pathogens/pests produce leaf-spot-shaped symptoms).
 judge_classification_strict_template: "You will be shown a full model response that may include an observational narrative (crop, symptom description, damage pattern, etc.) followed by a final stated diagnosis. Your job is to judge ONLY the model's explicitly stated final diagnosis/conclusion against the reference class — NOT whether the surrounding narrative sounds plausible or descriptively consistent with the reference class. If the narrative is detailed and accurate but the model's own final diagnosis is generic, vague, non-committal, or names a different condition, mark it as NOT a match — credit is based on what the model actually concluded, never on the narrative alone. A generic symptom-shape label (e.g. \"leaf spot disease\", \"nutrient deficiency\", \"viral infection\", \"fungal infection\") does NOT match a specifically-named reference class unless it is that exact condition's own recognized common name — many different, unrelated pathogens, pests, and abiotic causes can all produce similar generic symptom shapes, so a generic label must not be credited just because it is broadly consistent with the reference class's typical presentation.\n\nReference class: {gt}\nFull model response: {pred}\n\nRespond with JSON only:\n{{ \"stated_diagnosis\": \"the model's own final diagnosis, quoted or paraphrased\", \"is_match\": true/false, \"reasoning\": \"brief explanation referencing the stated diagnosis specifically\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
 judge_description_template: "Evaluate whether the predicted visual description captures the same key visual features as the reference description of a plant condition.\n\nReference: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+
+# Phase 3 (judge-improvements evaluation plan, "template sensitivity sweep")
+# — two more variants for PLAIN classification predictions (vision_baseline.py
+# / self_cot.py / cot_yaml.py / desc_augmented_vision_v2.py's short 1-2
+# sentence answers), distinct from judge_classification_strict_template
+# above (which is verifier_cot-specific — its wording assumes a rubric
+# narrative to isolate a final diagnosis line from, which a plain 1-2
+# sentence classification answer doesn't have).
+#
+# judge_classification_specificity_template — same "don't credit a generic
+# symptom-shape label" lever as the strict template above, rewritten without
+# any narrative-isolation language since there's no narrative here to
+# isolate from; the prediction IS already close to just the answer.
+judge_classification_specificity_template: "Evaluate whether the predicted label correctly and SPECIFICALLY identifies the plant condition in the reference. The prediction must name the reference class itself or one of its recognized common/scientific synonyms — a generic symptom-shape label (e.g. \"leaf spot disease\", \"nutrient deficiency\", \"viral infection\", \"fungal infection\", \"pest damage\") does NOT count as a match just because it is broadly consistent with the reference class's typical presentation, since many different, unrelated pathogens, pests, and abiotic causes can all produce similar generic symptom shapes. Only mark is_match true if the prediction is specific enough that it could not equally apply to a different, unrelated condition with a similar generic presentation.\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+# judge_classification_class_list_template — same base instruction as
+# judge_classification_template, plus the full list of possible classes for
+# this dataset, testing whether seeing the other possible (often similarly-
+# generic-sounding) classes alone makes the judge more specificity-demanding
+# without being told to be. {class_list} is filled via apply_judge's
+# extra_keys mechanism (src/common/metrics.py), not gt/pred — callers must
+# pass extra_keys={"class_list": "<row field holding the joined class list>"}.
+judge_classification_class_list_template: "Evaluate whether the predicted label correctly identifies the plant condition in the reference. For context, here is the full list of possible classes for this dataset — use it to judge whether the prediction is specific enough to distinguish the reference class from the other listed classes, not just broadly consistent with it:\n{class_list}\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"

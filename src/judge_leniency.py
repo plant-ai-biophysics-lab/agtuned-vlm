@@ -61,7 +61,9 @@ import json
 from pathlib import Path
 
 from src.common.ablation_judge_recheck import rejudge_condition
+from src.common.dataset_config import datasets_by_name
 from src.common.io import load_prompts
+from src.common.judge_template_sensitivity import add_class_list_field
 from src.common.leniency_analysis import (
     compute_leniency_gap, plot_leniency_gap, plot_leniency_gap_by_temperature,
     resolve_failure_report, write_resolve_failure_report,
@@ -95,7 +97,14 @@ def load_ckpt_rows(ckpt_arg: str) -> list[dict]:
     return rows
 
 
-def main(args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
+    """judge_llm/judge_tok (both default None): pass an already-loaded judge
+    model to reuse it instead of loading/destroying a fresh one — used by
+    src/judge_template_sensitivity.py's orchestrator, which calls this once
+    per template variant and would otherwise reload the (slow) judge model
+    from scratch every time. When None (the normal single-run CLI case),
+    behavior is unchanged: load here, destroy here."""
+    owns_judge_llm = judge_llm is None
     rows = load_ckpt_rows(args.ckpt)
     missing = [c for c in ("judged_correct", "resolved_class", "resolvable", "task_type") if c not in rows[0]]
     if missing:
@@ -107,6 +116,8 @@ def main(args: argparse.Namespace) -> None:
     rows = [r for r in rows if str(r.get("judged_correct", "")).strip() != ""]
     if not rows:
         raise ValueError("--ckpt has no judged rows (judged_correct is blank everywhere) — run the judge phase first.")
+    if getattr(args, "limit", None):
+        rows = rows[: args.limit]
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -127,12 +138,19 @@ def main(args: argparse.Namespace) -> None:
     print(f"  {len(resolvable_rows)}/{len(rows)} row(s) have a resolved_class "
           f"({failures['overall']['pct_unresolved']:.2f}% excluded as unresolved) — re-judging those.")
 
+    extra_keys = None
+    if args.class_list:
+        dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
+        add_class_list_field(resolvable_rows, dataset_classes)
+        extra_keys = {"class_list": "class_list_text"}
+
     prompts = load_prompts(Path(args.prompts))
-    judge_llm, judge_tok = _load_judge_llm(
-        args.judge_model, quantization=args.judge_quantize,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_model_len, enforce_eager=args.enforce_eager,
-    )
+    if owns_judge_llm:
+        judge_llm, judge_tok = _load_judge_llm(
+            args.judge_model, quantization=args.judge_quantize,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len, enforce_eager=args.enforce_eager,
+        )
     fields = ["agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
               "resolved_class", "correct", "prediction",
               "judged_correct_full_trajectory", "judge_reasoning_full_trajectory",
@@ -146,18 +164,18 @@ def main(args: argparse.Namespace) -> None:
                 confidence_threshold=args.judge_confidence_threshold,
                 chunk_size=args.judge_chunk_size,
                 log_path=output_dir / f"full_response_T{temperature}_judge_log.jsonl",
-                pred_key="prediction", template_key="judge_classification_template",
+                pred_key="prediction", template_key=args.template_key,
                 progress_desc=f"Re-judging {label} (full response, T={temperature})",
-                temperature=temperature, seed=0,
+                temperature=temperature, seed=0, extra_keys=extra_keys,
             )
             resolved_rechecked = rejudge_condition(
                 resolvable_rows, judge_llm, judge_tok, prompts,
                 confidence_threshold=args.judge_confidence_threshold,
                 chunk_size=args.judge_chunk_size,
                 log_path=output_dir / f"resolved_class_T{temperature}_judge_log.jsonl",
-                pred_key="resolved_class", template_key="judge_classification_template",
+                pred_key="resolved_class", template_key=args.template_key,
                 progress_desc=f"Re-judging {label} (resolved class, T={temperature})",
-                temperature=temperature, seed=0,
+                temperature=temperature, seed=0, extra_keys=extra_keys,
             )
 
             # Same row order/length (both are resolvable_rows re-judged
@@ -187,8 +205,9 @@ def main(args: argparse.Namespace) -> None:
             print(f"  T={temperature}: leniency_gap={d['leniency_gap']:+.4f} "
                   f"(full_response={d['full_response_rate']:.4f}, resolved_class={d['resolved_class_rate']:.4f})")
     finally:
-        _destroy_judge_llm(judge_llm)
-        del judge_tok
+        if owns_judge_llm:
+            _destroy_judge_llm(judge_llm)
+            del judge_tok
 
     plot_leniency_gap_by_temperature(results_by_temp, output_dir / "leniency_gap_by_temperature.png")
 
@@ -211,11 +230,25 @@ if __name__ == "__main__":
                               "(globs ckpt_*.csv inside it).")
     parser.add_argument("--output_dir", default="ablation/judge_leniency/")
     parser.add_argument("--label", default=None, help="Chart title / report header label (defaults to the ckpt filename).")
+    parser.add_argument("--limit", type=int, default=None,
+                         help="Subsample to this many rows first (each temperature re-judges both "
+                              "sides over every resolvable row in the subsample — start small).")
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.1, 0.5, 1.0],
                          help="Swept judge temperatures — matches src/judge_consistency.py's default so "
                               "leniency_gap(T) and flip_rate(T) line up for the correlation plot. Both the "
                               "full-response and resolved-class sides are freshly re-judged at each value "
                               "(no reuse of the checkpoint's stored judged_correct).")
+    parser.add_argument("--template_key", default="judge_classification_template",
+                         help="prompts.yaml key used on BOTH the full-response and resolved-class sides "
+                              "at every temperature — override to re-run this whole sweep under a "
+                              "different judge template (e.g. Phase 3's specificity/class_list variants, "
+                              "see src/judge_template_sensitivity.py).")
+    parser.add_argument("--class_list", action="store_true",
+                         help="Fill a {class_list} placeholder in --template_key from each row's own "
+                              "dataset (src/common/judge_template_sensitivity.py's class_list variant) — "
+                              "only meaningful if --template_key's prompt actually has that placeholder.")
+    parser.add_argument("--config", default="src/config/datasets.yaml",
+                         help="datasets.yaml, for each row's class list when --class_list is set.")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
     parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)

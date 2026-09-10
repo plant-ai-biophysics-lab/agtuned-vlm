@@ -60,6 +60,7 @@ def rejudge_condition(
     progress_desc: str = "Re-judging",
     temperature: float | None = None,
     seed: int | None = None,
+    extra_keys: dict[str, str] | None = None,
 ) -> list[dict]:
     """Re-judges `rows` against `pred_key` using `prompts[template_key]`
     instead of the original "prediction"/judge_classification_template pair.
@@ -86,6 +87,11 @@ def rejudge_condition(
     passes need a fresh, same-temperature call — reusing a checkpoint's
     already-computed judged_correct only gives the T=0 case) instead of
     only at the judge's fixed default.
+
+    extra_keys: forwarded to apply_judge — {template_placeholder: row_field}
+    for template variants needing a third placeholder beyond {gt}/{pred},
+    e.g. judge_classification_class_list_template's {class_list}
+    (src/common/judge_template_sensitivity.py, Phase 3).
     """
     from src.common.progress import ProgressBar
 
@@ -104,7 +110,7 @@ def rejudge_condition(
             gt_key="judge_gt_hint", pred_key=pred_key,
             confidence_threshold=confidence_threshold,
             log_path=log_path,
-            temperature=temperature, seed=seed,
+            temperature=temperature, seed=seed, extra_keys=extra_keys,
         )
         out.extend(judged_chunk)
         pbar.update(len(chunk))
