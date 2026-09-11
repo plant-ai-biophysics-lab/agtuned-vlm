@@ -40,7 +40,7 @@ uv run python main.py judge-consistency \
     --leniency_gap_json ablation/judge_leniency/vision_baseline_gemma4_31b_fp8/leniency_gap.json
 ```
 
-`--leniency_gap_json` is optional but recommended — pass Phase 1's own output (same `--ckpt`) to also get `leniency_vs_flip_rate.png`. Writes `flip_rate_by_temperature.png`, `flip_rate.json`, and (if `--leniency_gap_json` given) `leniency_vs_flip_rate.png` + `leniency_vs_flip_rate_stats.json`.
+Runs BOTH conditions — full response and `<answer>`-tag-only — over the same row set Phase 1 uses, so `flip_rate_full` and `flip_rate_answer_only` are directly comparable (this doubles the judge-call budget vs. a single condition). `--leniency_gap_json` is optional but recommended — pass Phase 1's own output (same `--ckpt`) to also get a correlation scatter per condition. Writes `flip_rate_by_temperature_full.png`, `flip_rate_by_temperature_answer_only.png`, `flip_rate.json`, and (if `--leniency_gap_json` given) `leniency_vs_flip_rate_full.png` + `leniency_vs_flip_rate_answer_only.png` + their stats JSON files.
 
 ## Phase 3 — template sensitivity
 

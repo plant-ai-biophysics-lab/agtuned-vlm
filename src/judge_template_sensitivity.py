@@ -43,12 +43,16 @@ Writes, under --output_dir:
                                              leniency_gap's single net rate —
                                              leniency_gap.json, etc.)
   <variant_key>/consistency/              — Phase 2's full output for this
-                                             variant (flip_rate_by_temperature.png,
-                                             leniency_vs_flip_rate.png,
+                                             variant, BOTH conditions
+                                             (flip_rate_by_temperature_full.png,
+                                             flip_rate_by_temperature_answer_only.png,
+                                             leniency_vs_flip_rate_full.png,
+                                             leniency_vs_flip_rate_answer_only.png,
                                              flip_rate.json, etc.)
-  <variant_key>/leniency_vs_flip_rate.png — copied up from consistency/ for
-                                             a quick look without descending
-                                             into that subfolder
+  <variant_key>/leniency_vs_flip_rate_{full,answer_only}.png — copied up
+                                             from consistency/ for a quick
+                                             look without descending into
+                                             that subfolder
   <variant_key>/disagreement_matrix_T<temp>.png — copied up from leniency/,
                                              same reason, one per swept
                                              temperature
@@ -198,19 +202,28 @@ def main(args: argparse.Namespace) -> None:
             # shouldn't require descending into consistency/ first) ──
             leniency_json_path = leniency_dir / "leniency_gap.json"
             flip_json_path = consistency_dir / "flip_rate.json"
-            corr_src = consistency_dir / "leniency_vs_flip_rate.png"
             if leniency_json_path.exists() and flip_json_path.exists():
                 leniency_data = json.loads(leniency_json_path.read_text())
                 flip_data = json.loads(flip_json_path.read_text())
                 variant_data[variant_key] = {
                     "leniency_by_temp": {float(t): d for t, d in leniency_data["leniency_gap_by_temperature"].items()},
-                    "flip_by_temp": {float(t): d for t, d in flip_data["flip_rate_by_temperature"].items()},
+                    # The table's "Flip rate" column reports the full-response
+                    # condition — flip_rate_by_temperature_answer_only is still
+                    # available in flip_rate.json and its own PNGs, just not
+                    # folded into this table (would need a 5th column).
+                    "flip_by_temp": {
+                        float(t): d for t, d in flip_data["flip_rate_by_temperature_full"].items()
+                    },
                     "disagreement_by_temp": {
                         float(t): d for t, d in leniency_data.get("disagreement_by_temperature", {}).items()
                     },
                 }
-            if corr_src.exists():
-                shutil.copy(corr_src, variant_dir / "leniency_vs_flip_rate.png")
+            # Promote both correlation plots (one per condition) up to the
+            # variant's own root folder for visibility.
+            for corr_suffix in ("full", "answer_only"):
+                corr_src = consistency_dir / f"leniency_vs_flip_rate_{corr_suffix}.png"
+                if corr_src.exists():
+                    shutil.copy(corr_src, variant_dir / corr_src.name)
             # Same promotion for the disagreement-matrix figures — one per
             # swept temperature, naturally written inside leniency/ by
             # judge_leniency.main(), copied up so this variant's own
@@ -244,7 +257,7 @@ def main(args: argparse.Namespace) -> None:
 
     print(f"\nWrote template_sensitivity.png, length_bias.png, template_sensitivity.json to {output_dir}")
     print(f"Per-variant Phase 1/2 output under {output_dir}/<variant>/leniency/ and /<variant>/consistency/ "
-          f"(leniency_vs_flip_rate.png also copied to {output_dir}/<variant>/ directly)")
+          f"(leniency_vs_flip_rate_{{full,answer_only}}.png also copied to {output_dir}/<variant>/ directly)")
 
 
 if __name__ == "__main__":

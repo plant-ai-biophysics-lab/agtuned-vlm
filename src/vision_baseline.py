@@ -47,15 +47,26 @@ from src.common.dataset_config import (
     load_manifest, parse_class_label,
 )
 from src.common.io import load_prompts
-from src.common.metrics import (
-    contains_match, extract_answer_tag, resolve_class, rouge_scores_per_sample, sample_class_images,
-)
+from src.common.metrics import contains_match, extract_answer_tag, resolve_class, sample_class_images
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
-    append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics, judge_gt_hint,
-    load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
+    CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
+    judge_gt_hint, load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
 )
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
+
+# No ROUGE/sem_sim here — this stage is classification-only (correct/
+# contains_match/resolvable already the real signal), and rouge1/rouge2/
+# rougeL/rouge_ss were already always blank via include_rouge=False;
+# sem_sim was the only one actually computed (a real per-row cost, loading
+# sentence-transformers) despite not being used anywhere downstream
+# (vision_baseline_collate.py's stage2_summary.csv is F1-only). Dropping
+# all five from this script's own checkpoint schema — desc_augmented_vision_v2.py
+# / self_cot.py / cot_yaml.py are unaffected, they still use CKPT_FIELDS
+# as-is. compute_model_metrics's aggregate_rouge() already skips missing
+# keys gracefully, so metrics.json needs no changes either.
+_DROPPED_FIELDS = {"rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"}
+VISION_BASELINE_CKPT_FIELDS = [f for f in CKPT_FIELDS if f not in _DROPPED_FIELDS]
 
 try:
     from vllm import SamplingParams
@@ -108,7 +119,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
     archive_ckpt_if_rerun(ckpt_path, args.rerun)
-    rows, seen = load_ckpt(ckpt_path)
+    rows, seen = load_ckpt(ckpt_path, fields=VISION_BASELINE_CKPT_FIELDS)
     if rows:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")
 
@@ -169,18 +180,17 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 resolved = resolve_class(answer, ds.clean_classes)
                 correct = resolved is not None and resolved.lower() == clean_label.lower()
                 c_match = contains_match(resolved or pred, clean_label)
-                scores = rouge_scores_per_sample(pred, clean_label, include_rouge=False)
                 row = {
                     "agml_dataset": ds.agml_name, "class_label": clean_label,
                     "task_type": task_type, "crop": crop_display(crop_val),
                     "image_name": name, "prediction": pred,
-                    "resolved_class": resolved or "", "ground_truth": clean_label,
+                    "resolved_class": resolved or "", "extracted_answer": answer,
+                    "ground_truth": clean_label,
                     "correct": int(correct), "contains_match": int(c_match),
                     "resolvable": int(resolved is not None),
                     "judge_gt_hint": gt_hint,
-                    **scores,
                 }
-                append_ckpt_row(ckpt_path, row)
+                append_ckpt_row(ckpt_path, row, fields=VISION_BASELINE_CKPT_FIELDS)
                 rows.append(row)
             pbar.update()
         pbar.finish()
@@ -190,17 +200,17 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         destroy_llm(llm)
         del tokenizer
 
-    rows = run_judge_phase(rows, ckpt_path, args, prompts)
+    rows = run_judge_phase(rows, ckpt_path, args, prompts, fields=VISION_BASELINE_CKPT_FIELDS)
 
     metrics = compute_model_metrics(rows)
     write_model_metrics(model_dir, metrics)
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
-          f"rouge_ss={metrics['overall'].get('rouge_ss')} (n={metrics['overall'].get('n_total')})")
+          f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
 
 
 def main(args: argparse.Namespace) -> None:
     if args.collate:
-        collated = collate_models(Path(args.output_dir))
+        collated = collate_models(Path(args.output_dir), fields=VISION_BASELINE_CKPT_FIELDS)
         if not collated:
             print(f"No per-model output folders with checkpoints found under {args.output_dir}")
             return

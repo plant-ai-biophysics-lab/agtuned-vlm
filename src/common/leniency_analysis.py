@@ -2,32 +2,49 @@
 see the "LLM as a judge improvements" note).
 
 leniency_gap = P(judge is correct on the FULL model response)
-             - P(judge is correct on JUST the resolved class string)
+             - P(judge is correct on JUST the extracted <answer> tag content)
 
 Both sides are graded by the SAME judge model and template
 (judge_classification_template) — the only thing that changes is how much
 text the judge sees: the model's full free-text response (prediction), vs.
-just the class name resolve_class already extracted from it (resolved_class,
-already computed at generation time by vision_baseline.py / self_cot.py /
-cot_yaml.py / desc_augmented_vision_v2.py). This isolates genuine judge
-leniency (does more surrounding narrative make the judge more generous) from
-resolve_class's own string-matching limits — comparing the judge against
-resolve_class directly (an earlier version of this module did that) instead
-conflated the two, since resolve_class's exact/single-substring matching
-fails on most naturally-phrased answers regardless of correctness.
+just the raw text between its own <answer></answer> tags (extract_answer_tag,
+src/common/metrics.py). This isolates genuine judge leniency (does more
+surrounding narrative make the judge more generous) from a DIFFERENT,
+much larger effect: resolve_class's own string-matching limits.
 
-Only resolvable rows (resolved_class non-empty) can be included — there's no
-"resolved class" to re-judge otherwise. See resolve_failure_report /
-write_resolve_failure_report for how many rows that excludes, which is
-necessary context for reading the leniency_gap number (a small gap over a
-small, cherry-picked resolvable subset means less than the same gap over
-most of the dataset).
+An earlier version of this module fed the judge resolve_class's OUTPUT
+(the checkpoint's resolved_class column — already canonicalized to a
+literal ground-truth class name, or empty if no exact/unique-substring
+match was found) instead of the raw tag content. That was wrong two ways:
+(1) when resolve_class succeeds, resolved_class IS already one of the
+literal class names, so judging "does this match the ground truth" is
+close to redundant with the already-deterministic `correct` column; (2)
+resolve_class's exact/single-substring matching fails on most naturally-
+phrased answers regardless of correctness (observed ~83% unresolved on a
+real pre-tagged-prompt checkpoint), discarding the vast majority of rows
+before the judge ever saw them, and conflating "the judge is lenient" with
+"resolve_class couldn't parse the response" — two different problems.
+Feeding the raw <answer> tag content instead fixes both: it's the
+model's own genuinely-reduced statement (not a re-canonicalized version of
+the ground truth), and every row with a parseable <answer> tag qualifies,
+not just the much smaller set resolve_class happens to match.
 
-Re-judging the resolved_class field needs real judge-LLM calls — this is
-NOT a pure-CPU step (see src/judge_leniency.py, which loads the judge model
-and calls src.common.ablation_judge_recheck.rejudge_condition(pred_key=
-"resolved_class") before handing rejudged rows to compute_leniency_gap
-here).
+Only rows with a parseable <answer> tag can be included — there's nothing
+reduced to re-judge otherwise (extract_answer_tag falls back to the full
+cleaned text when no tag is found, which would make this comparison
+trivial). See missing_answer_tag_report / write_missing_answer_tag_report
+for how many rows that excludes, which is necessary context for reading
+the leniency_gap number (with the tagged classification prompt, this
+should be a small fraction — unlike the old resolve_class-based
+exclusion).
+
+Re-judging the extracted answer needs real judge-LLM calls — this is NOT a
+pure-CPU step (see src/judge_leniency.py, which loads the judge model and
+calls src.common.ablation_judge_recheck.rejudge_condition(pred_key=
+"resolved_class") — the row field name is unchanged, but judge_leniency.py
+now populates it with extract_answer_tag's output rather than the
+checkpoint's own resolve_class-matched value — before handing rejudged
+rows to compute_leniency_gap here).
 """
 from __future__ import annotations
 
@@ -217,8 +234,8 @@ def plot_disagreement_matrix(results: dict, output_path: Path) -> None:
     cells = [
         ("both_correct", "Both correct", "#2ca02c"),
         ("both_wrong", "Both wrong", "#7f7f7f"),
-        ("full_correct_resolved_wrong", "Full correct, resolved wrong (leniency)", _FULL_RESPONSE_COLOR),
-        ("full_wrong_resolved_correct", "Full wrong, resolved correct (stricter)", _RESOLVED_CLASS_COLOR),
+        ("full_correct_resolved_wrong", "Full correct, <answer>-tag wrong (leniency)", _FULL_RESPONSE_COLOR),
+        ("full_wrong_resolved_correct", "Full wrong, <answer>-tag correct (stricter)", _RESOLVED_CLASS_COLOR),
     ]
 
     x = np.arange(len(task_types))
@@ -304,6 +321,98 @@ def write_resolve_failure_report(report: dict, output_path: Path, model_label: s
     output_path.write_text("\n".join(lines) + "\n")
 
 
+def taggable_rows_with_extracted_answer(rows: list[dict], pred_key: str = "prediction") -> list[dict]:
+    """Returns a NEW list containing only rows where row[pred_key] has a
+    parseable <answer>...</answer> tag (extract_answer_tag's found=True) —
+    each entry a shallow copy with row["resolved_class"] set to the raw tag
+    content. Shared by Phase 1 (src/judge_leniency.py) and Phase 2
+    (src/judge_consistency.py) so both filter/populate identically; a row
+    with no tag falls back to the full cleaned text, which would make the
+    "reduced information" comparison trivial (both sides nearly identical),
+    so such rows are excluded rather than included with a degraded value.
+
+    "resolved_class" here means the raw <answer> tag content, NOT
+    resolve_class's class-list-matched output — see this module's top
+    docstring for why."""
+    from src.common.metrics import extract_answer_tag
+
+    out = []
+    for r in rows:
+        answer, found = extract_answer_tag(r.get(pred_key, ""))
+        if found:
+            r2 = dict(r)
+            r2["resolved_class"] = answer
+            out.append(r2)
+    return out
+
+
+def missing_answer_tag_report(rows: list[dict], pred_key: str = "prediction") -> dict:
+    """{task_type: {n_total, n_missing, pct_missing}} + "overall" — same
+    shape as resolve_failure_report, but the exclusion criterion is
+    different: how many rows have NO <answer>...</answer> tag at all in
+    row[pred_key] (extract_answer_tag's `found` flag is False), rather than
+    how many rows resolve_class failed to match against the class list.
+
+    This is the criterion src/judge_leniency.py actually uses to decide
+    which rows are eligible for the leniency comparison — see that
+    module's docstring for why the judge is fed the RAW <answer> tag
+    content (not resolve_class's class-list-matched output): matching
+    against resolve_class conflates judge leniency with resolve_class's own
+    (much larger) vocabulary-matching gap, and discards the vast majority
+    of rows before the judge ever sees them.
+    """
+    from src.common.metrics import extract_answer_tag
+
+    by_task: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_task[r.get("task_type", "")].append(r)
+
+    def _count(trows: list[dict]) -> tuple[int, int]:
+        n_total = len(trows)
+        n_missing = sum(1 for r in trows if not extract_answer_tag(r.get(pred_key, ""))[1])
+        return n_total, n_missing
+
+    out: dict[str, dict] = {}
+    for task_type, trows in by_task.items():
+        n_total, n_missing = _count(trows)
+        out[task_type] = {
+            "n_total": n_total, "n_missing": n_missing,
+            "pct_missing": round(100 * n_missing / n_total, 2) if n_total else 0.0,
+        }
+    n_total, n_missing = _count(rows)
+    out["overall"] = {
+        "n_total": n_total, "n_missing": n_missing,
+        "pct_missing": round(100 * n_missing / n_total, 2) if n_total else 0.0,
+    }
+    return out
+
+
+def write_missing_answer_tag_report(report: dict, output_path: Path, model_label: str = "") -> None:
+    lines = []
+    if model_label:
+        lines.append(f"missing <answer> tag report — {model_label}")
+        lines.append("=" * (len(lines[0])))
+        lines.append("")
+    lines.append("How many predictions had NO <answer>...</answer> tag at all — these are")
+    lines.append("excluded from the leniency_gap comparison entirely, since there's no")
+    lines.append("extracted answer text to re-judge against the full response.")
+    lines.append("")
+    header = f"{'task_type':<26}{'n_total':>10}{'n_missing':>12}{'pct_missing':>14}"
+    lines.append(header)
+    lines.append("-" * len(header))
+    ordered = [t for t in TASK_TYPE_ORDER if t in report] + \
+              [t for t in report if t not in TASK_TYPE_ORDER and t != "overall"]
+    for task_type in ordered:
+        d = report[task_type]
+        lines.append(f"{task_type:<26}{d['n_total']:>10}{d['n_missing']:>12}{d['pct_missing']:>13.2f}%")
+    lines.append("-" * len(header))
+    d = report["overall"]
+    lines.append(f"{'overall':<26}{d['n_total']:>10}{d['n_missing']:>12}{d['pct_missing']:>13.2f}%")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines) + "\n")
+
+
 def plot_leniency_gap(results: dict, output_path: Path) -> None:
     """Grouped bar chart: judge-on-full-response rate vs. judge-on-resolved-
     class rate, one group per task_type (+ overall) — the gap between the
@@ -329,7 +438,7 @@ def plot_leniency_gap(results: dict, output_path: Path) -> None:
     width = 0.36
 
     fig, ax = plt.subplots(figsize=(max(7, len(task_types) * 1.6), 5.5))
-    b1 = ax.bar(x - width / 2, resolved, width, label="Judge on resolved class only",
+    b1 = ax.bar(x - width / 2, resolved, width, label="Judge on <answer> tag only",
                 color=_RESOLVED_CLASS_COLOR, yerr=resolved_yerr, capsize=3, ecolor="#333")
     b2 = ax.bar(x + width / 2, full, width, label="Judge on full model response",
                 color=_FULL_RESPONSE_COLOR, yerr=full_yerr, capsize=3, ecolor="#333")

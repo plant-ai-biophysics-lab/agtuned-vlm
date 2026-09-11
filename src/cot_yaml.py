@@ -294,6 +294,7 @@ def _step_row(
         "image_name": name, "mode": mode, "step_idx": entry["step_idx"],
         "rotation": rotation, "question_id": entry["question_id"],
         "prediction": entry["prediction"], "resolved_class": resolved or "",
+        "extracted_answer": answer,
         "ground_truth": clean_label, "correct": int(correct), "contains_match": int(c_match),
         "resolvable": int(resolved is not None), "reasoning": entry["reasoning"],
         "judge_gt_hint": gt_hint, **scores,

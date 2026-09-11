@@ -117,17 +117,19 @@ Stages:
                                (the full-response/resolved-class 2x2 breakdown — raw counts in
                                each disagreement direction, not just leniency_gap's net rate),
                                resolve_failures.txt, rechecked_T<temp>.csv, leniency_gap.json.
-    judge-consistency         — judge self-consistency (needs judge model/GPU): repeats the
-                               current full-response judge call N times per row at each of a
-                               swept set of temperatures (judge runs at temperature=0.0
-                               normally, so this forces real sampling variance) and reports
-                               flip_rate per task_type/temperature. --temperatures,
+    judge-consistency         — judge self-consistency (needs judge model/GPU, 2x the calls of
+                               a single condition): repeats the judge call N times per row at
+                               each of a swept set of temperatures, for BOTH the full-response
+                               and <answer>-tag-only conditions (judge runs at temperature=0.0
+                               normally, so this forces real sampling variance), and reports
+                               flip_rate per condition/task_type/temperature. --temperatures,
                                --n_repeats, --template_key/--class_list (same as judge-leniency);
                                --leniency_gap_json (a judge-leniency run's
                                leniency_gap.json for the SAME checkpoint) also writes a
-                               leniency-vs-flip-rate scatter. Writes
-                               flip_rate_by_temperature.png, flip_rate.json,
-                               [leniency_vs_flip_rate.png].
+                               leniency-vs-flip-rate scatter per condition. Writes
+                               flip_rate_by_temperature_full.png,
+                               flip_rate_by_temperature_answer_only.png, flip_rate.json,
+                               [leniency_vs_flip_rate_full.png, leniency_vs_flip_rate_answer_only.png].
     judge-template-sensitivity — judge template sensitivity sweep (needs judge model/GPU,
                                the most expensive step in the plan — start with --limit):
                                for each of 3 templates (current, a specificity-strict rewrite
@@ -144,8 +146,8 @@ Stages:
                                leniency_gap, flip_rate, and both disagreement-direction
                                counts/rates per variant x temperature), template_sensitivity.json
                                (top-level summary) plus each variant's own leniency_gap*.png /
-                               disagreement_matrix*.png / flip_rate*.png / leniency_vs_flip_rate.png
-                               underneath.
+                               disagreement_matrix*.png / flip_rate_by_temperature_{full,answer_only}.png /
+                               leniency_vs_flip_rate_{full,answer_only}.png underneath.
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:

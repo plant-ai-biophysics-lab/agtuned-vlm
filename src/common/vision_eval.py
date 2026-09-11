@@ -42,7 +42,20 @@ def _cached_excluded_class_pairs() -> set[tuple[str, str]]:
 
 CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
-    "prediction", "resolved_class", "ground_truth",
+    "prediction", "resolved_class",
+    "extracted_answer",  # raw text between the model's own <answer></answer>
+                         # tags (extract_answer_tag, src/common/metrics.py) —
+                         # NOT resolve_class-matched (that's resolved_class,
+                         # above); populated by vision_baseline.py / self_cot.py
+                         # / cot_yaml.py (all three use the tagged
+                         # assessment_classification_tagged prompt); empty for
+                         # desc_augmented_vision_v2.py, whose prompt doesn't
+                         # request a tag. Exists so future full-response-vs-
+                         # extracted-answer judge comparisons (leniency-style,
+                         # see src/judge_leniency.py) can read this column
+                         # directly instead of re-deriving it from `prediction`
+                         # every time.
+    "ground_truth",
     "correct", "contains_match", "resolvable",
     "rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim",
     "reasoning",  # self_cot's own generated description / cot_yaml's step-by-step
@@ -515,15 +528,25 @@ def write_model_metrics(model_dir: Path, metrics: dict) -> None:
     (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
 
-def collate_models(output_dir: Path) -> dict[str, dict]:
+def collate_models(output_dir: Path, fields: list[str] = CKPT_FIELDS) -> dict[str, dict]:
     """Scan output_dir/<model>/ckpt_<model>.csv (one subfolder per model
-    already run), recompute metrics per model, return {model_dir_name: metrics}."""
+    already run), recompute metrics per model, return {model_dir_name: metrics}.
+
+    fields defaults to CKPT_FIELDS but must be passed through explicitly by
+    a caller whose own checkpoints use a different schema (e.g.
+    vision_baseline.py's VISION_BASELINE_CKPT_FIELDS, which drops rouge1/
+    rouge2/rougeL/rouge_ss/sem_sim) — load_ckpt()'s schema-drift healing
+    treats any mismatch against `fields` as an OLDER file missing newly-added
+    columns and rewrites the file to match `fields`, so leaving this at the
+    full CKPT_FIELDS default here would silently re-add those columns back
+    into a checkpoint that deliberately dropped them, the next time
+    --collate runs."""
     if not output_dir.exists():
         return {}
     result = {}
     for model_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
         ckpt_path = model_dir / f"ckpt_{model_dir.name}.csv"
-        rows, _ = load_ckpt(ckpt_path)
+        rows, _ = load_ckpt(ckpt_path, fields=fields)
         if not rows:
             continue
         result[model_dir.name] = compute_model_metrics(rows)
