@@ -69,12 +69,12 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
     single-run CLI case), behavior is unchanged: load here, destroy here."""
     owns_judge_llm = judge_llm is None
     rows = load_ckpt_rows(args.ckpt)
-    missing = [c for c in ("judged_correct", "prediction", "task_type") if c not in rows[0]]
+    missing = [c for c in ("prediction", "task_type") if c not in rows[0]]
     if missing:
         raise ValueError(f"--ckpt is missing expected column(s) {missing}.")
-    rows = [r for r in rows if str(r.get("judged_correct", "")).strip() != ""]
-    if not rows:
-        raise ValueError("--ckpt has no judged rows (judged_correct is blank everywhere) — run the judge phase first.")
+    # No requirement that judged_correct already be populated — every
+    # repeat call re-judges from scratch (see repeat_judge_calls), so a
+    # checkpoint produced with --skip_judge works fine here too.
     if args.limit:
         rows = rows[: args.limit]
 

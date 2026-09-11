@@ -5,10 +5,13 @@ Re-judges Phase 0's SAME predictions (the full model response, pred_key=
 "prediction" — no new generation needed) under three template variants:
 
   current       judge_classification_template — the pipeline's existing
-                template, unchanged. Reuses the checkpoint's already-stored
-                judged_correct rather than a fresh call (identical
-                conditions: same template, same pred_key, same greedy
-                temperature=0.0 — a fresh call would just reproduce it).
+                template, unchanged. Always gets its own fresh greedy-
+                temperature judge call, same as the other two variants —
+                NOT a reuse of the checkpoint's own stored judged_correct
+                (an earlier version of this orchestrator did that, since
+                the conditions are identical and a fresh call reproduces
+                the same verdict; but it breaks on a --skip_judge
+                checkpoint, where judged_correct is blank everywhere).
   specificity   judge_classification_specificity_template — requires the
                 prediction to name the reference class or a recognized
                 synonym; a generic symptom-shape label doesn't count as a

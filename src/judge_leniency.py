@@ -124,16 +124,18 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
     behavior is unchanged: load here, destroy here."""
     owns_judge_llm = judge_llm is None
     rows = load_ckpt_rows(args.ckpt)
-    missing = [c for c in ("judged_correct", "prediction", "task_type") if c not in rows[0]]
+    missing = [c for c in ("prediction", "task_type") if c not in rows[0]]
     if missing:
         raise ValueError(
             f"--ckpt is missing expected column(s) {missing} — leniency_analysis needs "
             "CKPT_FIELDS-shaped rows (vision_baseline.py / self_cot.py / cot_yaml.py / "
             "desc_augmented_vision_v2.py's checkpoint CSV shape)."
         )
-    rows = [r for r in rows if str(r.get("judged_correct", "")).strip() != ""]
-    if not rows:
-        raise ValueError("--ckpt has no judged rows (judged_correct is blank everywhere) — run the judge phase first.")
+    # No requirement that judged_correct already be populated — every row's
+    # verdict is re-judged FRESH on both sides at every swept temperature
+    # (see rejudge_condition), so a checkpoint produced with --skip_judge
+    # (judged_correct blank everywhere) works fine here; the checkpoint's
+    # own stored judged_correct value, if any, is never read.
     if getattr(args, "limit", None):
         rows = rows[: args.limit]
 

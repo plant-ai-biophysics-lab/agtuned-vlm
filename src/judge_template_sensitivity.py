@@ -124,12 +124,12 @@ def _variant_args(base: argparse.Namespace, output_dir: Path, label: str, templa
 
 def main(args: argparse.Namespace) -> None:
     rows = load_ckpt_rows(args.ckpt)
-    missing = [c for c in ("judged_correct", "correct", "prediction", "agml_dataset", "task_type") if c not in rows[0]]
+    missing = [c for c in ("correct", "prediction", "agml_dataset", "task_type") if c not in rows[0]]
     if missing:
         raise ValueError(f"--ckpt is missing expected column(s) {missing}.")
-    rows = [r for r in rows if str(r.get("judged_correct", "")).strip() != ""]
-    if not rows:
-        raise ValueError("--ckpt has no judged rows (judged_correct is blank everywhere) — run the judge phase first.")
+    # No requirement that judged_correct already be populated — every
+    # variant (including "current") gets a fresh greedy-temperature judge
+    # call below, so a checkpoint produced with --skip_judge works fine.
     if args.limit:
         rows = rows[: args.limit]
 
@@ -153,26 +153,26 @@ def main(args: argparse.Namespace) -> None:
             print(f"\n=== {variant_label} ({variant_key}) ===")
 
             # ── Phase 3's own cheap greedy-temperature summary (vs. the
-            # deterministic `correct` column) — "current" reuses the
-            # checkpoint's already-stored judged_correct, no fresh call.
-            if variant_key == "current":
-                rows_by_variant[variant_key] = rows
-                print(f"  [greedy summary] reusing checkpoint's judged_correct (no fresh call).")
-            else:
-                if needs_class_list:
-                    add_class_list_field(rows, dataset_classes)
-                extra_keys = {"class_list": "class_list_text"} if needs_class_list else None
-                rechecked = rejudge_condition(
-                    rows, judge_llm, judge_tok, prompts,
-                    confidence_threshold=args.judge_confidence_threshold,
-                    chunk_size=args.judge_chunk_size,
-                    log_path=variant_dir / "greedy_summary_judge_log.jsonl",
-                    pred_key="prediction", template_key=template_key,
-                    progress_desc=f"[greedy summary] Re-judging {label} ({variant_label})",
-                    extra_keys=extra_keys,
-                )
-                rows_by_variant[variant_key] = rechecked
-                print(f"  [greedy summary] {len(rechecked)} row(s) re-judged.")
+            # deterministic `correct` column) — a fresh judge call for
+            # EVERY variant, including "current" (whose template_key is
+            # exactly judge_classification_template, i.e. what the
+            # checkpoint's own judge phase would have used) — never reuses
+            # a possibly-blank stored judged_correct, so this works
+            # whether or not Phase 0 ran with --skip_judge.
+            if needs_class_list:
+                add_class_list_field(rows, dataset_classes)
+            extra_keys = {"class_list": "class_list_text"} if needs_class_list else None
+            rechecked = rejudge_condition(
+                rows, judge_llm, judge_tok, prompts,
+                confidence_threshold=args.judge_confidence_threshold,
+                chunk_size=args.judge_chunk_size,
+                log_path=variant_dir / "greedy_summary_judge_log.jsonl",
+                pred_key="prediction", template_key=template_key,
+                progress_desc=f"[greedy summary] Re-judging {label} ({variant_label})",
+                extra_keys=extra_keys,
+            )
+            rows_by_variant[variant_key] = rechecked
+            print(f"  [greedy summary] {len(rechecked)} row(s) re-judged.")
 
             # ── Phase 1 (full temperature sweep) for this variant ──
             leniency_dir = variant_dir / "leniency"
