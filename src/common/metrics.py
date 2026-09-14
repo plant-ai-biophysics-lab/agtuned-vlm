@@ -316,6 +316,8 @@ def apply_judge(
     temperature: float | None = None,
     seed: int | None = None,
     extra_keys: dict[str, str] | None = None,
+    enable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> list[dict]:
     """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row.
 
@@ -344,15 +346,46 @@ def apply_judge(
     (each dataset's own class list) rather than being a fixed string bakeable
     into the template itself. Every existing caller leaves this None and
     gets the exact original gt/pred-only formatting.
+
+    enable_thinking (default False): every existing caller leaves this False
+    and gets the EXACT original prompt-rendering behavior — plain
+    tokenizer.apply_chat_template(msgs, tokenize=False,
+    add_generation_prompt=True), no enable_thinking kwarg passed at all. Only
+    when explicitly True does _fmt attempt
+    apply_chat_template(..., enable_thinking=True), falling back to the
+    plain call (via TypeError) if the tokenizer's chat template doesn't
+    accept that kwarg (e.g. non-Qwen3 tokenizers). This exists to test
+    whether the judge model exposes a controllable reasoning/thinking mode
+    (see src/common/chat_prompt.py::render_chat_template for the same
+    enable_thinking pattern used elsewhere in the pipeline) — unverified for
+    Gemma-4, which may use a different channel-based reasoning format
+    entirely; this flag is a no-op if the tokenizer doesn't support the
+    kwarg.
+
+    max_tokens (default None): override _JUDGE_PARAMS' fixed max_tokens=1024
+    for THIS call only — every existing caller leaves this None and keeps
+    the original budget. Added alongside enable_thinking since a thinking
+    trace can consume (or exceed) the judge's normal 1024-token budget
+    before it ever reaches its final JSON verdict, truncating the response
+    mid-thought.
     """
-    judge_params = _JUDGE_PARAMS if temperature is None and seed is None else SamplingParams(
+    judge_params = _JUDGE_PARAMS if temperature is None and seed is None and max_tokens is None else SamplingParams(
         temperature=_JUDGE_PARAMS.temperature if temperature is None else temperature,
-        max_tokens=_JUDGE_PARAMS.max_tokens,
+        max_tokens=_JUDGE_PARAMS.max_tokens if max_tokens is None else max_tokens,
         seed=seed,
     )
 
     def _fmt(text: str) -> str:
         msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
+        if enable_thinking:
+            try:
+                return tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=True, enable_thinking=True,
+                )
+            except TypeError:
+                pass  # tokenizer's chat template doesn't accept enable_thinking — fall through
+            except Exception:
+                pass
         try:
             return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         except Exception:

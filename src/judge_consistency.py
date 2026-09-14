@@ -119,6 +119,8 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
                 temperatures=args.temperatures, n_repeats=args.n_repeats,
                 log_dir=log_dir, pred_key=pred_key,
                 template_key=args.template_key, extra_keys=extra_keys,
+                enable_thinking=getattr(args, "judge_enable_thinking", False),
+                judge_max_tokens=getattr(args, "judge_max_tokens", None),
             )
             flip_rate_by_temp = {t: compute_flip_rate(rows_by_temp[t]) for t in args.temperatures}
             flip_rate_by_temp_by_condition[condition_key] = flip_rate_by_temp
@@ -198,5 +200,15 @@ if __name__ == "__main__":
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--judge_enable_thinking", action="store_true",
+                         help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
+                              "judge's own prompt — off by default, exact original prompt rendering. "
+                              "A no-op if the judge tokenizer's chat template doesn't accept this kwarg. "
+                              "Unverified for Gemma-4 — may use a different channel-based reasoning "
+                              "format than Qwen3's enable_thinking.")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                         help="Override the judge's default max_tokens=1024 for THIS run — a thinking "
+                              "trace (--judge_enable_thinking) can consume the normal budget before "
+                              "reaching the final JSON verdict, truncating the response.")
     args = parser.parse_args()
     main(args)

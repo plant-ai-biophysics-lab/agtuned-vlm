@@ -61,6 +61,8 @@ def rejudge_condition(
     temperature: float | None = None,
     seed: int | None = None,
     extra_keys: dict[str, str] | None = None,
+    enable_thinking: bool = False,
+    judge_max_tokens: int | None = None,
 ) -> list[dict]:
     """Re-judges `rows` against `pred_key` using `prompts[template_key]`
     instead of the original "prediction"/judge_classification_template pair.
@@ -92,6 +94,11 @@ def rejudge_condition(
     for template variants needing a third placeholder beyond {gt}/{pred},
     e.g. judge_classification_class_list_template's {class_list}
     (src/common/judge_template_sensitivity.py, Phase 3).
+
+    enable_thinking/judge_max_tokens: forwarded to apply_judge (both default
+    False/None, unchanged behavior) — lets a caller test whether the judge
+    model exposes a controllable reasoning mode, and raise the token budget
+    to accommodate a thinking trace if so.
     """
     from src.common.progress import ProgressBar
 
@@ -111,6 +118,7 @@ def rejudge_condition(
             confidence_threshold=confidence_threshold,
             log_path=log_path,
             temperature=temperature, seed=seed, extra_keys=extra_keys,
+            enable_thinking=enable_thinking, max_tokens=judge_max_tokens,
         )
         out.extend(judged_chunk)
         pbar.update(len(chunk))

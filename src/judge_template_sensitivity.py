@@ -78,6 +78,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import shutil
 from pathlib import Path
@@ -94,6 +95,16 @@ from src.common.judge_template_sensitivity import (
 )
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 from src.judge_leniency import load_ckpt_rows
+
+# Persisted so a LATER invocation covering a DIFFERENT --template can still
+# read this variant's greedy-summary verdicts back off disk and fold them
+# into the cross-variant summary (score_against_deterministic, length_bias,
+# template_sensitivity.png/table.tex) without re-judging anything.
+GREEDY_SUMMARY_FIELDS = [
+    "agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
+    "prediction", "resolved_class", "extracted_answer", "correct",
+    "judged_correct", "judge_reasoning",
+]
 
 
 def _variant_args(base: argparse.Namespace, output_dir: Path, label: str, template_key: str, needs_class_list: bool,
@@ -118,6 +129,7 @@ def _variant_args(base: argparse.Namespace, output_dir: Path, label: str, templa
         judge_confidence_threshold=base.judge_confidence_threshold, judge_chunk_size=base.judge_chunk_size,
         gpu_memory_utilization=base.gpu_memory_utilization, max_model_len=base.max_model_len,
         enforce_eager=base.enforce_eager,
+        judge_enable_thinking=base.judge_enable_thinking, judge_max_tokens=base.judge_max_tokens,
         **overrides,
     )
 
@@ -137,6 +149,12 @@ def main(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     label = args.label or Path(args.ckpt).stem
 
+    selected_variants = [v for v in TEMPLATE_VARIANTS if args.template in ("all", v[0])]
+    if not selected_variants:
+        raise ValueError(f"--template {args.template!r} doesn't match any TEMPLATE_VARIANTS key.")
+    print(f"Running {len(selected_variants)}/{len(TEMPLATE_VARIANTS)} variant(s) this invocation: "
+          f"{[v[0] for v in selected_variants]}")
+
     dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
     prompts = load_prompts(Path(args.prompts))
 
@@ -148,7 +166,7 @@ def main(args: argparse.Namespace) -> None:
     rows_by_variant: dict[str, list[dict]] = {}
     variant_data: dict[str, dict] = {}
     try:
-        for variant_key, template_key, needs_class_list, variant_label in TEMPLATE_VARIANTS:
+        for variant_key, template_key, needs_class_list, variant_label in selected_variants:
             variant_dir = output_dir / variant_key
             print(f"\n=== {variant_label} ({variant_key}) ===")
 
@@ -170,9 +188,17 @@ def main(args: argparse.Namespace) -> None:
                 pred_key="prediction", template_key=template_key,
                 progress_desc=f"[greedy summary] Re-judging {label} ({variant_label})",
                 extra_keys=extra_keys,
+                enable_thinking=args.judge_enable_thinking, judge_max_tokens=args.judge_max_tokens,
             )
             rows_by_variant[variant_key] = rechecked
             print(f"  [greedy summary] {len(rechecked)} row(s) re-judged.")
+
+            variant_dir.mkdir(parents=True, exist_ok=True)
+            with open(variant_dir / "greedy_summary_rechecked.csv", "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=GREEDY_SUMMARY_FIELDS, extrasaction="ignore")
+                w.writeheader()
+                for r in rechecked:
+                    w.writerow(r)
 
             # ── Phase 1 (full temperature sweep) for this variant ──
             leniency_dir = variant_dir / "leniency"
@@ -235,6 +261,35 @@ def main(args: argparse.Namespace) -> None:
         _destroy_judge_llm(judge_llm)
         del judge_tok
 
+    # ── Cross-variant summary covers every variant with COMPLETED output on
+    # disk, not just the ones --template selected THIS invocation — so
+    # running "current", then later "specificity", then later "class_list"
+    # (each its own job/invocation, same --output_dir) progressively fills
+    # in template_sensitivity.png / .tex / length_bias.png without ever
+    # re-judging a variant that already finished. ──
+    for variant_key, template_key, needs_class_list, variant_label in TEMPLATE_VARIANTS:
+        variant_dir = output_dir / variant_key
+        if variant_key not in rows_by_variant:
+            greedy_csv = variant_dir / "greedy_summary_rechecked.csv"
+            if greedy_csv.exists():
+                with open(greedy_csv, encoding="utf-8") as f:
+                    rows_by_variant[variant_key] = list(csv.DictReader(f))
+                print(f"  [{variant_label}] loaded {len(rows_by_variant[variant_key])} row(s) "
+                      f"from a prior invocation's greedy_summary_rechecked.csv.")
+        if variant_key not in variant_data:
+            leniency_json_path = variant_dir / "leniency" / "leniency_gap.json"
+            flip_json_path = variant_dir / "consistency" / "flip_rate.json"
+            if leniency_json_path.exists() and flip_json_path.exists():
+                leniency_data = json.loads(leniency_json_path.read_text())
+                flip_data = json.loads(flip_json_path.read_text())
+                variant_data[variant_key] = {
+                    "leniency_by_temp": {float(t): d for t, d in leniency_data["leniency_gap_by_temperature"].items()},
+                    "flip_by_temp": {float(t): d for t, d in flip_data["flip_rate_by_temperature_full"].items()},
+                    "disagreement_by_temp": {
+                        float(t): d for t, d in leniency_data.get("disagreement_by_temperature", {}).items()
+                    },
+                }
+
     template_results = score_against_deterministic(rows_by_variant)
     plot_template_sensitivity(template_results, output_dir / "template_sensitivity.png")
     for variant_key, variant_results in template_results.items():
@@ -242,8 +297,12 @@ def main(args: argparse.Namespace) -> None:
         print(f"  {variant_key}: judged_correct_rate={d['judged_correct_rate']:.4f}, "
               f"deterministic_correct_rate={d['deterministic_correct_rate']:.4f}, gap={d['gap']:+.4f}")
 
-    length_report = length_bias_report(rows_by_variant["current"], n_buckets=args.n_length_buckets)
-    plot_length_bias(length_report, output_dir / "length_bias.png")
+    length_report = None
+    if "current" not in rows_by_variant:
+        print("  [length_bias] skipped — \"current\" variant hasn't been run yet in this --output_dir.")
+    else:
+        length_report = length_bias_report(rows_by_variant["current"], n_buckets=args.n_length_buckets)
+        plot_length_bias(length_report, output_dir / "length_bias.png")
 
     (output_dir / "template_sensitivity.json").write_text(json.dumps(
         {"label": label, "n_rows": len(rows), "template_sensitivity": template_results,
@@ -253,9 +312,11 @@ def main(args: argparse.Namespace) -> None:
 
     if variant_data:
         write_variant_temperature_latex_table(variant_data, output_dir / "template_sensitivity_table.tex")
-        print(f"Wrote template_sensitivity_table.tex to {output_dir}")
+        print(f"Wrote template_sensitivity_table.tex to {output_dir} "
+              f"(covering {sorted(variant_data)} — re-run with --template for any variant still missing)")
 
-    print(f"\nWrote template_sensitivity.png, length_bias.png, template_sensitivity.json to {output_dir}")
+    print(f"\nWrote template_sensitivity.png, template_sensitivity.json"
+          f"{', length_bias.png' if length_report is not None else ''} to {output_dir}")
     print(f"Per-variant Phase 1/2 output under {output_dir}/<variant>/leniency/ and /<variant>/consistency/ "
           f"(leniency_vs_flip_rate_{{full,answer_only}}.png also copied to {output_dir}/<variant>/ directly)")
 
@@ -267,6 +328,14 @@ if __name__ == "__main__":
                               "(globs ckpt_*.csv inside it).")
     parser.add_argument("--output_dir", default="ablation/judge_template_sensitivity/")
     parser.add_argument("--label", default=None, help="Report/log label (defaults to the ckpt filename).")
+    parser.add_argument("--template", choices=["all", "current", "specificity", "class_list"], default="all",
+                         help="Run just ONE template variant this invocation instead of all 3 — lets each "
+                              "variant be its own job/run. The cross-variant summary "
+                              "(template_sensitivity.png/.tex, length_bias.png) reads back EVERY variant "
+                              "that has completed output under --output_dir so far (not just the one just "
+                              "run), so running \"current\", then later \"specificity\", then later "
+                              "\"class_list\" against the SAME --output_dir progressively completes the "
+                              "summary without re-judging anything already done.")
     parser.add_argument("--config", default="src/config/datasets.yaml", help="datasets.yaml, for each row's class list.")
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.1, 0.5, 1.0],
                          help="Swept judge temperatures, passed through to both Phase 1 and Phase 2 "
@@ -288,5 +357,15 @@ if __name__ == "__main__":
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--judge_enable_thinking", action="store_true",
+                         help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
+                              "judge's own prompt on every variant/phase call — off by default, exact "
+                              "original prompt rendering. A no-op if the judge tokenizer's chat template "
+                              "doesn't accept this kwarg. Unverified for Gemma-4 — may use a different "
+                              "channel-based reasoning format than Qwen3's enable_thinking.")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                         help="Override the judge's default max_tokens=1024 for every call this run — a "
+                              "thinking trace (--judge_enable_thinking) can consume the normal budget "
+                              "before reaching the final JSON verdict, truncating the response.")
     args = parser.parse_args()
     main(args)

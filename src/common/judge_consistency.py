@@ -43,6 +43,8 @@ def repeat_judge_calls(
     template_key: str = "judge_classification_template",
     base_seed: int = 0,
     extra_keys: dict[str, str] | None = None,
+    enable_thinking: bool = False,
+    judge_max_tokens: int | None = None,
 ) -> dict[float, list[dict]]:
     """{temperature: rows}, each row a shallow copy of the input row plus
     "judged_correct_reps": [verdict_0, ..., verdict_{n_repeats-1}] (each an
@@ -58,6 +60,11 @@ def repeat_judge_calls(
     for template_key variants needing a third placeholder beyond {gt}/
     {pred}, e.g. judge_classification_class_list_template's {class_list}
     (src/common/judge_template_sensitivity.py, Phase 3's per-variant sweep).
+
+    enable_thinking/judge_max_tokens: forwarded to apply_judge (both default
+    False/None, unchanged behavior) — lets the consistency sweep also be run
+    with the judge's thinking/reasoning mode enabled, if the judge model
+    supports it, with a raised token budget to accommodate a thinking trace.
     """
     from src.common.metrics import apply_judge
     from src.common.progress import ProgressBar
@@ -80,6 +87,7 @@ def repeat_judge_calls(
                     confidence_threshold=confidence_threshold,
                     log_path=log_path,
                     temperature=temperature, seed=base_seed + rep_idx, extra_keys=extra_keys,
+                    enable_thinking=enable_thinking, max_tokens=judge_max_tokens,
                 )
                 for j, r in enumerate(judged_chunk):
                     reps_by_row_idx[i + j].append(int(r["judged_correct"] or 0))
