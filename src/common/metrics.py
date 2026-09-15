@@ -420,6 +420,16 @@ def apply_judge(
             **row,
             "judged_correct": judged_correct,
             "judge_reasoning": cleaned[:600],
+            # Completely untouched judge output, no <think>-stripping and no
+            # 600-char truncation — added alongside enable_thinking for the
+            # same reason vision_baseline.py's raw_response column was: a
+            # thinking model's reasoning isn't guaranteed to show up as a
+            # tag _THINK_RE_JUDGE would ever match, so judge_reasoning alone
+            # can silently still contain it (or drop it) with no way to
+            # tell. Additive key — every existing caller/row shape is
+            # unaffected, this just rides along in **row for whatever
+            # downstream code chooses to keep it.
+            "judge_raw_response": raw,
         })
         if log_path is not None:
             log_records.append({

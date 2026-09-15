@@ -397,6 +397,13 @@ def run_judge_phase(
       judge_chunk_size, rejudge, skip_judge, gpu_memory_utilization,
       max_model_len, max_num_seqs, enforce_eager
 
+    args.judge_enable_thinking/args.judge_max_tokens (both optional, read
+    via getattr with False/None defaults so older callers without these
+    flags still work unchanged): forwarded to apply_judge — same
+    enable_thinking/max_tokens knobs src/judge_leniency.py etc. expose for
+    the Phase 1-3 re-judge calls, now also available for this, the ORIGINAL
+    judge pass that runs whenever --skip_judge isn't set.
+
     `prompts` must carry judge_classification_template (and optionally
     judge_system_vision) from prompts.yaml.
 
@@ -463,6 +470,8 @@ def run_judge_phase(
             gt_key="judge_gt_hint", pred_key="prediction",
             confidence_threshold=args.judge_confidence_threshold,
             log_path=log_path,
+            enable_thinking=getattr(args, "judge_enable_thinking", False),
+            max_tokens=getattr(args, "judge_max_tokens", None),
         )
         rows = merge_judged(rows, judged_chunk)
         rewrite_ckpt(ckpt_path, rows, fields=fields)

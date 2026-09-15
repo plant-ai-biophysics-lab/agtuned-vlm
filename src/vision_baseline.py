@@ -327,6 +327,18 @@ if __name__ == "__main__":
     parser.add_argument("--judge_chunk_size", type=int, default=200,
                          help="Rows per apply_judge() call — drives the judge progress bar "
                               "and how much work a kill mid-judging can lose.")
+    parser.add_argument("--judge_enable_thinking", action="store_true",
+                         help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for "
+                              "the judge's own prompt during this run's judge phase (ignored if "
+                              "--skip_judge is set). Off by default, exact original prompt rendering. "
+                              "A no-op if the judge tokenizer's chat template doesn't accept this "
+                              "kwarg. Same flag/behavior as judge-leniency's --judge_enable_thinking, "
+                              "now also available for this script's own built-in judge pass.")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                         help="Override the judge's default max_tokens=1024 for this run's judge "
+                              "phase — a thinking trace (--judge_enable_thinking) can consume the "
+                              "normal budget before reaching the final JSON verdict, truncating the "
+                              "response.")
     parser.add_argument("--rejudge", action="store_true",
                          help="Clear judged_correct/judge_reasoning on every row and re-judge "
                               "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "

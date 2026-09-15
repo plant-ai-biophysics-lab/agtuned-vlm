@@ -97,6 +97,26 @@ uv run python main.py judge-leniency \
     --judge_enable_thinking --judge_max_tokens 2048
 ```
 
+### Logging the judge's own thinking tokens
+
+Every row the judge scores now also carries a `judge_raw_response` column (alongside the existing `judge_reasoning`, which is `<think>`-stripped and truncated to 600 chars) — the judge's **completely untouched** output text, same rationale as `vision_baseline.py`'s `raw_response`: a thinking judge's reasoning isn't guaranteed to show up as a tag `judge_reasoning`'s stripping regex would ever match, so it's the column to actually read when checking whether/how the judge reasoned.
+
+- `judge-leniency`'s `rechecked_T<temp>.csv` carries both `judge_raw_response` (the `<answer>`-tag-only condition) and `judge_raw_response_full_trajectory` (the full-response condition) — same `_full_trajectory` suffix convention as `judged_correct`/`judge_reasoning`.
+- `judge-template-sensitivity`'s `<variant>/greedy_summary_rechecked.csv` carries `judge_raw_response` for that variant's greedy-temperature verdict.
+- Every `*_judge_log.jsonl` (written whenever a judge call logs at all — `judge-leniency` always, `judge-consistency` only with `--save_logs`) already had the judge's full raw response in its own `raw_response` field before this, independent of `judge_raw_response` — the CSV column is new, the JSONL log always had it.
+- `judge-consistency`'s flip-rate CSVs/JSON don't carry per-repeat raw text (only the 0/1 verdict per repeat) — use `--save_logs` and read the per-repeat JSONL logs if you need the judge's actual reasoning text for a specific repeat.
+
+`vision-baseline`'s own built-in judge phase (the one that runs unless `--skip_judge` is set) now also accepts `--judge_enable_thinking`/`--judge_max_tokens`, same meaning as above:
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_judge_thinking/ \
+    --judge_enable_thinking --judge_max_tokens 2048
+```
+
+This is a separate pair of flags from `--enable_thinking`/`--gen_max_tokens` (Phase 0's own generation-side thinking flags, see above) — `--judge_enable_thinking` only affects the judge model's call inside `run_judge_phase`, not the classification model's generation call. Not yet wired up for `desc_augmented_vision_v2.py`/`self_cot.py`/`cot_yaml.py`, which share the same `run_judge_phase` function but don't expose these flags on their own CLIs yet — ask if you need it there too.
+
 This is verified so far only via mocked tests (`enable_thinking=True` correctly changes the rendered prompt when the tokenizer accepts the kwarg, and falls back cleanly when it doesn't) — whether Gemma-4's tokenizer actually exposes a controllable thinking mode via this kwarg, or uses a different channel-based reasoning format entirely, is unverified without running it. To check: run a small `--limit` job with `--judge_enable_thinking` and inspect a `*_judge_log.jsonl`'s `rendered_prompt` field — if it differs from a non-thinking run's rendered prompt (e.g. shows a distinct reasoning/channel marker), the kwarg is doing something; if it's identical, the kwarg is a no-op for this tokenizer.
 
 ## Notes

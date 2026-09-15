@@ -103,7 +103,7 @@ from src.judge_leniency import load_ckpt_rows
 GREEDY_SUMMARY_FIELDS = [
     "agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
     "prediction", "resolved_class", "extracted_answer", "correct",
-    "judged_correct", "judge_reasoning",
+    "judged_correct", "judge_reasoning", "judge_raw_response",
 ]
 
 

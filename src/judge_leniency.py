@@ -174,7 +174,8 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
     fields = ["agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
               "resolved_class", "correct", "prediction",
               "judged_correct_full_trajectory", "judge_reasoning_full_trajectory",
-              "judged_correct", "judge_reasoning"]
+              "judged_correct", "judge_reasoning",
+              "judge_raw_response_full_trajectory", "judge_raw_response"]
 
     results_by_temp: dict[float, dict] = {}
     disagreement_by_temp: dict[float, dict] = {}
@@ -212,8 +213,10 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
                     **base,
                     "judged_correct_full_trajectory": full_r["judged_correct"],
                     "judge_reasoning_full_trajectory": full_r["judge_reasoning"],
+                    "judge_raw_response_full_trajectory": full_r.get("judge_raw_response", ""),
                     "judged_correct": resolved_r["judged_correct"],
                     "judge_reasoning": resolved_r["judge_reasoning"],
+                    "judge_raw_response": resolved_r.get("judge_raw_response", ""),
                 })
 
             results = compute_leniency_gap(combined)
