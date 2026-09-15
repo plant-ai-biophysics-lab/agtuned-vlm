@@ -30,6 +30,8 @@ uv run python main.py vision-baseline \
 
 This is a **different** flag from `--judge_enable_thinking` (below) — this one controls the model being evaluated's own generation call in Phase 0, that one controls the separate judge model's call in Phases 1-3. Whether Gemma-4's tokenizer actually exposes a controllable thinking mode via `enable_thinking=True`/`False` kwargs, or uses a different channel-based reasoning format entirely, is unverified without running it — check by diffing a `--enable_thinking` run's rendered prompt/raw prediction text against a default run's.
 
+The checkpoint now has a `raw_response` column (right after `prediction`) holding the model's completely untouched generation output, before `<think>`/`<thought>` tags are stripped into `prediction`. This exists because thinking isn't guaranteed to show up as a tagged block at all — real Gemma-4 output has been observed as an unwrapped reasoning paragraph sitting directly before `<answer>`, which the tag-stripping regex doesn't touch and wouldn't distinguish from a normal answer. `raw_response` preserves exactly what the model said regardless of tagging convention, so it's the column to actually read when checking whether/how a model reasons — `prediction` alone can't be trusted to show or hide reasoning consistently across models. Blank for any pre-existing checkpoint row (backfilled automatically by `load_ckpt`'s schema-drift healing, same as `extracted_answer` was before it).
+
 ## Phase 1 — leniency
 
 ```bash

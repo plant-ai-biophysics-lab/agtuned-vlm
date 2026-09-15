@@ -66,7 +66,20 @@ from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_l
 # as-is. compute_model_metrics's aggregate_rouge() already skips missing
 # keys gracefully, so metrics.json needs no changes either.
 _DROPPED_FIELDS = {"rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"}
-VISION_BASELINE_CKPT_FIELDS = [f for f in CKPT_FIELDS if f not in _DROPPED_FIELDS]
+_kept_fields = [f for f in CKPT_FIELDS if f not in _DROPPED_FIELDS]
+# raw_response: the model's completely untouched generation output, before
+# _clean() strips <think>/<thought> tags — added so a thinking-mode run
+# (--enable_thinking) has somewhere to keep the reasoning text even when it
+# isn't wrapped in a tag _clean's regex would catch (see run_batch's
+# docstring — Gemma-4 has been observed emitting unwrapped reasoning prose
+# directly before its <answer> tag). Inserted right after "prediction" so
+# the two sit next to each other in the CSV. Blank for any pre-existing
+# checkpoint row (backfilled as "" by load_ckpt's schema-drift healing, same
+# as extracted_answer was before it).
+_prediction_idx = _kept_fields.index("prediction")
+VISION_BASELINE_CKPT_FIELDS = (
+    _kept_fields[: _prediction_idx + 1] + ["raw_response"] + _kept_fields[_prediction_idx + 1 :]
+)
 
 try:
     from vllm import SamplingParams
@@ -98,8 +111,23 @@ def _clean(text: str) -> str:
 def run_batch(
     llm, tokenizer, images: list, question: str, system_prompt: str = "",
     enable_thinking: bool = False, max_tokens: int = 256,
-) -> list[str]:
-    """enable_thinking (default False, unchanged behavior): forwarded to
+) -> list[tuple[str, str]]:
+    """Returns (raw, cleaned) pairs, one per image — raw is the model's
+    completely untouched output text, cleaned is raw with any
+    <think>/<thought>...</think|thought> block stripped (_clean), same as
+    this function returned alone before raw was added.
+
+    raw is kept around (see run_model's "raw_response" checkpoint column)
+    because <think>/<thought> tags are not the only shape a model's
+    reasoning can take — e.g. Gemma-4 has been observed emitting an
+    unwrapped reasoning paragraph directly before its <answer> tag, with no
+    tags _THINK_RE would ever match, so "cleaned" alone can silently still
+    contain (or, for a differently-tagged future model, silently drop) the
+    actual thinking text. Keeping raw preserves exactly what the model said
+    regardless of what tagging convention (if any) it used, so this doesn't
+    need to be re-litigated per model.
+
+    enable_thinking (default False, unchanged behavior): forwarded to
     build_multimodal_prompt — set True to let the model's own extended
     thinking (<think>/<thought> tags) through instead of suppressing it.
     Raise max_tokens substantially (e.g. 1024+) when enabling it, or
@@ -112,7 +140,7 @@ def run_batch(
     ]
     sampling_params = SamplingParams(temperature=0.0, max_tokens=max_tokens, repetition_penalty=1.1)
     outputs = llm.generate(prompts, sampling_params=sampling_params)
-    return [_clean(o.outputs[0].text) for o in outputs]
+    return [(o.outputs[0].text, _clean(o.outputs[0].text)) for o in outputs]
 
 
 # run_judge_phase() lives in src/common/vision_eval.py — shared verbatim with
@@ -188,7 +216,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt,
                                enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens)
 
-            for name, pred in zip(names, preds):
+            for name, (raw, pred) in zip(names, preds):
                 answer, _ = extract_answer_tag(pred)
                 resolved = resolve_class(answer, ds.clean_classes)
                 correct = resolved is not None and resolved.lower() == clean_label.lower()
@@ -196,7 +224,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 row = {
                     "agml_dataset": ds.agml_name, "class_label": clean_label,
                     "task_type": task_type, "crop": crop_display(crop_val),
-                    "image_name": name, "prediction": pred,
+                    "image_name": name, "prediction": pred, "raw_response": raw,
                     "resolved_class": resolved or "", "extracted_answer": answer,
                     "ground_truth": clean_label,
                     "correct": int(correct), "contains_match": int(c_match),
