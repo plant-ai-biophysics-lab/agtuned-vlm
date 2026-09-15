@@ -19,6 +19,17 @@ uv run python main.py vision-baseline \
 
 `--rerun` archives any existing checkpoint as `ckpt_<model>.<timestamp>.bak.csv` and starts fresh — required here, since resuming without it would just skip every already-checkpointed row and keep their old (pre-tagged-prompt) predictions. This also runs the judge phase, so the output is ready for Phase 1 directly: `outputs_final/vision_baseline/<safe_model_name>/` (for this model, `outputs_final/vision_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/`). No `--quantize` needed — this checkpoint's FP8 quantization is baked in and vLLM auto-detects it.
 
+By default, this (and every other generation script in the repo) suppresses the model-being-evaluated's own extended thinking (`<think>`/`<thought>` tags) for the classification step — see `src/common/chat_prompt.py`'s module docstring for why. To let it through instead, add `--enable_thinking` (and raise `--gen_max_tokens`, default `256`, substantially — e.g. `1024`+ — since a thinking trace can consume the budget before the model reaches its `<answer>` tag):
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --skip_judge \
+    --enable_thinking --gen_max_tokens 1024
+```
+
+This is a **different** flag from `--judge_enable_thinking` (below) — this one controls the model being evaluated's own generation call in Phase 0, that one controls the separate judge model's call in Phases 1-3. Whether Gemma-4's tokenizer actually exposes a controllable thinking mode via `enable_thinking=True`/`False` kwargs, or uses a different channel-based reasoning format entirely, is unverified without running it — check by diffing a `--enable_thinking` run's rendered prompt/raw prediction text against a default run's.
+
 ## Phase 1 — leniency
 
 ```bash

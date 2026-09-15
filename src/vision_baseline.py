@@ -70,10 +70,8 @@ VISION_BASELINE_CKPT_FIELDS = [f for f in CKPT_FIELDS if f not in _DROPPED_FIELD
 
 try:
     from vllm import SamplingParams
-    _CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
-    _CLS_PARAMS = None
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
@@ -97,9 +95,23 @@ def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = "") -> list[str]:
-    prompts = [build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt) for img in images]
-    outputs = llm.generate(prompts, sampling_params=_CLS_PARAMS)
+def run_batch(
+    llm, tokenizer, images: list, question: str, system_prompt: str = "",
+    enable_thinking: bool = False, max_tokens: int = 256,
+) -> list[str]:
+    """enable_thinking (default False, unchanged behavior): forwarded to
+    build_multimodal_prompt — set True to let the model's own extended
+    thinking (<think>/<thought> tags) through instead of suppressing it.
+    Raise max_tokens substantially (e.g. 1024+) when enabling it, or
+    thinking traces will routinely get truncated before the model reaches
+    its <answer> tag."""
+    prompts = [
+        build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt,
+                                 enable_thinking=enable_thinking)
+        for img in images
+    ]
+    sampling_params = SamplingParams(temperature=0.0, max_tokens=max_tokens, repetition_penalty=1.1)
+    outputs = llm.generate(prompts, sampling_params=sampling_params)
     return [_clean(o.outputs[0].text) for o in outputs]
 
 
@@ -173,7 +185,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             question = cls_question(task_type, crop_val, prompts)
 
-            preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
+            preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt,
+                               enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens)
 
             for name, pred in zip(names, preds):
                 answer, _ = extract_answer_tag(pred)
@@ -266,6 +279,19 @@ if __name__ == "__main__":
                              "to 0 (falls back to each model's own default).")
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
+    parser.add_argument("--enable_thinking", action="store_true",
+                         help="Let the model being evaluated use its own extended thinking "
+                              "(<think>/<thought> tags) for the classification generation step, instead "
+                              "of suppressing it (this script's default, matching every other generation "
+                              "script in the repo — see src/common/chat_prompt.py's module docstring). "
+                              "Does NOT affect the judge phase's own calls (see judge-leniency's "
+                              "--judge_enable_thinking for that, a separate flag on a separate call). "
+                              "Raise --gen_max_tokens when using this, or thinking traces will routinely "
+                              "get truncated before the model reaches its <answer> tag.")
+    parser.add_argument("--gen_max_tokens", type=int, default=256,
+                         help="max_tokens for the classification generation step. 256 fits the tagged "
+                              "prompt's direct answer with no thinking; raise substantially (e.g. "
+                              "1024+) when --enable_thinking is set.")
     parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
                          help="Fixed judge model used for every baseline/model being evaluated.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)

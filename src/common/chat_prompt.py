@@ -79,13 +79,22 @@ def render_chat_template(tokenizer, messages: list[dict], enable_thinking: bool 
 
 
 def build_multimodal_prompt(
-    tokenizer, image: PILImage.Image, question: str, system_prompt: str = ""
+    tokenizer, image: PILImage.Image, question: str, system_prompt: str = "",
+    enable_thinking: bool = False,
 ) -> dict:
     """Convenience wrapper for the common single-turn case (one image +
     one question, no prior history) — vision_baseline.py /
     desc_augmented_vision_v2.py / vision_assessment/assess.py's shape.
     Multi-turn callers (self_cot.py, cot_yaml.py) build their own `messages`
-    list across turns and call render_chat_template directly."""
+    list across turns and call render_chat_template directly.
+
+    enable_thinking (default False, matches render_chat_template's own
+    default — thinking suppressed): forwarded straight through. Every
+    existing caller leaves this False and gets the exact original
+    behavior."""
     user_msg = {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
     messages = ([{"role": "system", "content": system_prompt}] if system_prompt else []) + [user_msg]
-    return {"prompt": render_chat_template(tokenizer, messages), "multi_modal_data": {"image": image}}
+    return {
+        "prompt": render_chat_template(tokenizer, messages, enable_thinking=enable_thinking),
+        "multi_modal_data": {"image": image},
+    }
