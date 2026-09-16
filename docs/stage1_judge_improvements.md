@@ -40,6 +40,61 @@ The checkpoint now has a `raw_response` column (right after `prediction`) holdin
 
 **Don't reuse `outputs_final/vision_baseline_thinking/`** for a real thinking run — that directory's existing data is now confirmed to be a non-thinking run (the `--enable_thinking`-only attempt, before `--chat_template_path` existed); point `--output_dir` somewhere new (e.g. `vision_baseline_thinking_v2/`) rather than silently mixing the two.
 
+A real Gemma-4 thinking trace is long — plan for `--gen_max_tokens 4096`, not `1024`; at `1024`, roughly a quarter of rows got truncated mid-thought with no `<answer>` at all (confirmed on a real partial run).
+
+### Splitting a run across multiple GPUs (data-parallel)
+
+Thinking-mode generation is much slower per row (long traces), so for a full-dataset run, split the (dataset, class) groups across N independent single-GPU processes with `--num_shards`/`--shard_index`:
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --skip_judge \
+    --enable_thinking --gen_max_tokens 4096 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_thinking_v2/ \
+    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID
+```
+
+As a SLURM job array (4 tasks, one GPU each, all launched by one `sbatch`):
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=agtuned-vlm-thinking
+#SBATCH --output=farm_outputs/%A_%a.out
+#SBATCH --error=farm_outputs/%A_%a.err
+#SBATCH --account=jmearlesgrp
+#SBATCH --partition=gpu-6000_ada-h
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=100:00:00
+#SBATCH --array=0-3
+
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --skip_judge \
+    --enable_thinking --gen_max_tokens 4096 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_thinking_v2/ \
+    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID
+```
+
+Each shard writes its own `ckpt_<model>_shard<i>of4.csv` — never the canonical `ckpt_<model>.csv` — so the 4 tasks never write-contend even though they share `--output_dir`. This is genuinely data-parallel (4 independent model copies, disjoint work), not tensor-parallel (one model split across GPUs) — the model already fits on a single GPU, so this gets ~4x throughput without any inter-GPU communication overhead.
+
+**Phase 1-4 scripts need no changes at all** — `judge_leniency.py` etc. already glob `ckpt_*.csv` inside a directory and will pick up all 4 shard files automatically once `--ckpt` points at the model's output directory.
+
+For `--collate`/anything else expecting exactly one file per model, run once after every shard task finishes:
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_thinking_v2/ \
+    --merge_shards
+```
+
+This combines every shard into the canonical `ckpt_<model>.csv` + `metrics.json`, deduplicating by `(agml_dataset, class_label, image_name)` (warns if it ever finds a real duplicate — shouldn't happen since shards partition disjoint groups). **Don't run `--merge_shards` in a directory Phase 1-4 is already reading from** — the glob would then match both the shard files and the new merged file, double-counting every row; either merge into a fresh check only after Phase 1-4 is done with the shards, or move the shard files aside afterward.
+
 ## Phase 1 — leniency
 
 ```bash

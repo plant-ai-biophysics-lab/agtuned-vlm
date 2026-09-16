@@ -51,7 +51,7 @@ from src.common.metrics import contains_match, extract_answer_tag, resolve_class
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
-    judge_gt_hint, load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
+    judge_gt_hint, load_ckpt, rewrite_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
 )
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
@@ -95,7 +95,16 @@ _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL 
 # --enable_thinking AND --chat_template_path (pointing at that vendored
 # file) are set — the model's own bundled template has no thinking support
 # at all, confirmed empirically (0/40978 real rows ever produced this).
-_CHANNEL_THOUGHT_RE = re.compile(r"<\|channel>thought\n(.*?)\n<channel\|>", re.DOTALL)
+#
+# No \n required immediately before <channel|> — real Gemma-4 output does
+# NOT reliably end its thought with a trailing newline before the closing
+# tag (confirmed against real generated rows, e.g. '..."Cercospora leaf
+# spot".<channel|>Cercospora leaf spot\n\n<answer>...' — no newline at all
+# there). An earlier version of this regex required '\n<channel|>' and
+# silently matched 0/1100 real rows despite 812/1100 having a genuine
+# closing tag — this looser version plus .strip() on the captured group
+# is the fix.
+_CHANNEL_THOUGHT_RE = re.compile(r"<\|channel>thought\n(.*?)<channel\|>", re.DOTALL)
 
 
 # ── Prompt building ─────────────────────────────────────────────────────────
@@ -198,7 +207,20 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
-    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    # --num_shards > 1: each shard gets its own checkpoint filename (never
+    # the canonical ckpt_<model>.csv) so N independent single-GPU processes
+    # can run concurrently against the SAME model_dir with zero write
+    # contention. The un-sharded case (num_shards=1, the default) is
+    # byte-for-byte the original filename — zero behavior change for every
+    # existing single-GPU run/script. Phase 1-4 (judge_leniency.py etc.)
+    # already glob ckpt_*.csv inside a directory, so shard files work there
+    # with NO further changes; --merge_shards (below) combines them back
+    # into the canonical filename for --collate and anything else that
+    # expects exactly one file.
+    ckpt_stem = f"ckpt_{safe_model_name(model_id)}"
+    if args.num_shards > 1:
+        ckpt_stem += f"_shard{args.shard_index}of{args.num_shards}"
+    ckpt_path = model_dir / f"{ckpt_stem}.csv"
     archive_ckpt_if_rerun(ckpt_path, args.rerun)
     rows, seen = load_ckpt(ckpt_path, fields=VISION_BASELINE_CKPT_FIELDS)
     if rows:
@@ -230,6 +252,12 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             if not pending:
                 continue
             groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
+
+    if args.num_shards > 1:
+        n_before = len(groups)
+        groups = groups[args.shard_index :: args.num_shards]
+        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(groups)}/{n_before} (dataset, class) "
+              f"group(s) assigned to this shard")
 
     if not groups:
         print("  Nothing to do — all samples already checkpointed.")
@@ -293,8 +321,70 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
     rows = run_judge_phase(rows, ckpt_path, args, prompts, fields=VISION_BASELINE_CKPT_FIELDS)
 
-    metrics = compute_model_metrics(rows)
+    if args.num_shards > 1:
+        # Skip metrics.json here — computed from only THIS shard's rows, and
+        # model_dir/metrics.json is a single fixed filename every shard would
+        # otherwise overwrite with its own partial (and therefore misleading)
+        # numbers. Run --merge_shards once all shards finish to get the real,
+        # complete metrics.json from the merged full row set.
+        print(f"  [shard {args.shard_index}/{args.num_shards}] done — {len(rows)} row(s) in {ckpt_path.name}. "
+              f"Run --merge_shards once every shard has finished for a combined ckpt + metrics.json.")
+    else:
+        metrics = compute_model_metrics(rows)
+        write_model_metrics(model_dir, metrics)
+        print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
+              f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
+
+
+def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VISION_BASELINE_CKPT_FIELDS) -> None:
+    """Combine every ckpt_<model>_shard<i>of<n>.csv in output_dir/<model>/
+    into the canonical ckpt_<model>.csv (rewritten fresh, not appended —
+    safe to re-run), so --collate/anything else expecting exactly one file
+    per model works after a sharded run. Rows are joined on
+    (agml_dataset, class_label, image_name); a duplicate key across shards
+    (shouldn't happen — shards partition disjoint groups — but checked
+    rather than assumed) keeps the first-seen row and prints a warning.
+
+    IMPORTANT: leaves the shard files in place (never deletes them). Phase
+    1-4 scripts (judge_leniency.py etc.) already glob ckpt_*.csv inside a
+    directory and don't need this merge step at all — they work directly
+    off shard files. If you run THIS merge in the same directory Phase 1-4
+    already reads from, that glob will now match BOTH the shard files AND
+    the new canonical ckpt_<model>.csv, double-counting every row. Either
+    run this in a model_dir Phase 1-4 hasn't looked at yet, or delete/move
+    the shard files after merging if Phase 1-4 needs to re-read that dir."""
+    model_dir = output_dir / safe_model_name(model_id)
+    shard_paths = sorted(model_dir.glob(f"ckpt_{safe_model_name(model_id)}_shard*of*.csv"))
+    if not shard_paths:
+        print(f"  No shard checkpoints found under {model_dir} (expected "
+              f"ckpt_{safe_model_name(model_id)}_shard<i>of<n>.csv).")
+        return
+
+    merged: list[dict] = []
+    seen_keys: set[tuple] = set()
+    n_dupes = 0
+    for shard_path in shard_paths:
+        shard_rows, _ = load_ckpt(shard_path, fields=fields)
+        for r in shard_rows:
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
+            if key in seen_keys:
+                n_dupes += 1
+                continue
+            seen_keys.add(key)
+            merged.append(r)
+        print(f"  {shard_path.name}: {len(shard_rows)} row(s)")
+
+    if n_dupes:
+        print(f"  WARNING: {n_dupes} duplicate (agml_dataset, class_label, image_name) key(s) across "
+              f"shards — kept the first-seen row for each. Shards should partition disjoint groups; "
+              f"this suggests shards were run with different --config/--manifest/--n_samples, or "
+              f"--num_shards/--shard_index don't match across the shard jobs.")
+
+    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    rewrite_ckpt(ckpt_path, merged, fields=fields)
+    metrics = compute_model_metrics(merged)
     write_model_metrics(model_dir, metrics)
+    print(f"  Merged {len(merged)} row(s) from {len(shard_paths)} shard(s) into {ckpt_path.name}")
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
 
@@ -308,8 +398,19 @@ def main(args: argparse.Namespace) -> None:
         write_collated(Path(args.output_dir), collated)
         return
 
+    if args.merge_shards:
+        if not args.model:
+            print("ERROR: --model is required with --merge_shards.")
+            sys.exit(1)
+        merge_shards(Path(args.output_dir), args.model, fields=VISION_BASELINE_CKPT_FIELDS)
+        return
+
     if not args.model:
         print("ERROR: --model is required (or pass --collate to combine finished runs).")
+        sys.exit(1)
+
+    if args.num_shards > 1 and not (0 <= args.shard_index < args.num_shards):
+        print(f"ERROR: --shard_index must be in [0, {args.num_shards}) — got {args.shard_index}.")
         sys.exit(1)
 
     run_model(args.model, args)
@@ -410,6 +511,24 @@ if __name__ == "__main__":
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")
+    parser.add_argument("--num_shards", type=int, default=1,
+                         help="Split this model's (dataset, class) groups across N independent "
+                              "processes (e.g. N separate single-GPU SLURM jobs/array tasks) for "
+                              "N-way data-parallel throughput — each shard writes its own "
+                              "ckpt_<model>_shard<i>of<N>.csv (never the canonical ckpt_<model>.csv, "
+                              "so concurrent shards never write-contend), and Phase 1-4 scripts "
+                              "(judge_leniency.py etc.) already glob ckpt_*.csv inside a directory, so "
+                              "shard files work there with no further changes. Default 1 = today's "
+                              "exact single-file behavior, zero change. Run --merge_shards once every "
+                              "shard finishes to get a combined ckpt_<model>.csv + metrics.json for "
+                              "--collate or anything else expecting exactly one file.")
+    parser.add_argument("--shard_index", type=int, default=0,
+                         help="Which shard this process is, in [0, --num_shards). Pass "
+                              "$SLURM_ARRAY_TASK_ID for a SLURM job array.")
+    parser.add_argument("--merge_shards", action="store_true",
+                         help="Skip inference — combine ckpt_<model>_shard*of*.csv (written by "
+                              "--num_shards > 1 runs) into the canonical ckpt_<model>.csv + "
+                              "metrics.json for --model's output dir.")
 
     # Keys this script doesn't use but the shared config file also carries
     # for desc_augmented_vision_v2.py / vision_baseline_collate.py.
