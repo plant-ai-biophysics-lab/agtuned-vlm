@@ -88,6 +88,15 @@ except ImportError:
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
+# Gemma-4's OWN thinking format (confirmed via its tokenizer_config.json's
+# response_schema and vLLM's vendored tool_chat_template_gemma4.jinja —
+# src/config/tool_chat_template_gemma4.jinja) — completely different from
+# Qwen's <think>/<thought> tags _THINK_RE handles. Only emitted when BOTH
+# --enable_thinking AND --chat_template_path (pointing at that vendored
+# file) are set — the model's own bundled template has no thinking support
+# at all, confirmed empirically (0/40978 real rows ever produced this).
+_CHANNEL_THOUGHT_RE = re.compile(r"<\|channel>thought\n(.*?)\n<channel\|>", re.DOTALL)
+
 
 # ── Prompt building ─────────────────────────────────────────────────────────
 
@@ -108,9 +117,24 @@ def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
+def extract_channel_thought(text: str) -> tuple[str, str]:
+    """(thinking_text, remainder) — thinking_text is "" if no
+    <|channel>thought...<channel|> block is present (the normal case unless
+    --enable_thinking + --chat_template_path were both used AND the model
+    actually chose to emit one). remainder is `text` with the block (and
+    one adjacent newline, if present) removed, so _clean()/extract_answer_tag
+    downstream never see leftover channel markers."""
+    m = _CHANNEL_THOUGHT_RE.search(text)
+    if not m:
+        return "", text
+    thinking = m.group(1).strip()
+    remainder = (text[: m.start()] + text[m.end() :]).lstrip("\n")
+    return thinking, remainder
+
+
 def run_batch(
     llm, tokenizer, images: list, question: str, system_prompt: str = "",
-    enable_thinking: bool = False, max_tokens: int = 256,
+    enable_thinking: bool = False, max_tokens: int = 256, chat_template: str | None = None,
 ) -> list[tuple[str, str]]:
     """Returns (raw, cleaned) pairs, one per image — raw is the model's
     completely untouched output text, cleaned is raw with any
@@ -129,16 +153,32 @@ def run_batch(
 
     enable_thinking (default False, unchanged behavior): forwarded to
     build_multimodal_prompt — set True to let the model's own extended
-    thinking (<think>/<thought> tags) through instead of suppressing it.
-    Raise max_tokens substantially (e.g. 1024+) when enabling it, or
+    thinking (<think>/<thought> tags, OR Gemma-4's <|channel>thought
+    channel if chat_template is also given) through instead of suppressing
+    it. Raise max_tokens substantially (e.g. 1024+) when enabling it, or
     thinking traces will routinely get truncated before the model reaches
-    its <answer> tag."""
+    its <answer> tag.
+
+    chat_template (default None): forwarded to build_multimodal_prompt —
+    Gemma-4's own bundled template has no thinking support at all, so
+    enable_thinking alone is a no-op for it; pass the vendored
+    src/config/tool_chat_template_gemma4.jinja's text here too. Also flips
+    SamplingParams(skip_special_tokens=not enable_thinking) — Gemma-4's
+    <|channel>/<channel|> markers are real special tokens (vLLM strips
+    special tokens from decoded output by default), so without
+    skip_special_tokens=False they'd vanish from the output text before
+    extract_channel_thought ever saw them, even with the right template.
+    Harmless when enable_thinking is False, or for models whose thinking
+    tags (e.g. Qwen's <think>) aren't special tokens either way."""
     prompts = [
         build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt,
-                                 enable_thinking=enable_thinking)
+                                 enable_thinking=enable_thinking, chat_template=chat_template)
         for img in images
     ]
-    sampling_params = SamplingParams(temperature=0.0, max_tokens=max_tokens, repetition_penalty=1.1)
+    sampling_params = SamplingParams(
+        temperature=0.0, max_tokens=max_tokens, repetition_penalty=1.1,
+        skip_special_tokens=not enable_thinking,
+    )
     outputs = llm.generate(prompts, sampling_params=sampling_params)
     return [(o.outputs[0].text, _clean(o.outputs[0].text)) for o in outputs]
 
@@ -155,6 +195,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
     manifest = load_manifest(Path(args.manifest))
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
@@ -214,9 +255,17 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             question = cls_question(task_type, crop_val, prompts)
 
             preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt,
-                               enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens)
+                               enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens,
+                               chat_template=chat_template)
 
-            for name, (raw, pred) in zip(names, preds):
+            for name, (raw, cleaned) in zip(names, preds):
+                # Extract Gemma-4's <|channel>thought block (if any) BEFORE
+                # answer-tag extraction, so a leftover channel marker never
+                # confuses extract_answer_tag/resolve_class — a no-op
+                # (thinking="", pred=cleaned) whenever no channel block is
+                # present, which is every row unless --enable_thinking +
+                # --chat_template_path were both used.
+                thinking, pred = extract_channel_thought(cleaned)
                 answer, _ = extract_answer_tag(pred)
                 resolved = resolve_class(answer, ds.clean_classes)
                 correct = resolved is not None and resolved.lower() == clean_label.lower()
@@ -229,6 +278,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "ground_truth": clean_label,
                     "correct": int(correct), "contains_match": int(c_match),
                     "resolvable": int(resolved is not None),
+                    "reasoning": thinking,
                     "judge_gt_hint": gt_hint,
                 }
                 append_ckpt_row(ckpt_path, row, fields=VISION_BASELINE_CKPT_FIELDS)
@@ -320,6 +370,16 @@ if __name__ == "__main__":
                          help="max_tokens for the classification generation step. 256 fits the tagged "
                               "prompt's direct answer with no thinking; raise substantially (e.g. "
                               "1024+) when --enable_thinking is set.")
+    parser.add_argument("--chat_template_path", default=None,
+                         help="Override the tokenizer's own bundled chat template with a Jinja file at "
+                              "this path — needed for --enable_thinking to actually do anything on some "
+                              "models. Gemma-4's own bundled template has NO enable_thinking support at "
+                              "all (confirmed empirically: 0/40978 real rows ever produced a thinking "
+                              "block with the stock template) — pass "
+                              "src/config/tool_chat_template_gemma4.jinja (vendored from vLLM) alongside "
+                              "--enable_thinking to get real <|channel>thought...<channel|> output from "
+                              "it, captured into the checkpoint's `reasoning` column. Not needed for "
+                              "Qwen models, whose own bundled template already supports enable_thinking.")
     parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
                          help="Fixed judge model used for every baseline/model being evaluated.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)

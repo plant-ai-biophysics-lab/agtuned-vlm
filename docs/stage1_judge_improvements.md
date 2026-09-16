@@ -19,18 +19,26 @@ uv run python main.py vision-baseline \
 
 `--rerun` archives any existing checkpoint as `ckpt_<model>.<timestamp>.bak.csv` and starts fresh — required here, since resuming without it would just skip every already-checkpointed row and keep their old (pre-tagged-prompt) predictions. This also runs the judge phase, so the output is ready for Phase 1 directly: `outputs_final/vision_baseline/<safe_model_name>/` (for this model, `outputs_final/vision_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/`). No `--quantize` needed — this checkpoint's FP8 quantization is baked in and vLLM auto-detects it.
 
-By default, this (and every other generation script in the repo) suppresses the model-being-evaluated's own extended thinking (`<think>`/`<thought>` tags) for the classification step — see `src/common/chat_prompt.py`'s module docstring for why. To let it through instead, add `--enable_thinking` (and raise `--gen_max_tokens`, default `256`, substantially — e.g. `1024`+ — since a thinking trace can consume the budget before the model reaches its `<answer>` tag):
+By default, this (and every other generation script in the repo) suppresses the model-being-evaluated's own extended thinking (`<think>`/`<thought>` tags) for the classification step — see `src/common/chat_prompt.py`'s module docstring for why. `--enable_thinking` lets it through instead (and raise `--gen_max_tokens`, default `256`, substantially — e.g. `1024`+ — since a thinking trace can consume the budget before the model reaches its `<answer>` tag) — **but for Gemma-4 specifically, `--enable_thinking` alone does nothing.**
+
+Confirmed empirically (0/40,978 real rows ever produced a thinking trace) and root-caused via Gemma-4's real `tokenizer_config.json`: its own bundled chat template has **no `enable_thinking` support at all** — the kwarg is silently ignored (`TypeError`, caught by the existing fallback) and generation is unaffected. Gemma-4's real thinking mechanism is a `<|channel>thought\n...\n<channel|>` block, gated by a *different*, separately-distributed chat template (vLLM's `tool_chat_template_gemma4.jinja`, vendored at `src/config/tool_chat_template_gemma4.jinja`) — not anything in the model's own tokenizer config. Use both flags together:
 
 ```bash
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --skip_judge \
-    --enable_thinking --gen_max_tokens 1024
+    --enable_thinking --gen_max_tokens 1024 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_thinking_v2/
 ```
 
-This is a **different** flag from `--judge_enable_thinking` (below) — this one controls the model being evaluated's own generation call in Phase 0, that one controls the separate judge model's call in Phases 1-3. Whether Gemma-4's tokenizer actually exposes a controllable thinking mode via `enable_thinking=True`/`False` kwargs, or uses a different channel-based reasoning format entirely, is unverified without running it — check by diffing a `--enable_thinking` run's rendered prompt/raw prediction text against a default run's.
+(Qwen models don't need `--chat_template_path` — their own bundled template already supports `enable_thinking` directly, which is why `--enable_thinking` alone has always worked for them.)
 
-The checkpoint now has a `raw_response` column (right after `prediction`) holding the model's completely untouched generation output, before `<think>`/`<thought>` tags are stripped into `prediction`. This exists because thinking isn't guaranteed to show up as a tagged block at all — real Gemma-4 output has been observed as an unwrapped reasoning paragraph sitting directly before `<answer>`, which the tag-stripping regex doesn't touch and wouldn't distinguish from a normal answer. `raw_response` preserves exactly what the model said regardless of tagging convention, so it's the column to actually read when checking whether/how a model reasons — `prediction` alone can't be trusted to show or hide reasoning consistently across models. Blank for any pre-existing checkpoint row (backfilled automatically by `load_ckpt`'s schema-drift healing, same as `extracted_answer` was before it).
+`--chat_template_path` also flips `SamplingParams(skip_special_tokens=False)` internally (only when `--enable_thinking` is set) — `<|channel>`/`<channel|>` are real special tokens, and vLLM strips special tokens from decoded output by default, so without this the channel markers would vanish from the output text even with the right template (a documented vLLM gotcha, see [vllm-project/vllm#38855](https://github.com/vllm-project/vllm/issues/38855)).
+
+The checkpoint now has a `raw_response` column (right after `prediction`) holding the model's completely untouched generation output, before either `<think>`/`<thought>` tags or a `<|channel>thought` block are stripped out. `reasoning` (previously always blank for this script) now holds the extracted `<|channel>thought` text when present — `prediction`/`extracted_answer` never see the leftover channel markers. Blank for any pre-existing checkpoint row (backfilled automatically by `load_ckpt`'s schema-drift healing, same as `extracted_answer` was before it).
+
+**Don't reuse `outputs_final/vision_baseline_thinking/`** for a real thinking run — that directory's existing data is now confirmed to be a non-thinking run (the `--enable_thinking`-only attempt, before `--chat_template_path` existed); point `--output_dir` somewhere new (e.g. `vision_baseline_thinking_v2/`) rather than silently mixing the two.
 
 ## Phase 1 — leniency
 
