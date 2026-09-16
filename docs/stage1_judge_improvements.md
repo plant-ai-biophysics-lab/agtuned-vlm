@@ -65,11 +65,49 @@ uv run python main.py judge-template-sensitivity \
     --limit 500
 ```
 
-Re-runs Phase 1 + 2 in full for each of 3 templates (`current` / `specificity` / `class_list` — specificity-strict and +full-class-list respectively) — by far the most expensive step, so start with `--limit` on a small subsample before a full run. Writes each variant's complete Phase 1+2 output under `<output_dir>/<variant>/`, **including its own `disagreement_matrix_T<temp>.png`** (the full-response/resolved-class breakdown shown above, one per variant — not a single pooled figure), plus a top-level `template_sensitivity.png`, `length_bias.png`, and `template_sensitivity_table.tex` — a LaTeX summary table across variants x temperatures (leniency_gap, flip_rate, and both disagreement-direction counts/rates), ready to paste into the paper.
+Re-runs Phase 1 + 2 in full for each of 4 templates (`current` / `specificity` / `class_list` / `hybrid` — specificity-strict, +full-class-list, and Phase 4's hybrid respectively) — by far the most expensive step, so start with `--limit` on a small subsample before a full run. Writes each variant's complete Phase 1+2 output under `<output_dir>/<variant>/`, **including its own `disagreement_matrix_T<temp>.png`** (the full-response/resolved-class breakdown shown above, one per variant — not a single pooled figure), plus a top-level `template_sensitivity.png`, `length_bias.png`, and `template_sensitivity_table.tex` — a LaTeX summary table across variants x temperatures (leniency_gap, flip_rate, and both disagreement-direction counts/rates), ready to paste into the paper.
+
+### Phase 4 — hybrid template (specificity + class list, membership not exact match)
+
+`current`/`specificity`/`class_list` (see `src/config/prompts.yaml`) established that `class_list` beats `specificity` on both false-positive credit rate (12.0% vs. 18.0% on deterministic-mismatch rows) and false-negative cost (4.2% vs. 14.2% of deterministic-*correct* rows wrongly rejected) — but `class_list`'s own literal-string matching is too rigid for `quality_identification`, where the ground truth is a coarse catch-all (`Bad`, ripeness stages) and the model gives a specific descriptive term (`moldy`, `shriveled`). `hybrid` (`judge_classification_hybrid_template`) keeps `class_list`'s context and `specificity`'s generic-label guardrail, but explicitly permits crediting a non-exact-match prediction when it **necessarily belongs to exactly one listed class** (`moldy` ⊂ `Bad` — always true) while still rejecting a **plausible-cause guess for a generic symptom label** (`leaf crinckle` → `Yellow Mosaic Virus` — only one of many possible causes, so naming it is a guess, not a necessary membership relationship). This is the same leniency failure mode `current` had, so the distinction is drawn explicitly in the template text rather than left implicit.
+
+Run it exactly like the other three variants — no new orchestration code, `TEMPLATE_VARIANTS` (`src/common/judge_template_sensitivity.py`) is a plain list this slots into:
+
+```bash
+uv run python main.py judge-template-sensitivity \
+    --ckpt outputs_final/vision_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \
+    --output_dir outputs_final/judge_template_sensitivity/vision_baseline_gemma4_31b_fp8/ \
+    --template hybrid
+```
+
+Pointed at the same `--output_dir` that already has `current`/`specificity`/`class_list` output, the cross-invocation summary backfill automatically folds `hybrid` into `template_sensitivity.png`/`.tex` alongside the other three without re-running them.
+
+### `hybrid` is now the pipeline-wide default judge template
+
+`src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY` (currently `judge_classification_hybrid_template`) is the single point of control for which template a judge call defaults to when nothing else is specified — every active judge call in the repo (`vision-baseline`'s own judge phase, `desc-aug-v2`/`self-cot`/`cot-yaml` via the same `run_judge_phase`, `majority_vote.py`, `cot_vision.py`, `cot_step_analysis.py`, `verifier_lmv.py`, and `judge-leniency`/`judge-consistency`'s `--template_key` CLI default) now reads this constant instead of hardcoding `judge_classification_template`. The original template is completely unchanged and still fully selectable by name (e.g. `--template_key judge_classification_template`, or `TEMPLATE_VARIANTS`' own `"current"` entry, which intentionally always means the literal original template regardless of this default).
+
+Since `hybrid` has a `{class_list}` placeholder, every one of those call sites now also builds a per-row class list automatically via `src.common.dataset_config.class_list_extra_keys(rows, Path(config_path))` before judging — each of `majority_vote.py`/`cot_vision.py` gained a `--config` flag (default `src/config/datasets.yaml`) for this, matching every other classification script's existing convention. This is safe regardless of which template ends up active — a template without a `{class_list}` placeholder just ignores the unused value.
+
+### End-of-run Phase 4 outputs
+
+Three additional outputs are written to `--output_dir` once at least `current` and/or `hybrid` have data on disk (same "skip with a printed note if data's missing, never a hard error" pattern as `length_bias.png`):
+
+- **`judge_accuracy_f1.png`** — judge accuracy + judge-scored macro-F1 (both with bootstrap 95% CI) per variant, reusing `judged_summary`/`bootstrap_judge_f1_ci` (`src/common/vision_eval.py`) — no new metric logic, just a new comparison chart.
+- **`leniency_and_false_positive_summary.png`** (+ `_stats.json`) — two-panel: left panel is `leniency_gap` (overall judged-correct rate over all rows, same metric `leniency_gap_T<temp>.png` plots, collapsed to "overall"), right panel is the false-positive credit rate restricted to deterministically-wrong rows only (isolates the disagreement cases from the true-positive agreement that otherwise dilutes the all-rows average). Both panels read from `--summary_temperature` (float, default `0.7`) — **this must be one of the values in that variant's own `--temperatures` sweep**, or that variant is skipped from this chart with a printed note (e.g. pass `--temperatures 0.1 0.5 0.7 1.0` to populate the default `0.7`).
+- **`oracle_validation_sample.csv`** — samples up to 200 rows (70% from disagreement cases, the rest a random sample for base-rate context, stratified by `task_type` where possible) joining `hybrid` and `current`'s verdicts on the same `(agml_dataset, class_label, image_name)`, for a human reviewer to manually adjudicate as an oracle. Needs both `hybrid` and `current` to have run in this `--output_dir`. Columns include both templates' `judged_correct`/`judge_reasoning` side by side, an `agreement` flag, and two blank columns (`human_verdict`, `human_notes`) for the reviewer to fill in.
+
+```bash
+uv run python main.py judge-template-sensitivity \
+    --ckpt outputs_final/vision_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \
+    --output_dir outputs_final/judge_template_sensitivity/vision_baseline_gemma4_31b_fp8/ \
+    --temperatures 0.1 0.5 0.7 1.0 \
+    --summary_temperature 0.7 \
+    --template hybrid
+```
 
 ### Running one template variant per job
 
-`--template {all,current,specificity,class_list}` (default `all`) runs just one variant per invocation instead of all three in one long-running job:
+`--template {all,current,specificity,class_list,hybrid}` (default `all`) runs just one variant per invocation instead of all four in one long-running job:
 
 ```bash
 uv run python main.py judge-template-sensitivity \
@@ -79,7 +117,7 @@ uv run python main.py judge-template-sensitivity \
     --template current
 ```
 
-Run again with `--template specificity`, then `--template class_list`, against the **same** `--output_dir` — each invocation writes its own `<output_dir>/<variant>/` output and persists a `greedy_summary_rechecked.csv` there. The cross-variant summary (`template_sensitivity.png`/`.tex`, `length_bias.png`) re-scans `--output_dir` for every variant with completed output on disk each time it's written, not just the one variant just run — so the summary progressively fills in as each job finishes, without re-judging anything already done. `length_bias.png` needs the `current` variant specifically and is skipped (with a printed note) until that one has run.
+Run again with `--template specificity`, then `--template class_list`, then `--template hybrid`, against the **same** `--output_dir` — each invocation writes its own `<output_dir>/<variant>/` output and persists a `greedy_summary_rechecked.csv` there. The cross-variant summary (`template_sensitivity.png`/`.tex`, `length_bias.png`) re-scans `--output_dir` for every variant with completed output on disk each time it's written, not just the one variant just run — so the summary progressively fills in as each job finishes, without re-judging anything already done. `length_bias.png` needs the `current` variant specifically and is skipped (with a printed note) until that one has run.
 
 ## Judge thinking mode (experimental)
 
@@ -125,3 +163,4 @@ This is verified so far only via mocked tests (`enable_thinking=True` correctly 
 - Every rate reported (leniency_gap, flip_rate, judged_correct_rate) carries a bootstrap 95% CI, shown as error bars on every figure — computed by resampling rows already on disk, no extra judge calls.
 - `--temperatures` (default `0.1 0.5 1.0`) and `--n_repeats` (Phase 2/3, default `5`) control cost directly — fewer/lower temperatures and fewer repeats run faster.
 - `--judge_enable_thinking` / `--judge_max_tokens` (all three phase scripts, off/unset by default) — see "Judge thinking mode" above.
+- `--summary_temperature` (`judge-template-sensitivity` only, default `0.7`) controls the end-of-run `leniency_and_false_positive_summary.png` — see "End-of-run Phase 4 outputs" above.

@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from src.common.leniency_analysis import TASK_TYPE_LABELS, TASK_TYPE_ORDER
+from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY
 
 _FLIP_COLOR = "#9467bd"
 
@@ -40,7 +41,7 @@ def repeat_judge_calls(
     n_repeats: int,
     log_dir: Path | None = None,
     pred_key: str = "prediction",
-    template_key: str = "judge_classification_template",
+    template_key: str = DEFAULT_JUDGE_TEMPLATE_KEY,
     base_seed: int = 0,
     extra_keys: dict[str, str] | None = None,
     enable_thinking: bool = False,

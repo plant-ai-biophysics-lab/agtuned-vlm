@@ -150,6 +150,35 @@ def datasets_by_name(config_path: Path) -> dict[str, DatasetConfig]:
     return {d.agml_name: d for d in load_datasets(config_path)}
 
 
+def add_class_list_field(rows: list[dict], dataset_classes: dict[str, list[str]]) -> None:
+    """In place: row["class_list_text"] = a newline-bulleted rendering of
+    dataset_classes[row["agml_dataset"]], joined for a judge template's
+    {class_list} placeholder (filled via apply_judge's extra_keys) —
+    datasets.yaml's own class order, unmodified. Moved here (from
+    src.common.judge_template_sensitivity, which still re-exports it for
+    existing importers) so any judge-calling script can build a class_list
+    value, not just the Phase 1-4 template-sensitivity ablation — needed
+    now that the pipeline's default judge template
+    (src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY) has a {class_list}
+    placeholder."""
+    for r in rows:
+        classes = dataset_classes.get(r.get("agml_dataset", ""), [])
+        r["class_list_text"] = "\n".join(f"- {c}" for c in classes)
+
+
+def class_list_extra_keys(rows: list[dict], config_path: Path) -> dict[str, str]:
+    """Convenience wrapper: builds dataset_classes from config_path via
+    datasets_by_name, calls add_class_list_field(rows, ...) in place, and
+    returns the extra_keys dict apply_judge expects for a template with a
+    {class_list} placeholder. Every judge call site defaulting to
+    src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY needs this, since that
+    template requires {class_list} — see its module-level comment in
+    metrics.py."""
+    dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(config_path).items()}
+    add_class_list_field(rows, dataset_classes)
+    return {"class_list": "class_list_text"}
+
+
 def prefetch_agml_datasets(datasets: list[DatasetConfig]) -> None:
     """Trigger AgML downloads for all datasets upfront before any model loading."""
     import agml

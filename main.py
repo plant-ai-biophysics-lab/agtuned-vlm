@@ -134,26 +134,35 @@ Stages:
                                [leniency_vs_flip_rate_full.png, leniency_vs_flip_rate_answer_only.png].
     judge-template-sensitivity — judge template sensitivity sweep (needs judge model/GPU,
                                the most expensive step in the plan — start with --limit):
-                               for each of 3 templates (current, a specificity-strict rewrite
-                               for plain classification, and a +full-class-list variant),
+                               for each of 4 templates (current, a specificity-strict rewrite
+                               for plain classification, a +full-class-list variant, and Phase 4's
+                               hybrid — class_list's context + specificity's guardrail, crediting
+                               necessary category membership without requiring exact wording),
                                re-runs BOTH judge-leniency and judge-consistency's full
                                temperature sweeps under that template, writing each variant's
                                complete Phase 1+2 figure set to its own subfolder
                                (<output_dir>/<variant>/leniency/, /<variant>/consistency/) —
-                               plus a cheap greedy-temperature summary of all 3 variants against
+                               plus a cheap greedy-temperature summary of all 4 variants against
                                the checkpoint's own deterministic resolve_class match, and a
                                length/verbosity bias report. --template {all,current,specificity,
-                               class_list} (default all) runs just one variant this invocation —
+                               class_list,hybrid} (default all) runs just one variant this invocation —
                                re-run against the SAME --output_dir for each remaining variant
                                and the cross-variant summary progressively fills in from disk,
                                no re-judging. --temperatures, --n_repeats, --n_length_buckets,
-                               --judge_enable_thinking/--judge_max_tokens (same as judge-leniency).
+                               --judge_enable_thinking/--judge_max_tokens (same as judge-leniency),
+                               --summary_temperature (default 0.7, must be included in --temperatures
+                               for a variant to appear in leniency_and_false_positive_summary.png).
                                Writes template_sensitivity.png,
                                length_bias.png (skipped until the "current" variant has run),
-                               template_sensitivity_table.tex (LaTeX summary: leniency_gap,
-                               flip_rate, and both disagreement-direction counts/rates per
-                               variant x temperature), template_sensitivity.json (top-level
-                               summary), each variant's own greedy_summary_rechecked.csv, plus
+                               judge_accuracy_f1.png (judge accuracy + judge-scored macro-F1 per
+                               variant), leniency_and_false_positive_summary.png (+ _stats.json;
+                               leniency_gap and false-positive-only credit rate per variant, at
+                               --summary_temperature), oracle_validation_sample.csv (hybrid vs.
+                               current, sampled mostly-disagreement rows for manual human
+                               validation — needs both variants present), template_sensitivity_table.tex
+                               (LaTeX summary: leniency_gap, flip_rate, and both disagreement-direction
+                               counts/rates per variant x temperature), template_sensitivity.json
+                               (top-level summary), each variant's own greedy_summary_rechecked.csv, plus
                                each variant's own leniency_gap*.png / disagreement_matrix*.png /
                                flip_rate_by_temperature_{full,answer_only}.png /
                                leniency_vs_flip_rate_{full,answer_only}.png underneath.

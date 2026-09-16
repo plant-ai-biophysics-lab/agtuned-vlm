@@ -1,6 +1,6 @@
-"""Judge template sensitivity sweep — Phase 3 of the judge-improvements
-evaluation plan ("LLM as a judge improvements" note). For each of three
-judge templates (see src/common/judge_template_sensitivity.py's
+"""Judge template sensitivity sweep — Phase 3 (+ Phase 4's hybrid variant) of
+the judge-improvements evaluation plan ("LLM as a judge improvements" note).
+For each of four judge templates (see src/common/judge_template_sensitivity.py's
 TEMPLATE_VARIANTS / module docstring for what each one tests), re-runs
 BOTH Phase 1 (src/judge_leniency.py — leniency_gap across a temperature
 sweep) and Phase 2 (src/judge_consistency.py — flip_rate across that same
@@ -19,10 +19,10 @@ the length/verbosity bias report.
 The judge model is loaded ONCE and shared across every variant/phase call
 (judge_leniency.main() and judge_consistency.main() both accept an
 already-loaded judge_llm/judge_tok) — six separate slow model loads would
-otherwise be paid for 3 variants x 2 phases.
+otherwise be paid for 4 variants x 2 phases.
 
 Needs a GPU/judge model. This is the most expensive script in the judge-
-improvements evaluation plan by far: 3 variants x (leniency's 2 sides x
+improvements evaluation plan by far: 4 variants x (leniency's 2 sides x
 n_temperatures judge passes + consistency's n_temperatures x n_repeats
 judge passes) x n_resolvable_rows. Start with --limit and a short
 --temperatures list.
@@ -57,15 +57,36 @@ Writes, under --output_dir:
                                              same reason, one per swept
                                              temperature
   template_sensitivity.png                — single-temperature (greedy) summary
-                                             across all 3 variants vs. the
+                                             across all 4 variants vs. the
                                              deterministic baseline
   length_bias.png                         — length/verbosity bias, current template
   template_sensitivity_table.tex          — LaTeX booktabs table: leniency_gap,
                                              flip_rate, and both disagreement-
                                              direction counts/rates (overall,
                                              with 95% CI) per variant x temperature
+  judge_accuracy_f1.png                   — judge accuracy + judge-scored
+                                             macro-F1 per variant (bootstrap
+                                             95% CI), reusing
+                                             judged_summary/bootstrap_judge_f1_ci
+  leniency_and_false_positive_summary.png — two-panel: leniency_gap (overall,
+                                             all rows) + false-positive credit
+                                             rate (deterministic-wrong rows
+                                             only) per variant, at
+                                             --summary_temperature (default
+                                             0.7 — must be included in
+                                             --temperatures for a variant to
+                                             appear here)
+  leniency_and_false_positive_summary_stats.json — the above, machine-readable
+  oracle_validation_sample.csv            — hybrid vs. current, sampled for
+                                             manual human review (mostly
+                                             disagreement rows, some agreement
+                                             for base-rate context) — blank
+                                             human_verdict/human_notes columns
+                                             to fill in; needs both variants
+                                             present in --output_dir
   template_sensitivity.json               — template_sensitivity.png +
-                                             length_bias.png's data, machine-readable
+                                             length_bias.png + judge_accuracy_f1's
+                                             data, machine-readable
 
 Usage:
     uv run python main.py judge-template-sensitivity \\
@@ -89,9 +110,10 @@ from src.common.ablation_judge_recheck import rejudge_condition
 from src.common.dataset_config import datasets_by_name
 from src.common.io import load_prompts
 from src.common.judge_template_sensitivity import (
-    TEMPLATE_VARIANTS, add_class_list_field, length_bias_report,
+    TEMPLATE_VARIANTS, add_class_list_field, compute_judge_accuracy_f1, false_positive_credit_rate,
+    length_bias_report, plot_judge_accuracy_f1, plot_leniency_and_false_positive_summary,
     plot_length_bias, plot_template_sensitivity, score_against_deterministic,
-    write_variant_temperature_latex_table,
+    write_oracle_validation_csv, write_variant_temperature_latex_table,
 )
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 from src.judge_leniency import load_ckpt_rows
@@ -304,9 +326,72 @@ def main(args: argparse.Namespace) -> None:
         length_report = length_bias_report(rows_by_variant["current"], n_buckets=args.n_length_buckets)
         plot_length_bias(length_report, output_dir / "length_bias.png")
 
+    # ── Phase 4 output B1: judge-scored F1 + accuracy across every variant
+    # with data on disk so far (same rows_by_variant used above). ──
+    accuracy_f1_results = compute_judge_accuracy_f1(rows_by_variant) if rows_by_variant else {}
+    if accuracy_f1_results:
+        plot_judge_accuracy_f1(accuracy_f1_results, output_dir / "judge_accuracy_f1.png")
+        for variant_key, d in accuracy_f1_results.items():
+            print(f"  {variant_key}: judge_accuracy={d['accuracy']:.4f}, judge_f1_macro={d['f1_macro']:.4f}")
+
+    # ── Phase 4 output B2: leniency_gap / false-positive-rate two-panel
+    # summary at --summary_temperature — reads each variant's OWN
+    # leniency/leniency_gap.json + rechecked_T<summary_temperature>.csv
+    # (Phase 1's per-temperature output), skipping (not erroring) any
+    # variant whose --temperatures sweep didn't include summary_temperature. ──
+    leniency_summary_by_variant: dict[str, dict] = {}
+    fp_summary_by_variant: dict[str, dict] = {}
+    for variant_key, template_key, needs_class_list, variant_label in TEMPLATE_VARIANTS:
+        variant_dir = output_dir / variant_key
+        leniency_json_path = variant_dir / "leniency" / "leniency_gap.json"
+        rechecked_csv_path = variant_dir / "leniency" / f"rechecked_T{args.summary_temperature}.csv"
+        if not leniency_json_path.exists() or not rechecked_csv_path.exists():
+            continue
+        leniency_data = json.loads(leniency_json_path.read_text())
+        temp_key = str(args.summary_temperature)
+        if temp_key not in leniency_data["leniency_gap_by_temperature"]:
+            continue
+        leniency_summary_by_variant[variant_key] = leniency_data["leniency_gap_by_temperature"][temp_key]["overall"]
+        with open(rechecked_csv_path, encoding="utf-8") as f:
+            rechecked_rows = list(csv.DictReader(f))
+        fp_summary_by_variant[variant_key] = false_positive_credit_rate(rechecked_rows)
+
+    if leniency_summary_by_variant and fp_summary_by_variant:
+        plot_leniency_and_false_positive_summary(
+            leniency_summary_by_variant, fp_summary_by_variant,
+            output_dir / "leniency_and_false_positive_summary.png",
+        )
+        (output_dir / "leniency_and_false_positive_summary_stats.json").write_text(json.dumps(
+            {"summary_temperature": args.summary_temperature,
+             "leniency_by_variant": leniency_summary_by_variant,
+             "false_positive_by_variant": fp_summary_by_variant},
+            indent=2,
+        ))
+        print(f"  Wrote leniency_and_false_positive_summary.png covering "
+              f"{sorted(leniency_summary_by_variant)} at T={args.summary_temperature} "
+              f"(re-run with --summary_temperature or add it to --temperatures for any variant missing)")
+    else:
+        print(f"  [leniency_and_false_positive_summary] skipped — no variant has both leniency_gap.json "
+              f"and rechecked_T{args.summary_temperature}.csv (need --summary_temperature "
+              f"{args.summary_temperature} included in that run's --temperatures).")
+
+    # ── Phase 4 output B3: oracle validation CSV (hybrid vs. current). ──
+    oracle_stats = write_oracle_validation_csv(rows_by_variant, output_dir / "oracle_validation_sample.csv")
+    if oracle_stats is None:
+        print("  [oracle_validation_sample.csv] skipped — needs both \"hybrid\" and \"current\" variants "
+              "present in this --output_dir.")
+    else:
+        print(f"  Wrote oracle_validation_sample.csv: {oracle_stats['n_total']} row(s) "
+              f"({oracle_stats['n_disagreement']} disagreement, {oracle_stats['n_agreement']} agreement)")
+
     (output_dir / "template_sensitivity.json").write_text(json.dumps(
         {"label": label, "n_rows": len(rows), "template_sensitivity": template_results,
-         "length_bias": length_report},
+         "length_bias": length_report, "judge_accuracy_f1": accuracy_f1_results,
+         "summary_temperature": args.summary_temperature,
+         "leniency_and_false_positive_summary": {
+             "leniency_by_variant": leniency_summary_by_variant,
+             "false_positive_by_variant": fp_summary_by_variant,
+         } if leniency_summary_by_variant else None},
         indent=2,
     ))
 
@@ -316,7 +401,10 @@ def main(args: argparse.Namespace) -> None:
               f"(covering {sorted(variant_data)} — re-run with --template for any variant still missing)")
 
     print(f"\nWrote template_sensitivity.png, template_sensitivity.json"
-          f"{', length_bias.png' if length_report is not None else ''} to {output_dir}")
+          f"{', length_bias.png' if length_report is not None else ''}"
+          f"{', judge_accuracy_f1.png' if accuracy_f1_results else ''}"
+          f"{', leniency_and_false_positive_summary.png' if leniency_summary_by_variant else ''}"
+          f"{', oracle_validation_sample.csv' if oracle_stats else ''} to {output_dir}")
     print(f"Per-variant Phase 1/2 output under {output_dir}/<variant>/leniency/ and /<variant>/consistency/ "
           f"(leniency_vs_flip_rate_{{full,answer_only}}.png also copied to {output_dir}/<variant>/ directly)")
 
@@ -328,22 +416,30 @@ if __name__ == "__main__":
                               "(globs ckpt_*.csv inside it).")
     parser.add_argument("--output_dir", default="ablation/judge_template_sensitivity/")
     parser.add_argument("--label", default=None, help="Report/log label (defaults to the ckpt filename).")
-    parser.add_argument("--template", choices=["all", "current", "specificity", "class_list"], default="all",
-                         help="Run just ONE template variant this invocation instead of all 3 — lets each "
+    parser.add_argument("--template", choices=["all", "current", "specificity", "class_list", "hybrid"], default="all",
+                         help="Run just ONE template variant this invocation instead of all 4 — lets each "
                               "variant be its own job/run. The cross-variant summary "
                               "(template_sensitivity.png/.tex, length_bias.png) reads back EVERY variant "
                               "that has completed output under --output_dir so far (not just the one just "
                               "run), so running \"current\", then later \"specificity\", then later "
-                              "\"class_list\" against the SAME --output_dir progressively completes the "
-                              "summary without re-judging anything already done.")
+                              "\"class_list\", then later \"hybrid\" (Phase 4 — class_list's context + "
+                              "specificity's guardrail + credits necessary category membership without "
+                              "requiring exact wording) against the SAME --output_dir progressively "
+                              "completes the summary without re-judging anything already done.")
     parser.add_argument("--config", default="src/config/datasets.yaml", help="datasets.yaml, for each row's class list.")
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.1, 0.5, 1.0],
                          help="Swept judge temperatures, passed through to both Phase 1 and Phase 2 "
                               "for every variant.")
+    parser.add_argument("--summary_temperature", type=float, default=0.7,
+                         help="Which swept temperature the Phase 4 leniency_and_false_positive_summary.png "
+                              "reads from each variant's rechecked_T<temp>.csv/leniency_gap.json — MUST be "
+                              "one of --temperatures' values (e.g. pass --temperatures 0.1 0.5 0.7 1.0 to "
+                              "use the 0.7 default), or that variant is skipped with a printed note rather "
+                              "than silently substituting a different temperature.")
     parser.add_argument("--n_repeats", type=int, default=5, help="Phase 2's repeat judge calls per row, per temperature.")
     parser.add_argument("--save_logs", action="store_true",
                          help="Phase 2: write one judge_log.jsonl per (variant, temperature, repeat) — "
-                              "off by default, this multiplies fast across 3 variants.")
+                              "off by default, this multiplies fast across 4 variants.")
     parser.add_argument("--n_length_buckets", type=int, default=4)
     parser.add_argument("--limit", type=int, default=None,
                          help="Subsample to this many rows first, applied ONCE before any variant runs "

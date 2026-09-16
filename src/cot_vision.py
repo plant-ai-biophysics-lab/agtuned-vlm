@@ -1541,6 +1541,10 @@ def main() -> None:
         description="CoT Vision Assessment — self-description and structured CoT conditions"
     )
     parser.add_argument("--model",       default="google/gemma-4-26B-A4B-it")
+    parser.add_argument("--config",      default="src/config/datasets.yaml",
+                         help="datasets.yaml, for each row's class list — needed since the pipeline's "
+                              "default judge template (DEFAULT_JUDGE_TEMPLATE_KEY, src/common/metrics.py) "
+                              "has a {class_list} placeholder.")
     parser.add_argument("--output_dir",  default="outputs/cot_vision/")
     parser.add_argument("--n_samples",   type=int, default=None,
                         help="Max images per class (default: all — uses test_split when available)")
@@ -1709,14 +1713,18 @@ def main() -> None:
                         for r in all_rows]
         else:
             print(f"\n=== Phase 3: judge ({len(todo)} new rows, {n_skip} already done) ===")
+            from src.common.dataset_config import class_list_extra_keys
+            from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY
+            extra_keys = class_list_extra_keys(todo, Path(args.config))
             judged_new = apply_judge(
                 rows=todo,
                 llm=llm,
                 tokenizer=tokenizer,
                 system_prompt=_PROMPTS.get("judge_system_vision", ""),
-                judge_template=_PROMPTS["judge_classification_template"],
+                judge_template=_PROMPTS[DEFAULT_JUDGE_TEMPLATE_KEY],
                 gt_key="ground_truth",
                 pred_key="prediction",
+                extra_keys=extra_keys,
             )
             new_judged_map = {_row_key(r): r for r in judged_new}
             all_rows = [

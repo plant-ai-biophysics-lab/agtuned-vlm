@@ -51,6 +51,21 @@ for _corpus in ("wordnet", "omw-1.4"):
 THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _THINK_RE_JUDGE = THINK_RE  # alias kept for internal use
 
+# Single point of control for which prompts.yaml judge template new judge
+# calls default to, pipeline-wide — every active caller (vision_baseline.py's
+# run_judge_phase, majority_vote.py, cot_vision.py, cot_step_analysis.py,
+# verifier_lmv.py, judge_leniency.py/judge_consistency.py's --template_key
+# defaults) reads this constant rather than hardcoding a literal template
+# name, so changing the pipeline's default judge template is a one-line
+# change here instead of finding every call site. "judge_classification_template"
+# (the original/"current" template) is completely unchanged and still fully
+# selectable by name — this only changes what's used when nothing else is
+# specified. src/common/judge_template_sensitivity.py's TEMPLATE_VARIANTS
+# intentionally does NOT read this constant for its "current" entry, since
+# that entry's whole point is the literal original template regardless of
+# whatever the pipeline default is.
+DEFAULT_JUDGE_TEMPLATE_KEY = "judge_classification_hybrid_template"
+
 
 @lru_cache(maxsize=16384)
 def _synonyms(word: str) -> frozenset[str]:

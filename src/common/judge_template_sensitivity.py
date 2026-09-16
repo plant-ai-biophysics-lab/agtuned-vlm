@@ -2,7 +2,7 @@
 evaluation plan (see the "LLM as a judge improvements" note).
 
 Re-judges Phase 0's SAME predictions (the full model response, pred_key=
-"prediction" — no new generation needed) under three template variants:
+"prediction" — no new generation needed) under four template variants:
 
   current       judge_classification_template — the pipeline's existing
                 template, unchanged. Always gets its own fresh greedy-
@@ -25,12 +25,26 @@ Re-judges Phase 0's SAME predictions (the full model response, pred_key=
                 that row's dataset, testing whether seeing the other
                 possible classes alone makes the judge more specificity-
                 demanding without being explicitly told to be.
+  hybrid        judge_classification_hybrid_template — Phase 4. Combines
+                class_list's context + specificity's generic-label guardrail,
+                plus a distinction neither of the other two draws: the
+                prediction doesn't need exact wording, but crediting it
+                requires a NECESSARY category-membership relationship (e.g.
+                a specific defect is always a case of a broad catch-all
+                class like "Bad") — never a plausible-cause guess for a
+                generically-named reference class (e.g. one specific
+                pathogen offered as an explanation for a symptom-only label,
+                when many different pathogens could equally cause that same
+                symptom). Targets class_list's own remaining rigidity
+                (concentrated in quality_identification's coarse ground
+                truth) without reopening the leaf-crinckle-style leniency
+                bug specificity/class_list both already guard against.
 
 Each variant is scored against Phase 1's deterministic baseline — NOT the
 resolved_class-judge comparison from judge_leniency.py, but the checkpoint's
 own `correct` column (resolve_class(prediction, classes) == ground_truth,
 computed at generation time, zero-cost). This is a fixed yardstick shared
-across all three variants, so which template narrows the judge-vs-
+across all four variants, so which template narrows the judge-vs-
 deterministic gap most is directly comparable.
 
 Also covers the plan's length/verbosity bias check: buckets judged_correct
@@ -46,6 +60,7 @@ verdict, and isn't worth the extra judge-call budget to confirm.)
 """
 from __future__ import annotations
 
+import csv
 from collections import defaultdict
 from pathlib import Path
 
@@ -58,19 +73,24 @@ TEMPLATE_VARIANTS = [
     ("current", "judge_classification_template", False, "Current template"),
     ("specificity", "judge_classification_specificity_template", False, "Specificity-strict template"),
     ("class_list", "judge_classification_class_list_template", True, "+ full class list"),
+    # Phase 4 — combines class_list's context + specificity's generic-label
+    # guardrail, plus a new is-a-membership-vs-plausible-cause distinction
+    # (see prompts.yaml's judge_classification_hybrid_template docstring)
+    # targeting quality_identification's remaining class_list rigidity
+    # (e.g. "moldy" not literally matching catch-all "Bad") without
+    # reopening the leaf-crinckle-style leniency bug specificity/class_list
+    # both guard against.
+    ("hybrid", "judge_classification_hybrid_template", True, "Specificity + class list (hybrid)"),
 ]
 
-_VARIANT_COLORS = {"current": "#7f7f7f", "specificity": "#d62728", "class_list": "#1f77b4"}
+_VARIANT_COLORS = {"current": "#7f7f7f", "specificity": "#d62728", "class_list": "#1f77b4", "hybrid": "#2ca02c"}
 
-
-def add_class_list_field(rows: list[dict], dataset_classes: dict[str, list[str]]) -> None:
-    """In place: row["class_list_text"] = a newline-bulleted rendering of
-    dataset_classes[row["agml_dataset"]], joined for the {class_list}
-    placeholder (judge_classification_class_list_template, filled via
-    apply_judge's extra_keys) — datasets.yaml's own class order, unmodified."""
-    for r in rows:
-        classes = dataset_classes.get(r.get("agml_dataset", ""), [])
-        r["class_list_text"] = "\n".join(f"- {c}" for c in classes)
+# Re-exported from src.common.dataset_config (moved there so every judge-calling
+# script, not just this ablation orchestrator, can build a {class_list} value —
+# needed now that src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY has a
+# {class_list} placeholder) — kept importable from here for existing callers
+# (src/judge_leniency.py, src/judge_consistency.py).
+from src.common.dataset_config import add_class_list_field  # noqa: E402
 
 
 def score_against_deterministic(
@@ -169,6 +189,91 @@ def plot_template_sensitivity(results_by_variant: dict[str, dict], output_path: 
     ax.set_ylabel("judged_correct rate")
     ax.set_ylim(0, 1.08)
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), fontsize=8, ncol=2)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def compute_judge_accuracy_f1(
+    rows_by_variant: dict[str, list[dict]], n_boot: int = 1000, ci: float = 0.95, seed: int = 42,
+) -> dict:
+    """{variant_key: {n, n_classes, accuracy, accuracy_ci, f1_macro, f1_macro_ci}}.
+
+    Both metrics are judge-scored (judged_correct=1 counts as a match,
+    falling back to resolved_class otherwise) — reuses existing functions,
+    no new metric logic: accuracy is judged_correct's own mean + a
+    bootstrap_mean_ci (src.common.bootstrap) resampled over rows; f1_macro
+    is src.common.vision_eval.bootstrap_judge_f1_ci, resampled over CLASSES
+    per that function's own established convention (same one
+    judged_summary()'s point-estimate judge_f1_macro and every other
+    judge-F1 number in this repo already use)."""
+    from src.common.bootstrap import bootstrap_mean_ci
+    from src.common.vision_eval import bootstrap_judge_f1_ci
+
+    out: dict[str, dict] = {}
+    for variant_key, rows in rows_by_variant.items():
+        judged = [r for r in rows if r.get("judged_correct", "") != ""]
+        if not judged:
+            out[variant_key] = {"n": 0, "n_classes": 0, "accuracy": float("nan"),
+                                 "accuracy_ci": (float("nan"), float("nan")),
+                                 "f1_macro": float("nan"), "f1_macro_ci": (float("nan"), float("nan"))}
+            continue
+        jc = [int(r["judged_correct"]) for r in judged]
+        f1_result = bootstrap_judge_f1_ci(rows, n_boot=n_boot, seed=seed)
+        out[variant_key] = {
+            "n": len(judged),
+            "n_classes": f1_result["judge_n_classes"],
+            "accuracy": round(float(np.mean(jc)), 4),
+            "accuracy_ci": bootstrap_mean_ci(jc, n_boot, ci, seed),
+            "f1_macro": f1_result["judge_f1_macro"],
+            "f1_macro_ci": (f1_result["judge_ci_low"], f1_result["judge_ci_high"]),
+        }
+    return out
+
+
+def plot_judge_accuracy_f1(results_by_variant: dict, output_path: Path) -> None:
+    """Grouped bar chart: judge accuracy + judge-scored macro-F1, one group
+    per variant, from compute_judge_accuracy_f1's output. Error bars are
+    bootstrap 95% CIs."""
+    import matplotlib.pyplot as plt
+
+    from src.common.bootstrap import ci_to_yerr
+
+    variant_keys = [v[0] for v in TEMPLATE_VARIANTS if v[0] in results_by_variant]
+    labels = [next(lbl for k, _, _, lbl in TEMPLATE_VARIANTS if k == vk) for vk in variant_keys]
+
+    x = np.arange(len(variant_keys))
+    width = 0.35
+
+    acc_vals = [results_by_variant[vk]["accuracy"] for vk in variant_keys]
+    f1_vals = [results_by_variant[vk]["f1_macro"] for vk in variant_keys]
+    acc_yerr = np.array([ci_to_yerr(v, results_by_variant[vk]["accuracy_ci"])
+                          for vk, v in zip(variant_keys, acc_vals)]).T
+    f1_yerr = np.array([ci_to_yerr(v, results_by_variant[vk]["f1_macro_ci"])
+                         for vk, v in zip(variant_keys, f1_vals)]).T
+
+    fig, ax = plt.subplots(figsize=(max(7, len(variant_keys) * 2.2), 5.5))
+    ax.bar(x - width / 2, acc_vals, width, yerr=acc_yerr, capsize=3, label="Judge accuracy",
+           color="#2a78d6", ecolor="#333", error_kw={"linewidth": 0.8})
+    ax.bar(x + width / 2, f1_vals, width, yerr=f1_yerr, capsize=3, label="Judge-scored macro-F1",
+           color="#eb6834", ecolor="#333", error_kw={"linewidth": 0.8})
+
+    for xi, v in zip(x - width / 2, acc_vals):
+        if not np.isnan(v):
+            ax.annotate(f"{v:.3f}", (xi, v), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
+    for xi, v in zip(x + width / 2, f1_vals):
+        if not np.isnan(v):
+            ax.annotate(f"{v:.3f}", (xi, v), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
+
+    ax.set_xticks(x)
+    ns = [results_by_variant[vk]["n"] for vk in variant_keys]
+    ax.set_xticklabels([f"{lab}\n(n={n})" for lab, n in zip(labels, ns)])
+    ax.set_ylabel("Score")
+    ax.set_ylim(0, 1.08)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.legend(loc="upper right", fontsize=9)
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -359,3 +464,193 @@ def write_variant_temperature_latex_table(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def false_positive_credit_rate(
+    rechecked_rows: list[dict], n_boot: int = 1000, ci: float = 0.95, seed: int = 42,
+) -> dict:
+    """{"full": {n, rate, rate_ci}, "answer_only": {...}, "gap", "gap_ci"}.
+
+    rechecked_rows is a <variant>/leniency/rechecked_T<temp>.csv-shaped row
+    list (has `correct` — the checkpoint's own deterministic resolve_class
+    match — plus `judged_correct_full_trajectory` and `judged_correct`, the
+    full-response and <answer>-tag-only judge verdicts at that temperature).
+    Restricts to rows where `correct` says WRONG, then measures how often
+    the judge credits them anyway — the false-positive rate specifically,
+    isolated from the true-positive agreement cases that otherwise dilute
+    leniency_gap's own all-rows average. gap/gap_ci is a PAIRED bootstrap
+    (full vs. answer_only on the SAME rows, src.common.bootstrap.bootstrap_diff_ci)."""
+    from src.common.bootstrap import bootstrap_diff_ci, bootstrap_mean_ci
+
+    wrong_rows = [r for r in rechecked_rows if r.get("correct", "") not in ("1", 1, True)]
+    n = len(wrong_rows)
+    if n == 0:
+        empty = {"n": 0, "rate": float("nan"), "rate_ci": (float("nan"), float("nan"))}
+        return {"full": empty, "answer_only": empty, "gap": float("nan"), "gap_ci": (float("nan"), float("nan"))}
+
+    full_vals = [int(r.get("judged_correct_full_trajectory", "") in ("1", 1, True)) for r in wrong_rows]
+    answer_vals = [int(r.get("judged_correct", "") in ("1", 1, True)) for r in wrong_rows]
+    full_rate, answer_rate = float(np.mean(full_vals)), float(np.mean(answer_vals))
+    return {
+        "full": {"n": n, "rate": round(full_rate, 4), "rate_ci": bootstrap_mean_ci(full_vals, n_boot, ci, seed)},
+        "answer_only": {"n": n, "rate": round(answer_rate, 4),
+                         "rate_ci": bootstrap_mean_ci(answer_vals, n_boot, ci, seed)},
+        "gap": round(full_rate - answer_rate, 4),
+        "gap_ci": bootstrap_diff_ci(full_vals, answer_vals, n_boot, ci, seed),
+    }
+
+
+def plot_leniency_and_false_positive_summary(
+    leniency_by_variant: dict[str, dict], fp_by_variant: dict[str, dict], output_path: Path,
+) -> None:
+    """Two-panel line chart, one line per condition (full response /
+    answer-only / gap) x panel, one point per variant (in TEMPLATE_VARIANTS
+    order) — left panel is leniency_gap (overall judged_correct rate over
+    ALL rows, from <variant>/leniency/leniency_gap.json), right panel is
+    false_positive_credit_rate (judge credit rate restricted to
+    deterministically-WRONG rows only). Same validated palette (blue/
+    orange/aqua — see the dataviz skill's palette validator, checked for
+    this exact triple) and above/below label-offset convention as every
+    other per-variant comparison in this module."""
+    import matplotlib.pyplot as plt
+
+    BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
+
+    variant_keys = [v[0] for v in TEMPLATE_VARIANTS
+                     if v[0] in leniency_by_variant and v[0] in fp_by_variant]
+    # Short variant KEYS (not the longer descriptive labels) on the x-axis —
+    # with up to 4 variants on screen, the full labels ("Specificity + class
+    # list (hybrid)") crowd/overlap each other; the keys stay legible.
+    labels = variant_keys
+    x = np.arange(len(variant_keys))
+
+    lg_full = [leniency_by_variant[vk]["full_response_rate"] * 100 for vk in variant_keys]
+    lg_answer = [leniency_by_variant[vk]["resolved_class_rate"] * 100 for vk in variant_keys]
+    lg_gap = [leniency_by_variant[vk]["leniency_gap"] * 100 for vk in variant_keys]
+
+    fp_full = [fp_by_variant[vk]["full"]["rate"] * 100 for vk in variant_keys]
+    fp_answer = [fp_by_variant[vk]["answer_only"]["rate"] * 100 for vk in variant_keys]
+    fp_gap = [fp_by_variant[vk]["gap"] * 100 for vk in variant_keys]
+
+    fig, axes = plt.subplots(1, 2, figsize=(max(13, len(variant_keys) * 3.2), 5.5))
+    panels = [
+        (axes[0], lg_full, lg_answer, lg_gap, "leniency_gap (overall accuracy, all rows)",
+         "% of all rows judged correct"),
+        (axes[1], fp_full, fp_answer, fp_gap, "false-positive credit rate (deterministic-wrong rows only)",
+         "% of deterministically-wrong rows credited"),
+    ]
+    for ax, full, answer, gap, title, ylabel in panels:
+        ax.plot(x, full, marker="o", markersize=8, linewidth=2, color=BLUE, label="Full response")
+        ax.plot(x, answer, marker="o", markersize=8, linewidth=2, color=ORANGE, label="Answer-only")
+        ax.plot(x, gap, marker="o", markersize=8, linewidth=2, color=AQUA, linestyle="--",
+                label="Gap (full − answer-only)")
+        # Full's label sits above its marker, answer-only's sits below —
+        # keeps the two from colliding where the lines converge.
+        for xi, yi in zip(x, full):
+            ax.annotate(f"{yi:.1f}", (xi, yi), textcoords="offset points",
+                        xytext=(0, 10), ha="center", fontsize=9, color=BLUE, fontweight="bold")
+        for xi, yi in zip(x, answer):
+            ax.annotate(f"{yi:.1f}", (xi, yi), textcoords="offset points",
+                        xytext=(0, -16), ha="center", fontsize=9, color=ORANGE, fontweight="bold")
+        for xi, yi in zip(x, gap):
+            ax.annotate(f"{yi:.1f}", (xi, yi), textcoords="offset points",
+                        xytext=(0, 9), ha="center", fontsize=9, color=AQUA, fontweight="bold")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title, fontsize=11)
+        ax.set_ylim(0, max(full + [1]) * 1.25)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis="y", linewidth=0.5, alpha=0.3)
+
+    axes[0].legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), fontsize=9, frameon=True, ncol=3)
+    fig.suptitle("Leniency shrinks as judge template gets stricter — two views of the same trend",
+                 fontsize=13)
+    fig.tight_layout(rect=[0, 0.06, 1, 0.94])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def write_oracle_validation_csv(
+    rows_by_variant: dict[str, list[dict]], output_path: Path,
+    sample_size: int = 200, disagreement_frac: float = 0.7, seed: int = 42,
+) -> dict:
+    """Samples rows from BOTH rows_by_variant["hybrid"] and
+    rows_by_variant["current"] (joined on agml_dataset/class_label/
+    image_name) for a human to manually adjudicate as an oracle — up to
+    `sample_size` rows, `disagreement_frac` of them from rows where the two
+    variants' judged_correct DISAGREE (the informative cases for validating
+    which template is actually right), the remainder a plain random sample
+    regardless of agreement (base-rate context), stratified by task_type
+    where the pool allows it. Returns {"n_disagreement", "n_agreement",
+    "n_total"} for the caller to report; writes nothing and returns None if
+    either variant is missing (caller should skip with a printed note, same
+    pattern as plot_length_bias's "current" gate).
+
+    Output columns: agml_dataset, class_label, image_name, task_type,
+    ground_truth, prediction, extracted_answer, resolved_class, correct
+    (deterministic), judged_correct_current, judge_reasoning_current,
+    judged_correct_hybrid, judge_reasoning_hybrid, agreement, plus two
+    BLANK columns for the reviewer: human_verdict, human_notes."""
+    import random
+
+    if "hybrid" not in rows_by_variant or "current" not in rows_by_variant:
+        return None
+
+    def _key(r):
+        return (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
+
+    current_by_key = {_key(r): r for r in rows_by_variant["current"]}
+    joined = []
+    for hyb_row in rows_by_variant["hybrid"]:
+        cur_row = current_by_key.get(_key(hyb_row))
+        if cur_row is None:
+            continue
+        hyb_correct = hyb_row.get("judged_correct", "") in ("1", 1, True)
+        cur_correct = cur_row.get("judged_correct", "") in ("1", 1, True)
+        joined.append({
+            "agml_dataset": hyb_row.get("agml_dataset", ""),
+            "class_label": hyb_row.get("class_label", ""),
+            "image_name": hyb_row.get("image_name", ""),
+            "task_type": hyb_row.get("task_type", ""),
+            "ground_truth": hyb_row.get("ground_truth", ""),
+            "prediction": hyb_row.get("prediction", ""),
+            "extracted_answer": hyb_row.get("extracted_answer", ""),
+            "resolved_class": hyb_row.get("resolved_class", ""),
+            "correct": hyb_row.get("correct", ""),
+            "judged_correct_current": cur_row.get("judged_correct", ""),
+            "judge_reasoning_current": cur_row.get("judge_reasoning", ""),
+            "judged_correct_hybrid": hyb_row.get("judged_correct", ""),
+            "judge_reasoning_hybrid": hyb_row.get("judge_reasoning", ""),
+            "agreement": hyb_correct == cur_correct,
+            "human_verdict": "",
+            "human_notes": "",
+        })
+
+    rng = random.Random(seed)
+    disagreement_pool = [r for r in joined if not r["agreement"]]
+    agreement_pool = [r for r in joined if r["agreement"]]
+    rng.shuffle(disagreement_pool)
+    rng.shuffle(agreement_pool)
+
+    n_disagreement = min(len(disagreement_pool), round(sample_size * disagreement_frac))
+    n_agreement = min(len(agreement_pool), sample_size - n_disagreement)
+    sample = disagreement_pool[:n_disagreement] + agreement_pool[:n_agreement]
+    rng.shuffle(sample)
+
+    fields = ["agml_dataset", "class_label", "image_name", "task_type", "ground_truth",
+              "prediction", "extracted_answer", "resolved_class", "correct",
+              "judged_correct_current", "judge_reasoning_current",
+              "judged_correct_hybrid", "judge_reasoning_hybrid", "agreement",
+              "human_verdict", "human_notes"]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for r in sample:
+            w.writerow(r)
+
+    return {"n_disagreement": n_disagreement, "n_agreement": n_agreement, "n_total": len(sample)}

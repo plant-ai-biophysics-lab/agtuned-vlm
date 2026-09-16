@@ -27,7 +27,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from src.common.metrics import apply_judge, extract_answer_tag, judged_summary
+from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY, apply_judge, extract_answer_tag, judged_summary
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 
 
@@ -56,7 +56,7 @@ def rejudge_condition(
     chunk_size: int,
     log_path: Path | None,
     pred_key: str = "answer_only",
-    template_key: str = "judge_classification_template",
+    template_key: str = DEFAULT_JUDGE_TEMPLATE_KEY,
     progress_desc: str = "Re-judging",
     temperature: float | None = None,
     seed: int | None = None,
@@ -66,6 +66,13 @@ def rejudge_condition(
 ) -> list[dict]:
     """Re-judges `rows` against `pred_key` using `prompts[template_key]`
     instead of the original "prediction"/judge_classification_template pair.
+    template_key defaults to DEFAULT_JUDGE_TEMPLATE_KEY (hybrid), which has
+    a {class_list} placeholder — every current caller passes template_key
+    explicitly (never relies on this default), but a future caller relying
+    on it must also pass extra_keys={"class_list": "class_list_text"} (see
+    src.common.dataset_config.class_list_extra_keys) or apply_judge's
+    .format() call will raise a KeyError.
+
     Preserves the ORIGINAL full-trajectory verdict under
     judged_correct_full_trajectory/judge_reasoning_full_trajectory before
     calling apply_judge, since apply_judge's return dict overwrites

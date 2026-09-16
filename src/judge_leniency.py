@@ -86,6 +86,7 @@ from src.common.leniency_analysis import (
     plot_disagreement_matrix, plot_leniency_gap, plot_leniency_gap_by_temperature,
     taggable_rows_with_extracted_answer, write_missing_answer_tag_report,
 )
+from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 
 
@@ -158,11 +159,15 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
     print(f"  {len(taggable_rows)}/{len(rows)} row(s) have a parseable <answer> tag "
           f"({failures['overall']['pct_missing']:.2f}% excluded as missing) — re-judging those.")
 
-    extra_keys = None
-    if args.class_list:
-        dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
-        add_class_list_field(taggable_rows, dataset_classes)
-        extra_keys = {"class_list": "class_list_text"}
+    # Built unconditionally (not gated on --class_list) since DEFAULT_JUDGE_TEMPLATE_KEY
+    # (hybrid, the new --template_key default) has a {class_list} placeholder —
+    # a template without that placeholder just ignores the unused format()
+    # kwarg, so this is harmless regardless of which --template_key is active.
+    # --class_list is kept as a flag for _variant_args/documentation purposes
+    # but is no longer load-bearing here.
+    dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
+    add_class_list_field(taggable_rows, dataset_classes)
+    extra_keys = {"class_list": "class_list_text"}
 
     prompts = load_prompts(Path(args.prompts))
     if owns_judge_llm:
@@ -277,7 +282,7 @@ if __name__ == "__main__":
                               "leniency_gap(T) and flip_rate(T) line up for the correlation plot. Both the "
                               "full-response and <answer>-tag-only sides are freshly re-judged at each value "
                               "(no reuse of the checkpoint's stored judged_correct).")
-    parser.add_argument("--template_key", default="judge_classification_template",
+    parser.add_argument("--template_key", default=DEFAULT_JUDGE_TEMPLATE_KEY,
                          help="prompts.yaml key used on BOTH the full-response and <answer>-tag-only sides "
                               "at every temperature — override to re-run this whole sweep under a "
                               "different judge template (e.g. Phase 3's specificity/class_list variants, "

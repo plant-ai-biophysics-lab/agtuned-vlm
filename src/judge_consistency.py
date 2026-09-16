@@ -52,6 +52,7 @@ from src.common.judge_consistency import (
 )
 from src.common.judge_template_sensitivity import add_class_list_field
 from src.common.leniency_analysis import taggable_rows_with_extracted_answer
+from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 from src.judge_leniency import load_ckpt_rows
 
@@ -95,11 +96,13 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
           f"{len(args.temperatures)} temperature(s) x {args.n_repeats} repeat(s) x {len(CONDITIONS)} condition(s) "
           f"= {n_calls} judge call(s) total.")
 
-    extra_keys = None
-    if args.class_list:
-        dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
-        add_class_list_field(taggable_rows, dataset_classes)
-        extra_keys = {"class_list": "class_list_text"}
+    # Built unconditionally (not gated on --class_list) since DEFAULT_JUDGE_TEMPLATE_KEY
+    # (hybrid, the new --template_key default) has a {class_list} placeholder —
+    # a template without that placeholder just ignores the unused format()
+    # kwarg, so this is harmless regardless of which --template_key is active.
+    dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(Path(args.config)).items()}
+    add_class_list_field(taggable_rows, dataset_classes)
+    extra_keys = {"class_list": "class_list_text"}
 
     prompts = load_prompts(Path(args.prompts))
     if owns_judge_llm:
@@ -183,7 +186,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_logs", action="store_true",
                          help="Write one judge_log.jsonl per (condition, temperature, repeat) — off by "
                               "default, this is 2 * n_temperatures * n_repeats files.")
-    parser.add_argument("--template_key", default="judge_classification_template",
+    parser.add_argument("--template_key", default=DEFAULT_JUDGE_TEMPLATE_KEY,
                          help="prompts.yaml key used for every repeat call, both conditions — override to "
                               "re-run this whole sweep under a different judge template (Phase 3's "
                               "specificity/class_list variants, see src/judge_template_sensitivity.py).")

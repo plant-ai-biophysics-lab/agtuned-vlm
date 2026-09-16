@@ -17,7 +17,9 @@ import numpy as np
 from sklearn.metrics import f1_score
 
 from src.common.dataset_config import excluded_class_pairs
-from src.common.metrics import apply_judge, aggregate_rouge, compute_classification_metrics, judged_summary
+from src.common.metrics import (
+    DEFAULT_JUDGE_TEMPLATE_KEY, apply_judge, aggregate_rouge, compute_classification_metrics, judged_summary,
+)
 from src.common.progress import ProgressBar
 
 try:
@@ -404,8 +406,14 @@ def run_judge_phase(
     the Phase 1-3 re-judge calls, now also available for this, the ORIGINAL
     judge pass that runs whenever --skip_judge isn't set.
 
-    `prompts` must carry judge_classification_template (and optionally
-    judge_system_vision) from prompts.yaml.
+    `prompts` must carry src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY's
+    template (and optionally judge_system_vision) from prompts.yaml. That
+    default template (judge_classification_hybrid_template) has a
+    {class_list} placeholder, filled from args.config via
+    src.common.dataset_config.class_list_extra_keys whenever args.config is
+    present — every existing caller (vision_baseline.py,
+    desc_augmented_vision_v2.py, self_cot.py, cot_yaml.py) already has this
+    flag.
 
     `fields` is the row schema to checkpoint with — defaults to CKPT_FIELDS,
     override for a differently-shaped checkpoint (e.g. cot_yaml.py's
@@ -451,6 +459,18 @@ def run_judge_phase(
     print(f"  [judge] {len(todo)} row(s) to judge ({len(rows) - len(todo)} already judged) "
           f"— loading {args.judge_model}")
     print(f"  [judge] logging full conversations to {log_path}")
+
+    # DEFAULT_JUDGE_TEMPLATE_KEY's template (hybrid) has a {class_list}
+    # placeholder — build it unconditionally from args.config whenever
+    # available; a template without that placeholder just ignores the
+    # unused format() kwarg, so this is safe regardless of which template
+    # ends up active.
+    extra_keys = None
+    config_path = getattr(args, "config", None)
+    if config_path:
+        from src.common.dataset_config import class_list_extra_keys
+        extra_keys = class_list_extra_keys(todo, Path(config_path))
+
     judge_llm, judge_tok = _load_judge_llm(
         args.judge_model, quantization=args.judge_quantize,
         gpu_memory_utilization=args.gpu_memory_utilization,
@@ -466,12 +486,13 @@ def run_judge_phase(
         judged_chunk = apply_judge(
             rows=chunk, llm=judge_llm, tokenizer=judge_tok,
             system_prompt=prompts.get("judge_system_vision", ""),
-            judge_template=prompts["judge_classification_template"],
+            judge_template=prompts[DEFAULT_JUDGE_TEMPLATE_KEY],
             gt_key="judge_gt_hint", pred_key="prediction",
             confidence_threshold=args.judge_confidence_threshold,
             log_path=log_path,
             enable_thinking=getattr(args, "judge_enable_thinking", False),
             max_tokens=getattr(args, "judge_max_tokens", None),
+            extra_keys=extra_keys,
         )
         rows = merge_judged(rows, judged_chunk)
         rewrite_ckpt(ckpt_path, rows, fields=fields)
