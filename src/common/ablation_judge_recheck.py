@@ -63,6 +63,7 @@ def rejudge_condition(
     extra_keys: dict[str, str] | None = None,
     enable_thinking: bool = False,
     judge_max_tokens: int | None = None,
+    judge_chat_template: str | None = None,
 ) -> list[dict]:
     """Re-judges `rows` against `pred_key` using `prompts[template_key]`
     instead of the original "prediction"/judge_classification_template pair.
@@ -106,6 +107,13 @@ def rejudge_condition(
     False/None, unchanged behavior) — lets a caller test whether the judge
     model exposes a controllable reasoning mode, and raise the token budget
     to accommodate a thinking trace if so.
+
+    judge_chat_template (default None): forwarded to apply_judge — raw
+    Jinja text overriding the judge tokenizer's own bundled template.
+    Needed for a Gemma-4 judge model alongside enable_thinking=True, whose
+    stock template can't express thinking at all (see apply_judge's own
+    docstring for the full explanation and the vLLM skip_special_tokens
+    gotcha it also handles).
     """
     from src.common.progress import ProgressBar
 
@@ -126,6 +134,7 @@ def rejudge_condition(
             log_path=log_path,
             temperature=temperature, seed=seed, extra_keys=extra_keys,
             enable_thinking=enable_thinking, max_tokens=judge_max_tokens,
+            chat_template=judge_chat_template,
         )
         out.extend(judged_chunk)
         pbar.update(len(chunk))

@@ -51,6 +51,33 @@ for _corpus in ("wordnet", "omw-1.4"):
 THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _THINK_RE_JUDGE = THINK_RE  # alias kept for internal use
 
+# Gemma-4's OWN thinking format (confirmed via its tokenizer_config.json's
+# response_schema and vLLM's vendored tool_chat_template_gemma4.jinja —
+# src/config/tool_chat_template_gemma4.jinja) — completely different from
+# Qwen's <think>/<thought> tags THINK_RE handles. Only emitted when BOTH
+# enable_thinking AND a matching chat_template override are given — the
+# model's own bundled template has no thinking support at all, confirmed
+# empirically on the generation side (0/40978 real rows ever produced this
+# with the stock template). Shared here (not just vision_baseline.py) since
+# apply_judge needs the identical extraction for the judge's own thinking.
+_CHANNEL_THOUGHT_RE = re.compile(r"<\|channel>thought\n(.*?)<channel\|>", re.DOTALL)
+
+
+def extract_channel_thought(text: str) -> tuple[str, str]:
+    """(thinking_text, remainder) — thinking_text is "" if no
+    <|channel>thought...<channel|> block is present (the normal case unless
+    thinking was both requested and actually produced). remainder is `text`
+    with the block (and one adjacent newline, if present) removed, so
+    downstream parsing (extract_answer_tag, _parse_judge_response's JSON
+    brace-matching) never sees leftover channel markers or thinking prose
+    that could contain stray {}/other characters."""
+    m = _CHANNEL_THOUGHT_RE.search(text)
+    if not m:
+        return "", text
+    thinking = m.group(1).strip()
+    remainder = (text[: m.start()] + text[m.end() :]).lstrip("\n")
+    return thinking, remainder
+
 # Single point of control for which prompts.yaml judge template new judge
 # calls default to, pipeline-wide — every active caller (vision_baseline.py's
 # run_judge_phase, majority_vote.py, cot_vision.py, cot_step_analysis.py,
@@ -333,6 +360,7 @@ def apply_judge(
     extra_keys: dict[str, str] | None = None,
     enable_thinking: bool = False,
     max_tokens: int | None = None,
+    chat_template: str | None = None,
 ) -> list[dict]:
     """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row.
 
@@ -369,13 +397,11 @@ def apply_judge(
     when explicitly True does _fmt attempt
     apply_chat_template(..., enable_thinking=True), falling back to the
     plain call (via TypeError) if the tokenizer's chat template doesn't
-    accept that kwarg (e.g. non-Qwen3 tokenizers). This exists to test
-    whether the judge model exposes a controllable reasoning/thinking mode
-    (see src/common/chat_prompt.py::render_chat_template for the same
-    enable_thinking pattern used elsewhere in the pipeline) — unverified for
-    Gemma-4, which may use a different channel-based reasoning format
-    entirely; this flag is a no-op if the tokenizer doesn't support the
-    kwarg.
+    accept that kwarg (e.g. non-Qwen3 tokenizers) — a no-op for Gemma-4,
+    whose bundled template has NO enable_thinking support at all, confirmed
+    empirically on the generation side (0/40978 real rows ever produced a
+    thinking trace with the stock template). Pass `chat_template` too for
+    a judge model in that situation (see below).
 
     max_tokens (default None): override _JUDGE_PARAMS' fixed max_tokens=1024
     for THIS call only — every existing caller leaves this None and keeps
@@ -383,15 +409,48 @@ def apply_judge(
     trace can consume (or exceed) the judge's normal 1024-token budget
     before it ever reaches its final JSON verdict, truncating the response
     mid-thought.
+
+    chat_template (default None — use the tokenizer's own bundled
+    template): raw Jinja text passed straight through as
+    apply_chat_template's own `chat_template` override kwarg, same
+    src.common.chat_prompt.render_chat_template pattern used on the
+    generation side. Needed for a Gemma-4 judge model, whose stock template
+    can't express enable_thinking at all — pass the vendored
+    src/config/tool_chat_template_gemma4.jinja's text here alongside
+    enable_thinking=True. When given, skips straight to the override render
+    rather than the Qwen-oriented TypeError/plain-call fallback chain,
+    which doesn't apply once a custom template is already in play. Also
+    flips SamplingParams(skip_special_tokens=False) whenever enable_thinking
+    is True — Gemma-4's <|channel>/<channel|> markers are real special
+    tokens vLLM strips from decoded output by default, so without this
+    they'd vanish from the judge's raw response before ever being visible
+    (same documented vLLM gotcha as the generation side —
+    https://github.com/vllm-project/vllm/issues/38855). The raw response is
+    also run through src.common.metrics.extract_channel_thought before
+    _parse_judge_response ever sees it, so a thinking judge's free-form
+    reasoning prose (which can contain stray {}/other characters) never
+    confuses the JSON-verdict brace-matching.
     """
-    judge_params = _JUDGE_PARAMS if temperature is None and seed is None and max_tokens is None else SamplingParams(
-        temperature=_JUDGE_PARAMS.temperature if temperature is None else temperature,
-        max_tokens=_JUDGE_PARAMS.max_tokens if max_tokens is None else max_tokens,
-        seed=seed,
-    )
+    if temperature is None and seed is None and max_tokens is None and not enable_thinking:
+        judge_params = _JUDGE_PARAMS
+    else:
+        judge_params = SamplingParams(
+            temperature=_JUDGE_PARAMS.temperature if temperature is None else temperature,
+            max_tokens=_JUDGE_PARAMS.max_tokens if max_tokens is None else max_tokens,
+            seed=seed,
+            skip_special_tokens=not enable_thinking,
+        )
 
     def _fmt(text: str) -> str:
         msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
+        if chat_template is not None:
+            try:
+                return tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=True,
+                    chat_template=chat_template, enable_thinking=enable_thinking,
+                )
+            except Exception:
+                pass  # fall through to the plain/Qwen-oriented paths below
         if enable_thinking:
             try:
                 return tokenizer.apply_chat_template(
@@ -429,8 +488,15 @@ def apply_judge(
     log_records = []
     for row, raw_prompt, formatted_prompt, out in zip(rows, raw_prompts, formatted_prompts, outputs):
         raw = out.outputs[0].text
-        cleaned = _THINK_RE_JUDGE.sub("", raw).strip()
-        judged_correct = _parse_judge_response(raw, threshold=confidence_threshold)
+        # Strip a Gemma-4-style <|channel>thought block BEFORE JSON parsing —
+        # the free-form thinking prose can itself contain stray {}/other
+        # characters that would otherwise confuse _parse_judge_response's
+        # brace-matching. No-op (returns raw unchanged) when no channel
+        # block is present, which is every call unless enable_thinking +
+        # chat_template were both given and the judge actually used it.
+        _thinking, de_channeled = extract_channel_thought(raw)
+        cleaned = _THINK_RE_JUDGE.sub("", de_channeled).strip()
+        judged_correct = _parse_judge_response(de_channeled, threshold=confidence_threshold)
         updated.append({
             **row,
             "judged_correct": judged_correct,

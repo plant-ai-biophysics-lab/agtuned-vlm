@@ -399,12 +399,15 @@ def run_judge_phase(
       judge_chunk_size, rejudge, skip_judge, gpu_memory_utilization,
       max_model_len, max_num_seqs, enforce_eager
 
-    args.judge_enable_thinking/args.judge_max_tokens (both optional, read
-    via getattr with False/None defaults so older callers without these
-    flags still work unchanged): forwarded to apply_judge — same
-    enable_thinking/max_tokens knobs src/judge_leniency.py etc. expose for
-    the Phase 1-3 re-judge calls, now also available for this, the ORIGINAL
-    judge pass that runs whenever --skip_judge isn't set.
+    args.judge_enable_thinking/args.judge_max_tokens/args.judge_chat_template_path
+    (all optional, read via getattr with False/None defaults so older
+    callers without these flags still work unchanged): forwarded to
+    apply_judge — same enable_thinking/max_tokens/chat_template knobs
+    src/judge_leniency.py etc. expose for the Phase 1-3 re-judge calls, now
+    also available for this, the ORIGINAL judge pass that runs whenever
+    --skip_judge isn't set. judge_chat_template_path is a file path (read
+    once here, not the raw Jinja text) — needed for a Gemma-4 judge model
+    alongside judge_enable_thinking.
 
     `prompts` must carry src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY's
     template (and optionally judge_system_vision) from prompts.yaml. That
@@ -492,6 +495,10 @@ def run_judge_phase(
             log_path=log_path,
             enable_thinking=getattr(args, "judge_enable_thinking", False),
             max_tokens=getattr(args, "judge_max_tokens", None),
+            chat_template=(
+                Path(args.judge_chat_template_path).read_text(encoding="utf-8")
+                if getattr(args, "judge_chat_template_path", None) else None
+            ),
             extra_keys=extra_keys,
         )
         rows = merge_judged(rows, judged_chunk)

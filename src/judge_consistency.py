@@ -90,6 +90,10 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     label = args.label or Path(args.ckpt).stem
+    judge_chat_template = (
+        Path(args.judge_chat_template_path).read_text(encoding="utf-8")
+        if getattr(args, "judge_chat_template_path", None) else None
+    )
 
     n_calls = len(taggable_rows) * len(args.temperatures) * args.n_repeats * len(CONDITIONS)
     print(f"  {len(taggable_rows)}/{len(rows)} row(s) have a parseable <answer> tag, "
@@ -124,6 +128,7 @@ def main(args: argparse.Namespace, judge_llm=None, judge_tok=None) -> None:
                 template_key=args.template_key, extra_keys=extra_keys,
                 enable_thinking=getattr(args, "judge_enable_thinking", False),
                 judge_max_tokens=getattr(args, "judge_max_tokens", None),
+                judge_chat_template=judge_chat_template,
             )
             flip_rate_by_temp = {t: compute_flip_rate(rows_by_temp[t]) for t in args.temperatures}
             flip_rate_by_temp_by_condition[condition_key] = flip_rate_by_temp
@@ -206,12 +211,19 @@ if __name__ == "__main__":
     parser.add_argument("--judge_enable_thinking", action="store_true",
                          help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
                               "judge's own prompt — off by default, exact original prompt rendering. "
-                              "A no-op if the judge tokenizer's chat template doesn't accept this kwarg. "
-                              "Unverified for Gemma-4 — may use a different channel-based reasoning "
-                              "format than Qwen3's enable_thinking.")
+                              "A no-op for a Qwen judge model's stock template if it doesn't accept the "
+                              "kwarg; a no-op for a Gemma-4 judge model UNLESS --judge_chat_template_path "
+                              "is also given — Gemma-4's own bundled template has no enable_thinking "
+                              "support at all (confirmed empirically).")
     parser.add_argument("--judge_max_tokens", type=int, default=None,
                          help="Override the judge's default max_tokens=1024 for THIS run — a thinking "
                               "trace (--judge_enable_thinking) can consume the normal budget before "
                               "reaching the final JSON verdict, truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
+                         help="Override the judge tokenizer's own bundled chat template with a Jinja "
+                              "file at this path — needed for --judge_enable_thinking to do anything on "
+                              "a Gemma-4 judge model. Pass src/config/tool_chat_template_gemma4.jinja "
+                              "alongside --judge_enable_thinking for a Gemma-4 judge. Not needed for a "
+                              "Qwen judge model.")
     args = parser.parse_args()
     main(args)

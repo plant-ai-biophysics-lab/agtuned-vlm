@@ -46,6 +46,7 @@ def repeat_judge_calls(
     extra_keys: dict[str, str] | None = None,
     enable_thinking: bool = False,
     judge_max_tokens: int | None = None,
+    judge_chat_template: str | None = None,
 ) -> dict[float, list[dict]]:
     """{temperature: rows}, each row a shallow copy of the input row plus
     "judged_correct_reps": [verdict_0, ..., verdict_{n_repeats-1}] (each an
@@ -66,6 +67,9 @@ def repeat_judge_calls(
     False/None, unchanged behavior) — lets the consistency sweep also be run
     with the judge's thinking/reasoning mode enabled, if the judge model
     supports it, with a raised token budget to accommodate a thinking trace.
+
+    judge_chat_template (default None): forwarded to apply_judge — see its
+    docstring; needed for a Gemma-4 judge model alongside enable_thinking.
     """
     from src.common.metrics import apply_judge
     from src.common.progress import ProgressBar
@@ -89,6 +93,7 @@ def repeat_judge_calls(
                     log_path=log_path,
                     temperature=temperature, seed=base_seed + rep_idx, extra_keys=extra_keys,
                     enable_thinking=enable_thinking, max_tokens=judge_max_tokens,
+                    chat_template=judge_chat_template,
                 )
                 for j, r in enumerate(judged_chunk):
                     reps_by_row_idx[i + j].append(int(r["judged_correct"] or 0))

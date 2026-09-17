@@ -47,7 +47,9 @@ from src.common.dataset_config import (
     load_manifest, parse_class_label,
 )
 from src.common.io import load_prompts
-from src.common.metrics import contains_match, extract_answer_tag, resolve_class, sample_class_images
+from src.common.metrics import (
+    contains_match, extract_answer_tag, extract_channel_thought, resolve_class, sample_class_images,
+)
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
@@ -88,23 +90,9 @@ except ImportError:
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
-# Gemma-4's OWN thinking format (confirmed via its tokenizer_config.json's
-# response_schema and vLLM's vendored tool_chat_template_gemma4.jinja —
-# src/config/tool_chat_template_gemma4.jinja) — completely different from
-# Qwen's <think>/<thought> tags _THINK_RE handles. Only emitted when BOTH
-# --enable_thinking AND --chat_template_path (pointing at that vendored
-# file) are set — the model's own bundled template has no thinking support
-# at all, confirmed empirically (0/40978 real rows ever produced this).
-#
-# No \n required immediately before <channel|> — real Gemma-4 output does
-# NOT reliably end its thought with a trailing newline before the closing
-# tag (confirmed against real generated rows, e.g. '..."Cercospora leaf
-# spot".<channel|>Cercospora leaf spot\n\n<answer>...' — no newline at all
-# there). An earlier version of this regex required '\n<channel|>' and
-# silently matched 0/1100 real rows despite 812/1100 having a genuine
-# closing tag — this looser version plus .strip() on the captured group
-# is the fix.
-_CHANNEL_THOUGHT_RE = re.compile(r"<\|channel>thought\n(.*?)<channel\|>", re.DOTALL)
+# extract_channel_thought (Gemma-4's <|channel>thought...<channel|> format)
+# now lives in src/common/metrics.py — shared with apply_judge, which needs
+# the identical extraction for the judge's own thinking output.
 
 
 # ── Prompt building ─────────────────────────────────────────────────────────
@@ -124,21 +112,6 @@ def cls_question(task_type: str, crop_val, prompts: dict) -> str:
 
 def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
-
-
-def extract_channel_thought(text: str) -> tuple[str, str]:
-    """(thinking_text, remainder) — thinking_text is "" if no
-    <|channel>thought...<channel|> block is present (the normal case unless
-    --enable_thinking + --chat_template_path were both used AND the model
-    actually chose to emit one). remainder is `text` with the block (and
-    one adjacent newline, if present) removed, so _clean()/extract_answer_tag
-    downstream never see leftover channel markers."""
-    m = _CHANNEL_THOUGHT_RE.search(text)
-    if not m:
-        return "", text
-    thinking = m.group(1).strip()
-    remainder = (text[: m.start()] + text[m.end() :]).lstrip("\n")
-    return thinking, remainder
 
 
 def run_batch(
@@ -500,6 +473,13 @@ if __name__ == "__main__":
                               "phase — a thinking trace (--judge_enable_thinking) can consume the "
                               "normal budget before reaching the final JSON verdict, truncating the "
                               "response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
+                         help="Override the judge tokenizer's own bundled chat template with a Jinja "
+                              "file at this path — needed for --judge_enable_thinking to do anything "
+                              "on a Gemma-4 judge model, whose stock template has no enable_thinking "
+                              "support at all. Pass src/config/tool_chat_template_gemma4.jinja "
+                              "alongside --judge_enable_thinking for a Gemma-4 judge. Not needed for "
+                              "a Qwen judge model.")
     parser.add_argument("--rejudge", action="store_true",
                          help="Clear judged_correct/judge_reasoning on every row and re-judge "
                               "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "

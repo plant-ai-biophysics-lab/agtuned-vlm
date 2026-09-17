@@ -182,12 +182,13 @@ uv run python main.py judge-template-sensitivity \
 
 Run again with `--template specificity`, then `--template class_list`, then `--template hybrid`, against the **same** `--output_dir` — each invocation writes its own `<output_dir>/<variant>/` output and persists a `greedy_summary_rechecked.csv` there. The cross-variant summary (`template_sensitivity.png`/`.tex`, `length_bias.png`) re-scans `--output_dir` for every variant with completed output on disk each time it's written, not just the one variant just run — so the summary progressively fills in as each job finishes, without re-judging anything already done. `length_bias.png` needs the `current` variant specifically and is skipped (with a printed note) until that one has run.
 
-## Judge thinking mode (experimental)
+## Judge thinking mode
 
-Every phase script (`judge-leniency`, `judge-consistency`, `judge-template-sensitivity`) accepts:
+Every phase script (`judge-leniency`, `judge-consistency`, `judge-template-sensitivity`, and `vision-baseline`'s own built-in judge phase) accepts:
 
-- `--judge_enable_thinking` — attempts `tokenizer.apply_chat_template(..., enable_thinking=True)` for the judge's own prompt. **Off by default**, which reproduces the exact original prompt rendering with no behavior change. This is a no-op (silently falls back to the plain call) if the judge tokenizer's chat template doesn't accept the `enable_thinking` kwarg at all.
-- `--judge_max_tokens` — overrides the judge's default `max_tokens=1024` budget. Useful alongside `--judge_enable_thinking`, since a thinking trace can consume the normal budget before the judge ever reaches its final JSON verdict, truncating the response mid-thought.
+- `--judge_enable_thinking` — attempts `tokenizer.apply_chat_template(..., enable_thinking=True)` for the judge's own prompt. **Off by default**, which reproduces the exact original prompt rendering with no behavior change.
+- `--judge_max_tokens` — overrides the judge's default `max_tokens=1024` budget. Needed alongside `--judge_enable_thinking`, since a thinking trace can consume the normal budget before the judge ever reaches its final JSON verdict, truncating the response mid-thought.
+- `--judge_chat_template_path` — override the judge tokenizer's own bundled chat template with a Jinja file. **Required alongside `--judge_enable_thinking` for a Gemma-4 judge model** — confirmed empirically (same investigation as the generation side) that Gemma-4's stock template has no `enable_thinking` support at all; `--judge_enable_thinking` alone is a silent no-op for it. Pass the vendored `src/config/tool_chat_template_gemma4.jinja`. Not needed for a Qwen judge model, whose own bundled template already supports `enable_thinking` directly.
 
 ```bash
 uv run python main.py judge-leniency \
@@ -195,8 +196,12 @@ uv run python main.py judge-leniency \
     --output_dir ablation/judge_leniency/vision_baseline_gemma4_31b_fp8_thinking/ \
     --label "Vision Baseline — Gemma-4-31B-it-FP8 (thinking)" \
     --limit 50 \
-    --judge_enable_thinking --judge_max_tokens 2048
+    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --judge_enable_thinking --judge_max_tokens 2048 \
+    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
 ```
+
+Also handles the same vLLM `skip_special_tokens` gotcha as the generation side automatically — `apply_judge` flips `skip_special_tokens=False` internally whenever `enable_thinking=True`, so Gemma-4's `<|channel>`/`<channel|>` special tokens survive into the judge's decoded output instead of being silently stripped. The judge's raw response is also run through `extract_channel_thought` (`src/common/metrics.py`) before the JSON-verdict parser ever sees it, so a thinking judge's free-form reasoning prose — which can itself contain stray `{`/`}` characters — never confuses the brace-matching that extracts `is_match`/`confidence`.
 
 ### Logging the judge's own thinking tokens
 
@@ -207,18 +212,20 @@ Every row the judge scores now also carries a `judge_raw_response` column (along
 - Every `*_judge_log.jsonl` (written whenever a judge call logs at all — `judge-leniency` always, `judge-consistency` only with `--save_logs`) already had the judge's full raw response in its own `raw_response` field before this, independent of `judge_raw_response` — the CSV column is new, the JSONL log always had it.
 - `judge-consistency`'s flip-rate CSVs/JSON don't carry per-repeat raw text (only the 0/1 verdict per repeat) — use `--save_logs` and read the per-repeat JSONL logs if you need the judge's actual reasoning text for a specific repeat.
 
-`vision-baseline`'s own built-in judge phase (the one that runs unless `--skip_judge` is set) now also accepts `--judge_enable_thinking`/`--judge_max_tokens`, same meaning as above:
+`vision-baseline`'s own built-in judge phase (the one that runs unless `--skip_judge` is set) also accepts all three flags, same meaning as above:
 
 ```bash
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --output_dir outputs_final/vision_baseline_judge_thinking/ \
-    --judge_enable_thinking --judge_max_tokens 2048
+    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --judge_enable_thinking --judge_max_tokens 2048 \
+    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
 ```
 
-This is a separate pair of flags from `--enable_thinking`/`--gen_max_tokens` (Phase 0's own generation-side thinking flags, see above) — `--judge_enable_thinking` only affects the judge model's call inside `run_judge_phase`, not the classification model's generation call. Not yet wired up for `desc_augmented_vision_v2.py`/`self_cot.py`/`cot_yaml.py`, which share the same `run_judge_phase` function but don't expose these flags on their own CLIs yet — ask if you need it there too.
+This is a separate set of flags from `--enable_thinking`/`--gen_max_tokens`/`--chat_template_path` (Phase 0's own generation-side thinking flags, see above) — the `--judge_*` versions only affect the judge model's call inside `run_judge_phase`, not the classification model's generation call. Not yet wired up for `desc_augmented_vision_v2.py`/`self_cot.py`/`cot_yaml.py`, which share the same `run_judge_phase` function but don't expose these flags on their own CLIs yet — ask if you need it there too.
 
-This is verified so far only via mocked tests (`enable_thinking=True` correctly changes the rendered prompt when the tokenizer accepts the kwarg, and falls back cleanly when it doesn't) — whether Gemma-4's tokenizer actually exposes a controllable thinking mode via this kwarg, or uses a different channel-based reasoning format entirely, is unverified without running it. To check: run a small `--limit` job with `--judge_enable_thinking` and inspect a `*_judge_log.jsonl`'s `rendered_prompt` field — if it differs from a non-thinking run's rendered prompt (e.g. shows a distinct reasoning/channel marker), the kwarg is doing something; if it's identical, the kwarg is a no-op for this tokenizer.
+Verified via mocked tests: `chat_template` overrides the tokenizer's own template correctly, `skip_special_tokens` flips with `enable_thinking`, and — the case that actually matters — a judge response containing both a `<|channel>thought...<channel|>` block *and* a stray `{`/`}` character inside the thinking prose still parses the real JSON verdict correctly (the old code, which ran `_parse_judge_response` directly on the raw text, would have been confused by that stray brace before this fix). Not yet verified on a real GPU run — check by inspecting a `*_judge_log.jsonl`'s `rendered_prompt`/`raw_response` fields for the `<|think|>`/`<|channel>thought` markers once you run it.
 
 ## Notes
 

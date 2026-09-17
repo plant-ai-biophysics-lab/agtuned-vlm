@@ -152,6 +152,7 @@ def _variant_args(base: argparse.Namespace, output_dir: Path, label: str, templa
         gpu_memory_utilization=base.gpu_memory_utilization, max_model_len=base.max_model_len,
         enforce_eager=base.enforce_eager,
         judge_enable_thinking=base.judge_enable_thinking, judge_max_tokens=base.judge_max_tokens,
+        judge_chat_template_path=base.judge_chat_template_path,
         **overrides,
     )
 
@@ -170,6 +171,10 @@ def main(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     label = args.label or Path(args.ckpt).stem
+    judge_chat_template = (
+        Path(args.judge_chat_template_path).read_text(encoding="utf-8")
+        if getattr(args, "judge_chat_template_path", None) else None
+    )
 
     selected_variants = [v for v in TEMPLATE_VARIANTS if args.template in ("all", v[0])]
     if not selected_variants:
@@ -211,6 +216,7 @@ def main(args: argparse.Namespace) -> None:
                 progress_desc=f"[greedy summary] Re-judging {label} ({variant_label})",
                 extra_keys=extra_keys,
                 enable_thinking=args.judge_enable_thinking, judge_max_tokens=args.judge_max_tokens,
+                judge_chat_template=judge_chat_template,
             )
             rows_by_variant[variant_key] = rechecked
             print(f"  [greedy summary] {len(rechecked)} row(s) re-judged.")
@@ -456,12 +462,19 @@ if __name__ == "__main__":
     parser.add_argument("--judge_enable_thinking", action="store_true",
                          help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
                               "judge's own prompt on every variant/phase call — off by default, exact "
-                              "original prompt rendering. A no-op if the judge tokenizer's chat template "
-                              "doesn't accept this kwarg. Unverified for Gemma-4 — may use a different "
-                              "channel-based reasoning format than Qwen3's enable_thinking.")
+                              "original prompt rendering. A no-op for a Qwen judge model's stock template "
+                              "if it doesn't accept the kwarg; a no-op for a Gemma-4 judge model UNLESS "
+                              "--judge_chat_template_path is also given — Gemma-4's own bundled template "
+                              "has no enable_thinking support at all (confirmed empirically).")
     parser.add_argument("--judge_max_tokens", type=int, default=None,
                          help="Override the judge's default max_tokens=1024 for every call this run — a "
                               "thinking trace (--judge_enable_thinking) can consume the normal budget "
                               "before reaching the final JSON verdict, truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
+                         help="Override the judge tokenizer's own bundled chat template with a Jinja "
+                              "file at this path, for every variant/phase call — needed for "
+                              "--judge_enable_thinking to do anything on a Gemma-4 judge model. Pass "
+                              "src/config/tool_chat_template_gemma4.jinja alongside "
+                              "--judge_enable_thinking for a Gemma-4 judge. Not needed for a Qwen judge.")
     args = parser.parse_args()
     main(args)
