@@ -237,15 +237,27 @@ def main(args: argparse.Namespace) -> None:
 
             # ── Phase 2 (full temperature sweep) for this variant, wired
             # to Phase 1's just-written leniency_gap.json for the
-            # correlation plot ──
+            # correlation plot — skippable via --skip_consistency, since
+            # flip-rate is a repeated-sampling metric (n_repeats judge
+            # calls per row per condition per temperature) and by far the
+            # most expensive part of a variant's run; nothing in the
+            # cross-variant summary strictly needs it EXCEPT the LaTeX
+            # table's "Flip rate" column (that table just won't cover a
+            # variant missing flip_rate.json, same graceful-partial-
+            # coverage behavior as a variant that hasn't run at all yet). ──
             consistency_dir = variant_dir / "consistency"
-            consistency_args = _variant_args(
-                args, consistency_dir, f"{label} — {variant_label}", template_key, needs_class_list,
-                n_repeats=args.n_repeats,
-                leniency_gap_json=str(leniency_dir / "leniency_gap.json"),
-                save_logs=args.save_logs,
-            )
-            judge_consistency.main(consistency_args, judge_llm=judge_llm, judge_tok=judge_tok)
+            if args.skip_consistency:
+                print(f"  [Phase 2] skipped (--skip_consistency) — leniency_and_false_positive_summary.png "
+                      f"and judge_accuracy_f1.png don't need it; the LaTeX table's Flip rate column will "
+                      f"be missing for this variant.")
+            else:
+                consistency_args = _variant_args(
+                    args, consistency_dir, f"{label} — {variant_label}", template_key, needs_class_list,
+                    n_repeats=args.n_repeats,
+                    leniency_gap_json=str(leniency_dir / "leniency_gap.json"),
+                    save_logs=args.save_logs,
+                )
+                judge_consistency.main(consistency_args, judge_llm=judge_llm, judge_tok=judge_tok)
 
             # ── Collect this variant's Phase 1/2 results (read back from
             # the JSON each just wrote) for the cross-variant LaTeX table,
@@ -442,10 +454,23 @@ if __name__ == "__main__":
                               "one of --temperatures' values (e.g. pass --temperatures 0.1 0.5 0.7 1.0 to "
                               "use the 0.7 default), or that variant is skipped with a printed note rather "
                               "than silently substituting a different temperature.")
-    parser.add_argument("--n_repeats", type=int, default=5, help="Phase 2's repeat judge calls per row, per temperature.")
+    parser.add_argument("--n_repeats", type=int, default=5,
+                         help="Phase 2's repeat judge calls per row, per temperature — ignored if "
+                              "--skip_consistency is set.")
+    parser.add_argument("--skip_consistency", action="store_true",
+                         help="Skip Phase 2 (flip-rate/consistency) entirely for every variant this "
+                              "invocation — by far the most expensive part of a variant's run (n_repeats "
+                              "judge calls per row per condition per temperature, vs. Phase 1's single "
+                              "call). Nothing else needs it: judge_accuracy_f1.png, "
+                              "leniency_and_false_positive_summary.png, template_sensitivity.png, and "
+                              "oracle_validation_sample.csv all read only Phase 1 / greedy-summary output. "
+                              "The one thing that degrades: template_sensitivity_table.tex's Flip rate "
+                              "column, and the leniency_vs_flip_rate_*.png correlation plots, won't exist "
+                              "for a variant run this way.")
     parser.add_argument("--save_logs", action="store_true",
                          help="Phase 2: write one judge_log.jsonl per (variant, temperature, repeat) — "
-                              "off by default, this multiplies fast across 4 variants.")
+                              "off by default, this multiplies fast across 4 variants. Ignored if "
+                              "--skip_consistency is set.")
     parser.add_argument("--n_length_buckets", type=int, default=4)
     parser.add_argument("--limit", type=int, default=None,
                          help="Subsample to this many rows first, applied ONCE before any variant runs "

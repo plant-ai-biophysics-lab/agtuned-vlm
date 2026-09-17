@@ -149,9 +149,13 @@ Stages:
                                re-run against the SAME --output_dir for each remaining variant
                                and the cross-variant summary progressively fills in from disk,
                                no re-judging. --temperatures, --n_repeats, --n_length_buckets,
-                               --judge_enable_thinking/--judge_max_tokens (same as judge-leniency),
-                               --summary_temperature (default 0.7, must be included in --temperatures
-                               for a variant to appear in leniency_and_false_positive_summary.png).
+                               --judge_enable_thinking/--judge_max_tokens/--judge_chat_template_path
+                               (same as judge-leniency), --summary_temperature (default 0.7, must be
+                               included in --temperatures for a variant to appear in
+                               leniency_and_false_positive_summary.png), --skip_consistency (skip Phase 2
+                               entirely for every variant — by far the most expensive part; nothing but
+                               the LaTeX table's Flip rate column and the leniency_vs_flip_rate_*.png
+                               plots need it).
                                Writes template_sensitivity.png,
                                length_bias.png (skipped until the "current" variant has run),
                                judge_accuracy_f1.png (judge accuracy + judge-scored macro-F1 per

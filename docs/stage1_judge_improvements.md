@@ -168,6 +168,21 @@ uv run python main.py judge-template-sensitivity \
     --template hybrid
 ```
 
+### Skipping Phase 2 (flip-rate) entirely
+
+`--skip_consistency` skips Phase 2 for every variant this invocation — by far the most expensive part (`n_repeats` judge calls per row per condition per temperature, vs. Phase 1's single call). Nothing else needs it: `judge_accuracy_f1.png`, `leniency_and_false_positive_summary.png`, `template_sensitivity.png`, and `oracle_validation_sample.csv` all read only Phase 1 / greedy-summary output. The only things that don't exist for a variant run this way: `template_sensitivity_table.tex`'s "Flip rate" column, and the `leniency_vs_flip_rate_*.png` correlation plots.
+
+```bash
+uv run python main.py judge-template-sensitivity \
+    --ckpt outputs_final/vision_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \
+    --output_dir outputs_final/judge_template_sensitivity/vision_baseline_gemma4_31b_fp8/ \
+    --template hybrid \
+    --temperatures 0.7 \
+    --skip_consistency
+```
+
+With a single temperature and `--skip_consistency`, one variant's judge-call count drops from ~13x the dataset size (1 greedy + 2 leniency + 10 flip-rate repeats, at the default `--n_repeats 5`) down to ~3x (1 greedy + 2 leniency) — roughly a 4x reduction.
+
 ### Running one template variant per job
 
 `--template {all,current,specificity,class_list,hybrid}` (default `all`) runs just one variant per invocation instead of all four in one long-running job:
