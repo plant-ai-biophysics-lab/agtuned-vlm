@@ -90,6 +90,17 @@ except ImportError:
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 
+# Confidence-language markers (Paper 2 Stage 2, docs/stage2_verifier_corrections.md)
+# — the same phenomenon flagged in the CoT-verifier findings memory ("confidence
+# language is anti-correlated with correctness"): logged per pairwise-analysis
+# so verifier-score-analysis can test whether it carries over into the PPT
+# verifier's own comparative analysis text, not assumed.
+_CONFIDENCE_MARKERS_RE = re.compile(
+    r"\b(clearly|obviously|definitely|certainly|without doubt|undoubtedly|"
+    r"characteristic of|classic(?:ally)?|hallmark|unmistakabl\w*|textbook)\b",
+    re.IGNORECASE,
+)
+
 _VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.yaml"
 
 # Extra columns inserted right after image_name — same convention as
@@ -307,6 +318,14 @@ def _score_pairs_batch(
     for i in active:
         r, o = results[i], owners[i]
         result[i] = (r.r_a, r.r_b, r.analysis, [r.prompt_tokens, r.completion_tokens])
+        # Paper 2 Stage 2 granularity (docs/stage2_verifier_corrections.md):
+        # raw letter-probability max/sum breakdown (tests the Step 2
+        # max-not-sum hypothesis), trajectory word counts (length-bias
+        # hypothesis), and a confidence-language marker count on the
+        # free-text analysis (carries the CoT-verifier finding — confident
+        # phrasing anti-correlated with correctness — forward to this
+        # verifier). All additive/read-only: never fed back into scoring.
+        n_confidence_markers = len(_CONFIDENCE_MARKERS_RE.findall(r.analysis))
         _log_verifier_call(
             log_path, agml_dataset=agml_dataset, class_label=class_label,
             image_name=image_names[i], pool_pair=[o.a, o.b],
@@ -314,6 +333,12 @@ def _score_pairs_batch(
             slot_swapped=o.swapped, user_prompt=o.prompt_text, analysis=r.analysis,
             score_a=r.r_a, score_b=r.r_b,
             prompt_tokens=r.prompt_tokens, completion_tokens=r.completion_tokens,
+            n_confidence_markers=n_confidence_markers,
+            trajectory_a_words=r.words_a, trajectory_b_words=r.words_b,
+            letter_probs_a_max=(r.diag_a or {}).get("probs_max"),
+            letter_probs_a_sum=(r.diag_a or {}).get("probs_sum"),
+            letter_probs_b_max=(r.diag_b or {}).get("probs_max"),
+            letter_probs_b_sum=(r.diag_b or {}).get("probs_sum"),
         )
     return result
 

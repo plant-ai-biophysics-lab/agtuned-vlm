@@ -38,6 +38,8 @@ LLM.generate() API, not a served endpoint).
 """
 from __future__ import annotations
 
+import math
+
 try:
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -178,3 +180,35 @@ def extract_tag_score(analysis: str, tag: str, letter_raw: str, logprobs_list) -
     synth_tokens = [f"\n{tag}", letter_raw, closing]
     synth_position_logprobs = [[(f"\n{tag}", 0.0)], alts, [(closing, 0.0)]]
     return extract_score(synth_text, synth_tokens, synth_position_logprobs, tag)
+
+
+def letter_probability_diagnostics(logprobs_list) -> dict:
+    """Diagnostic-only breakdown of the raw per-letter probability mass at
+    a forced score-token position (Paper 2 Stage 2 — see docs/
+    stage2_verifier_corrections.md). Read-only: never used to score
+    anything, so it can't change tournament behavior — extract_tag_score
+    above remains the sole authority on the actual score.
+
+    llm_verifier.fine_grained_reward.extract_score (called via
+    extract_tag_score) folds a letter's plain and leading-space spellings
+    ("C" / " C") together by taking the MAX of their two probabilities,
+    not the sum — see extract_tag_score's docstring / docs/
+    stage2_verifier_corrections.md's Step 2 for why that's a plausible
+    contributor to the letter-scale's low variance (Paper 1 Appendix C,
+    Figure 9). This returns both aggregations side by side so
+    verifier-score-analysis can measure how much probability mass the max
+    convention is actually discarding on real data, rather than assuming
+    it: `probs_max` mirrors what extract_score itself uses, `probs_sum`
+    is the candidate alternative."""
+    lp_dict = logprobs_list[0] if logprobs_list else {}
+    letters = {chr(65 + i) for i in range(20)}
+    probs_max: dict[str, float] = {}
+    probs_sum: dict[str, float] = {}
+    for lp in lp_dict.values():
+        tok = lp.decoded_token.strip()
+        if tok not in letters:
+            continue
+        p = math.exp(lp.logprob)
+        probs_max[tok] = max(probs_max.get(tok, 0.0), p)
+        probs_sum[tok] = probs_sum.get(tok, 0.0) + p
+    return {"probs_max": probs_max, "probs_sum": probs_sum}

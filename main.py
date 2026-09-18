@@ -34,6 +34,7 @@ STAGES = {
     "verifier-cot":  "src.verifier_cot",
     "verifier-summary": "src.verifier_summary",
     "verifier-scaling-summary": "src.verifier_scaling_summary",
+    "verifier-score-analysis": "src.verifier_score_analysis",
     "filter-checkpoints": "src.filter_checkpoints",
     "ablation":      "src.ablation",
     "judge-leniency": "src.judge_leniency",
@@ -99,6 +100,12 @@ Stages:
                                --k_candidates/--k_pivots are the main tunables. Compared against
                                src/verifier_lmv.py's full PPT tournament (run separately, not wired
                                into main.py — see its own --help) in `cot-compare`.
+    verifier-score-analysis   — diagnostic (no GPU needed): re-derives the paper's Appendix C
+                               Figure 8/9 checks (score distribution + retained-set accuracy vs.
+                               threshold, nearest-letter histogram) from an existing verifier-cot
+                               run's own ckpt CSV + verifier_log.jsonl, to see whether the
+                               fine-grained-reward score is discriminating (or inverted/collapsed)
+                               BEFORE picking a fix. --model/--output_dir or --verifier_dir.
     ablation                 — reviewer-question ablation: isolates rubric vs. K-sampling
                                vs. verifier-selection (Q2/Q3), verifier confidence
                                calibration/ranking accuracy (Q4), oracle-description
