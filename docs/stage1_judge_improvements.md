@@ -242,6 +242,20 @@ This is a separate set of flags from `--enable_thinking`/`--gen_max_tokens`/`--c
 
 Verified via mocked tests: `chat_template` overrides the tokenizer's own template correctly, `skip_special_tokens` flips with `enable_thinking`, and — the case that actually matters — a judge response containing both a `<|channel>thought...<channel|>` block *and* a stray `{`/`}` character inside the thinking prose still parses the real JSON verdict correctly (the old code, which ran `_parse_judge_response` directly on the raw text, would have been confused by that stray brace before this fix). Not yet verified on a real GPU run — check by inspecting a `*_judge_log.jsonl`'s `rendered_prompt`/`raw_response` fields for the `<|think|>`/`<|channel>thought` markers once you run it.
 
+## Backfilling a checkpoint's own judged_correct after comparing templates
+
+A checkpoint produced with `--skip_judge` has blank `judged_correct`/`judge_reasoning` — normal for the Phase 0 workflow, since judging happens via Phase 1-4 instead. Once you've compared templates (Phase 3/4) and decided which one's **full-response** verdict to trust, `vision-baseline --backfill_judge_results` copies that judgment straight into the checkpoint, so it ends up with real judged results as if its own judge phase had used that template:
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_thinking/ \
+    --backfill_judge_results \
+    --rechecked_csv outputs_final/judge_template_sensitivity/vision_baseline_gemma4_31b_fp8_thinking/current/leniency/rechecked_T0.7.csv
+```
+
+Reads `judged_correct_full_trajectory`/`judge_reasoning_full_trajectory` (the full-response condition — see `src/judge_leniency.py`) from the given `rechecked_T<temp>.csv`, joins on `(agml_dataset, class_label, image_name)`, and writes those values into the checkpoint's own `judged_correct`/`judge_reasoning` columns. Works with any `rechecked_T<temp>.csv` — from a standalone `judge-leniency` run, or from a specific variant's `<output_dir>/<variant>/leniency/` subfolder under `judge-template-sensitivity` (pick whichever template's results you've decided to trust after comparing current/specificity/class_list/hybrid). A checkpoint row with no match (e.g. that Phase 1-4 run used `--limit`) is left completely unchanged, never partially overwritten — the printed summary reports how many rows were actually updated.
+
 ## Notes
 
 - Phases 1-3 each need a judge model loaded (`--judge_model`, default `google/gemma-4-26B-A4B-it`; `--judge_quantize` for `4bit`/`8bit`/`awq`/`gptq`) — GPU required, not a local-CPU step.

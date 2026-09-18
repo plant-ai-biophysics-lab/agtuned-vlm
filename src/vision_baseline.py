@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
+import csv
 import re
 import time
 
@@ -362,6 +363,69 @@ def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VISION_BAS
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
 
 
+def backfill_judge_results(
+    output_dir: Path, model_id: str, rechecked_csv: Path, fields: list[str] = VISION_BASELINE_CKPT_FIELDS,
+) -> None:
+    """Backfill judged_correct/judge_reasoning in this checkpoint from a
+    Phase 1/judge-template-sensitivity rechecked_T<temp>.csv's FULL-RESPONSE
+    condition (judged_correct_full_trajectory/judge_reasoning_full_trajectory
+    — see src/judge_leniency.py) — for a checkpoint whose own judge phase was
+    skipped (--skip_judge), once you've compared templates via Phase 1-4 and
+    decided which one's full-response verdict to trust as this checkpoint's
+    real judged result.
+
+    Joined on (agml_dataset, class_label, image_name); a checkpoint row with
+    no match in rechecked_csv (e.g. if that Phase 1-4 run used --limit and
+    only covers a subsample) is left completely unchanged — still blank if
+    it was blank before, never partially overwritten. Rewrites the
+    checkpoint in place; every other column is preserved untouched."""
+    model_dir = output_dir / safe_model_name(model_id)
+    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    ckpt_rows, _ = load_ckpt(ckpt_path, fields=fields)
+    if not ckpt_rows:
+        print(f"  No rows found in {ckpt_path}.")
+        return
+
+    with open(rechecked_csv, encoding="utf-8") as f:
+        rechecked_rows = list(csv.DictReader(f))
+    if not rechecked_rows:
+        print(f"  {rechecked_csv} has no rows — nothing to backfill.")
+        return
+    missing = [c for c in ("judged_correct_full_trajectory", "judge_reasoning_full_trajectory")
+               if c not in rechecked_rows[0]]
+    if missing:
+        raise ValueError(
+            f"{rechecked_csv} is missing expected column(s) {missing} — expected a "
+            f"judge_leniency.py / judge_template_sensitivity.py rechecked_T<temp>.csv, which carries "
+            f"the full-response condition under these _full_trajectory column names."
+        )
+
+    by_key = {
+        (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", "")): r
+        for r in rechecked_rows
+    }
+    n_updated = 0
+    for row in ckpt_rows:
+        key = (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""))
+        match = by_key.get(key)
+        if match is None:
+            continue
+        row["judged_correct"] = match.get("judged_correct_full_trajectory", "")
+        row["judge_reasoning"] = match.get("judge_reasoning_full_trajectory", "")
+        n_updated += 1
+
+    rewrite_ckpt(ckpt_path, ckpt_rows, fields=fields)
+    metrics = compute_model_metrics(ckpt_rows)
+    write_model_metrics(model_dir, metrics)
+    print(f"  Backfilled judged_correct/judge_reasoning for {n_updated}/{len(ckpt_rows)} row(s) "
+          f"in {ckpt_path.name} from {rechecked_csv}")
+    if n_updated < len(ckpt_rows):
+        print(f"  {len(ckpt_rows) - n_updated} row(s) had no match in {rechecked_csv.name} "
+              f"(e.g. that run used --limit) — left unchanged.")
+    print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
+          f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
+
+
 def main(args: argparse.Namespace) -> None:
     if args.collate:
         collated = collate_models(Path(args.output_dir), fields=VISION_BASELINE_CKPT_FIELDS)
@@ -376,6 +440,18 @@ def main(args: argparse.Namespace) -> None:
             print("ERROR: --model is required with --merge_shards.")
             sys.exit(1)
         merge_shards(Path(args.output_dir), args.model, fields=VISION_BASELINE_CKPT_FIELDS)
+        return
+
+    if args.backfill_judge_results:
+        if not args.model:
+            print("ERROR: --model is required with --backfill_judge_results.")
+            sys.exit(1)
+        if not args.rechecked_csv:
+            print("ERROR: --rechecked_csv is required with --backfill_judge_results.")
+            sys.exit(1)
+        backfill_judge_results(
+            Path(args.output_dir), args.model, Path(args.rechecked_csv), fields=VISION_BASELINE_CKPT_FIELDS,
+        )
         return
 
     if not args.model:
@@ -509,6 +585,18 @@ if __name__ == "__main__":
                          help="Skip inference — combine ckpt_<model>_shard*of*.csv (written by "
                               "--num_shards > 1 runs) into the canonical ckpt_<model>.csv + "
                               "metrics.json for --model's output dir.")
+    parser.add_argument("--backfill_judge_results", action="store_true",
+                         help="Skip inference — backfill judged_correct/judge_reasoning in --model's "
+                              "checkpoint from a judge-leniency/judge-template-sensitivity "
+                              "rechecked_T<temp>.csv's full-response condition (see --rechecked_csv). "
+                              "For a checkpoint whose own judge phase was skipped (--skip_judge), once "
+                              "you've compared judge templates via Phase 1-4 and decided which one's "
+                              "full-response verdict to trust. Rows with no match in --rechecked_csv "
+                              "(e.g. a --limit subsample) are left unchanged.")
+    parser.add_argument("--rechecked_csv", default=None,
+                         help="Path to a rechecked_T<temp>.csv (from judge-leniency directly, or from "
+                              "judge-template-sensitivity's <output_dir>/<variant>/leniency/ subfolder) "
+                              "— required with --backfill_judge_results.")
 
     # Keys this script doesn't use but the shared config file also carries
     # for desc_augmented_vision_v2.py / vision_baseline_collate.py.
