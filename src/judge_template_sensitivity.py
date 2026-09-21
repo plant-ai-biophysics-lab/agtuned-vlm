@@ -88,13 +88,13 @@ Writes, under --output_dir:
                                              length_bias.png + judge_accuracy_f1's
                                              data, machine-readable
 
-Usage:
+Usage (--judge_model/--judge_enable_thinking/--judge_max_tokens/
+--judge_chat_template_path and --temperatures 0.7 are all defaults now —
+only pass them to override):
     uv run python main.py judge-template-sensitivity \\
-        --ckpt outputs_final/vision_baseline/google_gemma-4-E4B-it/ \\
-        --output_dir ablation/judge_template_sensitivity/vision_baseline_e4b/ \\
-        --label "Vision Baseline — Gemma-4-E4B-it" \\
-        --temperatures 0.1 0.5 1.0 --n_repeats 5 \\
-        --judge_model google/gemma-4-26B-A4B-it
+        --ckpt outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \\
+        --output_dir outputs_final/judge_template_sensitivity/vision_baseline_thinking/ \\
+        --template hybrid
 """
 from __future__ import annotations
 
@@ -445,7 +445,7 @@ if __name__ == "__main__":
                               "requiring exact wording) against the SAME --output_dir progressively "
                               "completes the summary without re-judging anything already done.")
     parser.add_argument("--config", default="src/config/datasets.yaml", help="datasets.yaml, for each row's class list.")
-    parser.add_argument("--temperatures", type=float, nargs="+", default=[0.1, 0.5, 1.0],
+    parser.add_argument("--temperatures", type=float, nargs="+", default=[0.7],
                          help="Swept judge temperatures, passed through to both Phase 1 and Phase 2 "
                               "for every variant.")
     parser.add_argument("--summary_temperature", type=float, default=0.7,
@@ -477,29 +477,30 @@ if __name__ == "__main__":
                               "(each variant re-runs the full Phase 1+2 sweep over the same subsample) — "
                               "start small, this is the most expensive script in the plan.")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
-    parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it")
+    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
     parser.add_argument("--enforce_eager", action="store_true")
-    parser.add_argument("--judge_enable_thinking", action="store_true",
+    parser.add_argument("--judge_enable_thinking", action=argparse.BooleanOptionalAction, default=True,
                          help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
-                              "judge's own prompt on every variant/phase call — off by default, exact "
-                              "original prompt rendering. A no-op for a Qwen judge model's stock template "
-                              "if it doesn't accept the kwarg; a no-op for a Gemma-4 judge model UNLESS "
-                              "--judge_chat_template_path is also given — Gemma-4's own bundled template "
-                              "has no enable_thinking support at all (confirmed empirically).")
-    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                              "judge's own prompt on every variant/phase call — ON by default (this repo's "
+                              "judge model is Gemma-4, and --judge_chat_template_path defaults to the "
+                              "template that makes this work for it). Pass --no-judge_enable_thinking to "
+                              "fall back to the exact original prompt rendering.")
+    parser.add_argument("--judge_max_tokens", type=int, default=2048,
                          help="Override the judge's default max_tokens=1024 for every call this run — a "
-                              "thinking trace (--judge_enable_thinking) can consume the normal budget "
-                              "before reaching the final JSON verdict, truncating the response.")
-    parser.add_argument("--judge_chat_template_path", default=None,
+                              "thinking trace (--judge_enable_thinking, on by default) can consume the "
+                              "normal budget before reaching the final JSON verdict, truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
                          help="Override the judge tokenizer's own bundled chat template with a Jinja "
                               "file at this path, for every variant/phase call — needed for "
-                              "--judge_enable_thinking to do anything on a Gemma-4 judge model. Pass "
-                              "src/config/tool_chat_template_gemma4.jinja alongside "
-                              "--judge_enable_thinking for a Gemma-4 judge. Not needed for a Qwen judge.")
+                              "--judge_enable_thinking to do anything on a Gemma-4 judge model (the "
+                              "default judge model here). Pass an empty string "
+                              "(--judge_chat_template_path '') to disable for a non-Gemma-4 judge model.")
     args = parser.parse_args()
+    if not args.judge_chat_template_path:
+        args.judge_chat_template_path = None
     main(args)

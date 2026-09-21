@@ -557,32 +557,31 @@ if __name__ == "__main__":
                               "--enable_thinking to get real <|channel>thought...<channel|> output from "
                               "it, captured into the checkpoint's `reasoning` column. Not needed for "
                               "Qwen models, whose own bundled template already supports enable_thinking.")
-    parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
+    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic",
                          help="Fixed judge model used for every baseline/model being evaluated.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200,
                          help="Rows per apply_judge() call — drives the judge progress bar "
                               "and how much work a kill mid-judging can lose.")
-    parser.add_argument("--judge_enable_thinking", action="store_true",
+    parser.add_argument("--judge_enable_thinking", action=argparse.BooleanOptionalAction, default=True,
                          help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for "
                               "the judge's own prompt during this run's judge phase (ignored if "
-                              "--skip_judge is set). Off by default, exact original prompt rendering. "
-                              "A no-op if the judge tokenizer's chat template doesn't accept this "
-                              "kwarg. Same flag/behavior as judge-leniency's --judge_enable_thinking, "
-                              "now also available for this script's own built-in judge pass.")
-    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                              "--skip_judge is set). ON by default (this repo's judge model is "
+                              "Gemma-4, and --judge_chat_template_path defaults to the template that "
+                              "makes this work for it) — pass --no-judge_enable_thinking to fall back "
+                              "to the exact original prompt rendering.")
+    parser.add_argument("--judge_max_tokens", type=int, default=2048,
                          help="Override the judge's default max_tokens=1024 for this run's judge "
-                              "phase — a thinking trace (--judge_enable_thinking) can consume the "
-                              "normal budget before reaching the final JSON verdict, truncating the "
-                              "response.")
-    parser.add_argument("--judge_chat_template_path", default=None,
+                              "phase — a thinking trace (--judge_enable_thinking, on by default) can "
+                              "consume the normal budget before reaching the final JSON verdict, "
+                              "truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
                          help="Override the judge tokenizer's own bundled chat template with a Jinja "
                               "file at this path — needed for --judge_enable_thinking to do anything "
-                              "on a Gemma-4 judge model, whose stock template has no enable_thinking "
-                              "support at all. Pass src/config/tool_chat_template_gemma4.jinja "
-                              "alongside --judge_enable_thinking for a Gemma-4 judge. Not needed for "
-                              "a Qwen judge model.")
+                              "on a Gemma-4 judge model (the default judge model here). Pass an empty "
+                              "string (--judge_chat_template_path '') to disable for a non-Gemma-4 "
+                              "judge model.")
     parser.add_argument("--rejudge", action="store_true",
                          help="Clear judged_correct/judge_reasoning on every row and re-judge "
                               "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "
@@ -653,4 +652,7 @@ if __name__ == "__main__":
             print(f"[warn] {_pre_args.vision_baseline_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
         parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
 
-    main(parser.parse_args())
+    _args = parser.parse_args()
+    if not _args.judge_chat_template_path:
+        _args.judge_chat_template_path = None
+    main(_args)

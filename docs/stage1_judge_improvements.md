@@ -56,11 +56,14 @@ uv run python main.py judge-template-sensitivity \
     --ckpt outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \
     --output_dir outputs_final/judge_template_sensitivity/vision_baseline_thinking/ \
     --template hybrid \
-    --temperatures 0.7 \
     --skip_consistency
 ```
 
-Re-runs Phase 1 (+ Phase 2, unless `--skip_consistency`) for a template variant. `--template {all,current,specificity,class_list,hybrid}` (default `all`) — run one variant per invocation against the **same** `--output_dir` and the cross-variant summary (`template_sensitivity.png`/`.tex`) backfills progressively as each finishes.
+Judge thinking is **on by default** for every judge call in the repo (`judge-leniency`/`judge-consistency`/`judge-template-sensitivity`/`vision-baseline`'s judge phase) — `--judge_model` defaults to `RedHatAI/gemma-4-31B-it-FP8-dynamic`, `--judge_enable_thinking` defaults `True`, `--judge_max_tokens` defaults `2048`, `--judge_chat_template_path` defaults to the vendored Gemma-4 template, and `--temperatures` defaults to `[0.7]`. Pass `--no-judge_enable_thinking` to fall back to the original non-thinking prompt rendering, or override `--judge_model`/`--judge_chat_template_path` for a non-Gemma-4 judge (e.g. Qwen doesn't need `--judge_chat_template_path` — pass `--judge_chat_template_path ''` to clear it).
+
+Every judged row carries `judge_raw_response` (the judge's completely untouched output) alongside the `<think>`-stripped `judge_reasoning`. The raw response is run through `extract_channel_thought` before JSON-verdict parsing, so stray `{`/`}` in the judge's own thinking prose can't corrupt the parse.
+
+`--template {all,current,specificity,class_list,hybrid}` (default `all`) — run one variant per invocation against the **same** `--output_dir` and the cross-variant summary (`template_sensitivity.png`/`.tex`) backfills progressively as each finishes.
 
 `hybrid` (`judge_classification_hybrid_template`, `src/config/prompts.yaml`) is the template that won this comparison — it credits a prediction when it **necessarily belongs to exactly one listed class** (`moldy` ⊂ `Bad`) while still rejecting a plausible-but-unproven cause guess for a generic symptom label. It's now `src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY` — every judge call in the repo defaults to it unless a different template is explicitly requested (e.g. `--template_key judge_classification_template` for the original).
 
@@ -70,21 +73,6 @@ Re-runs Phase 1 (+ Phase 2, unless `--skip_consistency`) for a template variant.
 - `judge_accuracy_f1.png` — judge accuracy + judge-F1 per variant, with CI.
 - `leniency_and_false_positive_summary.png` (+ `_stats.json`) — leniency_gap and false-positive credit rate, read from `--summary_temperature` (default `0.7`; must be one of `--temperatures`).
 - `oracle_validation_sample.csv` — up to 200 rows for manual adjudication, joining `hybrid`/`current` verdicts. Superseded by `judge-qa-export` below for a more deliberately-sampled version.
-
-## Judge thinking mode
-
-`judge-leniency`/`judge-consistency`/`judge-template-sensitivity`/`vision-baseline`'s judge phase all accept `--judge_enable_thinking` (off by default), `--judge_max_tokens` (raise alongside it — default budget truncates a thinking trace), and `--judge_chat_template_path` (required alongside `--judge_enable_thinking` for a Gemma-4 judge, same reason as Phase 0's generation side).
-
-```bash
-uv run python main.py judge-leniency \
-    --ckpt outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \
-    --output_dir ablation/judge_leniency/vision_baseline_thinking/ \
-    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --judge_enable_thinking --judge_max_tokens 2048 \
-    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
-```
-
-Every judged row carries `judge_raw_response` (completely untouched judge output, alongside the `<think>`-stripped/truncated `judge_reasoning`) — the column to check when verifying a thinking judge actually reasoned. The judge's raw response is run through `extract_channel_thought` before JSON-verdict parsing, so stray `{`/`}` in the judge's own thinking prose can't corrupt the parse.
 
 ## Backfilling a checkpoint's own `judged_correct`
 
@@ -126,6 +114,6 @@ Writes to `dataset/judge_qa_review/judge_qa_review.csv` by default — `dataset/
 
 ## Notes
 
-- Phases 1-3 need a judge model loaded (`--judge_model`, default `google/gemma-4-26B-A4B-it`) — GPU required.
+- Phases 1-3 need a judge model loaded (`--judge_model`, default `RedHatAI/gemma-4-31B-it-FP8-dynamic`, thinking on by default) — GPU required.
 - Every rate reported carries a bootstrap 95% CI (resampled from rows already on disk, no extra judge calls).
 - `--temperatures` / `--n_repeats` control cost directly.

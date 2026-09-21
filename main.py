@@ -124,11 +124,13 @@ Stages:
                                judge leniency from resolve_class's own string-matching limits,
                                and tracks whether leniency itself grows with temperature.
                                --ckpt (path/glob/dir), --output_dir, --label, --temperatures
-                               (default 0.1 0.5 1.0, matches judge-consistency),
+                               (default 0.7, matches judge-consistency),
                                --template_key/--class_list (re-run under a different judge
-                               template — see judge-template-sensitivity), --limit, --judge_model,
-                               --judge_enable_thinking/--judge_max_tokens (experimental, off/unset
-                               by default — see docs/stage1_judge_improvements.md).
+                               template — see judge-template-sensitivity), --limit, --judge_model
+                               (default RedHatAI/gemma-4-31B-it-FP8-dynamic),
+                               --judge_enable_thinking/--judge_max_tokens/--judge_chat_template_path
+                               (ON by default — pass --no-judge_enable_thinking to disable; see
+                               docs/stage1_judge_improvements.md).
                                Writes leniency_gap_T<temp>.png,
                                leniency_gap_by_temperature.png, disagreement_matrix_T<temp>.png
                                (the full-response/resolved-class 2x2 breakdown — raw counts in
@@ -185,6 +187,15 @@ Stages:
                                each variant's own leniency_gap*.png / disagreement_matrix*.png /
                                flip_rate_by_temperature_{full,answer_only}.png /
                                leniency_vs_flip_rate_{full,answer_only}.png underneath.
+    judge-qa-export            — no GPU needed: samples a review-ready CSV for human QA of judge
+                               verdicts, comparing the "current" and "hybrid" templates' own
+                               rechecked_T<temp>.csv files. Three pools per task_type
+                               (--n_per_task, default 50): targeted_hybrid (hybrid disagrees with
+                               a cheap extracted-answer-vs-ground-truth text check), disagreement
+                               (current vs. hybrid differ), random_control (unbiased baseline).
+                               --current_csv/--hybrid_csv, --seed (default 42), --output_csv
+                               (default dataset/judge_qa_review/judge_qa_review.csv — dataset/, not
+                               outputs_final/, so it's git-tracked for reproducibility).
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
 
 Examples:
