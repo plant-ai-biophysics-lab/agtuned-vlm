@@ -75,6 +75,7 @@ import argparse
 import csv
 import glob
 import json
+import re
 from pathlib import Path
 
 from src.common.ablation_judge_recheck import rejudge_condition
@@ -90,21 +91,40 @@ from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
 
 
+_SHARD_RE = re.compile(r"_shard\d+of\d+\.csv$")
+
+
+def _is_excluded_ckpt(name: str) -> bool:
+    """True for a checkpoint file that must NEVER be concatenated alongside
+    others matched by the same ckpt_*.csv glob:
+      - "*.bak.csv" — vision_eval.py's --rerun archive of a prior checkpoint.
+      - "*_shard<i>of<n>.csv" — vision_baseline.py's --num_shards output.
+        Once --merge_shards has combined these into the canonical
+        ckpt_<model>.csv, the shard files are deliberately left in place
+        (never deleted — see merge_shards' own docstring), so a directory
+        can contain BOTH the canonical file and its own already-merged
+        shards. A plain glob then reads every row TWICE — this is exactly
+        what caused the judge-template-sensitivity double-judging found on
+        a real run (rechecked_T0.7.csv: every key appearing exactly twice,
+        the leniency run's own judge cost silently doubled) — root-caused
+        to this exact gap, not a judging-phase bug."""
+    return ".bak." in name or bool(_SHARD_RE.search(name))
+
+
 def load_ckpt_rows(ckpt_arg: str) -> list[dict]:
     """--ckpt accepts a single CSV path, a glob pattern, or a directory
     (globs ckpt_*.csv inside it) — concatenates every match, since a
     resumed/collated run can be split across multiple ckpt_*.csv files.
 
-    Excludes "*.bak.csv" — vision_eval.py's --rerun archives the prior
-    checkpoint as ckpt_<model>.<timestamp>.bak.csv before starting fresh, so
-    a plain ckpt_*.csv glob over a model's output directory would otherwise
-    pick up both the live checkpoint and its own archived predecessor and
-    double-count every already-resumed row."""
+    Excludes anything _is_excluded_ckpt flags: "*.bak.csv" (an archived
+    --rerun predecessor) and "*_shard<i>of<n>.csv" (already-merged shard
+    files sitting alongside their own canonical merge) — either one would
+    otherwise double-count every row it covers."""
     p = Path(ckpt_arg)
     if p.is_dir():
-        paths = sorted(f for f in p.glob("ckpt_*.csv") if ".bak." not in f.name)
+        paths = sorted(f for f in p.glob("ckpt_*.csv") if not _is_excluded_ckpt(f.name))
     else:
-        matches = sorted(m for m in glob.glob(ckpt_arg) if ".bak." not in Path(m).name)
+        matches = sorted(m for m in glob.glob(ckpt_arg) if not _is_excluded_ckpt(Path(m).name))
         paths = [Path(m) for m in matches] if matches else [p]
     if not paths:
         raise FileNotFoundError(f"No checkpoint CSV found for --ckpt {ckpt_arg!r}")

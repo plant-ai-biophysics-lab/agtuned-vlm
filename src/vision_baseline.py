@@ -54,7 +54,8 @@ from src.common.metrics import (
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
-    judge_gt_hint, load_ckpt, rewrite_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
+    judge_gt_hint, load_ckpt, plot_task_f1_summary, plot_template_comparison, rewrite_ckpt, run_judge_phase,
+    safe_model_name, write_collated, write_model_metrics,
 )
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
@@ -425,6 +426,10 @@ def backfill_judge_results(
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
 
+    plot_path = model_dir / "task_f1_summary.png"
+    plot_task_f1_summary(ckpt_rows, model_label=model_id, out_path=plot_path)
+    print(f"  Saved: {plot_path}")
+
 
 def main(args: argparse.Namespace) -> None:
     if args.collate:
@@ -452,6 +457,28 @@ def main(args: argparse.Namespace) -> None:
         backfill_judge_results(
             Path(args.output_dir), args.model, Path(args.rechecked_csv), fields=VISION_BASELINE_CKPT_FIELDS,
         )
+        return
+
+    if args.compare_templates:
+        if not args.model:
+            print("ERROR: --model is required with --compare_templates.")
+            sys.exit(1)
+        if not args.template_rechecked_csv:
+            print("ERROR: --template_rechecked_csv (one or more name=path pairs) is required "
+                  "with --compare_templates.")
+            sys.exit(1)
+        template_csvs: dict[str, Path] = {}
+        for item in args.template_rechecked_csv:
+            name, sep, path = item.partition("=")
+            if not sep:
+                print(f"ERROR: --template_rechecked_csv entries must be name=path — got {item!r}.")
+                sys.exit(1)
+            template_csvs[name] = Path(path)
+        model_dir = Path(args.output_dir) / safe_model_name(args.model)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = model_dir / "template_comparison.png"
+        plot_template_comparison(template_csvs, model_label=args.model, out_path=plot_path)
+        print(f"  Saved: {plot_path}")
         return
 
     if not args.model:
@@ -597,6 +624,18 @@ if __name__ == "__main__":
                          help="Path to a rechecked_T<temp>.csv (from judge-leniency directly, or from "
                               "judge-template-sensitivity's <output_dir>/<variant>/leniency/ subfolder) "
                               "— required with --backfill_judge_results.")
+    parser.add_argument("--compare_templates", action="store_true",
+                         help="Skip inference — plot a grouped bar chart comparing two or more judge "
+                              "templates' FULL-RESPONSE judged F1 macro (per task_type + overall, 95%% "
+                              "CI) directly from their own rechecked_T<temp>.csv files (see "
+                              "--template_rechecked_csv), without needing all of them backfilled into "
+                              "the same checkpoint at once. Saved to --output_dir/<model>/"
+                              "template_comparison.png.")
+    parser.add_argument("--template_rechecked_csv", nargs="+", default=None,
+                         help="One or more name=path pairs, e.g. "
+                              "current=outputs_final/judge_template_sensitivity/<run>/current/leniency/"
+                              "rechecked_T0.7.csv hybrid=outputs_final/judge_template_sensitivity/<run>/"
+                              "hybrid/leniency/rechecked_T0.7.csv — required with --compare_templates.")
 
     # Keys this script doesn't use but the shared config file also carries
     # for desc_augmented_vision_v2.py / vision_baseline_collate.py.

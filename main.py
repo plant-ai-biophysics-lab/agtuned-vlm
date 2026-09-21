@@ -40,6 +40,7 @@ STAGES = {
     "judge-leniency": "src.judge_leniency",
     "judge-consistency": "src.judge_consistency",
     "judge-template-sensitivity": "src.judge_template_sensitivity",
+    "judge-qa-export": "src.judge_qa_export",
     "collate":       "src.collate_results",
 }
 
