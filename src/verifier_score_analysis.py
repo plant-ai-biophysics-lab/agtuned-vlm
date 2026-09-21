@@ -264,21 +264,72 @@ def analyze(verifier_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: dict = {"verifier_dir": str(verifier_dir), "n_rows": len(rows)}
 
-    # ── 1. Image-level: top1_win_rate vs. correct (Figure 8 analog, no log needed) ──
-    win_rates = [float(r["top1_win_rate"]) for r in rows if r.get("top1_win_rate") not in (None, "")]
-    corrects = [int(r["correct"]) for r in rows if r.get("top1_win_rate") not in (None, "")]
-    _plot_threshold_chart(
-        win_rates, corrects, out_dir / "image_level_threshold.png",
-        title="Image-level (top1_win_rate)", xlabel="top1_win_rate threshold",
-    )
-    r_image = _point_biserial(win_rates, corrects)
-    summary["image_level"] = {
-        "n": len(win_rates),
-        "point_biserial_r": r_image,
-        "mean_win_rate_correct": (sum(w for w, c in zip(win_rates, corrects) if c) / max(sum(corrects), 1)),
-        "mean_win_rate_incorrect": (sum(w for w, c in zip(win_rates, corrects) if not c)
-                                     / max(len(corrects) - sum(corrects), 1)),
-    }
+    # ── 1. Image-level: top1_win_rate vs. correctness (Figure 8 analog, no log needed).
+    # Two signals, both worth reporting: `judged_correct` is what the paper's own
+    # Figure 8 actually plots (LLM-judge verdict on the free-text prediction) and
+    # is the PRIMARY chart here — the deterministic `correct` column (exact/
+    # substring resolve_class match) is kept as a secondary reference chart since
+    # it's known to undercount free-text correctness (that gap is the whole reason
+    # the judge exists, per Stage 1) and the two can genuinely disagree.
+    def _win_rate_correctness(key: str, truthy_filter) -> tuple[list[float], list[int]]:
+        wr, co = [], []
+        for r in rows:
+            if r.get("top1_win_rate") in (None, "") or not truthy_filter(r.get(key)):
+                continue
+            wr.append(float(r["top1_win_rate"]))
+            co.append(int(r[key]))
+        return wr, co
+
+    win_rates, corrects = _win_rate_correctness("judged_correct", lambda v: v not in (None, ""))
+    n_unjudged = sum(1 for r in rows if r.get("judged_correct") in (None, "") and r.get("top1_win_rate") not in (None, ""))
+    if win_rates:
+        _plot_threshold_chart(
+            win_rates, corrects, out_dir / "image_level_threshold.png",
+            title="Image-level (top1_win_rate vs. JUDGED correctness)", xlabel="top1_win_rate threshold",
+        )
+        r_image = _point_biserial(win_rates, corrects)
+        summary["image_level"] = {
+            "n": len(win_rates),
+            "n_unjudged_excluded": n_unjudged,
+            "point_biserial_r": r_image,
+            "mean_win_rate_correct": (sum(w for w, c in zip(win_rates, corrects) if c) / max(sum(corrects), 1)),
+            "mean_win_rate_incorrect": (sum(w for w, c in zip(win_rates, corrects) if not c)
+                                         / max(len(corrects) - sum(corrects), 1)),
+        }
+    else:
+        print(f"  [note] no rows have judged_correct populated (--skip_judge run?) — "
+              f"falling back to deterministic `correct` as the primary image-level signal.")
+        win_rates, corrects = _win_rate_correctness("correct", lambda v: v not in (None, ""))
+        _plot_threshold_chart(
+            win_rates, corrects, out_dir / "image_level_threshold.png",
+            title="Image-level (top1_win_rate vs. deterministic correctness — no judge results available)",
+            xlabel="top1_win_rate threshold",
+        )
+        summary["image_level"] = {
+            "n": len(win_rates), "n_unjudged_excluded": n_unjudged,
+            "point_biserial_r": _point_biserial(win_rates, corrects),
+            "mean_win_rate_correct": (sum(w for w, c in zip(win_rates, corrects) if c) / max(sum(corrects), 1)),
+            "mean_win_rate_incorrect": (sum(w for w, c in zip(win_rates, corrects) if not c)
+                                         / max(len(corrects) - sum(corrects), 1)),
+        }
+
+    # Secondary reference chart — deterministic correctness, always produced when
+    # available, so the two signals can be compared directly instead of guessed at.
+    det_win_rates, det_corrects = _win_rate_correctness("correct", lambda v: v not in (None, ""))
+    if det_win_rates:
+        _plot_threshold_chart(
+            det_win_rates, det_corrects, out_dir / "image_level_threshold_deterministic.png",
+            title="Image-level (top1_win_rate vs. deterministic correctness — reference only)",
+            xlabel="top1_win_rate threshold",
+        )
+        summary["image_level_deterministic"] = {
+            "n": len(det_win_rates),
+            "point_biserial_r": _point_biserial(det_win_rates, det_corrects),
+            "mean_win_rate_correct": (sum(w for w, c in zip(det_win_rates, det_corrects) if c)
+                                       / max(sum(det_corrects), 1)),
+            "mean_win_rate_incorrect": (sum(w for w, c in zip(det_win_rates, det_corrects) if not c)
+                                         / max(len(det_corrects) - sum(det_corrects), 1)),
+        }
 
     # ── 2. Pair-level: raw score_a/score_b vs. local candidate correctness (needs log) ──
     log_path = verifier_dir / "verifier_log.jsonl"
@@ -385,10 +436,17 @@ def main(args: argparse.Namespace) -> None:
     out_path.write_text(json.dumps(summary, indent=2))
 
     il = summary.get("image_level", {})
-    print(f"  Image-level (top1_win_rate vs. correct, n={il.get('n')}): "
+    print(f"  Image-level (top1_win_rate vs. JUDGED correct, n={il.get('n')}, "
+          f"{il.get('n_unjudged_excluded', 0)} unjudged row(s) excluded): "
           f"point-biserial r={il.get('point_biserial_r')}, "
           f"mean win_rate correct={il.get('mean_win_rate_correct'):.3f} "
           f"vs. incorrect={il.get('mean_win_rate_incorrect'):.3f}")
+    ild = summary.get("image_level_deterministic")
+    if ild:
+        print(f"  Image-level (top1_win_rate vs. deterministic correct, reference only, n={ild.get('n')}): "
+              f"point-biserial r={ild.get('point_biserial_r')}, "
+              f"mean win_rate correct={ild.get('mean_win_rate_correct'):.3f} "
+              f"vs. incorrect={ild.get('mean_win_rate_incorrect'):.3f}")
     pl = summary.get("pair_level")
     if pl:
         print(f"  Pair-level (raw score vs. local correctness, n={pl['n_matched']}, "
