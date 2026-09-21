@@ -61,6 +61,9 @@ from collections import defaultdict
 
 _PRED_TRUNCATE = 300
 _REASON_TRUNCATE = 300
+_RAW_RESPONSE_TRUNCATE = 2000  # longer — a thinking trace is verbose and truncates well before
+                                # judge_reasoning would, so this needs real headroom to keep the
+                                # actual <|channel>thought...<channel|> reasoning, not just the tail
 
 
 def _normalize(s: str) -> str:
@@ -101,8 +104,8 @@ def _load_dedup(path: Path) -> dict[tuple, dict]:
 _FIELDNAMES = [
     "pool", "agml_dataset", "class_label", "image_name", "task_type",
     "ground_truth", "extracted_answer", "prediction", "overlap_heuristic",
-    "current_judged_correct", "current_judge_reasoning",
-    "hybrid_judged_correct", "hybrid_judge_reasoning",
+    "current_judged_correct", "current_judge_reasoning", "current_judge_raw_response",
+    "hybrid_judged_correct", "hybrid_judge_reasoning", "hybrid_judge_raw_response",
     "reviewer_verdict", "failure_category", "which_template_wrong", "notes",
 ]
 
@@ -119,8 +122,10 @@ def _build_row(pool: str, key: tuple, current_row: dict, hybrid_row: dict, overl
         "overlap_heuristic": overlap_value,
         "current_judged_correct": current_row.get("judged_correct_full_trajectory", ""),
         "current_judge_reasoning": (current_row.get("judge_reasoning_full_trajectory", "") or "")[:_REASON_TRUNCATE],
+        "current_judge_raw_response": (current_row.get("judge_raw_response_full_trajectory", "") or "")[:_RAW_RESPONSE_TRUNCATE],
         "hybrid_judged_correct": hybrid_row.get("judged_correct_full_trajectory", ""),
         "hybrid_judge_reasoning": (hybrid_row.get("judge_reasoning_full_trajectory", "") or "")[:_REASON_TRUNCATE],
+        "hybrid_judge_raw_response": (hybrid_row.get("judge_raw_response_full_trajectory", "") or "")[:_RAW_RESPONSE_TRUNCATE],
         "reviewer_verdict": "", "failure_category": "", "which_template_wrong": "", "notes": "",
     }
 
