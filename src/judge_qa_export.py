@@ -88,6 +88,21 @@ def _judged_bool(v: str) -> bool:
     return str(v).strip() in ("1", "True", "true")
 
 
+_CONFIDENCE_RE = re.compile(r'"confidence"\s*:\s*(\d+)')
+
+
+def _extract_confidence(judge_reasoning_full: str) -> str:
+    """The judge's own stated confidence (1 or 2 in this repo's JSON verdict
+    schema — see src/config/prompts.yaml's judge templates) — already
+    present in every judge_reasoning_full_trajectory string, just never
+    pulled out as its own column before. Regex over the raw text rather
+    than json.loads, since the judge's response is often markdown-fenced
+    (```json ... ```) and/or not strictly valid JSON — this only needs the
+    one field, not a full parse."""
+    m = _CONFIDENCE_RE.search(judge_reasoning_full or "")
+    return m.group(1) if m else ""
+
+
 def _load_dedup(path: Path) -> dict[tuple, dict]:
     """Load a rechecked_T<temp>.csv, keeping the LAST occurrence of each
     (agml_dataset, class_label, image_name) key — see module docstring for
@@ -103,15 +118,36 @@ def _load_dedup(path: Path) -> dict[tuple, dict]:
 
 _FIELDNAMES = [
     "pool", "agml_dataset", "class_label", "image_name", "task_type",
-    "ground_truth", "extracted_answer", "prediction", "overlap_heuristic",
-    "current_judged_correct", "current_judge_reasoning", "current_judge_raw_response",
-    "hybrid_judged_correct", "hybrid_judge_reasoning", "hybrid_judge_raw_response",
-    "reviewer_verdict", "failure_category", "which_template_wrong", "notes",
+    "ground_truth", "extracted_answer", "prediction", "model_raw_response", "overlap_heuristic",
+    "current_judged_correct", "current_judge_confidence", "current_judge_reasoning", "current_judge_raw_response",
+    "hybrid_judged_correct", "hybrid_judge_confidence", "hybrid_judge_reasoning", "hybrid_judge_raw_response",
+    "reviewer_verdict", "visual_detail_score", "categorical_score", "failure_category",
+    "which_template_wrong", "notes",
 ]
 
+# Reviewer-scoring columns — always blank in the export; documented here so
+# the meaning ships with the file (a reviewer opening this CSV cold has no
+# other place to read what a "3" means):
+#   visual_detail_score  (1-5) — how much concrete, checkable visual evidence
+#     the model's OWN reasoning actually cites (specific colors/shapes/
+#     textures/measurements) vs. vague assertion. 1 = no real description
+#     ("it looks diseased"), 5 = specific, diagnostic-grade detail.
+#   categorical_score  (0/1/2) — how far the prediction is from the ground
+#     truth, mirroring Paper 1 Appendix C.1's distinction: 0 = correct,
+#     1 = specificity gap (right general category, wrong specific member —
+#     e.g. "leaf spot disease" for "Cercospora"), 2 = causal-category
+#     mismatch (different kingdom/cause entirely — e.g. a fungal name for
+#     an insect-damage ground truth).
 
-def _build_row(pool: str, key: tuple, current_row: dict, hybrid_row: dict, overlap_value: str = "") -> dict:
+
+def _build_row(
+    pool: str, key: tuple, current_row: dict, hybrid_row: dict, model_row: dict | None = None,
+    overlap_value: str = "",
+) -> dict:
     ds, cls, img = key
+    model_row = model_row or {}
+    current_reasoning_full = current_row.get("judge_reasoning_full_trajectory", "") or ""
+    hybrid_reasoning_full = hybrid_row.get("judge_reasoning_full_trajectory", "") or ""
     return {
         "pool": pool,
         "agml_dataset": ds, "class_label": cls, "image_name": img,
@@ -119,26 +155,43 @@ def _build_row(pool: str, key: tuple, current_row: dict, hybrid_row: dict, overl
         "ground_truth": hybrid_row.get("ground_truth", ""),
         "extracted_answer": hybrid_row.get("resolved_class", ""),
         "prediction": (hybrid_row.get("prediction", "") or "")[:_PRED_TRUNCATE],
+        # The classification MODEL's own completely untouched generation —
+        # includes its <|channel>thought...<channel|> thinking trace when
+        # present (see vision_baseline.py's raw_response column). Not in
+        # the rechecked_T<temp>.csv files at all (those only carry the
+        # already thinking-stripped `prediction`) — this comes from a
+        # separate join against the model's own checkpoint via --ckpt_csv.
+        "model_raw_response": (model_row.get("raw_response", "") or "")[:_RAW_RESPONSE_TRUNCATE],
         "overlap_heuristic": overlap_value,
         "current_judged_correct": current_row.get("judged_correct_full_trajectory", ""),
-        "current_judge_reasoning": (current_row.get("judge_reasoning_full_trajectory", "") or "")[:_REASON_TRUNCATE],
+        "current_judge_confidence": _extract_confidence(current_reasoning_full),
+        "current_judge_reasoning": current_reasoning_full[:_REASON_TRUNCATE],
         "current_judge_raw_response": (current_row.get("judge_raw_response_full_trajectory", "") or "")[:_RAW_RESPONSE_TRUNCATE],
         "hybrid_judged_correct": hybrid_row.get("judged_correct_full_trajectory", ""),
-        "hybrid_judge_reasoning": (hybrid_row.get("judge_reasoning_full_trajectory", "") or "")[:_REASON_TRUNCATE],
+        "hybrid_judge_confidence": _extract_confidence(hybrid_reasoning_full),
+        "hybrid_judge_reasoning": hybrid_reasoning_full[:_REASON_TRUNCATE],
         "hybrid_judge_raw_response": (hybrid_row.get("judge_raw_response_full_trajectory", "") or "")[:_RAW_RESPONSE_TRUNCATE],
-        "reviewer_verdict": "", "failure_category": "", "which_template_wrong": "", "notes": "",
+        "reviewer_verdict": "", "visual_detail_score": "", "categorical_score": "",
+        "failure_category": "", "which_template_wrong": "", "notes": "",
     }
 
 
 def build_export(
-    current_csv: Path, hybrid_csv: Path, n_per_task: int, seed: int,
+    current_csv: Path, hybrid_csv: Path, n_per_task: int, seed: int, ckpt_csv: Path | None = None,
 ) -> tuple[list[dict], dict]:
     """Returns (output_rows, stats) — stats records how many candidates
     existed per (pool, task_type) vs. how many were actually sampled, so a
     task_type/pool with fewer real candidates than n_per_task is visible
-    in the printed summary rather than silently under-filled."""
+    in the printed summary rather than silently under-filled.
+
+    ckpt_csv (optional): the classification model's own checkpoint CSV
+    (e.g. ckpt_<model>.csv) — joined in purely to pull `raw_response`
+    (model_raw_response column) into the export, since the judge-side
+    rechecked_T<temp>.csv files never carry it. None/missing is fine —
+    model_raw_response is just left blank for every row."""
     current = _load_dedup(current_csv)
     hybrid = _load_dedup(hybrid_csv)
+    model_ckpt = _load_dedup(ckpt_csv) if ckpt_csv and Path(ckpt_csv).exists() else {}
     common_keys = sorted(set(current) & set(hybrid))
 
     # candidates[pool][task_type] -> list of (key, overlap_value)
@@ -173,18 +226,23 @@ def build_export(
             sampled = shuffled[:n_per_task]
             stats[pool][task_type] = {"n_candidates": len(cand_list), "n_sampled": len(sampled)}
             for key, ov in sampled:
-                output_rows.append(_build_row(pool, key, current[key], hybrid[key], overlap_value=ov))
+                output_rows.append(_build_row(
+                    pool, key, current[key], hybrid[key], model_row=model_ckpt.get(key), overlap_value=ov,
+                ))
 
     return output_rows, stats
 
 
 def main(args: argparse.Namespace) -> None:
+    ckpt_csv = Path(args.ckpt_csv) if args.ckpt_csv else None
     output_rows, stats = build_export(
-        Path(args.current_csv), Path(args.hybrid_csv), args.n_per_task, args.seed,
+        Path(args.current_csv), Path(args.hybrid_csv), args.n_per_task, args.seed, ckpt_csv=ckpt_csv,
     )
     if not output_rows:
         print("No candidate rows found — check --current_csv/--hybrid_csv paths.")
         return
+    if ckpt_csv and not ckpt_csv.exists():
+        print(f"  [note] --ckpt_csv {ckpt_csv} not found — model_raw_response left blank for every row.")
 
     out_path = Path(args.output_csv).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,6 +269,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--hybrid_csv",
         default="outputs_final/judge_template_sensitivity/vision_baseline_gemma4_31b_fp8_thinking/hybrid/leniency/rechecked_T0.7.csv",
+    )
+    parser.add_argument(
+        "--ckpt_csv",
+        default="outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv",
+        help="The classification model's own checkpoint CSV — joined in to add model_raw_response "
+             "(the model's completely untouched generation, including its thinking trace) to the "
+             "export. Pass an empty string (--ckpt_csv '') to skip this join.",
     )
     parser.add_argument("--n_per_task", type=int, default=50,
                          help="Rows sampled per (pool, task_type) — capped by however many real "
