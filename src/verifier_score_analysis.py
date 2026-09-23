@@ -158,7 +158,7 @@ def _plot_threshold_chart(
 def _granularity_diagnostics(
     log_entries: list[dict], candidate_correct: dict[tuple[str, str, str, int], int],
 ) -> dict | None:
-    """Paper 2 Stage 2 (docs/stage2_verifier_corrections.md) — tests the
+    """Paper 2 Stage 2 (docs/legacy/stage2_verifier_corrections_paused.md) — tests the
     three concrete hypotheses raised for why the letter-scale score is
     under-varied/inverted, using the extra fields verifier_cot.py now logs
     per tournament_pair (letter_probs_*_max/sum, trajectory_*_words,

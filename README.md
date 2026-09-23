@@ -40,7 +40,7 @@ Browse Stage 0b's output: dataset/crop/class per record, the grounding sources f
 | Stage | Doc | What it does |
 |---|---|---|
 | 1 | [docs/stage1_judge_improvements.md](docs/stage1_judge_improvements.md) | LLM judge leniency (Phase 1), self-consistency (Phase 2), and template sensitivity (Phase 3, `hybrid` template) on the thinking-enabled classification checkpoint — judge thinking on by default; includes a human-QA review export for hand-checking judge verdicts |
-| 2 | [docs/stage2_verifier_corrections.md](docs/stage2_verifier_corrections.md) | Diagnose the PPT verifier's own under-varied/inverted letter-scale score (Paper 1 Appendix C) before fixing it: baseline run, Figure 8/9-style analysis, and granularity checks (max-vs-sum letter aggregation, length bias, confidence-language carryover) |
+| 2 | [docs/stage2_baseline_rubric.md](docs/stage2_baseline_rubric.md) | Baseline with rubric: same thinking-enabled checkpoint, classification question wrapped through a fill-in-the-blank criteria chain before the final answer (Paper 1 Appendix A's "Manual CoT," rerun on the current pipeline) — includes multi-GPU generation-with-inline-judging via `--num_shards` |
 
 ### Viewers
 

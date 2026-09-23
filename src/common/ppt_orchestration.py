@@ -61,7 +61,7 @@ class PairScoreResult:
     analysis: str
     prompt_tokens: int
     completion_tokens: int
-    # Diagnostic-only (Paper 2 Stage 2, docs/stage2_verifier_corrections.md)
+    # Diagnostic-only (Paper 2 Stage 2, docs/legacy/stage2_verifier_corrections_paused.md)
     # — letter_probability_diagnostics' raw max/sum breakdown for each
     # side's forced score-token position, and each side's trajectory word
     # count. None for any caller that doesn't need this (no behavior

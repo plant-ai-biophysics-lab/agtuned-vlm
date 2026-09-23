@@ -1,6 +1,22 @@
-# Paper 2, Stage 2 — Verifier Corrections
+# [PAUSED] Paper 2, Stage 2 — Verifier Corrections
 
-[← Back to README](../README.md)
+Paused 2026-09 — real diagnosis (see `docs/stage2_baseline_rubric.md`'s
+predecessor slot in the README) found `top1_win_rate` unusable as a
+confidence/filtering threshold at the tested config (`--k_candidates 3
+--k_pivots 2`): near-ceiling raw pair-level scores get compressed and
+sign-flipped by the Bradley-Terry aggregation (a real, load-bearing
+finding — see the verifier-score-analysis conversation history), and ~41%
+of tournament pools collapsed to identical candidates (temperature=1.0
+sampling converging), leaving nothing for the tournament to discriminate
+between. Paper 2's Stage 2 slot now covers the "Baseline with rubric"
+work instead (`docs/stage2_baseline_rubric.md`) — this doc and all the
+code it describes (`verifier-score-analysis`, the granularity logging in
+`verifier_cot.py`/`ppt_scoring.py`/`ppt_orchestration.py`) still exist and
+still work, just not the active line of work right now.
+
+Original content preserved below for whenever this resumes.
+
+---
 
 Paper 1's Appendix C (Figures 8–9) found the PPT verifier's own
 fine-grained-reward letter score (`src/common/ppt_scoring.py`, A–T scale) is
@@ -105,3 +121,40 @@ older `verifier_log.jsonl` files (predating this stage) are read fine —
 ## Step 4 — fix (not started)
 
 Deferred until Step 3's results on a real run point at a specific cause.
+
+## Post-mortem (why this got paused)
+
+Real data on `RedHatAI/gemma-4-31B-it-FP8-dynamic` at `--k_candidates 3
+--k_pivots 2` (n=5,054 images):
+
+- **Pair-level (raw score, before Bradley-Terry)**: replicates Paper 1's
+  Figure 9 almost exactly — 88.1% of scores land in the top-3 letters, and
+  the direction is correct (`mean_score_correct=0.950` vs.
+  `mean_score_incorrect=0.891`, `point_biserial_r=+0.076`).
+- **Image-level (`top1_win_rate`, after aggregation)**: the signal doesn't
+  just weaken, it flips sign (`mean_win_rate_correct=0.532` vs.
+  `mean_win_rate_incorrect=0.545`, `r=-0.097`), and the whole distribution
+  compresses into a narrow 0.50–0.73 band, nowhere near the ceiling.
+- **Root cause, mechanistically confirmed**: `top1_win_rate = argmax` over
+  a near-ceiling-collapsed, weakly-correlated raw signal is a structural
+  winner's-curse — taking the max of several near-tied estimates centered
+  on 0.5 is biased upward regardless of correctness. Worse: **41% of
+  tournament pools (2,068/5,059 images) had all 3 candidates give the
+  identical extracted answer** (temperature=1.0 sampling converged) — for
+  those, every pairwise comparison is a trajectory against a copy of
+  itself, so `win_rate` carries zero information by construction. Split by
+  pool diversity: `n_distinct=1` → 38.4% judge accuracy but
+  `mean_top1_win_rate=0.516`; `n_distinct=3` → 12.5% accuracy but
+  `mean_top1_win_rate=0.570` — accuracy and win_rate move in **opposite**
+  directions across the diversity axis, which is the actual inversion
+  mechanism, larger than anything in Step 3's three hypotheses (none of
+  which were fully tested against real data before pausing — hypothesis
+  #1's `letter_probs_*` logging was added AFTER the one real run this
+  post-mortem is based on, so it's still untested).
+
+Bottom line if this resumes: don't re-litigate whether `top1_win_rate` is
+usable — it isn't, confirmed. The open question is whether raising
+`--k_candidates`/`--k_pivots` (closer to Paper 1's `K∈{4,8}`) or lowering
+generation `--temperature` (fewer degenerate pools) meaningfully changes
+this, and whether hypothesis #1 (max-not-sum) is a real secondary
+contributor once tested on a fresh run with the granularity logging live.

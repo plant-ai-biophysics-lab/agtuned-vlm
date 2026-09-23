@@ -231,7 +231,12 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     if args.num_shards > 1:
         ckpt_stem += f"_shard{args.shard_index}of{args.num_shards}"
     ckpt_path = model_dir / f"{ckpt_stem}.csv"
-    archive_ckpt_if_rerun(ckpt_path, args.rerun)
+    # judge_log.jsonl's own name is shard-aware too (run_judge_phase,
+    # src/common/vision_eval.py) — archive the SAME filename this run will
+    # actually write to, not the unsharded default, or --rerun on a
+    # sharded run would archive nothing (or the wrong shared file).
+    _judge_log_name = f"judge_log_shard{args.shard_index}of{args.num_shards}.jsonl" if args.num_shards > 1 else "judge_log.jsonl"
+    archive_ckpt_if_rerun(ckpt_path, args.rerun, extra_logs=(_judge_log_name,))
     rows, seen = load_ckpt(ckpt_path, fields=VISION_BASELINE_CKPT_FIELDS)
     if rows:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")

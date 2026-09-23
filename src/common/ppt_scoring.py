@@ -184,18 +184,18 @@ def extract_tag_score(analysis: str, tag: str, letter_raw: str, logprobs_list) -
 
 def letter_probability_diagnostics(logprobs_list) -> dict:
     """Diagnostic-only breakdown of the raw per-letter probability mass at
-    a forced score-token position (Paper 2 Stage 2 — see docs/
-    stage2_verifier_corrections.md). Read-only: never used to score
-    anything, so it can't change tournament behavior — extract_tag_score
-    above remains the sole authority on the actual score.
+    a forced score-token position (Paper 2 Stage 2 — see
+    docs/legacy/stage2_verifier_corrections_paused.md). Read-only: never
+    used to score anything, so it can't change tournament behavior —
+    extract_tag_score above remains the sole authority on the actual score.
 
     llm_verifier.fine_grained_reward.extract_score (called via
     extract_tag_score) folds a letter's plain and leading-space spellings
     ("C" / " C") together by taking the MAX of their two probabilities,
-    not the sum — see extract_tag_score's docstring / docs/
-    stage2_verifier_corrections.md's Step 2 for why that's a plausible
-    contributor to the letter-scale's low variance (Paper 1 Appendix C,
-    Figure 9). This returns both aggregations side by side so
+    not the sum — see extract_tag_score's docstring /
+    docs/legacy/stage2_verifier_corrections_paused.md's Step 2 for why
+    that's a plausible contributor to the letter-scale's low variance
+    (Paper 1 Appendix C, Figure 9). This returns both aggregations side by side so
     verifier-score-analysis can measure how much probability mass the max
     convention is actually discarding on real data, rather than assuming
     it: `probs_max` mirrors what extract_score itself uses, `probs_sum`

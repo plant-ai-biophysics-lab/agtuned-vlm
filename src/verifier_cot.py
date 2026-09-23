@@ -90,7 +90,7 @@ except ImportError:
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _REPEAT_RE = re.compile(r"(\b\w+\b)(\s+\1){4,}", re.IGNORECASE)
 
-# Confidence-language markers (Paper 2 Stage 2, docs/stage2_verifier_corrections.md)
+# Confidence-language markers (Paper 2 Stage 2, docs/legacy/stage2_verifier_corrections_paused.md)
 # — the same phenomenon flagged in the CoT-verifier findings memory ("confidence
 # language is anti-correlated with correctness"): logged per pairwise-analysis
 # so verifier-score-analysis can test whether it carries over into the PPT
@@ -318,7 +318,7 @@ def _score_pairs_batch(
     for i in active:
         r, o = results[i], owners[i]
         result[i] = (r.r_a, r.r_b, r.analysis, [r.prompt_tokens, r.completion_tokens])
-        # Paper 2 Stage 2 granularity (docs/stage2_verifier_corrections.md):
+        # Paper 2 Stage 2 granularity (docs/legacy/stage2_verifier_corrections_paused.md):
         # raw letter-probability max/sum breakdown (tests the Step 2
         # max-not-sum hypothesis), trajectory word counts (length-bias
         # hypothesis), and a confidence-language marker count on the

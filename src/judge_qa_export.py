@@ -1,7 +1,7 @@
 """
-Paper 2, Stage 2 — Judge QA review export (docs/stage2_verifier_corrections.md
-is the verifier's own diagnostic doc; this is the judge-template-comparison
-counterpart, no doc file yet — see the "LLM as a judge improvements" note).
+Paper 2, Stage 1 — Judge QA review export. See docs/stage1_judge_improvements.md's
+"Judge QA review export" section (docs/legacy/stage2_verifier_corrections_paused.md
+is a different, paused diagnostic — the PPT verifier's own score, not the judge).
 
 Builds ONE review-ready CSV for a human reviewer to hand-check the judge's
 verdicts, comparing the `current` and `hybrid` judge templates on the same

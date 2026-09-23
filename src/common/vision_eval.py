@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import gc
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -441,7 +442,22 @@ def run_judge_phase(
         print("  [judge] --skip_judge set — skipping judge phase entirely")
         return rows
 
-    log_path = ckpt_path.parent / "judge_log.jsonl"
+    # Shard-aware log filename: ckpt_path.parent is the SAME model_dir for
+    # every shard of a --num_shards run (only the checkpoint filename
+    # differs), so a fixed "judge_log.jsonl" would have every shard's
+    # judge phase — each its own process, its own GPU, running
+    # concurrently — appending to ONE shared file at the same time.
+    # append_jsonl's plain open(path, "a") + one write() per record is only
+    # safe against interleaving up to the OS's atomic-write threshold
+    # (~4KB on Linux); a judge's raw response (especially with
+    # --judge_enable_thinking) routinely exceeds that, so concurrent
+    # shards really could corrupt/interleave lines in a shared log. Suffix
+    # the log filename with the checkpoint's own "_shard<i>of<n>" suffix
+    # when present (each shard's log stays fully separate); every
+    # non-sharded caller is completely unaffected (empty suffix ->
+    # unchanged "judge_log.jsonl").
+    _shard_m = re.search(r"(_shard\d+of\d+)$", ckpt_path.stem)
+    log_path = ckpt_path.parent / f"judge_log{_shard_m.group(1) if _shard_m else ''}.jsonl"
 
     if args.rejudge:
         for r in rows:
