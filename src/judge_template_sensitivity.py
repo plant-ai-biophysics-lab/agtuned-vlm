@@ -484,23 +484,22 @@ if __name__ == "__main__":
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
     parser.add_argument("--enforce_eager", action="store_true")
-    parser.add_argument("--judge_enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+    parser.add_argument("--judge_enable_thinking", action="store_true",
                          help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
-                              "judge's own prompt on every variant/phase call — ON by default (this repo's "
-                              "judge model is Gemma-4, and --judge_chat_template_path defaults to the "
-                              "template that makes this work for it). Pass --no-judge_enable_thinking to "
-                              "fall back to the exact original prompt rendering.")
-    parser.add_argument("--judge_max_tokens", type=int, default=2048,
+                              "judge's own prompt on every variant/phase call — off by default, exact "
+                              "original prompt rendering. A no-op for a Qwen judge model's stock template "
+                              "if it doesn't accept the kwarg; a no-op for a Gemma-4 judge model UNLESS "
+                              "--judge_chat_template_path is also given — Gemma-4's own bundled template "
+                              "has no enable_thinking support at all (confirmed empirically).")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
                          help="Override the judge's default max_tokens=1024 for every call this run — a "
-                              "thinking trace (--judge_enable_thinking, on by default) can consume the "
-                              "normal budget before reaching the final JSON verdict, truncating the response.")
-    parser.add_argument("--judge_chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
+                              "thinking trace (--judge_enable_thinking) can consume the normal budget "
+                              "before reaching the final JSON verdict, truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
                          help="Override the judge tokenizer's own bundled chat template with a Jinja "
                               "file at this path, for every variant/phase call — needed for "
-                              "--judge_enable_thinking to do anything on a Gemma-4 judge model (the "
-                              "default judge model here). Pass an empty string "
-                              "(--judge_chat_template_path '') to disable for a non-Gemma-4 judge model.")
+                              "--judge_enable_thinking to do anything on a Gemma-4 judge model. Pass "
+                              "src/config/tool_chat_template_gemma4.jinja alongside "
+                              "--judge_enable_thinking for a Gemma-4 judge. Not needed for a Qwen judge.")
     args = parser.parse_args()
-    if not args.judge_chat_template_path:
-        args.judge_chat_template_path = None
     main(args)

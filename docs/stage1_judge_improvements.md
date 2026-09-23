@@ -26,6 +26,24 @@ The checkpoint's `raw_response` column holds the fully untouched generation; `re
 
 **Splitting across multiple GPUs**: `--num_shards N --shard_index i` partitions the work into N independent single-GPU processes (each writes its own `ckpt_<model>_shard<i>ofN.csv`); `--merge_shards` combines them into the canonical `ckpt_<model>.csv` afterward. See `vision-baseline --help` for details. **Don't leave shard files sitting alongside the merged canonical file when pointing Phase 1-3 at that directory** — their `--ckpt` glob matches both and silently double-judges every row (fixed to exclude `*.bak.csv` but still matches shard files unless they're moved/deleted after merging).
 
+## Baseline with rubric
+
+An additional Phase 0 variant, not a replacement — same single-shot pipeline, no tournament/verifier machinery, just a different prompt. `--rubric` wraps the classification question through `verifier_prompts.yaml`'s `structured_templates` (the same model-facing, fill-in-the-blank criteria chain `verifier-cot`'s own k-candidate generation uses), asking the model to state each rubric field (affected species, symptom color/shape/texture, damage pattern, etc.) before its final `<answer>`. Same prompt shape as Paper 1's Appendix A "Manual CoT" condition, which found only a modest, inconsistent gain on its own (Δ=0.008 overall) — this reruns that idea on the current thinking-enabled model to see if it still holds.
+
+Combines freely with `--enable_thinking` — they're independent (rubric changes what's asked, thinking changes whether the model can reason before answering):
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --skip_judge \
+    --rubric \
+    --enable_thinking --gen_max_tokens 4096 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_rubric_thinking/
+```
+
+Raise `--gen_max_tokens` regardless of `--enable_thinking` — the rubric prompt alone asks for several fields before the final answer, on top of any thinking trace (a printed `[rubric]` note fires if `--gen_max_tokens` is left at the flat 256 default).
+
 ## Phase 1 — leniency
 
 ```bash
@@ -59,7 +77,19 @@ uv run python main.py judge-template-sensitivity \
     --skip_consistency
 ```
 
-Judge thinking is **on by default** for every judge call in the repo (`judge-leniency`/`judge-consistency`/`judge-template-sensitivity`/`vision-baseline`'s judge phase) — `--judge_model` defaults to `RedHatAI/gemma-4-31B-it-FP8-dynamic`, `--judge_enable_thinking` defaults `True`, `--judge_max_tokens` defaults `2048`, `--judge_chat_template_path` defaults to the vendored Gemma-4 template, and `--temperatures` defaults to `[0.7]`. Pass `--no-judge_enable_thinking` to fall back to the original non-thinking prompt rendering, or override `--judge_model`/`--judge_chat_template_path` for a non-Gemma-4 judge (e.g. Qwen doesn't need `--judge_chat_template_path` — pass `--judge_chat_template_path ''` to clear it).
+`--judge_model` defaults to `RedHatAI/gemma-4-31B-it-FP8-dynamic` and `--temperatures` defaults to `[0.7]`, but **judge thinking is off by default** (`--judge_enable_thinking`, plain `store_true`, matching every other thinking flag in this repo) — pass it explicitly, along with `--judge_max_tokens` (raise past the default `1024`) and `--judge_chat_template_path` (required alongside `--judge_enable_thinking` for a Gemma-4 judge, whose stock template has no thinking support at all):
+
+```bash
+uv run python main.py judge-template-sensitivity \
+    --ckpt outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ \
+    --output_dir outputs_final/judge_template_sensitivity/vision_baseline_thinking/ \
+    --template hybrid \
+    --skip_consistency \
+    --judge_enable_thinking --judge_max_tokens 2048 \
+    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
+```
+
+Same three flags (`--judge_enable_thinking`/`--judge_max_tokens`/`--judge_chat_template_path`) work identically on `judge-leniency`, `judge-consistency`, and `vision-baseline`'s own built-in judge phase.
 
 Every judged row carries `judge_raw_response` (the judge's completely untouched output) alongside the `<think>`-stripped `judge_reasoning`. The raw response is run through `extract_channel_thought` before JSON-verdict parsing, so stray `{`/`}` in the judge's own thinking prose can't corrupt the parse.
 
@@ -114,6 +144,6 @@ Writes to `dataset/judge_qa_review/judge_qa_review.csv` by default — `dataset/
 
 ## Notes
 
-- Phases 1-3 need a judge model loaded (`--judge_model`, default `RedHatAI/gemma-4-31B-it-FP8-dynamic`, thinking on by default) — GPU required.
+- Phases 1-3 need a judge model loaded (`--judge_model`, default `RedHatAI/gemma-4-31B-it-FP8-dynamic`; thinking off by default, `--judge_enable_thinking` to turn it on) — GPU required.
 - Every rate reported carries a bootstrap 95% CI (resampled from rows already on disk, no extra judge calls).
 - `--temperatures` / `--n_repeats` control cost directly.

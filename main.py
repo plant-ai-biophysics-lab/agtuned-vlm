@@ -75,10 +75,13 @@ Stages:
                                classification-only (F1 + ROUGE-SS), per-sample resumable.
                                --enable_thinking/--gen_max_tokens/--chat_template_path (generation-side
                                thinking), --judge_enable_thinking/--judge_max_tokens/
-                               --judge_chat_template_path (judge-side thinking), --num_shards/
-                               --shard_index (data-parallel across GPUs) + --merge_shards,
-                               --backfill_judge_results + --rechecked_csv (copy a Phase 1-4 template's
-                               full-response verdict into this checkpoint's own judged_correct) — see
+                               --judge_chat_template_path (judge-side thinking), --rubric ("Baseline with
+                               rubric" — wrap the classification question through verifier_prompts.yaml's
+                               fill-in-the-blank criteria chain before the final answer; combines freely
+                               with --enable_thinking), --num_shards/--shard_index (data-parallel across
+                               GPUs) + --merge_shards, --backfill_judge_results + --rechecked_csv (copy a
+                               Phase 1-4 template's full-response verdict into this checkpoint's own
+                               judged_correct), --compare_templates + --template_rechecked_csv — see
                                docs/stage1_judge_improvements.md.
     desc-aug-v2     Stage 2b — vision upper bound: image + reference description +
                                classification question, same resumable per-model setup
@@ -129,8 +132,7 @@ Stages:
                                template — see judge-template-sensitivity), --limit, --judge_model
                                (default RedHatAI/gemma-4-31B-it-FP8-dynamic),
                                --judge_enable_thinking/--judge_max_tokens/--judge_chat_template_path
-                               (ON by default — pass --no-judge_enable_thinking to disable; see
-                               docs/stage1_judge_improvements.md).
+                               (off/unset by default — see docs/stage1_judge_improvements.md).
                                Writes leniency_gap_T<temp>.png,
                                leniency_gap_by_temperature.png, disagreement_matrix_T<temp>.png
                                (the full-response/resolved-class 2x2 breakdown — raw counts in

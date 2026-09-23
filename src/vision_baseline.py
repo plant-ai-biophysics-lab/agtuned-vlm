@@ -110,6 +110,33 @@ def cls_question(task_type: str, crop_val, prompts: dict) -> str:
     return prompts["assessment_classification_tagged"].format(question=inner)
 
 
+_VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.yaml"
+
+
+def load_rubric_templates(path: Path = _VERIFIER_PROMPTS_PATH) -> tuple[dict, dict]:
+    """(structured_templates, task_type_to_rubric) — "Baseline with rubric"
+    stage: reuses verifier_cot.py's own model-facing fill-in-the-blank
+    criteria chain (src/config/verifier_prompts.yaml's structured_templates,
+    NOT the `rubrics` dict — that one is verifier-only wording, see the
+    YAML's own header comment) as a --rubric flag on the plain
+    single-shot baseline, with no tournament/verifier machinery at all.
+    This is the same prompt shape as Paper 1's "Manual CoT" condition
+    (Appendix A: each rubric criterion answered in sequence before the
+    final label) — that paper found only a modest, inconsistent gain on
+    its own (overall Δ=0.008 vs. the lower bound); this reruns the same
+    idea on the current thinking-enabled pipeline/model to see if it
+    still holds."""
+    import yaml as _yaml
+    with open(path) as f:
+        vprompts = _yaml.safe_load(f)
+    return vprompts["structured_templates"], vprompts["task_type_to_rubric"]
+
+
+def apply_rubric(question: str, task_type: str, structured_templates: dict, task_type_to_rubric: dict) -> str:
+    rubric_key = task_type_to_rubric.get(task_type, "disease_pest")
+    return structured_templates[rubric_key].format(question=question)
+
+
 # ── vLLM helpers ─────────────────────────────────────────────────────────────
 
 def _clean(text: str) -> str:
@@ -180,6 +207,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     system_prompt = prompts.get("assessment_system", "")
     manifest = load_manifest(Path(args.manifest))
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
+    if args.rubric:
+        structured_templates, task_type_to_rubric = load_rubric_templates()
+        if args.gen_max_tokens <= 256:
+            print(f"  [rubric] --gen_max_tokens={args.gen_max_tokens} — the rubric prompt asks for "
+                  f"several fill-in-the-blank fields before the final answer"
+                  f"{' plus a thinking trace' if args.enable_thinking else ''}; consider raising this "
+                  f"(e.g. {'1024+' if args.enable_thinking else '512+'}) or responses may get truncated "
+                  f"before reaching <answer>.")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     # --num_shards > 1: each shard gets its own checkpoint filename (never
@@ -256,6 +291,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             pbar.desc = f"Classes ({ds.agml_name} / {clean_label})"
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             question = cls_question(task_type, crop_val, prompts)
+            if args.rubric:
+                question = apply_rubric(question, task_type, structured_templates, task_type_to_rubric)
 
             preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt,
                                enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens,
@@ -547,6 +584,19 @@ if __name__ == "__main__":
                          help="max_tokens for the classification generation step. 256 fits the tagged "
                               "prompt's direct answer with no thinking; raise substantially (e.g. "
                               "1024+) when --enable_thinking is set.")
+    parser.add_argument("--rubric", action="store_true",
+                         help="\"Baseline with rubric\" stage — wrap the classification question through "
+                              "verifier_prompts.yaml's structured_templates (the same model-facing, "
+                              "fill-in-the-blank criteria chain verifier_cot.py uses for its own "
+                              "k-candidate generation, keyed by task_type via task_type_to_rubric), asking "
+                              "the model to state each rubric field before its final <answer> — no "
+                              "tournament/verifier machinery, just this one extra prompt structure on the "
+                              "plain single-shot baseline. Same prompt shape as Paper 1's Appendix A "
+                              "\"Manual CoT\" condition. Combine with --enable_thinking freely — they're "
+                              "independent (this changes what's asked, --enable_thinking changes whether "
+                              "the model can reason before answering). Raise --gen_max_tokens (e.g. 512+) "
+                              "when using this — the rubric prompt asks for several fields before the "
+                              "final answer, on top of any thinking trace.")
     parser.add_argument("--chat_template_path", default=None,
                          help="Override the tokenizer's own bundled chat template with a Jinja file at "
                               "this path — needed for --enable_thinking to actually do anything on some "
@@ -564,24 +614,25 @@ if __name__ == "__main__":
     parser.add_argument("--judge_chunk_size", type=int, default=200,
                          help="Rows per apply_judge() call — drives the judge progress bar "
                               "and how much work a kill mid-judging can lose.")
-    parser.add_argument("--judge_enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+    parser.add_argument("--judge_enable_thinking", action="store_true",
                          help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for "
                               "the judge's own prompt during this run's judge phase (ignored if "
-                              "--skip_judge is set). ON by default (this repo's judge model is "
-                              "Gemma-4, and --judge_chat_template_path defaults to the template that "
-                              "makes this work for it) — pass --no-judge_enable_thinking to fall back "
-                              "to the exact original prompt rendering.")
-    parser.add_argument("--judge_max_tokens", type=int, default=2048,
+                              "--skip_judge is set). Off by default, exact original prompt rendering. "
+                              "A no-op if the judge tokenizer's chat template doesn't accept this "
+                              "kwarg. Same flag/behavior as judge-leniency's --judge_enable_thinking, "
+                              "now also available for this script's own built-in judge pass.")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
                          help="Override the judge's default max_tokens=1024 for this run's judge "
-                              "phase — a thinking trace (--judge_enable_thinking, on by default) can "
-                              "consume the normal budget before reaching the final JSON verdict, "
-                              "truncating the response.")
-    parser.add_argument("--judge_chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
+                              "phase — a thinking trace (--judge_enable_thinking) can consume the "
+                              "normal budget before reaching the final JSON verdict, truncating the "
+                              "response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
                          help="Override the judge tokenizer's own bundled chat template with a Jinja "
                               "file at this path — needed for --judge_enable_thinking to do anything "
-                              "on a Gemma-4 judge model (the default judge model here). Pass an empty "
-                              "string (--judge_chat_template_path '') to disable for a non-Gemma-4 "
-                              "judge model.")
+                              "on a Gemma-4 judge model, whose stock template has no enable_thinking "
+                              "support at all. Pass src/config/tool_chat_template_gemma4.jinja "
+                              "alongside --judge_enable_thinking for a Gemma-4 judge. Not needed for "
+                              "a Qwen judge model.")
     parser.add_argument("--rejudge", action="store_true",
                          help="Clear judged_correct/judge_reasoning on every row and re-judge "
                               "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "
