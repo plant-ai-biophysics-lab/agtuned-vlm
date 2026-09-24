@@ -35,6 +35,9 @@ quantize: null  # "4bit", "8bit", "awq", "gptq" — separate from the model chec
                 # double-quantizing
 gpu_memory_utilization: 0.9
 max_model_len: 24576
+vision_token_budget: 1120  # only matters for a --tasks_jsonl row carrying image_path (from
+                # react-build-tasks) — aligns per-image token count across model families,
+                # same convention/default as vision_baseline.py's own flag of this name
 max_num_seqs: 64
 enforce_eager: false
 chat_template_path: src/config/tool_chat_template_gemma4.jinja  # REQUIRED for the default

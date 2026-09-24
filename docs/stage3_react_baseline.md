@@ -12,14 +12,14 @@ detail lives in the module docstrings of `src/baselines/react_baseline.py`,
 `react_agent.py`, `tools.py`, and `tool_call_formats.py` — this doc is just
 the "how do I run it" version.
 
-The real heldout-AgML classification harness (sample images, build the
-classification question, score `finish`'s answer against ground truth) is
-**not built yet**. What exists today already supports a **text-only smoke
-test** — a handful of freeform grounding/reasoning tasks, no images — to
-verify the loop, the tool-calling parser, and the checkpoint plumbing
-actually work end to end before building anything more elaborate on top.
+Comparable to `vision-baseline`/`verifier-cot` by construction, not by
+accident: `react-build-tasks` (Step 1 below) samples images and builds the
+classification question the exact same way `vision_baseline.py` does
+(`active_datasets`/`load_hf_samples`/`sample_class_images`/`cls_question`)
+— a `react-baseline` run over its output is scoring the same task on the
+same images, not a different one.
 
-## Step 0 — smoke test (3 examples)
+## Step 0 — smoke test (3 examples, text-only, no GPU-hungry image step)
 
 ```bash
 uv run python main.py react-baseline \
@@ -51,7 +51,38 @@ Confirm the 3 rows all land with `stop_reason=finished` (not
 `tool_call_formats.py`'s module docstring) before trusting anything built
 on top of this.
 
-## Step 1 — view the results
+## Step 1 — real classification episodes (images included)
+
+Build a `--tasks_jsonl` file from real AgML images — 3 images/class by
+default, same sampling `vision_baseline.py` uses:
+
+```bash
+uv run python main.py react-build-tasks \
+    --n_samples 3 \
+    --output outputs_final/react_tasks_smoke3.jsonl
+```
+
+Then run it — each row's `image_path` gets loaded and attached to its
+episode (`react_agent.py`'s `image` param), so the model actually sees the
+image this time, not just the question text:
+
+```bash
+uv run python main.py react-baseline \
+    --tasks_jsonl outputs_final/react_tasks_smoke3.jsonl
+```
+
+For a true apples-to-apples comparison against an existing
+`vision-baseline` run (same exact images, not just the same sampling
+*procedure*), point `--match_images_from` at its checkpoint:
+
+```bash
+uv run python main.py react-build-tasks \
+    --match_images_from outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --n_samples 50 \
+    --output outputs_final/react_tasks_full.jsonl
+```
+
+## Step 2 — view the results
 
 ```bash
 streamlit run app/react_baseline_viewer.py -- \
@@ -61,8 +92,8 @@ streamlit run app/react_baseline_viewer.py -- \
 Browse every episode (filter by `stop_reason`, search task/result text),
 click a row for its full task/result and the matched turn-by-turn
 trajectory. `--images_root dataset/images` (the default) shows the source
-image for any row that does carry `agml_dataset`/`class_label`/
-`image_name` — the ad-hoc smoke-test rows above won't have one, since they
+image for any row from Step 1 (real `agml_dataset`/`class_label`/
+`image_name`) — the Step 0 smoke-test rows won't show one, since they
 aren't tied to a real image.
 
 ## Timing
@@ -78,14 +109,20 @@ call) is visible straight from the checkpoint without re-reading
 ## Notes
 
 - `--tasks_jsonl` is the batch mode — one JSON object per line, each with
-  at least a `"task"` key (optional `"agml_dataset"`/`"class_label"`/
-  `"image_name"` for a real image-tied episode, once that sampling step
-  exists). `--task "..."` runs a single ad-hoc episode instead, for a
-  quick one-off check.
+  at least a `"task"` key, plus `"agml_dataset"`/`"class_label"`/
+  `"image_name"`/`"image_path"` for a real image-tied episode
+  (`react-build-tasks`'s own output shape). A row without `"image_path"`
+  runs text-only, same as before. `--task "..."` runs a single ad-hoc
+  text-only episode instead, for a quick one-off check.
 - `--rerun` archives the existing checkpoint + trajectory log (timestamped,
   never deleted) and regenerates every episode from scratch — same
   convention as every other stage's `--rerun`.
-- `run_episode()` is still **text-only** — no image content block is wired
-  into the prompt yet. A `--tasks_jsonl` row's `agml_dataset`/`class_label`/
-  `image_name` are bookkeeping only right now, not something the model
-  actually sees.
+- `--vision_token_budget` (default matches `vision_baseline.py`'s own)
+  only matters for rows carrying `image_path` — it's a model-load-time
+  vLLM kwarg (`mm_processor_kwargs`), so it's always set, not conditional
+  on whether any given row actually has an image.
+- Scoring `finish`'s answer against ground truth (F1/contains-match/judge,
+  the way `vision_baseline.py`'s checkpoint gets scored) isn't built yet —
+  `react-build-tasks`'s output carries `class_label` per row, so this is a
+  straightforward next step once you're ready to compare accuracy, not a
+  redesign of the images/task-format work above.

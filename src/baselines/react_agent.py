@@ -17,23 +17,36 @@ family and tool_call_format_for(model_id) picks the right one by model
 name — see that module's docstring for the full detail and provenance of
 each grammar, and its "NOT verified against a live model" caveat.
 
-This module is model/task-agnostic — run_episode() takes a task string and
-a tool list, nothing here knows about agml datasets or classification. The
-eval-harness-specific piece (heldout AgML images, per-episode
-checkpointing, scoring against ground truth) is react_baseline.py, which
-calls this — including where episodes are actually persisted: this module
-does NOT write a checkpoint row or own a per-episode directory. It writes
-at most one shared JSONL log (`log_path`, one line per model turn, tagged
-by `episode_key`) — react_baseline.py opens ONE such log per model, not one
-per episode, specifically to avoid a directory-per-image explosion at
-scale (thousands of images -> thousands of folders was the wrong shape,
-fixed here).
+This module is model/task-agnostic — run_episode() takes a task string
+(optionally an image) and a tool list, nothing here knows about agml
+datasets or classification. The eval-harness-specific piece (heldout AgML
+images, per-episode checkpointing, scoring against ground truth) is
+react_baseline.py, which calls this — including where episodes are
+actually persisted: this module does NOT write a checkpoint row or own a
+per-episode directory. It writes at most one shared JSONL log (`log_path`,
+one line per model turn, tagged by `episode_key`) — react_baseline.py opens
+ONE such log per model, not one per episode, specifically to avoid a
+directory-per-image explosion at scale (thousands of images -> thousands
+of folders was the wrong shape, fixed here).
+
+Image support: an optional `image` (PIL) attaches to the FIRST user turn
+only (`[{"type": "image"}, {"type": "text", "text": task}]`, same content
+shape build_multimodal_prompt/chat_prompt.py already uses elsewhere) and is
+re-attached via `multi_modal_data` on EVERY generate() call — vLLM has no
+persistent multimodal state across separate .generate() calls the way a
+real multi-turn chat session would, so each turn's full re-rendered prompt
+needs the same image handed back alongside it. This is the exact same
+pattern self_cot.py/cot_yaml.py already use for their own multi-turn
+image + growing-history loops (`{"prompt": ..., "multi_modal_data":
+{"image": image}}`), not a new one invented for this loop.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from PIL import Image as PILImage
 
 try:
     from vllm import SamplingParams
@@ -70,6 +83,7 @@ def run_episode(
     tokenizer,
     task: str,
     *,
+    image: PILImage.Image | None = None,
     episode_key: str = "",
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     tools: list[dict] = TOOL_SCHEMAS,
@@ -87,6 +101,11 @@ def run_episode(
     load_llm) — loading/destroying the model is the caller's job (same
     convention as every other run_model() in this repo), so a harness can
     load once and call run_episode() per task/image without reloading.
+
+    `image`, if given, attaches to the FIRST user turn only (the task
+    itself) and is re-sent via multi_modal_data on every generate() call
+    thereafter — see module docstring. None (default) keeps this a
+    plain-text episode, unchanged from before image support existed.
 
     `episode_key`: an opaque identifier for this episode (e.g. a
     dataset/class/image-name triple, or an ad-hoc key for a manual test) —
@@ -138,9 +157,10 @@ def run_episode(
     if extract_tool_calls is None:
         raise ValueError(f"Unknown tool_call_format {tool_call_format!r} — must be one of {sorted(TOOL_CALL_EXTRACTORS)}.")
 
+    first_user_content = [{"type": "image"}, {"type": "text", "text": task}] if image is not None else task
     messages: list[dict] = (
         [{"role": "system", "content": system_prompt}] if system_prompt else []
-    ) + [{"role": "user", "content": task}]
+    ) + [{"role": "user", "content": first_user_content}]
     tools_used: list[str] = []
 
     # skip_special_tokens=not enable_thinking — Gemma-4's <|channel>thought
@@ -160,7 +180,12 @@ def run_episode(
         prompt = render_chat_template(
             tokenizer, messages, enable_thinking=enable_thinking, chat_template=chat_template, tools=tools,
         )
-        outputs = llm.generate([prompt], sampling_params)
+        # Same shape self_cot.py/cot_yaml.py already pass for their own
+        # multi-turn image + growing-history loops — vLLM's .generate() has
+        # no persistent multimodal state across separate calls, so `image`
+        # is re-attached every turn, not just the first.
+        gen_input = {"prompt": prompt, "multi_modal_data": {"image": image}} if image is not None else prompt
+        outputs = llm.generate([gen_input], sampling_params)
         raw_text = outputs[0].outputs[0].text
         messages.append({"role": "assistant", "content": raw_text})
         if log_path is not None:

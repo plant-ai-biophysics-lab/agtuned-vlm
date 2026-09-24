@@ -49,34 +49,41 @@ checkpoint. See docs/stage3_react_baseline.md and app/react_baseline_viewer.py
 
 Two ways to run:
 
-- `--task "..."` — a single ad-hoc episode (quick manual test), no
-  agml_dataset/class_label — image_name defaults to an auto-generated
-  "adhoc_<timestamp>_<hash>" key unless --episode_key is given.
+- `--task "..."` — a single ad-hoc, text-only episode (quick manual test),
+  no agml_dataset/class_label/image — image_name defaults to an
+  auto-generated "adhoc_<timestamp>_<hash>" key unless --episode_key is
+  given.
 - `--tasks_jsonl <path>` — the batch/harness mode: one JSON object per
-  line, each with at minimum a "task" key and (for resumability +
-  apples-to-apples bookkeeping with vision_baseline.py's own checkpoints)
-  "agml_dataset"/"class_label"/"image_name" keys — e.g. one line per
-  heldout AgML image once that harness's own image-sampling + task-prompt
-  step exists (not built yet, see below). Every row's model/tokenizer load
-  happens ONCE, shared across every episode in the file — episodes are NOT
-  destroy/reload cycles.
+  line, each with at minimum a "task" key and, optionally,
+  "agml_dataset"/"class_label"/"image_name"/"image_path" keys. A row WITH
+  "image_path" gets that image actually loaded (PIL, RGB) and attached to
+  the episode (react_agent.py's `image` param) — a REAL classification
+  episode, comparable to vision-baseline/verifier-cot, not a different
+  task. A row without it is text-only, same as --task mode. Every row's
+  model/tokenizer load happens ONCE, shared across every episode in the
+  file — episodes are NOT destroy/reload cycles.
+
+  src/baselines/build_react_tasks.py generates exactly this file from real
+  AgML images — same active_datasets/load_hf_samples/sample_class_images
+  sampling AND the same cls_question() prompt text vision_baseline.py
+  itself uses (optionally --match_images_from an existing vision_baseline
+  checkpoint, for a true apples-to-apples image set) — see its own
+  docstring and docs/stage3_react_baseline.md.
 
 Only tool-calling-capable models are valid here — confirmed for the
 default Gemma-4 + vendored template combination, and for Qwen3/Qwen2.5
 (their own bundled templates already support tools).
 
-The task/prompt format for a real heldout-AgML classification harness
-(sampling images, building the classification question, scoring the
-`finish` result against ground truth) is not built yet — this script
-already has everything needed to consume such a --tasks_jsonl file once
-that sampling step exists; this is the scaffolding it sits on top of.
-
 Usage:
     uv run python main.py react-baseline \\
         --task "What crops is early blight commonly found on?"
 
-    # 3-task text-only smoke test — see docs/stage3_react_baseline.md
+    # 3-task text-only smoke test (infra check, no images) — see docs/stage3_react_baseline.md
     uv run python main.py react-baseline --tasks_jsonl dataset/react_smoke_test_tasks.jsonl
+
+    # real classification episodes, images included — build the file first:
+    uv run python main.py react-build-tasks --n_samples 3 --output outputs_final/react_tasks_smoke3.jsonl
+    uv run python main.py react-baseline --tasks_jsonl outputs_final/react_tasks_smoke3.jsonl
 """
 from __future__ import annotations
 
@@ -91,11 +98,12 @@ import time
 from datetime import datetime
 
 import yaml
+from PIL import Image as PILImage
 
 from src.baselines.react_agent import run_episode
 from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS, tool_call_format_for
 from src.common.io import load_jsonl
-from src.common.vlm_load import destroy_llm, load_llm
+from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 
 REACT_CKPT_FIELDS = [
@@ -142,11 +150,13 @@ def _auto_episode_key(task: str) -> str:
 
 
 def _load_episodes(args: argparse.Namespace) -> list[dict]:
-    """Each episode dict has agml_dataset/class_label/image_name/task —
-    from --tasks_jsonl (batch mode) or a single row built from --task
-    (ad-hoc mode). Missing optional keys in a --tasks_jsonl line default to
-    "" (agml_dataset/class_label) same as REACT_CKPT_FIELDS's own blank
-    convention for a non-image task."""
+    """Each episode dict has agml_dataset/class_label/image_name/task/
+    image_path — from --tasks_jsonl (batch mode) or a single row built from
+    --task (ad-hoc mode, always image_path=None — text-only). Missing
+    optional keys in a --tasks_jsonl line default to "" (agml_dataset/
+    class_label) same as REACT_CKPT_FIELDS's own blank convention for a
+    non-image task; image_path defaults to None (text-only row) if absent
+    — see build_react_tasks.py for how a row WITH image_path gets built."""
     if args.tasks_jsonl:
         rows = load_jsonl(Path(args.tasks_jsonl))
         episodes = []
@@ -158,6 +168,7 @@ def _load_episodes(args: argparse.Namespace) -> list[dict]:
                 "class_label": r.get("class_label", ""),
                 "image_name": r.get("image_name") or _auto_episode_key(r["task"]),
                 "task": r["task"],
+                "image_path": r.get("image_path"),
             })
         return episodes
     return [{
@@ -165,6 +176,7 @@ def _load_episodes(args: argparse.Namespace) -> list[dict]:
         "class_label": "",
         "image_name": args.episode_key or _auto_episode_key(args.task),
         "task": args.task,
+        "image_path": None,
     }]
 
 
@@ -198,15 +210,23 @@ def main(args: argparse.Namespace) -> None:
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         enforce_eager=args.enforce_eager,
-        vision_token_budget=None,  # text-only for now — no image in the loop yet, see module docstring
+        # Set unconditionally, not just when a --tasks_jsonl row actually
+        # carries image_path — this is a per-model-LOAD kwarg (vLLM's
+        # mm_processor_kwargs), not per-request, so it has to be right
+        # before we know which specific rows in this batch have images.
+        # Harmless for a text-only episode (never touched unless
+        # multi_modal_data is actually passed on that generate() call).
+        vision_token_budget=args.vision_token_budget,
         caller_tag="react-baseline",
     )
     try:
         for i, ep in enumerate(pending, start=1):
             key = "/".join(filter(None, [ep["agml_dataset"], ep["class_label"], ep["image_name"]]))
+            image = PILImage.open(ep["image_path"]).convert("RGB") if ep.get("image_path") else None
             t0 = time.time()
             result = run_episode(
                 llm, tokenizer, ep["task"],
+                image=image,
                 episode_key=key,
                 tool_call_format=tool_call_format,
                 sandbox_root=workspace_root / _safe_component(key),
@@ -290,6 +310,10 @@ if __name__ == "__main__":
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
+    parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET,
+                         help="Only matters for --tasks_jsonl rows carrying image_path — aligns "
+                              "per-image token count across model families, same as vision_baseline.py's "
+                              "own flag of this name (src/common/vlm_load.py).")
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
 
