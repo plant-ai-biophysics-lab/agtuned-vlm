@@ -13,21 +13,29 @@ model: google/gemma-4-26B-A4B-it
 config: src/config/datasets.yaml
 prompts: src/config/prompts.yaml
 verifier_prompts: src/config/verifier_prompts.yaml
-manifest: dataset/selected_images_10.json  # reproducible 10/class prefix of the original 50/class
-                                            # manifest (scripts/agml_hf/truncate_manifest.py) — n=10
-                                            # vs n=25 gave nearly identical bound/CoT numbers
-                                            # (within ~0.002-0.004 judge_f1_macro), so this is the
-                                            # cheaper option for the full run
+manifest: dataset/selected_images.json  # the FULL manifest — same one vision_baseline_config.yaml
+                                          # uses. Must match vision-baseline's own manifest for
+                                          # --match_images_from to actually find every reference
+                                          # image name in path_by_name (load_hf_samples scopes
+                                          # strictly to what the manifest lists — pointing this at
+                                          # the smaller dataset/selected_images_10.json silently caps
+                                          # every class at 10 images no matter what --n_samples says,
+                                          # since there's nothing beyond that in the manifest to draw
+                                          # from). dataset/selected_images_10.json still exists for a
+                                          # deliberately smaller/cheaper run — pass --manifest to opt
+                                          # into it explicitly; it's no longer the default, since
+                                          # every vision_baseline_thinking/vision_baseline_rubric_
+                                          # thinking run this compares against used the full one.
 images_root: dataset/images
 output_dir: outputs_final/verifier_cot/
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-n_samples: 10  # images/class to evaluate — dropped back from 25 after confirming 10/class gives
-                # nearly identical bound/CoT numbers (n=25 vs n=10 differed by ~0.002-0.004
-                # judge_f1_macro across Lower/Self-CoT/Manual-CoT/Upper Bound), so the cheaper
-                # option is worth it for the paper-deadline full run (2026-08-27 target).
-                # --match_images_from (default: auto-detected per --model, see run_model) makes
-                # this a guaranteed subset of vision_baseline's own 50/class sample.
+n_samples: null  # null = use every image the manifest has for that class (matches
+                  # vision_baseline_config.yaml's own convention/comment) — NOT a literal count, so
+                  # this can't silently drift out of sync with whatever vision-baseline's own runs
+                  # actually used. --match_images_from (default: auto-detected per --model, see
+                  # run_model) still governs WHICH images per class; this just stops capping how many
+                  # of them get used once matched.
 seed: 42       # seeds the k-candidate sampling AND the pairwise duel's A/B-slot randomization/
                # analysis sampling, so runs over the same images/config are reproducible rather
                # than drawing fresh randomness each time.
