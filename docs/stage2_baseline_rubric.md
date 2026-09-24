@@ -29,7 +29,7 @@ uv run python main.py vision-baseline \
     --enable_thinking --gen_max_tokens 4096 \
     --chat_template_path src/config/tool_chat_template_gemma4.jinja \
     --output_dir outputs_final/vision_baseline_rubric_thinking/ \
-    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID \
+    --num_shards 4 --shard_index $SHARD_INDEX \
     --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --judge_enable_thinking --judge_max_tokens 2048 \
     --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
@@ -46,32 +46,9 @@ needed afterward. `run_judge_phase`'s own log file
 (`judge_log.jsonl`) is shard-aware too (`judge_log_shard<i>of<n>.jsonl`)
 so concurrent shard tasks never write-collide on it.
 
-As a SLURM job array (4 tasks, one GPU each):
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=agtuned-vlm-rubric-thinking
-#SBATCH --output=farm_outputs/%A_%a.out
-#SBATCH --error=farm_outputs/%A_%a.err
-#SBATCH --account=<your_account>
-#SBATCH --partition=<your_gpu_partition>
-#SBATCH --nodes=1
-#SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --time=100:00:00
-#SBATCH --array=0-3
-
-uv run python main.py vision-baseline \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --rubric \
-    --enable_thinking --gen_max_tokens 4096 \
-    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
-    --output_dir outputs_final/vision_baseline_rubric_thinking/ \
-    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID \
-    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --judge_enable_thinking --judge_max_tokens 2048 \
-    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
-```
+Run the 4 shard tasks via your own cluster's job scheduler — one GPU per
+task, `$SHARD_INDEX` set per task and passed as `--shard_index` — omitted
+here, scheduler config is environment-specific.
 
 ## Step 2 — merge shards (single job, after ALL array tasks finish)
 
@@ -84,18 +61,10 @@ uv run python main.py vision-baseline \
 
 Each shard already carries `judged_correct`/`judge_reasoning` (from Step
 1's inline judging), so the merged canonical checkpoint is fully judged
-immediately — no separate judging-only pass needed. If submitting Steps
-1–2 as separate `sbatch` scripts rather than one script that runs both
-sequentially, use a real dependency so the merge doesn't start before every
-array task lands:
-
-```bash
-JOB1=$(sbatch --parsable step1_generate_array.sh)
-JOB2=$(sbatch --parsable --dependency=afterok:${JOB1} step2_merge.sh)
-```
-
-`afterok:${JOB1}` on an array job waits for **every** array task to
-succeed, not just the first to finish.
+immediately — no separate judging-only pass needed. If Steps 1–2 are
+submitted as separate jobs, make the merge job depend on ALL Step 1 array
+tasks succeeding first (not just the first one to finish) — the exact
+mechanism depends on your scheduler.
 
 ## Step 3 — verifier-cot over the same images, with the verifier fixes applied
 
@@ -137,7 +106,7 @@ uv run python main.py verifier-cot \
     --enable_thinking --gen_max_tokens 4096 \
     --chat_template_path src/config/tool_chat_template_gemma4.jinja \
     --output_dir outputs_final/vision_baseline_rubric_verifier_thinking/ \
-    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID \
+    --num_shards 4 --shard_index $SHARD_INDEX \
     --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --judge_enable_thinking --judge_max_tokens 2048 \
     --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
@@ -145,37 +114,10 @@ uv run python main.py verifier-cot \
 
 `--match_images_from` guarantees this run scores the exact same images the
 rubric baseline used (not an independent sample), so any comparison between
-them is apples-to-apples. As a SLURM job array, same shape as Step 1:
+them is apples-to-apples. Run the array tasks the same way as Step 1 (your
+own scheduler, one GPU per task, `--shard_index` set per task).
 
-```bash
-#!/bin/bash
-#SBATCH --job-name=agtuned-vlm-rubric-verifier-thinking
-#SBATCH --output=farm_outputs/%A_%a.out
-#SBATCH --error=farm_outputs/%A_%a.err
-#SBATCH --account=<your_account>
-#SBATCH --partition=<your_gpu_partition>
-#SBATCH --nodes=1
-#SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --time=100:00:00
-#SBATCH --array=0-3
-
-uv run python main.py verifier-cot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --match_images_from outputs_final/vision_baseline_rubric_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --n_samples 50 \
-    --k_candidates 5 --k_pivots 3 --temperature 1.0 \
-    --enable_thinking --gen_max_tokens 4096 \
-    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
-    --output_dir outputs_final/vision_baseline_rubric_verifier_thinking/ \
-    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID \
-    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --judge_enable_thinking --judge_max_tokens 2048 \
-    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
-```
-
-Then merge (single job, no `--array`, after all 4 tasks finish — use a
-`--dependency=afterok:` submission as in Step 2):
+Then merge (single job, after all 4 tasks finish):
 
 ```bash
 uv run python main.py verifier-cot \

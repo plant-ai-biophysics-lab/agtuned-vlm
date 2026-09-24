@@ -874,6 +874,23 @@ if __name__ == "__main__":
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200)
+    parser.add_argument("--judge_enable_thinking", action="store_true",
+                         help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for the "
+                              "judge's own prompt — off by default, exact original prompt rendering. "
+                              "A no-op for a Qwen judge model's stock template if it doesn't accept the "
+                              "kwarg; a no-op for a Gemma-4 judge model UNLESS --judge_chat_template_path "
+                              "is also given — Gemma-4's own bundled template has no enable_thinking "
+                              "support at all (confirmed empirically).")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                         help="Override the judge's default max_tokens=1024 — a thinking trace "
+                              "(--judge_enable_thinking) can consume the normal budget before reaching "
+                              "the final JSON verdict, truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
+                         help="Override the judge tokenizer's own bundled chat template with a Jinja "
+                              "file at this path — needed for --judge_enable_thinking to do anything on "
+                              "a Gemma-4 judge model. Pass src/config/tool_chat_template_gemma4.jinja "
+                              "alongside --judge_enable_thinking for a Gemma-4 judge. Not needed for a "
+                              "Qwen judge model.")
     parser.add_argument("--rejudge", action="store_true")
     parser.add_argument("--skip_judge", action="store_true")
     parser.add_argument("--collate", action="store_true",
