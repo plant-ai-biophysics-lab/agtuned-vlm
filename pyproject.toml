@@ -57,6 +57,13 @@ dependencies = [
     "tqdm>=4.66",
     "ddgs>=9.14.4",
     "trafilatura>=2.2.0",
+    # ReAct baseline (src/baselines/) — agml-agent's grounding/catalog-search
+    # tools, imported directly as a Python package rather than over MCP (no
+    # client/server round trip needed for a batch eval harness — see
+    # src/baselines/tools.py). The agent itself runs on the same local vLLM
+    # models as every other script here (src/common/vlm_load.py), no
+    # separate hosted-API dependency needed.
+    "agml-agent",
 ]
 
 [tool.uv]
@@ -77,3 +84,4 @@ override-dependencies = [
 [tool.uv.sources]
 unsloth = { git = "https://github.com/unslothai/unsloth.git" }
 unsloth-zoo = { git = "https://github.com/unslothai/unsloth-zoo.git" }
+agml-agent = { git = "https://github.com/Project-AgML/agml-agent" }

@@ -53,6 +53,7 @@ def _inject_no_think(messages: list[dict]) -> list[dict]:
 
 def render_chat_template(
     tokenizer, messages: list[dict], enable_thinking: bool = False, chat_template: str | None = None,
+    tools: list[dict] | None = None,
 ) -> str:
     """Render a full chat `messages` list (system/user/assistant turns,
     already built by the caller — a user turn may carry an image content
@@ -78,26 +79,41 @@ def render_chat_template(
     When given, skips straight to the override render (the enable_thinking
     kwarg is still forwarded and respected by that custom template) rather
     than going through the Qwen-oriented TypeError/no_think fallback chain,
-    which doesn't apply once a custom template is already in play."""
+    which doesn't apply once a custom template is already in play.
+
+    tools (default None): forwarded straight through as apply_chat_template's
+    own `tools` kwarg (standard HF function-calling feature — a list of
+    OpenAI-style {"type": "function", "function": {name, description,
+    parameters}} schemas). Renders each tool's definition into the prompt so
+    a tool-calling-trained model (e.g. Qwen3/Qwen2.5's Hermes-style
+    <tool_call>{"name":...,"arguments":...}</tool_call> convention) knows
+    what it can call. A model/template with no tools support raises
+    TypeError same as an unsupported enable_thinking kwarg would — not
+    caught here, since silently dropping `tools` would leave the ReAct loop
+    (src/baselines/react_agent.py) generating against a model that was
+    never told its own tool list exists. Confirm the target model's chat
+    template actually supports `tools` before relying on this (Qwen3/
+    Qwen2.5 do; Gemma-4's bundled template does not — same gap as its
+    missing enable_thinking support, see module docstring above)."""
     if chat_template is not None:
         return tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True,
-            chat_template=chat_template, enable_thinking=enable_thinking,
+            chat_template=chat_template, enable_thinking=enable_thinking, tools=tools,
         )
     if enable_thinking:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, tools=tools)
     try:
         return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False, tools=tools,
         )
     except TypeError:
         pass
     try:
         return tokenizer.apply_chat_template(
-            _inject_no_think(messages), tokenize=False, add_generation_prompt=True,
+            _inject_no_think(messages), tokenize=False, add_generation_prompt=True, tools=tools,
         )
     except Exception:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, tools=tools)
 
 
 def build_multimodal_prompt(

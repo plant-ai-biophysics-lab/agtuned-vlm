@@ -1,0 +1,196 @@
+"""Core ReAct loop over a locally-served vLLM model's own tool-calling
+support — Thought/Action/Observation via whatever tag/syntax the model's
+own chat template trains it to emit for a tool call, not a hosted API. Kept
+consistent with every other generation script in this repo: same load_llm/
+vLLM machinery (src/common/vlm_load.py), same render_chat_template
+(src/common/chat_prompt.py, now tools-aware) — this loop is just another
+multi-turn caller of it, in the same vein as self_cot.py/cot_yaml.py's own
+growing-message-history pattern.
+
+Tool-call syntax is NOT standardized across model families the way JSON
+itself is — each model reproduces whatever its own chat template rendered
+for past tool_calls turns, and different families disagree (Qwen/Hermes:
+a real JSON object inside <tool_call> tags; Gemma-4's vendored template:
+a custom non-JSON <|tool_call>call:NAME{...}<tool_call|> syntax with its
+own quoting token). src/baselines/tool_call_formats.py holds one parser per
+family and tool_call_format_for(model_id) picks the right one by model
+name — see that module's docstring for the full detail and provenance of
+each grammar, and its "NOT verified against a live model" caveat.
+
+This module is model/task-agnostic — run_episode() takes a task string and
+a tool list, nothing here knows about agml datasets or classification. The
+eval-harness-specific piece (heldout AgML images, per-episode
+checkpointing, scoring against ground truth) is react_baseline.py, which
+calls this — including where episodes are actually persisted: this module
+does NOT write a checkpoint row or own a per-episode directory. It writes
+at most one shared JSONL log (`log_path`, one line per model turn, tagged
+by `episode_key`) — react_baseline.py opens ONE such log per model, not one
+per episode, specifically to avoid a directory-per-image explosion at
+scale (thousands of images -> thousands of folders was the wrong shape,
+fixed here).
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+try:
+    from vllm import SamplingParams
+except ImportError:
+    SamplingParams = None  # type: ignore[assignment,misc]
+
+from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS
+from src.baselines.tools import TOOL_SCHEMAS, ToolError, dispatch_tool
+from src.common.chat_prompt import render_chat_template
+from src.common.io import append_jsonl, load_prompts
+
+_REACT_PROMPTS_PATH = Path(__file__).parent.parent / "config" / "react_prompts.yaml"
+DEFAULT_SYSTEM_PROMPT = load_prompts(_REACT_PROMPTS_PATH)["default_system_prompt"]
+
+# Tool results are truncated before going back into the conversation — a
+# large retrieve()/grep() payload would otherwise eat the context budget
+# for the rest of the episode (each turn re-renders the FULL message
+# history, same growing-prompt pattern as self_cot.py/cot_yaml.py). The
+# model can always narrow its query and re-call.
+_MAX_TOOL_RESULT_CHARS = 20_000
+
+
+@dataclass
+class EpisodeResult:
+    result: str | None
+    stop_reason: str          # "finished" | "no_tool_call" | "max_iterations"
+    n_steps: int
+    tools_used: list[str] = field(default_factory=list)  # tool names called, in order, "finish" excluded
+    trajectory: list[dict] = field(default_factory=list)  # raw message history, for logging/debugging
+
+
+def run_episode(
+    llm,
+    tokenizer,
+    task: str,
+    *,
+    episode_key: str = "",
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    tools: list[dict] = TOOL_SCHEMAS,
+    tool_call_format: str = "hermes",
+    sandbox_root: Path | None = None,
+    max_iterations: int = 20,
+    gen_max_tokens: int = 1024,
+    temperature: float = 0.0,
+    enable_thinking: bool = False,
+    chat_template: str | None = None,
+    log_path: Path | None = None,
+) -> EpisodeResult:
+    """Runs one ReAct episode to completion (or exhaustion) against an
+    already-loaded vLLM `llm`/`tokenizer` (src/common/vlm_load.py's
+    load_llm) — loading/destroying the model is the caller's job (same
+    convention as every other run_model() in this repo), so a harness can
+    load once and call run_episode() per task/image without reloading.
+
+    `episode_key`: an opaque identifier for this episode (e.g. a
+    dataset/class/image-name triple, or an ad-hoc key for a manual test) —
+    stamped onto every log line this call writes so a SHARED `log_path`
+    across many episodes can still be split back apart per episode
+    afterward. Purely a label; nothing here parses or validates it.
+
+    `tool_call_format`: "hermes" (Qwen3/Qwen2.5) or "gemma4"
+    (src/config/tool_chat_template_gemma4.jinja) — picks which of
+    tool_call_formats.py's parsers reads the model's raw generation. Get
+    this wrong for the served model and every episode silently ends
+    stop_reason="no_tool_call" on turn 1 (no exception — there's no way to
+    distinguish "wrong parser" from "model chose not to call a tool" from
+    parsed output alone). react_baseline.py picks this automatically via
+    tool_call_format_for(model_id); pass it explicitly here only if calling
+    run_episode() directly.
+
+    `sandbox_root`, if given, is passed through to the `write` tool as its
+    confinement root — every write call is refused if it'd resolve outside
+    it (see tools.py's module docstring). NOT created here — `write`'s own
+    implementation creates it (and any subdirectory) lazily, on first
+    actual write, via target.parent.mkdir(...). An episode that never calls
+    `write` (the common case) creates no directory at all; the caller
+    decides what `sandbox_root` even points at (react_baseline.py scopes it
+    per-episode under one shared workspace/ directory, not a directory
+    named after the episode itself, so only episodes that actually write
+    something leave a trace on disk).
+
+    `log_path`, if given, gets one JSON line per model turn
+    ({"episode_key": episode_key, "step": i, "raw_text": ...}) via
+    append_jsonl — pass the SAME path across many run_episode() calls (one
+    shared file per model, same convention as judge_log.jsonl/
+    verifier_log.jsonl elsewhere in this repo) rather than one log file per
+    episode; filter by episode_key afterward if you need one episode's
+    turns in isolation.
+
+    Each turn re-renders the FULL message history through the chat
+    template (system + user task + every past assistant/tool turn) — the
+    same multi-turn pattern self_cot.py/cot_yaml.py already use, not a new
+    one. Multiple tool calls in a single turn are all executed and their
+    results folded into ONE "tool" role message (rather than one message
+    per call correlated by an id) — neither the Hermes nor the gemma4
+    convention carries a per-call id to correlate against, only call order,
+    so a single combined observation avoids relying on an id that doesn't
+    exist."""
+    if SamplingParams is None:
+        raise RuntimeError("vllm not installed — this only runs on the sys_platform == 'linux' GPU environment.")
+    extract_tool_calls = TOOL_CALL_EXTRACTORS.get(tool_call_format)
+    if extract_tool_calls is None:
+        raise ValueError(f"Unknown tool_call_format {tool_call_format!r} — must be one of {sorted(TOOL_CALL_EXTRACTORS)}.")
+
+    messages: list[dict] = (
+        [{"role": "system", "content": system_prompt}] if system_prompt else []
+    ) + [{"role": "user", "content": task}]
+    tools_used: list[str] = []
+
+    # skip_special_tokens=not enable_thinking — Gemma-4's <|channel>thought
+    # ...<channel|> markers are real special tokens; vLLM's default
+    # (skip_special_tokens=True) strips them from decoded output before we
+    # ever see them, which would also strip the boundary the vendored
+    # template's own strip_thinking() macro needs to prune past thinking
+    # from history on the next render — without this, thinking text would
+    # leak into and silently accumulate across every subsequent turn's
+    # prompt instead of being cleanly pruned. Same fix vision_baseline.py /
+    # verifier_cot.py already apply to their own SamplingParams.
+    sampling_params = SamplingParams(
+        temperature=temperature, max_tokens=gen_max_tokens, skip_special_tokens=not enable_thinking,
+    )
+
+    for step in range(max_iterations):
+        prompt = render_chat_template(
+            tokenizer, messages, enable_thinking=enable_thinking, chat_template=chat_template, tools=tools,
+        )
+        outputs = llm.generate([prompt], sampling_params)
+        raw_text = outputs[0].outputs[0].text
+        messages.append({"role": "assistant", "content": raw_text})
+        if log_path is not None:
+            append_jsonl(log_path, {"episode_key": episode_key, "step": step, "raw_text": raw_text})
+
+        calls = extract_tool_calls(raw_text)
+        if not calls:
+            # No tool call found — the loop has nothing to observe next.
+            # Treat as an incomplete episode rather than silently returning
+            # whatever text the model produced (finish is the only
+            # sanctioned way to end with a real result).
+            return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, trajectory=messages)
+
+        finish_call = next((c for c in calls if c["name"] == "finish"), None)
+        if finish_call is not None:
+            return EpisodeResult(
+                result=finish_call["arguments"].get("result"), stop_reason="finished",
+                n_steps=step + 1, tools_used=tools_used, trajectory=messages,
+            )
+
+        observations = []
+        for call in calls:
+            tools_used.append(call["name"])
+            try:
+                output = dispatch_tool(call["name"], call["arguments"], sandbox_root=sandbox_root)
+                content = output if isinstance(output, str) else json.dumps(output)
+                content = content[:_MAX_TOOL_RESULT_CHARS]
+            except ToolError as e:
+                content = f"ERROR: {e}"
+            observations.append(f"[{call['name']}]\n{content}")
+        messages.append({"role": "tool", "content": "\n\n".join(observations)})
+
+    return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, trajectory=messages)

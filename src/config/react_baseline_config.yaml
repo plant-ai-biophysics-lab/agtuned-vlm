@@ -1,0 +1,58 @@
+# ReAct baseline (src/baselines/) defaults — edit these directly instead of
+# remembering CLI flags. Loaded automatically (default --react_config path
+# is this file). Any flag you DO pass on the command line still overrides
+# whatever is set here — same convention as verifier_config.yaml /
+# vision_baseline_config.yaml.
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+# Served locally via vLLM (src/common/vlm_load.py), same as every other
+# script in this repo — NOT a hosted API. Must be tool-calling-capable.
+# RedHatAI's quantized Gemma-4 needs chat_template_path (below) pointing at
+# the vendored src/config/tool_chat_template_gemma4.jinja — its own bundled
+# template has no tools support at all (same gap as its missing
+# enable_thinking support). tool_call_format (below, null = auto-detect via
+# tool_call_format_for) picks src/baselines/tool_call_formats.py's matching
+# parser — "gemma4" for this model, "hermes" for a Qwen3/Qwen2.5 model.
+model: RedHatAI/gemma-4-31B-it-FP8-dynamic
+tool_call_format: null  # null = auto-detect from `model`; "hermes" or "gemma4" to override
+
+# ── Loop ─────────────────────────────────────────────────────────────────────
+max_iterations: 20     # hard cap on Thought/Action/Observation rounds per episode —
+                        # a stuck loop (e.g. repeated failing tool calls) ends here
+                        # with stop_reason="max_iterations" rather than running forever
+gen_max_tokens: 1024    # max_tokens per turn (generation, not the whole episode).
+                        # Raise well above this with enable_thinking — same reasoning
+                        # as every other generation script in this repo.
+temperature: 0.0        # deterministic by default — this is an eval harness, not a
+                         # creative task; raise it deliberately if you want sampling
+enable_thinking: false  # model's own extended thinking, off by default — same
+                         # convention as render_chat_template's own default
+
+# ── vLLM ─────────────────────────────────────────────────────────────────────
+quantize: null  # "4bit", "8bit", "awq", "gptq" — separate from the model checkpoint
+                # already being an FP8-quantized release; this is vLLM's own
+                # on-the-fly quantization= kwarg, leave null unless deliberately
+                # double-quantizing
+gpu_memory_utilization: 0.9
+max_model_len: 24576
+max_num_seqs: 64
+enforce_eager: false
+chat_template_path: src/config/tool_chat_template_gemma4.jinja  # REQUIRED for the default
+                # Gemma-4 model (see Model section above). Set to "" (empty string) if you
+                # switch `model` to a Qwen3/Qwen2.5 checkpoint — its own bundled template
+                # already supports tools/enable_thinking, no override needed.
+
+# ── Output ───────────────────────────────────────────────────────────────────
+output_dir: outputs_final/react_baseline/
+# Every write tool call is confined to <output_dir>/<episode_id>/workspace/ —
+# refused (returned to the model as a tool error, not a crash) if the
+# requested path resolves outside it. No human confirmation step, since this
+# runs unattended (SLURM/batch), unlike Claude Code's own permission prompts.
+
+# ── agml-agent tools (retrieve, search_agml) ────────────────────────────────
+# Called directly as Python functions (agml_agent.retrieve.retrieve /
+# agml_agent.search_agml.search_agml), not over MCP — see
+# src/baselines/tools.py's module docstring for why. retrieve's EPPO source
+# needs EPPO_API_KEY in the environment (agml-agent's own .env convention);
+# every other source works without a key. Missing key -> that one source
+# comes back empty, not an error.
