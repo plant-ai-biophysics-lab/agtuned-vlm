@@ -53,8 +53,8 @@ As a SLURM job array (4 tasks, one GPU each):
 #SBATCH --job-name=agtuned-vlm-rubric-thinking
 #SBATCH --output=farm_outputs/%A_%a.out
 #SBATCH --error=farm_outputs/%A_%a.err
-#SBATCH --account=jmearlesgrp
-#SBATCH --partition=gpu-6000_ada-h
+#SBATCH --account=<your_account>
+#SBATCH --partition=<your_gpu_partition>
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
@@ -152,8 +152,8 @@ them is apples-to-apples. As a SLURM job array, same shape as Step 1:
 #SBATCH --job-name=agtuned-vlm-rubric-verifier-thinking
 #SBATCH --output=farm_outputs/%A_%a.out
 #SBATCH --error=farm_outputs/%A_%a.err
-#SBATCH --account=jmearlesgrp
-#SBATCH --partition=gpu-6000_ada-h
+#SBATCH --account=<your_account>
+#SBATCH --partition=<your_gpu_partition>
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
