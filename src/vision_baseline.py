@@ -54,7 +54,8 @@ from src.common.metrics import (
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
-    judge_gt_hint, load_ckpt, plot_task_f1_summary, plot_template_comparison, rewrite_ckpt, run_judge_phase,
+    judge_gt_hint, load_ckpt, plot_checkpoint_comparison, plot_task_f1_summary, plot_template_comparison,
+    rewrite_ckpt, run_judge_phase,
     safe_model_name, write_collated, write_model_metrics,
 )
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
@@ -523,6 +524,24 @@ def main(args: argparse.Namespace) -> None:
         print(f"  Saved: {plot_path}")
         return
 
+    if args.compare_checkpoints:
+        if not args.named_ckpt:
+            print("ERROR: --named_ckpt (one or more name=path pairs) is required "
+                  "with --compare_checkpoints.")
+            sys.exit(1)
+        named_ckpt_paths: dict[str, Path] = {}
+        for item in args.named_ckpt:
+            name, sep, path = item.partition("=")
+            if not sep:
+                print(f"ERROR: --named_ckpt entries must be name=path — got {item!r}.")
+                sys.exit(1)
+            named_ckpt_paths[name] = Path(path)
+        out_path = Path(args.compare_checkpoints_output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        plot_checkpoint_comparison(named_ckpt_paths, out_path=out_path)
+        print(f"  Saved: {out_path}")
+        return
+
     if not args.model:
         print("ERROR: --model is required (or pass --collate to combine finished runs).")
         sys.exit(1)
@@ -691,6 +710,18 @@ if __name__ == "__main__":
                               "current=outputs_final/judge_template_sensitivity/<run>/current/leniency/"
                               "rechecked_T0.7.csv hybrid=outputs_final/judge_template_sensitivity/<run>/"
                               "hybrid/leniency/rechecked_T0.7.csv — required with --compare_templates.")
+    parser.add_argument("--compare_checkpoints", action="store_true",
+                         help="Skip inference — plot a grouped bar chart comparing two or more DIFFERENT "
+                              "vision-baseline checkpoints (e.g. plain thinking vs. rubric+thinking) on "
+                              "their own already-judged judged_correct column, judged F1 macro only (per "
+                              "task_type + overall, 95%% CI). See --named_ckpt and --compare_checkpoints_output.")
+    parser.add_argument("--named_ckpt", nargs="+", default=None,
+                         help="One or more name=path pairs pointing at each run's own ckpt_<model>.csv, "
+                              "e.g. thinking=outputs_final/vision_baseline_thinking/<model>/ckpt_<model>.csv "
+                              "rubric+thinking=outputs_final/vision_baseline_rubric_thinking/<model>/"
+                              "ckpt_<model>.csv — required with --compare_checkpoints.")
+    parser.add_argument("--compare_checkpoints_output", default="outputs_final/checkpoint_comparison.png",
+                         help="Where to save --compare_checkpoints' chart.")
 
     # Keys this script doesn't use but the shared config file also carries
     # for desc_augmented_vision_v2.py / vision_baseline_collate.py.

@@ -152,6 +152,15 @@ pairwise_prompt: |
   Trajectory A: {trajectory_a}
   Trajectory B: {trajectory_b}
 
-  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. If either trajectory's stated answer has a visually similar but distinct condition it could easily be confused with (e.g. Black Sigatoka vs. Yellow Sigatoka, or two look-alike species), explicitly check whether the trajectory's cited evidence actually distinguishes between them — not just whether it names a plausible general category. Immediately after this analysis you will be asked to rate each trajectory on a 20-point letter scale from A to T (A = clearly and completely correct, T = clearly and completely incorrect, with the letters in between spanning that range), so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
+  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. If either trajectory's stated answer has a visually similar but distinct condition it could easily be confused with (e.g. Black Sigatoka vs. Yellow Sigatoka, or two look-alike species), explicitly check whether the trajectory's cited evidence actually distinguishes between them — not just whether it names a plausible general category.
+
+  Immediately after this analysis you will be asked to rate EACH trajectory independently on a 20-point letter scale from A to T, anchored to how many of the numbered Evaluation Criteria above that trajectory actually satisfies WITH EVIDENCE CITED FROM ITS OWN TEXT — not a vague overall impression of correctness:
+    A-C — satisfies essentially ALL of the criteria, each with specific supporting evidence. No real gap.
+    D-H — satisfies MOST of the criteria (clear majority), but at least one is unaddressed, unclear, or only weakly supported.
+    I-M — satisfies SOME of the criteria — genuine, cited gaps outnumber the supported points, even if the overall diagnosis still sounds plausible.
+    N-T — satisfies at most ONE criterion, or the cited evidence actively contradicts the stated diagnosis.
+  Apply this same four-band anchor separately to Trajectory A and Trajectory B — each trajectory's score reflects how well THAT trajectory satisfies the criteria, not which one you'd pick as the winner.
+
+  Before scoring, state in your analysis which band (A-C / D-H / I-M / N-T) each trajectory falls into and why. If your analysis finds a real difference in how many criteria the two trajectories satisfy, THEIR SCORES MUST LAND IN DIFFERENT BANDS — do not describe a criteria-satisfaction gap between A and B and then score them within a few letters of each other; let the bands above drive real separation whenever a genuine difference exists, not just a tie-break in the same band.
 
   Analysis:

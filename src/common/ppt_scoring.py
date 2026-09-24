@@ -28,13 +28,27 @@ letters (+ their leading-space tokenization variants) via
 SamplingParams(structured_outputs=StructuredOutputsParams(choice=...)).
 The resulting top-20 logprobs are then already a distribution over the
 scale itself, not competing against the model's full vocabulary — read via
-llm_verifier.fine_grained_reward.extract_score (the vendored package's own
-expectation-over-logprobs formula, paper Eq. 3.1). This is the
-offline-vLLM equivalent of an OpenAI-compatible server's
-continue_final_message=True (which is what the vendored package's own
-call_verifier/_score_tags_by_prefill uses when talking to a server — not
-directly usable here, since this repo generates via vLLM's offline batch
-LLM.generate() API, not a served endpoint).
+extract_tag_score below, this module's own expectation-over-logprobs
+formula (paper Eq. 3.1). This is the offline-vLLM equivalent of an
+OpenAI-compatible server's continue_final_message=True (which is what
+llm_verifier's own call_verifier/_score_tags_by_prefill uses when talking
+to a server — not directly usable here, since this repo generates via
+vLLM's offline batch LLM.generate() API, not a served endpoint).
+
+extract_tag_score used to delegate to the vendored
+llm_verifier.fine_grained_reward.extract_score, which folds a letter's
+plain/leading-space spellings ("C" / " C") together via MAX. Paper 2 Stage
+2 (docs/legacy/stage2_verifier_corrections_paused.md) flagged this as a
+candidate cause of the letter-scale's low variance (Paper 1 Appendix C,
+Fig. 9) and built letter_probability_diagnostics below to measure it, but
+never got real data confirming which direction a fix should go (does the
+mass loss disproportionately hit the top-scoring letter, or is it
+roughly uniform across letters — see the diagnostics function's own
+docstring). extract_tag_score now sums the space-variants instead of
+maxing (reimplemented locally rather than patching the vendored
+extract_score) — a real, live change to the scoring path, not just
+diagnostic. This is NOT confirmed to be strictly better (see the
+docstring below) — treat this as the experiment, not a settled fix.
 """
 from __future__ import annotations
 
@@ -46,13 +60,6 @@ try:
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
     StructuredOutputsParams = None  # type: ignore[assignment,misc]
-
-try:
-    from llm_verifier.fine_grained_reward import extract_score
-    HAS_LMV = True
-except ImportError:
-    HAS_LMV = False
-    extract_score = None  # type: ignore[assignment]
 
 # The 20-letter scale plus a leading-space variant of each letter — mirrors
 # llm_verifier's own _score_tags_by_prefill comment: "Some models (e.g.
@@ -103,13 +110,33 @@ _DEFAULT_PAIRWISE_TEMPLATE = (
     "easily be confused with (e.g. Black Sigatoka vs. Yellow "
     "Sigatoka, or two look-alike species), explicitly check whether "
     "the trajectory's cited evidence actually distinguishes between "
-    "them — not just whether it names a plausible general category. "
-    "Immediately after this analysis you will be asked to rate each "
-    "trajectory on a 20-point letter scale from A to T (A = clearly and "
-    "completely correct, T = clearly and completely incorrect, with the "
-    "letters in between spanning that range), so make sure your analysis "
-    "actually justifies whatever gap (or lack of gap) you're about to "
-    "score.\n\n"
+    "them — not just whether it names a plausible general category.\n\n"
+    "Immediately after this analysis you will be asked to rate EACH "
+    "trajectory independently on a 20-point letter scale from A to T, "
+    "anchored to how many of the numbered Evaluation Criteria above "
+    "that trajectory actually satisfies WITH EVIDENCE CITED FROM ITS "
+    "OWN TEXT — not a vague overall impression of correctness:\n"
+    "  A-C — satisfies essentially ALL of the criteria, each with "
+    "specific supporting evidence. No real gap.\n"
+    "  D-H — satisfies MOST of the criteria (clear majority), but at "
+    "least one is unaddressed, unclear, or only weakly supported.\n"
+    "  I-M — satisfies SOME of the criteria — genuine, cited gaps "
+    "outnumber the supported points, even if the overall diagnosis "
+    "still sounds plausible.\n"
+    "  N-T — satisfies at most ONE criterion, or the cited evidence "
+    "actively contradicts the stated diagnosis.\n"
+    "Apply this same four-band anchor separately to Trajectory A and "
+    "Trajectory B — each trajectory's score reflects how well THAT "
+    "trajectory satisfies the criteria, not which one you'd pick as "
+    "the winner.\n\n"
+    "Before scoring, state in your analysis which band (A-C / D-H / "
+    "I-M / N-T) each trajectory falls into and why. If your analysis "
+    "finds a real difference in how many criteria the two trajectories "
+    "satisfy, THEIR SCORES MUST LAND IN DIFFERENT BANDS — do not "
+    "describe a criteria-satisfaction gap between A and B and then "
+    "score them within a few letters of each other; let the bands "
+    "above drive real separation whenever a genuine difference "
+    "exists, not just a tie-break in the same band.\n\n"
     "Analysis:"
 )
 
@@ -164,42 +191,62 @@ def score_prefill_params(temperature: float = 1.0) -> "SamplingParams":
     )
 
 
+_LETTER_VALUES = {chr(65 + i): float(20 - i) for i in range(20)}  # A=20 ... T=1, phi() in Eq. 3.1
+
+
 def extract_tag_score(analysis: str, tag: str, letter_raw: str, logprobs_list) -> float:
-    """Reconstruct the (text, tokens, position_logprobs) shape
-    extract_score expects, matching llm_verifier's own
-    _score_tags_by_prefill return convention exactly (so the shared
-    library function needs no changes), and extract the Eq. 3.1
-    expectation-over-logprobs score for this one tag. `logprobs_list` is a
-    vLLM CompletionOutput's `.logprobs` for the single forced token
-    (a list with exactly one {token_id: Logprob} dict, from
+    """Eq. 3.1 expectation-over-logprobs score for one forced letter-token
+    position, normalized to [0, 1] — same formula the vendored
+    llm_verifier.fine_grained_reward.extract_score uses, reimplemented
+    locally so we can fold a letter's plain/leading-space spellings
+    ("C" / " C") by SUMMING their probabilities instead of the vendored
+    function's MAX (see this module's docstring for why, and the caveat
+    that this isn't confirmed to be strictly better).
+
+    `analysis`/`tag` are unused for the score itself now (kept in the
+    signature for caller compatibility — ppt_orchestration.py and
+    verifier_lmv.py both call this positionally). `letter_raw` is the
+    single fallback used only if `logprobs_list` is somehow empty (not
+    expected in practice — score_prefill_params always requests
+    logprobs=20, so this is a defensive fallback, not the normal path,
+    mirroring the vendored function's own text-fallback behavior).
+    `logprobs_list` is a vLLM CompletionOutput's `.logprobs` for the single
+    forced token (a list with exactly one {token_id: Logprob} dict, from
     score_prefill_params's max_tokens=1)."""
     lp_dict = logprobs_list[0] if logprobs_list else {}
-    alts = [(lp.decoded_token, lp.logprob) for lp in lp_dict.values()] if lp_dict else [(letter_raw, 0.0)]
-    closing = "</" + tag[1:]
-    synth_text = f"{analysis}\n{tag}{letter_raw}{closing}"
-    synth_tokens = [f"\n{tag}", letter_raw, closing]
-    synth_position_logprobs = [[(f"\n{tag}", 0.0)], alts, [(closing, 0.0)]]
-    return extract_score(synth_text, synth_tokens, synth_position_logprobs, tag)
+    probs_sum: dict[str, float] = {}
+    for lp in lp_dict.values():
+        tok = lp.decoded_token.strip()
+        if tok not in _LETTER_VALUES:
+            continue
+        probs_sum[tok] = probs_sum.get(tok, 0.0) + math.exp(lp.logprob)
+
+    if not probs_sum:
+        raw_val = _LETTER_VALUES.get(letter_raw.strip())
+        return (raw_val - 1) / 19 if raw_val is not None else 0.5
+
+    total_p = sum(probs_sum.values())
+    expected = sum(_LETTER_VALUES[t] * p for t, p in probs_sum.items()) / total_p
+    return (expected - 1) / 19
 
 
 def letter_probability_diagnostics(logprobs_list) -> dict:
     """Diagnostic-only breakdown of the raw per-letter probability mass at
     a forced score-token position (Paper 2 Stage 2 — see
     docs/legacy/stage2_verifier_corrections_paused.md). Read-only: never
-    used to score anything, so it can't change tournament behavior —
-    extract_tag_score above remains the sole authority on the actual score.
+    used to score anything itself, so it can't change tournament behavior.
 
-    llm_verifier.fine_grained_reward.extract_score (called via
-    extract_tag_score) folds a letter's plain and leading-space spellings
-    ("C" / " C") together by taking the MAX of their two probabilities,
-    not the sum — see extract_tag_score's docstring /
-    docs/legacy/stage2_verifier_corrections_paused.md's Step 2 for why
-    that's a plausible contributor to the letter-scale's low variance
-    (Paper 1 Appendix C, Figure 9). This returns both aggregations side by side so
-    verifier-score-analysis can measure how much probability mass the max
-    convention is actually discarding on real data, rather than assuming
-    it: `probs_max` mirrors what extract_score itself uses, `probs_sum`
-    is the candidate alternative."""
+    `extract_tag_score` above now SUMS a letter's plain/leading-space
+    spellings ("C" / " C") — `probs_sum` here mirrors that live scoring
+    path; `probs_max` is the vendored llm_verifier behavior this replaced.
+    Kept computing both (not just the live one) because the sum-vs-max
+    question was never fully settled: whether summing actually helps
+    depends on whether the top-scoring letter specifically loses more mass
+    to the max operation than lower letters do, not just the average gap
+    size — verifier-score-analysis's max_vs_sum_mass_gap only reports the
+    average, so a real before/after judged-accuracy comparison (not just
+    this mass-gap number) is what actually tells you whether summing
+    helped, hurt, or was a wash on a given run."""
     lp_dict = logprobs_list[0] if logprobs_list else {}
     letters = {chr(65 + i) for i in range(20)}
     probs_max: dict[str, float] = {}

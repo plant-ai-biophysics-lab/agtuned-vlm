@@ -97,6 +97,107 @@ JOB2=$(sbatch --parsable --dependency=afterok:${JOB1} step2_merge.sh)
 `afterok:${JOB1}` on an array job waits for **every** array task to
 succeed, not just the first to finish.
 
+## Step 3 — verifier-cot over the same images, with the verifier fixes applied
+
+A brief, informal revisit of the paused verifier diagnosis
+(`docs/legacy/stage2_verifier_corrections_paused.md`) — not a full resumption
+of that investigation, just applying the two live fixes it identified to a
+real run over the *same image set* as the rubric baseline above, so the
+results are directly comparable:
+
+- **Sum-not-max letter aggregation** (`src/common/ppt_scoring.py`'s
+  `extract_tag_score`) — live now, not diagnostic-only. Unconfirmed
+  whether this actually helps (see its own docstring) — this run is part
+  of how you'd find out.
+- **Rewritten pairwise prompt** (`src/config/verifier_prompts.yaml`'s
+  `pairwise_prompt`) — criteria-satisfaction-band anchors (A-C/D-H/I-M/N-T)
+  + a forced-separability rule between Trajectory A/B scores.
+- **More candidates/pivots** — now that more GPUs are available, raised
+  from the earlier diagnostic run's `--k_candidates 3 --k_pivots 2` (closer
+  to the paper's own `K ∈ {4, 8}`) — directly targets the pool-diversity
+  and winner's-curse findings from that diagnosis (41% of pools were fully
+  degenerate at K=3; more independent draws per image makes that less
+  likely, and more comparisons per candidate reduces small-sample argmax
+  noise). `--temperature` is left at its default (`1.0`, unchanged) so this
+  run isolates the effect of the scoring/prompt/K changes rather than
+  conflating them with a temperature change too.
+- **`--num_shards`/`--shard_index` now exist on `verifier-cot`** (added
+  alongside this run — previously only `vision-baseline` had them), same
+  array-job convention. `--chat_template_path` was also added to
+  `verifier-cot`'s own k-candidates generation step, since without it
+  `--enable_thinking` was a silent no-op for Gemma-4 here too (same root
+  cause `vision_baseline.py`'s fix addressed) — now fixed.
+
+```bash
+uv run python main.py verifier-cot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --match_images_from outputs_final/vision_baseline_rubric_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --n_samples 50 \
+    --k_candidates 5 --k_pivots 3 --temperature 1.0 \
+    --enable_thinking --gen_max_tokens 4096 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_rubric_verifier_thinking/ \
+    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID \
+    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --judge_enable_thinking --judge_max_tokens 2048 \
+    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
+```
+
+`--match_images_from` guarantees this run scores the exact same images the
+rubric baseline used (not an independent sample), so any comparison between
+them is apples-to-apples. As a SLURM job array, same shape as Step 1:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=agtuned-vlm-rubric-verifier-thinking
+#SBATCH --output=farm_outputs/%A_%a.out
+#SBATCH --error=farm_outputs/%A_%a.err
+#SBATCH --account=jmearlesgrp
+#SBATCH --partition=gpu-6000_ada-h
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=100:00:00
+#SBATCH --array=0-3
+
+uv run python main.py verifier-cot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --match_images_from outputs_final/vision_baseline_rubric_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --n_samples 50 \
+    --k_candidates 5 --k_pivots 3 --temperature 1.0 \
+    --enable_thinking --gen_max_tokens 4096 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_rubric_verifier_thinking/ \
+    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID \
+    --judge_model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --judge_enable_thinking --judge_max_tokens 2048 \
+    --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
+```
+
+Then merge (single job, no `--array`, after all 4 tasks finish — use a
+`--dependency=afterok:` submission as in Step 2):
+
+```bash
+uv run python main.py verifier-cot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_rubric_verifier_thinking/ \
+    --merge_shards
+```
+
+Then diagnose whether the fixes actually moved anything:
+
+```bash
+uv run python main.py verifier-score-analysis \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_rubric_verifier_thinking/
+```
+
+Compare `score_analysis_summary.json`'s `image_level.point_biserial_r` and
+`pair_level.granularity.max_vs_sum_mass_gap` against the paused doc's
+post-mortem numbers (`r=-0.097` image-level, `r=+0.076` pair-level, at
+K=3) to see whether K=5/pivots=3 plus the two live fixes actually closed
+the gap — this is genuinely unknown until this run exists.
+
 ## Notes
 
 - Raise `--gen_max_tokens` regardless of `--enable_thinking` — the rubric

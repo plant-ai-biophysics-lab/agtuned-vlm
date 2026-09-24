@@ -64,7 +64,8 @@ from src.common.dataset_config import (
 )
 from src.common.io import append_jsonl, load_prompts
 from src.common.metrics import (
-    contains_match, extract_answer_tag, resolve_class, rouge_scores_per_sample, sample_class_images,
+    contains_match, extract_answer_tag, extract_channel_thought, resolve_class, rouge_scores_per_sample,
+    sample_class_images,
 )
 from src.common.ppt_scoring import score_prefill_params
 from src.common.ppt_orchestration import (
@@ -78,7 +79,7 @@ except ImportError:
     DEFAULT_PIVOTS = 2
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, compute_model_metrics,
-    judge_gt_hint, load_ckpt, run_judge_phase, safe_model_name, write_collated,
+    judge_gt_hint, load_ckpt, rewrite_ckpt, run_judge_phase, safe_model_name, write_collated,
 )
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
@@ -141,6 +142,13 @@ def _cls_question(task_type: str, crop_val, prompts: dict) -> str:
 
 
 def _clean(text: str) -> str:
+    # Strip Gemma-4's <|channel>thought...<channel|> block first (a no-op,
+    # returns text unchanged, for every model/run that doesn't produce one —
+    # i.e. every run without --enable_thinking + --chat_template_path) —
+    # same fix vision_baseline.py already has, needed here too so a leftover
+    # channel block never pollutes pool text/extract_answer_tag/the
+    # pairwise-duel prompt shown to the verifier.
+    _, text = extract_channel_thought(text)
     text = _THINK_RE.sub("", text).strip()
     m = _REPEAT_RE.search(text)
     return text[:m.start()].strip() if m else text
@@ -148,7 +156,7 @@ def _clean(text: str) -> str:
 
 def run_batch_n(
     llm, tokenizer, images: list, histories: list[list[dict]], params,
-    call_stats: dict | None = None, enable_thinking: bool = False,
+    call_stats: dict | None = None, enable_thinking: bool = False, chat_template: str | None = None,
 ) -> list[list[dict]]:
     """n completions per prompt. Returns one list of {"text", "prompt_tokens",
     "completion_tokens"} dicts per prompt. `call_stats` (a plain dict shared
@@ -164,8 +172,19 @@ def run_batch_n(
     is meant to test and turning thinking on for every verifier call too
     would multiply cost across k_candidates x pairwise-comparisons for no
     benefit to the actual question (does the MODEL BEING TESTED reason
-    better)."""
-    prompts = [{"prompt": render_chat_template(tokenizer, h, enable_thinking=enable_thinking),
+    better).
+
+    chat_template (default None): forwarded to render_chat_template —
+    Gemma-4's own bundled template has no enable_thinking support at all
+    (same root cause vision_baseline.py's --chat_template_path fixes), so
+    without this --enable_thinking is a silent no-op for it here too. Pass
+    the vendored src/config/tool_chat_template_gemma4.jinja's text.
+    Caller (run_model) is also responsible for flipping
+    SamplingParams(skip_special_tokens=not enable_thinking) on `params`
+    when this is set — Gemma-4's <|channel>/<channel|> markers are real
+    special tokens vLLM strips by default."""
+    prompts = [{"prompt": render_chat_template(tokenizer, h, enable_thinking=enable_thinking,
+                                                chat_template=chat_template),
                 "multi_modal_data": {"image": img}}
                for img, h in zip(images, histories)]
     outputs = llm.generate(prompts, sampling_params=params)
@@ -349,6 +368,7 @@ def run_group(
     agml_dataset: str, class_label: str, image_names: list[str],
     log_path: Path | None = None, call_stats: dict | None = None,
     seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
+    chat_template: str | None = None,
 ) -> list[dict]:
     """Run one image's worth of the whole single-round pipeline for every
     image in one (dataset, class) group, batched across the group: generate
@@ -386,8 +406,10 @@ def run_group(
     gen_params = SamplingParams(
         temperature=gen_temperature, max_tokens=gen_max_tokens,
         repetition_penalty=1.1, n=k_candidates, seed=seed,
+        skip_special_tokens=not enable_thinking,
     )
-    gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats, enable_thinking=enable_thinking)
+    gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats,
+                           enable_thinking=enable_thinking, chat_template=chat_template)
     pools: dict[int, list[str]] = {i: [c["text"] for c in gen_out[i]] for i in active}
     answer_lists: list[list[str]] = []
     for cands in gen_out:
@@ -474,23 +496,90 @@ def _result_row(result: dict, ds, clean_label: str, crop_val, task_type: str, na
     }
 
 
+def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VERIFIER_CKPT_FIELDS) -> None:
+    """Combine every ckpt_<model>_shard<i>of<n>.csv in output_dir/<model>/
+    into the canonical ckpt_<model>.csv (rewritten fresh, not appended —
+    safe to re-run), same convention as vision_baseline.py's own
+    merge_shards. Rows are joined on (agml_dataset, class_label,
+    image_name); a duplicate key across shards (shouldn't happen — shards
+    partition disjoint groups — but checked rather than assumed) keeps the
+    first-seen row and prints a warning.
+
+    IMPORTANT: leaves the shard files in place (never deletes them).
+    judge-leniency/judge-consistency/judge-template-sensitivity's own
+    --ckpt directory glob excludes shard files now (see
+    judge_leniency.py's _is_excluded_ckpt) — but if you run THIS merge
+    into a directory those scripts are still reading from concurrently,
+    prefer merging into a directory they haven't looked at yet."""
+    model_dir = output_dir / safe_model_name(model_id)
+    shard_paths = sorted(model_dir.glob(f"ckpt_{safe_model_name(model_id)}_shard*of*.csv"))
+    if not shard_paths:
+        print(f"  No shard checkpoints found under {model_dir} (expected "
+              f"ckpt_{safe_model_name(model_id)}_shard<i>of<n>.csv).")
+        return
+
+    merged: list[dict] = []
+    seen_keys: set[tuple] = set()
+    n_dupes = 0
+    for shard_path in shard_paths:
+        shard_rows, _ = load_ckpt(shard_path, fields=fields)
+        for r in shard_rows:
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
+            if key in seen_keys:
+                n_dupes += 1
+                continue
+            seen_keys.add(key)
+            merged.append(r)
+        print(f"  {shard_path.name}: {len(shard_rows)} row(s)")
+
+    if n_dupes:
+        print(f"  WARNING: {n_dupes} duplicate (agml_dataset, class_label, image_name) key(s) across "
+              f"shards — kept the first-seen row for each. Shards should partition disjoint groups; "
+              f"investigate if this number is large.")
+
+    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    rewrite_ckpt(ckpt_path, merged, fields=fields)
+    metrics = compute_model_metrics(merged)
+    (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    print(f"  Merged {len(merged)} row(s) from {len(shard_paths)} shard(s) into {ckpt_path.name}")
+    print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
+          f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
+
+
 # ── Main run ─────────────────────────────────────────────────────────────────
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     vprompts = _load_yaml(Path(args.verifier_prompts))
     manifest = load_manifest(Path(args.manifest))
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     # Flat <output_dir>/<model>/ layout so this stays compatible with the
     # rest of the repo's load_all_rows()-style loaders.
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
-    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    # --num_shards > 1: each shard gets its own checkpoint filename (never
+    # the canonical ckpt_<model>.csv), same convention as vision_baseline.py
+    # — N independent single-GPU processes can run concurrently against the
+    # SAME model_dir with zero write contention. num_shards=1 (default) is
+    # byte-for-byte the original filename.
+    ckpt_stem = f"ckpt_{safe_model_name(model_id)}"
+    if args.num_shards > 1:
+        ckpt_stem += f"_shard{args.shard_index}of{args.num_shards}"
+    ckpt_path = model_dir / f"{ckpt_stem}.csv"
     # verifier_log.jsonl is this script's own raw per-call log (every
-    # tournament_pair/candidate prompt+response) — must be archived
-    # alongside the checkpoint on --rerun too, or old and new run entries
-    # silently concatenate in one ever-growing file with no way to tell
-    # them apart.
-    archive_ckpt_if_rerun(ckpt_path, args.rerun, extra_logs=("judge_log.jsonl", "verifier_log.jsonl"))
+    # tournament_pair/candidate prompt+response). Shard-aware name (matching
+    # run_judge_phase's own judge_log.jsonl fix, src/common/vision_eval.py)
+    # — model_dir is the SAME directory for every shard, so a fixed name
+    # would have concurrent shard processes appending to one shared file at
+    # the same time.
+    _log_suffix = f"_shard{args.shard_index}of{args.num_shards}" if args.num_shards > 1 else ""
+    verifier_log_name = f"verifier_log{_log_suffix}.jsonl"
+    judge_log_name = f"judge_log{_log_suffix}.jsonl"
+    log_path = model_dir / verifier_log_name
+    # Must archive alongside the checkpoint on --rerun too, or old and new
+    # run entries silently concatenate in one ever-growing file with no way
+    # to tell them apart.
+    archive_ckpt_if_rerun(ckpt_path, args.rerun, extra_logs=(judge_log_name, verifier_log_name))
     rows, seen = load_ckpt(ckpt_path, fields=VERIFIER_CKPT_FIELDS)
     if rows:
         print(f"  [resume] {len(rows)} row(s) already scored in {ckpt_path.name}")
@@ -543,9 +632,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         if missing:
             print(f"  [warn] --subsample not found (skip/not in manifest/already complete?): {sorted(missing)}")
 
+    if args.num_shards > 1:
+        n_before = len(groups)
+        groups = groups[args.shard_index :: args.num_shards]
+        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(groups)}/{n_before} (dataset, class) "
+              f"group(s) assigned to this shard")
+
     n_rows_before = len(rows)
     call_stats: dict = {"n_calls": 0, "n_prompts": 0}
-    log_path = model_dir / "verifier_log.jsonl"
     elapsed = 0.0
     # One rng, seeded once, threaded through every group in a fixed
     # processing order — reproducible positional-bias randomization
@@ -585,6 +679,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
                 log_path=log_path, call_stats=call_stats,
                 seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
+                chat_template=chat_template,
             )
 
             for name, result in zip(names, results):
@@ -600,6 +695,17 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         del tokenizer
 
     rows = run_judge_phase(rows, ckpt_path, args, prompts, fields=VERIFIER_CKPT_FIELDS)
+
+    if args.num_shards > 1:
+        # Skip metrics.json/compute_summary.json here — computed from only
+        # THIS shard's rows, and both are single fixed filenames every
+        # shard would otherwise overwrite with its own partial (and
+        # therefore misleading) numbers. Run --merge_shards once all
+        # shards finish for the real, whole-checkpoint versions.
+        print(f"  [shard {args.shard_index}/{args.num_shards}] done — skipping metrics.json/"
+              f"compute_summary.json (per-shard numbers would be misleading); run --merge_shards "
+              f"once every shard has finished.")
+        return
 
     metrics = compute_model_metrics(rows)
     (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
@@ -651,9 +757,21 @@ def main(args: argparse.Namespace) -> None:
         write_collated(Path(args.output_dir), collated)
         return
 
+    if args.merge_shards:
+        if not args.model:
+            print("ERROR: --model is required with --merge_shards.")
+            sys.exit(1)
+        merge_shards(Path(args.output_dir), args.model, fields=VERIFIER_CKPT_FIELDS)
+        return
+
     if not args.model:
         print("ERROR: --model is required (or pass --collate to combine finished runs).")
         sys.exit(1)
+
+    if args.num_shards > 1 and not (0 <= args.shard_index < args.num_shards):
+        print(f"ERROR: --shard_index must be in [0, {args.num_shards}) — got {args.shard_index}.")
+        sys.exit(1)
+
     run_model(args.model, args)
 
 
@@ -731,7 +849,16 @@ if __name__ == "__main__":
                               "multi-turn pipelines). Off by default to match that convention. Does NOT "
                               "affect the verifier's own pairwise-duel calls — see run_batch_n's "
                               "docstring. Raise --gen_max_tokens when using this, or thinking traces "
-                              "will routinely get truncated before the model reaches its actual answer.")
+                              "will routinely get truncated before the model reaches its actual answer. "
+                              "For Gemma-4, also pass --chat_template_path — its own bundled template "
+                              "has no enable_thinking support at all, so this alone is a silent no-op "
+                              "for it (same root cause vision_baseline.py's --chat_template_path fixes).")
+    parser.add_argument("--chat_template_path", default=None,
+                         help="Override the tokenizer's own bundled chat template with a Jinja file at "
+                              "this path, for the k_candidates generation step — needed for "
+                              "--enable_thinking to do anything on a Gemma-4 model. Pass "
+                              "src/config/tool_chat_template_gemma4.jinja alongside --enable_thinking "
+                              "for Gemma-4. Not needed for Qwen models.")
     parser.add_argument("--gen_max_tokens", type=int, default=180,
                          help="max_tokens for the k_candidates generation step. 180 fits a direct "
                               "fill-in-the-blank answer with no thinking; raise substantially (e.g. "
@@ -752,6 +879,21 @@ if __name__ == "__main__":
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/ folder into "
                               "collated_summary.csv / collated_metrics.json.")
+    parser.add_argument("--num_shards", type=int, default=1,
+                         help="Split (dataset, class) groups across N independent single-GPU "
+                              "processes for data-parallel throughput (same convention as "
+                              "vision_baseline.py) — each shard writes its own "
+                              "ckpt_<model>_shard<i>ofN.csv, verifier_log_shard<i>ofN.jsonl, and "
+                              "judge_log_shard<i>ofN.jsonl (never the canonical filenames), so N "
+                              "shards can run concurrently against the SAME --output_dir with zero "
+                              "write contention. Run --merge_shards once all shards finish.")
+    parser.add_argument("--shard_index", type=int, default=0,
+                         help="This process's shard index, in [0, --num_shards) — e.g. "
+                              "$SLURM_ARRAY_TASK_ID in a job array. Ignored if --num_shards <= 1.")
+    parser.add_argument("--merge_shards", action="store_true",
+                         help="Skip inference — combine ckpt_<model>_shard*ofN.csv (written by "
+                              "--num_shards > 1 runs) into the canonical ckpt_<model>.csv + "
+                              "metrics.json for --model's output dir.")
 
     if _pre_args.verifier_config and Path(_pre_args.verifier_config).exists():
         _cfg = _load_yaml(Path(_pre_args.verifier_config)) or {}

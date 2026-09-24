@@ -985,6 +985,66 @@ def plot_template_comparison(
     plt.close(fig)
 
 
+def plot_checkpoint_comparison(
+    named_ckpt_paths: dict[str, Path], out_path: Path, n_boot: int = 2000, seed: int = 42,
+) -> None:
+    """Grouped bar chart comparing DIFFERENT CHECKPOINTS (e.g. plain
+    thinking baseline vs. rubric+thinking baseline) on their own already-
+    judged `judged_correct` column, across task_type + overall — judged F1
+    macro only (95% CI), one color per named checkpoint.
+
+    Unlike plot_template_comparison (which compares judge TEMPLATES on the
+    SAME underlying predictions, via each template's own
+    rechecked_T<temp>.csv `_full_trajectory` columns), this compares
+    different PREDICTIONS entirely — two independent vision-baseline runs,
+    each already carrying its own single judged_correct verdict directly
+    in its checkpoint CSV, no rechecked_T<temp>.csv needed."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    per_run_stats: dict[str, dict] = {}
+    for name, path in named_ckpt_paths.items():
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        per_run_stats[name] = compute_condition_stats(rows, n_boot, seed)
+
+    labels: list[str] = [t for t in _TASK_TYPE_ORDER if any(t in s for s in per_run_stats.values())]
+    for s in per_run_stats.values():
+        labels += [t for t in s if t not in labels]
+    if not labels:
+        return
+
+    run_names = list(named_ckpt_paths.keys())
+    n_runs = len(run_names)
+    x = np.arange(len(labels))
+    width = 0.8 / max(n_runs, 1)
+    palette = ["#9467bd", "#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for i, name in enumerate(run_names):
+        stats = per_run_stats[name]
+        vals = [stats.get(t, {}).get("judge_f1_macro", 0.0) for t in labels]
+        lo = [stats.get(t, {}).get("judge_f1_macro", 0.0) - stats.get(t, {}).get("judge_ci_low", 0.0)
+              for t in labels]
+        hi = [stats.get(t, {}).get("judge_ci_high", 0.0) - stats.get(t, {}).get("judge_f1_macro", 0.0)
+              for t in labels]
+        offset = (i - (n_runs - 1) / 2) * width
+        ax.bar(x + offset, vals, width, yerr=[lo, hi], capsize=3,
+               color=palette[i % len(palette)], label=name)
+
+    first_stats = per_run_stats[run_names[0]]
+    ns = [first_stats.get(t, {}).get("n", 0) for t in labels]
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{_TASK_TYPE_LABELS.get(l, l)}\n(n={n})" for l, n in zip(labels, ns)])
+    ax.set_ylabel("Judged F1 macro (95% CI across classes)")
+    ax.legend(loc="upper right", fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def write_collated(output_dir: Path, collated: dict[str, dict]) -> None:
     (output_dir / "collated_metrics.json").write_text(json.dumps(collated, indent=2))
 

@@ -103,7 +103,9 @@ Stages:
                                once by the Probabilistic Pivot Tournament, argmax(win_rate) reported.
                                --k_candidates/--k_pivots are the main tunables. Compared against
                                src/verifier_lmv.py's full PPT tournament (run separately, not wired
-                               into main.py — see its own --help) in `cot-compare`.
+                               into main.py — see its own --help) in `cot-compare`. --num_shards/
+                               --shard_index (data-parallel across GPUs, same convention as
+                               vision-baseline) + --merge_shards.
     verifier-score-analysis   — diagnostic (no GPU needed): re-derives the paper's Appendix C
                                Figure 8/9 checks (score distribution + retained-set accuracy vs.
                                threshold, nearest-letter histogram) from an existing verifier-cot
