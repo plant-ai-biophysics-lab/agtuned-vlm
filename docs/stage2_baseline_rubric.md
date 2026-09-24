@@ -95,13 +95,28 @@ results are directly comparable:
   array-job convention. `--chat_template_path` was also added to
   `verifier-cot`'s own k-candidates generation step, since without it
   `--enable_thinking` was a silent no-op for Gemma-4 here too (same root
-  cause `vision_baseline.py`'s fix addressed) — now fixed.
+  cause `vision_baseline.py`'s fix addressed) — now fixed. `--judge_enable_thinking`/
+  `--judge_max_tokens`/`--judge_chat_template_path` were also missing from
+  `verifier-cot`'s own CLI (the underlying `run_judge_phase` call already
+  supported them via `getattr`, the flags just weren't registered) — fixed.
+- **`src/config/verifier_config.yaml`'s defaults now match
+  `vision_baseline_config.yaml`'s** — `manifest: dataset/selected_images.json`
+  (the full manifest, not the smaller `selected_images_10.json` this file
+  used to default to) and `n_samples: null` (uncapped), so a bare
+  `--match_images_from` invocation is automatically full apples-to-apples
+  with any vision-baseline run, no `--manifest`/`--n_samples` flags needed.
+  This matters specifically because `load_hf_samples` scopes strictly to
+  what the manifest lists — pointing `--match_images_from` at a 50/class
+  reference checkpoint while the manifest itself only has 10/class silently
+  caps every class at 10 regardless of `--n_samples`, since there's nothing
+  beyond that in the manifest to draw from. `dataset/selected_images_10.json`
+  still exists for a deliberately smaller/cheaper run — pass `--manifest`
+  explicitly to opt into it.
 
 ```bash
 uv run python main.py verifier-cot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --match_images_from outputs_final/vision_baseline_rubric_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --n_samples 50 \
     --k_candidates 5 --k_pivots 3 --temperature 1.0 \
     --enable_thinking --gen_max_tokens 4096 \
     --chat_template_path src/config/tool_chat_template_gemma4.jinja \
@@ -111,6 +126,11 @@ uv run python main.py verifier-cot \
     --judge_enable_thinking --judge_max_tokens 2048 \
     --judge_chat_template_path src/config/tool_chat_template_gemma4.jinja
 ```
+
+`--manifest`/`--n_samples` are deliberately omitted — they now come from
+`verifier_config.yaml`'s own defaults (full manifest, uncapped), which is
+what makes this a true apples-to-apples match against the rubric baseline
+without needing to remember either flag.
 
 `--match_images_from` guarantees this run scores the exact same images the
 rubric baseline used (not an independent sample), so any comparison between
