@@ -59,7 +59,9 @@ from src.common.chat_prompt import render_chat_template
 from src.common.io import append_jsonl, load_prompts
 
 _REACT_PROMPTS_PATH = Path(__file__).parent.parent / "config" / "react_prompts.yaml"
-DEFAULT_SYSTEM_PROMPT = load_prompts(_REACT_PROMPTS_PATH)["default_system_prompt"]
+_REACT_PROMPTS = load_prompts(_REACT_PROMPTS_PATH)
+DEFAULT_SYSTEM_PROMPT = _REACT_PROMPTS["default_system_prompt"]
+NUDGE_PROMPT = _REACT_PROMPTS["nudge_prompt"]
 
 # Tool results are truncated before going back into the conversation — a
 # large retrieve()/grep() payload would otherwise eat the context budget
@@ -75,6 +77,7 @@ class EpisodeResult:
     stop_reason: str          # "finished" | "no_tool_call" | "max_iterations"
     n_steps: int
     tools_used: list[str] = field(default_factory=list)  # tool names called, in order, "finish" excluded
+    nudges_used: int = 0      # see run_episode's `max_nudges` — how many of them this episode needed
     trajectory: list[dict] = field(default_factory=list)  # raw message history, for logging/debugging
 
 
@@ -90,6 +93,7 @@ def run_episode(
     tool_call_format: str = "hermes",
     sandbox_root: Path | None = None,
     max_iterations: int = 20,
+    max_nudges: int = 1,
     gen_max_tokens: int = 1024,
     temperature: float = 0.0,
     enable_thinking: bool = False,
@@ -102,6 +106,18 @@ def run_episode(
     load_llm) — loading/destroying the model is the caller's job (same
     convention as every other run_model() in this repo), so a harness can
     load once and call run_episode() per task/image without reloading.
+
+    `max_nudges` (default 1): a turn with no tool call at all doesn't
+    immediately end the episode — NUDGE_PROMPT (react_prompts.yaml) is
+    injected as one "user" turn and the model gets another try, up to this
+    many times, before actually returning stop_reason="no_tool_call". Real,
+    observed failure mode this recovers from: even with an explicit "call
+    finish, don't just answer in prose" system-prompt instruction, the
+    model sometimes writes a complete, well-cited answer as plain text and
+    never calls `finish` — discarding that answer outright (the original,
+    nudge-free behavior) throws away a result that was right there. Costs
+    one extra turn (counts against max_iterations) only on a genuine miss;
+    0 disables nudging entirely, back to the original all-or-nothing check.
 
     `verbose` (default True): print one short line per turn (step index +
     what happened — tool call(s), no tool call, or finish) as the episode
@@ -172,6 +188,7 @@ def run_episode(
         [{"role": "system", "content": system_prompt}] if system_prompt else []
     ) + [{"role": "user", "content": first_user_content}]
     tools_used: list[str] = []
+    nudges_used = 0
 
     # skip_special_tokens=False, UNCONDITIONALLY — not just when
     # enable_thinking is True (an earlier version of this line was
@@ -218,13 +235,26 @@ def run_episode(
 
         calls = extract_tool_calls(raw_text)
         if not calls:
+            if nudges_used < max_nudges:
+                # Real, observed failure mode (not hypothetical): even with
+                # an explicit "call finish, don't just answer in prose"
+                # system-prompt instruction, the model sometimes writes a
+                # complete, well-cited answer as plain text and never calls
+                # `finish`. Give it one more try with a reminder rather than
+                # discarding an answer that was right there — see
+                # NUDGE_PROMPT / max_nudges docstring.
+                nudges_used += 1
+                if verbose:
+                    print(f"    [react] step {step}: no tool call found — nudging ({nudges_used}/{max_nudges})")
+                messages.append({"role": "user", "content": NUDGE_PROMPT})
+                continue
             if verbose:
                 print(f"    [react] step {step}: no tool call found (stop_reason=no_tool_call)")
-            # No tool call found — the loop has nothing to observe next.
-            # Treat as an incomplete episode rather than silently returning
-            # whatever text the model produced (finish is the only
-            # sanctioned way to end with a real result).
-            return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, trajectory=messages)
+            # Still nothing after every nudge — the loop has nothing to
+            # observe next. Treat as an incomplete episode rather than
+            # silently returning whatever text the model produced (finish
+            # is the only sanctioned way to end with a real result).
+            return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
 
         finish_call = next((c for c in calls if c["name"] == "finish"), None)
         if finish_call is not None:
@@ -232,7 +262,7 @@ def run_episode(
                 print(f"    [react] step {step}: finish")
             return EpisodeResult(
                 result=finish_call["arguments"].get("result"), stop_reason="finished",
-                n_steps=step + 1, tools_used=tools_used, trajectory=messages,
+                n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages,
             )
 
         if verbose:
@@ -274,4 +304,4 @@ def run_episode(
             combined = "\n\n".join(f"[{o['name']}]\n{o['content']}" for o in observations)
             messages.append({"role": "tool", "content": combined})
 
-    return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, trajectory=messages)
+    return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)

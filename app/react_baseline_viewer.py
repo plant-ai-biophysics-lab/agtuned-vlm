@@ -42,7 +42,7 @@ _DEFAULT_IMAGES_ROOT = _flag("--images_root", "dataset/images")
 
 REACT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "image_name", "task", "result",
-    "stop_reason", "n_steps", "tools_used", "tool_call_format", "elapsed_seconds",
+    "stop_reason", "n_steps", "tools_used", "nudges_used", "tool_call_format", "elapsed_seconds",
 ]
 
 
@@ -55,28 +55,43 @@ def episode_key(agml_dataset: str, class_label: str, image_name: str) -> str:
     return "/".join(filter(None, [agml_dataset, class_label, image_name]))
 
 
+def _canonical_ckpt_path(model_dir: Path) -> Path:
+    """react_baseline.py always writes the canonical checkpoint as
+    ckpt_<model_dir.name>.csv (safe_model_name(args.model) == the model's
+    own output subfolder name, by construction) — targeting that exact
+    filename, not a glob("ckpt_*.csv"), matters because --rerun's own
+    archives (ckpt_<model>.<timestamp>.bak.csv) ALSO match that glob
+    pattern (starts with "ckpt_", ends with ".csv"); a plain glob's first
+    result can be an archived, stale checkpoint instead of the current
+    one — confirmed as a real bug here, not hypothetical."""
+    return model_dir / f"ckpt_{model_dir.name}.csv"
+
+
 @st.cache_data
 def discover_model_dirs(output_dir: str) -> dict[str, str]:
     """{model_dir_name: model_dir_path} for every folder under output_dir
-    (searched recursively) that contains at least one ckpt_*.csv — so this
-    works whether output_dir IS a model's own folder, the react_baseline/
-    root above several model folders, or some other wrapper directory."""
+    (searched recursively) that contains a canonical ckpt_<name>.csv — so
+    this works whether output_dir IS a model's own folder, the
+    react_baseline/ root above several model folders, or some other
+    wrapper directory. Deliberately does NOT match --rerun's own
+    ckpt_<model>.<timestamp>.bak.csv archives — see _canonical_ckpt_path."""
     root = Path(output_dir)
     if not root.exists():
         return {}
     found = {}
     for ckpt_path in sorted(root.rglob("ckpt_*.csv")):
         model_dir = ckpt_path.parent
-        found[model_dir.name] = str(model_dir)
+        if ckpt_path == _canonical_ckpt_path(model_dir):
+            found[model_dir.name] = str(model_dir)
     return found
 
 
 @st.cache_data
 def load_episodes(model_dir: str) -> pd.DataFrame:
-    ckpt_paths = list(Path(model_dir).glob("ckpt_*.csv"))
-    if not ckpt_paths:
+    ckpt_path = _canonical_ckpt_path(Path(model_dir))
+    if not ckpt_path.exists():
         return pd.DataFrame(columns=REACT_CKPT_FIELDS)
-    df = pd.read_csv(ckpt_paths[0], dtype=str).fillna("")
+    df = pd.read_csv(ckpt_path, dtype=str).fillna("")
     for col in REACT_CKPT_FIELDS:
         if col not in df.columns:
             df[col] = ""
@@ -174,7 +189,7 @@ c5.metric("Avg. time/episode", f"{elapsed_numeric.mean():.1f}s" if elapsed_numer
 
 overview_cols = [
     "agml_dataset", "class_label", "image_name", "stop_reason", "n_steps",
-    "elapsed_seconds", "tools_used", "result",
+    "elapsed_seconds", "tools_used", "nudges_used", "result",
 ]
 display_df = filtered[overview_cols].copy()
 display_df["result"] = display_df["result"].str.slice(0, 120)
@@ -207,7 +222,8 @@ with col_info:
     st.markdown(f"**stop_reason:** `{row['stop_reason']}`  |  **n_steps:** {row['n_steps']}  |  "
                 f"**elapsed:** {row['elapsed_seconds'] or '?'}s  |  "
                 f"**tool_call_format:** `{row['tool_call_format']}`  |  "
-                f"**tools_used:** {row['tools_used'] or '(none)'}")
+                f"**tools_used:** {row['tools_used'] or '(none)'}  |  "
+                f"**nudges_used:** {row['nudges_used'] or '0'}")
 
 tab_task, tab_result, tab_trajectory = st.tabs(["Task", "Result", "Trajectory"])
 with tab_task:

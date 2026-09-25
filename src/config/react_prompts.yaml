@@ -30,3 +30,17 @@ default_system_prompt: |
   - Call `write` whenever you need to store notes as you reason.
   - Call `finish` exactly once you're ready. Don't stop silently, and don't
     answer in prose instead of calling it.
+
+# Injected as a "user" turn (react_agent.py's run_episode, nudge mechanism)
+# when a model turn produces NO tool call at all — a real, observed failure
+# mode even with the strengthened instruction above: the model sometimes
+# writes a complete, well-cited answer as plain text and just never calls
+# `finish`. One retry with this reminder, rather than immediately giving up
+# with stop_reason="no_tool_call" and discarding an answer that was right
+# there.
+nudge_prompt: |
+  You did not call a tool in your last turn. If you already have enough
+  information to answer, call `finish` right now with your complete answer
+  — do not just restate it as plain text again. If you still need more
+  information, call the appropriate tool (retrieve/search_agml/etc.)
+  instead.

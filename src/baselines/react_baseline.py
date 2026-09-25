@@ -135,6 +135,8 @@ REACT_CKPT_FIELDS = [
     "stop_reason",        # "finished" | "no_tool_call" | "max_iterations"
     "n_steps",
     "tools_used",         # tool names called, in order, ";"-joined — "finish" excluded (see stop_reason)
+    "nudges_used",        # how many times the "you didn't call a tool" reminder had to fire — see
+                          # run_episode's max_nudges docstring. 0 = never needed one.
     "tool_call_format",
     "elapsed_seconds",    # wall-clock time for this episode's run_episode() call alone (excludes
                           # model load/destroy, which happen once outside the per-episode loop) —
@@ -254,6 +256,7 @@ def main(args: argparse.Namespace) -> None:
                 tool_call_format=tool_call_format,
                 sandbox_root=workspace_root / _safe_component(key),
                 max_iterations=args.max_iterations,
+                max_nudges=args.max_nudges,
                 gen_max_tokens=args.gen_max_tokens,
                 temperature=args.temperature,
                 enable_thinking=args.enable_thinking,
@@ -271,6 +274,7 @@ def main(args: argparse.Namespace) -> None:
                 "stop_reason": result.stop_reason,
                 "n_steps": result.n_steps,
                 "tools_used": ";".join(result.tools_used),
+                "nudges_used": result.nudges_used,
                 "tool_call_format": tool_call_format,
                 "elapsed_seconds": round(elapsed, 1),
             }, fields=REACT_CKPT_FIELDS)
@@ -354,6 +358,12 @@ if __name__ == "__main__":
                               "timestamped, and regenerate every episode from scratch. Old files "
                               "are archived, never deleted — same convention as every other stage.")
     parser.add_argument("--max_iterations", type=int, default=20)
+    parser.add_argument("--max_nudges", type=int, default=1,
+                         help="A turn with no tool call at all gets this many reminder retries "
+                              "(NUDGE_PROMPT in react_prompts.yaml) before the episode actually ends "
+                              "stop_reason=no_tool_call — recovers a real, observed failure mode where "
+                              "the model writes a complete answer as plain text and never calls "
+                              "finish. 0 disables nudging (the original all-or-nothing behavior).")
     parser.add_argument("--gen_max_tokens", type=int, default=1024,
                          help="max_tokens per turn. Raise well above this with --enable_thinking, "
                               "same reasoning as every other generation script in this repo.")
