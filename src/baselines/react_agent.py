@@ -95,12 +95,22 @@ def run_episode(
     enable_thinking: bool = False,
     chat_template: str | None = None,
     log_path: Path | None = None,
+    verbose: bool = True,
 ) -> EpisodeResult:
     """Runs one ReAct episode to completion (or exhaustion) against an
     already-loaded vLLM `llm`/`tokenizer` (src/common/vlm_load.py's
     load_llm) — loading/destroying the model is the caller's job (same
     convention as every other run_model() in this repo), so a harness can
     load once and call run_episode() per task/image without reloading.
+
+    `verbose` (default True): print one short line per turn (step index +
+    what happened — tool call(s), no tool call, or finish) as the episode
+    runs, not just a summary after it's done. A slow episode (generation
+    can genuinely take minutes per turn) would otherwise leave the
+    terminal silent with no way to tell it's still working vs. hung — this
+    is cheap stdout noise, not a real cost, so it defaults on. Set False
+    for a quieter batch run once you trust the loop and just want
+    react_baseline.py's own per-episode summary lines.
 
     `image`, if given, attaches to the FIRST user turn only (the task
     itself) and is re-sent via multi_modal_data on every generate() call
@@ -163,20 +173,35 @@ def run_episode(
     ) + [{"role": "user", "content": first_user_content}]
     tools_used: list[str] = []
 
-    # skip_special_tokens=not enable_thinking — Gemma-4's <|channel>thought
-    # ...<channel|> markers are real special tokens; vLLM's default
-    # (skip_special_tokens=True) strips them from decoded output before we
-    # ever see them, which would also strip the boundary the vendored
-    # template's own strip_thinking() macro needs to prune past thinking
-    # from history on the next render — without this, thinking text would
-    # leak into and silently accumulate across every subsequent turn's
-    # prompt instead of being cleanly pruned. Same fix vision_baseline.py /
-    # verifier_cot.py already apply to their own SamplingParams.
+    # skip_special_tokens=False, UNCONDITIONALLY — not just when
+    # enable_thinking is True (an earlier version of this line was
+    # `skip_special_tokens=not enable_thinking`, matching vision_baseline.py/
+    # verifier_cot.py's own SamplingParams, which only ever need this for
+    # Gemma-4's thinking channel). This loop ALSO needs it for
+    # tool_call_formats.py's "gemma4" parser: <|tool_call>/<tool_call|> and
+    # the <|"|> quote token are REAL special tokens in the vendored
+    # template's vocabulary too, same bracket family as <|channel>/
+    # <channel|>, not literal text — confirmed from a real cluster run with
+    # enable_thinking OFF (the default): raw_text came back as
+    # `call:search_agml{query:coffee leaf rust}`, missing every one of those
+    # markers, so extract_tool_calls_gemma4 matched nothing even though the
+    # model clearly intended to call a tool. skip_special_tokens=True was
+    # stripping them regardless of enable_thinking. Harmless for "hermes"
+    # (Qwen's <tool_call> tags are plain text, not special tokens — already
+    # established elsewhere in this repo for its <think> tags too), so
+    # there's no reason to gate this on tool_call_format either — always off.
     sampling_params = SamplingParams(
-        temperature=temperature, max_tokens=gen_max_tokens, skip_special_tokens=not enable_thinking,
+        temperature=temperature, max_tokens=gen_max_tokens, skip_special_tokens=False,
     )
 
     for step in range(max_iterations):
+        if verbose:
+            # vLLM's own generate() shows a tqdm progress bar per call too,
+            # but that renders as carriage-return updates — useless in a
+            # redirected/SLURM log file. This is a plain line specifically
+            # so a log file (not just an interactive terminal) still shows
+            # forward progress during the slow part (generation itself).
+            print(f"    [react] step {step}: generating...", flush=True)
         prompt = render_chat_template(
             tokenizer, messages, enable_thinking=enable_thinking, chat_template=chat_template, tools=tools,
         )
@@ -193,6 +218,8 @@ def run_episode(
 
         calls = extract_tool_calls(raw_text)
         if not calls:
+            if verbose:
+                print(f"    [react] step {step}: no tool call found (stop_reason=no_tool_call)")
             # No tool call found — the loop has nothing to observe next.
             # Treat as an incomplete episode rather than silently returning
             # whatever text the model produced (finish is the only
@@ -201,11 +228,15 @@ def run_episode(
 
         finish_call = next((c for c in calls if c["name"] == "finish"), None)
         if finish_call is not None:
+            if verbose:
+                print(f"    [react] step {step}: finish")
             return EpisodeResult(
                 result=finish_call["arguments"].get("result"), stop_reason="finished",
                 n_steps=step + 1, tools_used=tools_used, trajectory=messages,
             )
 
+        if verbose:
+            print(f"    [react] step {step}: {', '.join(c['name'] for c in calls)}")
         observations = []
         for call in calls:
             tools_used.append(call["name"])

@@ -259,6 +259,7 @@ def main(args: argparse.Namespace) -> None:
                 enable_thinking=args.enable_thinking,
                 chat_template=chat_template,
                 log_path=trajectory_log_path,
+                verbose=not args.quiet,
             )
             elapsed = time.time() - t0
             append_ckpt_row(ckpt_path, {
@@ -357,6 +358,12 @@ if __name__ == "__main__":
                          help="max_tokens per turn. Raise well above this with --enable_thinking, "
                               "same reasoning as every other generation script in this repo.")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--quiet", action="store_true",
+                         help="Suppress run_episode()'s per-turn progress lines (step index + "
+                              "generating/tool-call/finish) — keeps just react-baseline's own "
+                              "per-episode summary lines. On by default (verbose) since a single "
+                              "turn's generation can take real minutes with otherwise zero terminal "
+                              "output to tell it apart from a hang.")
     parser.add_argument("--enable_thinking", action="store_true",
                          help="Model's own extended thinking, off by default — same convention as "
                               "chat_prompt.py's render_chat_template (see its module docstring).")

@@ -19,18 +19,27 @@ Two formats implemented here:
   emits exactly <|tool_call>call:NAME{key:value,...}<tool_call|>, where
   string values are wrapped in a custom quote token (<|"|>...<|"|>, NOT a
   plain double quote) and keys are unquoted bare text — NOT valid JSON, so
-  json.loads can't be reused here. Since a chat template only defines how
-  PAST turns are serialized back into the prompt, this is a strong signal
-  for (not a guarantee of) what the model was trained to produce for a NEW
-  tool call — NOT verified against a live model in this environment (no GPU
-  here). On first real Gemma-4 run, inspect a raw generation in
-  trajectory.jsonl and confirm it actually matches this grammar before
-  trusting parsed tool calls; if vLLM ships its own registered tool-call
-  parser for this exact template (check
-  `python -c "from vllm.entrypoints.openai.tool_parsers import ToolParserManager as T; print(list(T.tool_parsers))"`
-  on the remote machine), prefer that over this hand-written one — it was
-  written by the same people who wrote the template and is far less likely
-  to drift from it.
+  json.loads can't be reused here.
+
+  The GRAMMAR is confirmed against a real cluster run — a raw generation
+  with enable_thinking off came back as `call:search_agml{query:coffee leaf
+  rust}`, keys/structure exactly matching this format, just missing every
+  <|tool_call>/<tool_call|>/<|"|> marker. Root cause (fixed in
+  react_agent.py's run_episode): those markers are REAL special tokens in
+  this template's vocabulary too (same bracket family as
+  <|channel>/<channel|>), and vLLM's SamplingParams had
+  skip_special_tokens=True whenever enable_thinking was off, stripping them
+  before this parser ever saw them — extract_tool_calls_gemma4 correctly
+  matched zero calls on that raw text, because the markers it depends on
+  genuinely weren't there. skip_special_tokens is now unconditionally False
+  for this loop, not just when enable_thinking is on. If a rerun after that
+  fix still doesn't show <|tool_call>call:... in trajectory_log.jsonl,
+  something deeper is wrong (this parser's grammar, not just the special-
+  token stripping) — check whether vLLM ships its own registered tool-call
+  parser for this exact template (`python -c "from
+  vllm.entrypoints.openai.tool_parsers import ToolParserManager as T;
+  print(list(T.tool_parsers))"` on the remote machine) and prefer that over
+  this hand-written one if so.
 
 tool_call_format_for(model_id) picks between them by model name, same
 "gemma"/"qwen" substring convention src/common/vlm_load.py's own
