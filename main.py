@@ -203,13 +203,20 @@ Stages:
                                (default dataset/judge_qa_review/judge_qa_review.csv — dataset/, not
                                outputs_final/, so it's git-tracked for reproducibility).
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
-    react-build-tasks  Stage 3 (Paper 2/3) — builds a --tasks_jsonl file for react-baseline (below)
-                               from REAL AgML images: same active_datasets/load_hf_samples/
-                               sample_class_images sampling AND the same cls_question() prompt
-                               text vision_baseline.py itself uses, so react-baseline is genuinely
-                               comparable to it, not a different task. --match_images_from an
-                               existing vision_baseline checkpoint for a true apples-to-apples
-                               image set. See docs/stage3_react_baseline.md.
+    react-build-tasks  Stage 3 (Paper 2/3) — builds a PERSISTED --tasks_jsonl file for
+                               react-baseline (below) from REAL AgML images: same
+                               active_datasets/load_hf_samples/sample_class_images sampling AND the
+                               same cls_question() prompt text vision_baseline.py itself uses (pass
+                               --rubric for the SAME fill-in-the-blank criteria chain
+                               vision-baseline's own --rubric flag AND verifier_cot.py's own
+                               k-candidate generation step always use, to compare against those
+                               instead of plain vision-baseline), so react-baseline is genuinely
+                               comparable, not a different task. --match_images_from an existing
+                               vision_baseline checkpoint for a true apples-to-apples image set.
+                               react-baseline's own --sample_images does the same sampling
+                               IN-MEMORY (no file) for a one-off run — use this script instead when
+                               you want the task list reviewable/reusable across multiple runs. See
+                               docs/stage3_react_baseline.md.
     react-baseline  Stage 3 (Paper 2/3) — a tool-using ReAct agent (src/baselines/) over a
                                locally-served vLLM model's own native tool calling (same
                                load_llm/render_chat_template machinery as every other script here,
@@ -218,14 +225,16 @@ Stages:
                                Python (no MCP connection needed). Default model: RedHatAI's
                                quantized Gemma-4 + the vendored tool_chat_template_gemma4.jinja;
                                --tool_call_format auto-detects the matching parser
-                               (tool_call_formats.py) by model name. --task "..." for a single
-                               ad-hoc text-only episode; --tasks_jsonl <path> for the batch mode —
-                               a row carrying "image_path" (from react-build-tasks, above) runs as
-                               a real image episode, otherwise text-only (see
+                               (tool_call_formats.py) by model name. Three ways to run (in priority
+                               order): --sample_images (real AgML images sampled on the fly, same
+                               code/flags as react-build-tasks — --rubric available here too);
+                               --tasks_jsonl <path> (a row carrying "image_path" runs as a real
+                               image episode, otherwise text-only — see
                                dataset/react_smoke_test_tasks.jsonl for a 3-task text-only smoke
-                               test). One checkpoint row per episode (resumable) + a shared
-                               trajectory log under outputs_final/react_baseline/<model>/, each
-                               row carrying elapsed_seconds; browse with `streamlit run
+                               test); --task "..." (single ad-hoc text-only episode). One checkpoint
+                               row per episode (resumable) + a shared trajectory log under
+                               outputs_final/react_baseline/<model>/, each row carrying
+                               elapsed_seconds; browse with `streamlit run
                                app/react_baseline_viewer.py`. Defaults in
                                src/config/react_baseline_config.yaml — see
                                docs/stage3_react_baseline.md.

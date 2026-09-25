@@ -13,11 +13,14 @@ detail lives in the module docstrings of `src/baselines/react_baseline.py`,
 the "how do I run it" version.
 
 Comparable to `vision-baseline`/`verifier-cot` by construction, not by
-accident: `react-build-tasks` (Step 1 below) samples images and builds the
+accident: Step 1's `--sample_images` samples images and builds the
 classification question the exact same way `vision_baseline.py` does
 (`active_datasets`/`load_hf_samples`/`sample_class_images`/`cls_question`)
-— a `react-baseline` run over its output is scoring the same task on the
-same images, not a different one.
+— a `react-baseline` run is scoring the same task on the same images, not a
+different one. Pass `--rubric` to instead use the same fill-in-the-blank
+criteria chain `vision-baseline --rubric` (Stage 2) and `verifier-cot`'s
+own k-candidate generation always use, if that's the comparison you want
+instead.
 
 ## Step 0 — smoke test (3 examples, text-only, no GPU-hungry image step)
 
@@ -53,33 +56,41 @@ on top of this.
 
 ## Step 1 — real classification episodes (images included)
 
-Build a `--tasks_jsonl` file from real AgML images — 3 images/class by
-default, same sampling `vision_baseline.py` uses:
+Sampled on the fly, no intermediate file — 3 images/class by default, same
+sampling and prompt text `vision_baseline.py` uses. Each episode's image
+gets loaded and attached (`react_agent.py`'s `image` param), so the model
+actually sees the image this time, not just the question text:
 
 ```bash
-uv run python main.py react-build-tasks \
-    --n_samples 3 \
-    --output outputs_final/react_tasks_smoke3.jsonl
+uv run python main.py react-baseline --sample_images --n_samples 3
 ```
 
-Then run it — each row's `image_path` gets loaded and attached to its
-episode (`react_agent.py`'s `image` param), so the model actually sees the
-image this time, not just the question text:
+Add `--rubric` to compare against "Baseline with rubric" (Stage 2) /
+`verifier-cot` instead of plain `vision-baseline`:
 
 ```bash
-uv run python main.py react-baseline \
-    --tasks_jsonl outputs_final/react_tasks_smoke3.jsonl
+uv run python main.py react-baseline --sample_images --n_samples 3 --rubric
 ```
 
 For a true apples-to-apples comparison against an existing
 `vision-baseline` run (same exact images, not just the same sampling
-*procedure*), point `--match_images_from` at its checkpoint:
+*procedure*), add `--match_images_from`:
 
 ```bash
-uv run python main.py react-build-tasks \
-    --match_images_from outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --n_samples 50 \
-    --output outputs_final/react_tasks_full.jsonl
+uv run python main.py react-baseline --sample_images --n_samples 3 \
+    --match_images_from outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+Prefer a **persisted, reviewable** task list instead (e.g. before spending
+GPU time on a full 10/class run, or to reuse the exact same task list across
+several models)? `react-build-tasks` runs the identical sampling/prompt
+code and writes it to a `--tasks_jsonl` file instead of running it
+immediately — same flags (`--rubric`, `--match_images_from`, `--n_samples`,
+...), see its own `--help`:
+
+```bash
+uv run python main.py react-build-tasks --n_samples 3 --output outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
+uv run python main.py react-baseline --tasks_jsonl outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
 ```
 
 ## Step 2 — view the results
@@ -108,12 +119,13 @@ call) is visible straight from the checkpoint without re-reading
 
 ## Notes
 
-- `--tasks_jsonl` is the batch mode — one JSON object per line, each with
-  at least a `"task"` key, plus `"agml_dataset"`/`"class_label"`/
-  `"image_name"`/`"image_path"` for a real image-tied episode
-  (`react-build-tasks`'s own output shape). A row without `"image_path"`
-  runs text-only, same as before. `--task "..."` runs a single ad-hoc
-  text-only episode instead, for a quick one-off check.
+- Three ways to run, checked in this priority order: `--sample_images` >
+  `--tasks_jsonl <path>` > `--task "..."`. `--tasks_jsonl` is one JSON
+  object per line, each with at least a `"task"` key, plus
+  `"agml_dataset"`/`"class_label"`/`"image_name"`/`"image_path"` for a real
+  image-tied episode (`react-build-tasks`'s own output shape — a row
+  without `"image_path"` runs text-only). `--task "..."` runs a single
+  ad-hoc text-only episode, for a quick one-off check.
 - `--rerun` archives the existing checkpoint + trajectory log (timestamped,
   never deleted) and regenerates every episode from scratch — same
   convention as every other stage's `--rerun`.

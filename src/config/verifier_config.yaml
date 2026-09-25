@@ -13,19 +13,22 @@ model: google/gemma-4-26B-A4B-it
 config: src/config/datasets.yaml
 prompts: src/config/prompts.yaml
 verifier_prompts: src/config/verifier_prompts.yaml
-manifest: dataset/selected_images.json  # the FULL manifest — same one vision_baseline_config.yaml
-                                          # uses. Must match vision-baseline's own manifest for
-                                          # --match_images_from to actually find every reference
-                                          # image name in path_by_name (load_hf_samples scopes
-                                          # strictly to what the manifest lists — pointing this at
-                                          # the smaller dataset/selected_images_10.json silently caps
-                                          # every class at 10 images no matter what --n_samples says,
-                                          # since there's nothing beyond that in the manifest to draw
-                                          # from). dataset/selected_images_10.json still exists for a
-                                          # deliberately smaller/cheaper run — pass --manifest to opt
-                                          # into it explicitly; it's no longer the default, since
-                                          # every vision_baseline_thinking/vision_baseline_rubric_
-                                          # thinking run this compares against used the full one.
+manifest: dataset/selected_images_10.json  # 10/class — REVERTED from the full 50/class
+                                          # dataset/selected_images.json: a verifier-cot run over the
+                                          # full manifest was projected at 1+ week to finish, so this
+                                          # switched back to 10/class, and vision_baseline_config.yaml's
+                                          # own manifest was switched back to match (both
+                                          # vision_baseline_thinking and vision_baseline_rubric_thinking
+                                          # now default to 10/class too — see its own comment). The
+                                          # existing full-50 vision_baseline_thinking/
+                                          # vision_baseline_rubric_thinking checkpoints are NOT being
+                                          # regenerated at 10/class — filter their own rows down to
+                                          # whatever image_names this 10/class manifest selected when
+                                          # comparing against this verifier-cot run, rather than
+                                          # rerunning them. Must still match vision-baseline's own
+                                          # manifest for --match_images_from to find every reference
+                                          # image name in path_by_name (load_hf_samples scopes strictly
+                                          # to what the manifest lists).
 images_root: dataset/images
 output_dir: outputs_final/verifier_cot/
 

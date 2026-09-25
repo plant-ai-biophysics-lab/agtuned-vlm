@@ -17,13 +17,22 @@ config: src/config/datasets.yaml
 prompts: src/config/prompts.yaml
 classification_jsonl: dataset/agml_classification.jsonl  # ground truth + reference
                                                             # descriptions (desc-aug only)
-manifest: dataset/selected_images.json
+manifest: dataset/selected_images_10.json  # 10/class, not the full 50/class
+                # dataset/selected_images.json — verifier-cot over the full 50/class
+                # manifest was projected at 1+ week to finish, so vision_baseline_thinking/
+                # vision_baseline_rubric_thinking are being switched back to 10/class too, to
+                # stay apples-to-apples with that verifier-cot rerun. The existing full-50
+                # vision_baseline_thinking/vision_baseline_rubric_thinking checkpoints are
+                # NOT being regenerated — filter their own rows down to whatever image_names
+                # this 10/class manifest selected when comparing against the new verifier-cot
+                # run, rather than rerunning them.
 images_root: dataset/images
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-# null = use every image the manifest has for that class (it was built with
-# an n_per_class=50 cap, so this means "all ~50/class", not literally
-# unbounded). Set an int here to sub-cap further for a faster/cheaper run.
+# null = use every image the manifest has for that class. With the 10/class
+# manifest above, that means "all ~10/class" (not literally unbounded — the
+# manifest itself is what caps this). Set an int here to sub-cap further for
+# an even faster/cheaper run.
 n_samples: null
 
 # ── vLLM ─────────────────────────────────────────────────────────────────────

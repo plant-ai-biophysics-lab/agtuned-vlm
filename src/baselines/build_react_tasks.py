@@ -28,16 +28,16 @@ own default behavior.
 Usage:
     uv run python main.py react-build-tasks \\
         --n_samples 3 \\
-        --output outputs_final/react_tasks_smoke3.jsonl
+        --output outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
 
     # true apples-to-apples against an existing vision-baseline run:
     uv run python main.py react-build-tasks \\
         --match_images_from outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \\
-        --n_samples 50 \\
-        --output outputs_final/react_tasks_full.jsonl
+        --n_samples 10 \\
+        --output outputs_final/react_baseline/tasks/react_tasks_full.jsonl
 
 Then:
-    uv run python main.py react-baseline --tasks_jsonl outputs_final/react_tasks_smoke3.jsonl
+    uv run python main.py react-baseline --tasks_jsonl outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ from src.common.dataset_config import (
 )
 from src.common.io import load_prompts
 from src.common.metrics import sample_class_images
-from src.vision_baseline import cls_question
+from src.vision_baseline import apply_rubric, cls_question, load_rubric_templates
 
 
 def _load_reference_images(path: Path) -> dict[tuple[str, str], list[str]]:
@@ -77,6 +77,18 @@ def build_tasks(args: argparse.Namespace) -> list[dict]:
     prompts = load_prompts(Path(args.prompts))
     manifest = load_manifest(Path(args.manifest))
     reference_images = _load_reference_images(Path(args.match_images_from)) if args.match_images_from else None
+    # --rubric: wrap cls_question()'s output through the SAME fill-in-the-
+    # blank criteria chain vision_baseline.py's own --rubric flag uses (its
+    # docstring covers the "Baseline with rubric" rationale) — this is ALSO
+    # the exact prompt verifier_cot.py's own k-candidate generation step
+    # always uses (verifier_config.yaml: "Candidate generation prompt is
+    # ALWAYS the fill-in-the-blank structured_templates entry"), so
+    # --rubric here is what makes a react-baseline task comparable to
+    # verifier-cot's candidates too, not just vision-baseline's plain
+    # question. Loaded once outside the per-class loop below, not per row.
+    structured_templates = task_type_to_rubric = None
+    if getattr(args, "rubric", False):
+        structured_templates, task_type_to_rubric = load_rubric_templates()
 
     rows = []
     for ds in active_datasets(Path(args.config)):
@@ -109,6 +121,8 @@ def build_tasks(args: argparse.Namespace) -> list[dict]:
                 names = sample_class_images(list(path_by_name.keys()), args.n_samples)
             task_type = ds.effective_task_type(raw_label)
             question = cls_question(task_type, crop_val, prompts)
+            if structured_templates is not None:
+                question = apply_rubric(question, task_type, structured_templates, task_type_to_rubric)
             for name in names:
                 rows.append({
                     "agml_dataset": ds.agml_name,
@@ -137,12 +151,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="src/config/datasets.yaml")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
-    parser.add_argument("--manifest", default="dataset/selected_images.json")
+    parser.add_argument("--manifest", default="dataset/selected_images_10.json",
+                         help="10/class, matching vision_baseline_config.yaml's own current default "
+                              "(both switched back from the full 50/class dataset/selected_images.json "
+                              "— a full-manifest verifier-cot run was projected at 1+ week). Pass the "
+                              "full manifest explicitly if you want more than 10/class available to "
+                              "sample from.")
     parser.add_argument("--images_root", default="dataset/images")
     parser.add_argument("--n_samples", type=int, default=3,
-                         help="Images/class. Kept small (3) by default — this file is meant to be "
-                              "a deliberate, readable starting point, not vision_baseline.py's own "
-                              "default of 10+; raise it once react-baseline itself is trusted.")
+                         help="Images/class, capped by whatever --manifest actually has (10, by "
+                              "default). Kept small (3) by default — this file is meant to be a "
+                              "deliberate, readable starting point; raise it (up to 10) once "
+                              "react-baseline itself is trusted.")
     parser.add_argument("--subsample", nargs="+", default=None,
                          help="Restrict to these dataset(s) only (agml_name, space-separated) — "
                               "same convention as verifier_cot.py's own --subsample.")
@@ -151,5 +171,17 @@ if __name__ == "__main__":
                               "outputs_final/vision_baseline_thinking/<model>/ckpt_<model>.csv) — "
                               "replays that run's own sampled image names for a true apples-to-apples "
                               "image set, same convention as verifier_cot.py's own flag of this name.")
-    parser.add_argument("--output", default="outputs_final/react_tasks.jsonl")
+    parser.add_argument("--rubric", action="store_true",
+                         help="Wrap the classification question through the same fill-in-the-blank "
+                              "criteria chain vision_baseline.py's own --rubric flag uses — this is "
+                              "ALSO the exact prompt verifier_cot.py's own k-candidate generation "
+                              "step always uses, so pass this to compare react-baseline against "
+                              "'Baseline with rubric' (Stage 2) or verifier-cot (Stage 4/legacy) "
+                              "rather than plain vision-baseline. Off by default (plain question, "
+                              "matching vision-baseline's own default).")
+    parser.add_argument("--output", default="outputs_final/react_baseline/tasks/react_tasks.jsonl",
+                         help="Nested under react-baseline's own output_dir (outputs_final/"
+                              "react_baseline/) rather than a sibling path, so every react-baseline "
+                              "artifact — task lists, per-model checkpoints, trajectory logs — lives "
+                              "under one directory.")
     main(parser.parse_args())

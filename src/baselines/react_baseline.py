@@ -47,7 +47,8 @@ around the whole batch) — so a slow outlier is visible straight from the
 checkpoint. See docs/stage3_react_baseline.md and app/react_baseline_viewer.py
 (a Streamlit viewer over this exact checkpoint + trajectory log shape).
 
-Two ways to run:
+Three ways to run (checked in this order — --sample_images wins over
+--tasks_jsonl wins over --task):
 
 - `--task "..."` — a single ad-hoc, text-only episode (quick manual test),
   no agml_dataset/class_label/image — image_name defaults to an
@@ -62,13 +63,20 @@ Two ways to run:
   task. A row without it is text-only, same as --task mode. Every row's
   model/tokenizer load happens ONCE, shared across every episode in the
   file — episodes are NOT destroy/reload cycles.
-
-  src/baselines/build_react_tasks.py generates exactly this file from real
-  AgML images — same active_datasets/load_hf_samples/sample_class_images
-  sampling AND the same cls_question() prompt text vision_baseline.py
-  itself uses (optionally --match_images_from an existing vision_baseline
-  checkpoint, for a true apples-to-apples image set) — see its own
-  docstring and docs/stage3_react_baseline.md.
+- `--sample_images` — the same thing as --tasks_jsonl over
+  build_react_tasks.py's output, but IN-MEMORY, no intermediate file:
+  same active_datasets/load_hf_samples/sample_class_images sampling AND the
+  same cls_question() prompt text vision_baseline.py itself uses (pass
+  --rubric to instead use the SAME fill-in-the-blank criteria chain
+  vision-baseline's own --rubric flag AND verifier_cot.py's own
+  k-candidate generation step always use — makes this comparable to
+  "Baseline with rubric"/verifier-cot instead of plain vision-baseline;
+  --config/--prompts/--manifest/--images_root/--n_samples/--subsample/
+  --match_images_from mirror build_react_tasks.py's own flags exactly, see
+  its docstring). Use react-build-tasks instead (a separate command, same
+  underlying code) when you want the task list persisted/reviewable/
+  reusable across multiple react-baseline runs rather than resampled every
+  invocation.
 
 Only tool-calling-capable models are valid here — confirmed for the
 default Gemma-4 + vendored template combination, and for Qwen3/Qwen2.5
@@ -81,9 +89,15 @@ Usage:
     # 3-task text-only smoke test (infra check, no images) — see docs/stage3_react_baseline.md
     uv run python main.py react-baseline --tasks_jsonl dataset/react_smoke_test_tasks.jsonl
 
-    # real classification episodes, images included — build the file first:
-    uv run python main.py react-build-tasks --n_samples 3 --output outputs_final/react_tasks_smoke3.jsonl
-    uv run python main.py react-baseline --tasks_jsonl outputs_final/react_tasks_smoke3.jsonl
+    # real classification episodes, images included, sampled on the fly:
+    uv run python main.py react-baseline --sample_images --n_samples 3
+
+    # same, but rubric-wrapped (comparable to Stage 2 / verifier-cot instead of plain vision-baseline):
+    uv run python main.py react-baseline --sample_images --n_samples 3 --rubric
+
+    # persisted/reusable task file instead of --sample_images:
+    uv run python main.py react-build-tasks --n_samples 3 --output outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
+    uv run python main.py react-baseline --tasks_jsonl outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
 """
 from __future__ import annotations
 
@@ -100,6 +114,7 @@ from datetime import datetime
 import yaml
 from PIL import Image as PILImage
 
+from src.baselines.build_react_tasks import build_tasks
 from src.baselines.react_agent import run_episode
 from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS, tool_call_format_for
 from src.common.io import load_jsonl
@@ -151,12 +166,20 @@ def _auto_episode_key(task: str) -> str:
 
 def _load_episodes(args: argparse.Namespace) -> list[dict]:
     """Each episode dict has agml_dataset/class_label/image_name/task/
-    image_path — from --tasks_jsonl (batch mode) or a single row built from
-    --task (ad-hoc mode, always image_path=None — text-only). Missing
-    optional keys in a --tasks_jsonl line default to "" (agml_dataset/
+    image_path — from --sample_images (real AgML images, sampled in-memory,
+    no intermediate file), --tasks_jsonl (batch mode, reading a file build_
+    react_tasks.py or --sample_images itself already wrote), or a single
+    row built from --task (ad-hoc mode, always image_path=None — text-only).
+    Missing optional keys in a --tasks_jsonl line default to "" (agml_dataset/
     class_label) same as REACT_CKPT_FIELDS's own blank convention for a
-    non-image task; image_path defaults to None (text-only row) if absent
-    — see build_react_tasks.py for how a row WITH image_path gets built."""
+    non-image task; image_path defaults to None (text-only row) if absent."""
+    if args.sample_images:
+        # build_tasks() (build_react_tasks.py) takes an argparse.Namespace
+        # and only reads .config/.prompts/.manifest/.images_root/.n_samples/
+        # .subsample/.match_images_from off it — this parser defines those
+        # same dests, so `args` is passed straight through unchanged rather
+        # than repackaging it into a second Namespace.
+        return build_tasks(args)
     if args.tasks_jsonl:
         rows = load_jsonl(Path(args.tasks_jsonl))
         episodes = []
@@ -278,7 +301,44 @@ if __name__ == "__main__":
     parser.add_argument("--tasks_jsonl", default=None,
                          help="Batch mode: path to a JSONL file, one episode per line, each a JSON "
                               "object with a required \"task\" key and optional \"agml_dataset\"/"
-                              "\"class_label\"/\"image_name\" keys. Takes precedence over --task.")
+                              "\"class_label\"/\"image_name\" keys. Takes precedence over --task, "
+                              "ignored if --sample_images is given.")
+    parser.add_argument("--sample_images", action="store_true",
+                         help="Sample real AgML images in-memory (same code build_react_tasks.py's "
+                              "own CLI uses — active_datasets/load_hf_samples/sample_class_images/"
+                              "cls_question/apply_rubric) instead of reading --tasks_jsonl from disk. "
+                              "Takes precedence over both --tasks_jsonl and --task. Use "
+                              "react-build-tasks instead when you want the task list persisted/"
+                              "reviewable/reusable across multiple react-baseline runs rather than "
+                              "resampled every invocation.")
+    parser.add_argument("--config", default="src/config/datasets.yaml",
+                         help="Only used with --sample_images.")
+    parser.add_argument("--prompts", default="src/config/prompts.yaml",
+                         help="Only used with --sample_images.")
+    parser.add_argument("--manifest", default="dataset/selected_images.json",
+                         help="Only used with --sample_images.")
+    parser.add_argument("--images_root", default="dataset/images",
+                         help="Only used with --sample_images.")
+    parser.add_argument("--n_samples", type=int, default=3,
+                         help="Images/class. Only used with --sample_images. Kept small (3) by "
+                              "default — raise it once react-baseline itself is trusted.")
+    parser.add_argument("--subsample", nargs="+", default=None,
+                         help="Restrict --sample_images to these dataset(s) only (agml_name, "
+                              "space-separated) — same convention as verifier_cot.py's own "
+                              "--subsample.")
+    parser.add_argument("--match_images_from", default=None,
+                         help="Only used with --sample_images. Path to an existing "
+                              "single-prediction-per-row checkpoint (e.g. outputs_final/"
+                              "vision_baseline_thinking/<model>/ckpt_<model>.csv) — replays that "
+                              "run's own sampled image names for a true apples-to-apples image set, "
+                              "same convention as verifier_cot.py's own flag of this name.")
+    parser.add_argument("--rubric", action="store_true",
+                         help="Only used with --sample_images. Wrap the classification question "
+                              "through the same fill-in-the-blank criteria chain vision_baseline.py's "
+                              "own --rubric flag AND verifier_cot.py's own k-candidate generation "
+                              "step always use — pass this to compare react-baseline against "
+                              "'Baseline with rubric' (Stage 2) or verifier-cot rather than plain "
+                              "vision-baseline. Off by default (plain question).")
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic",
                          help="Must be a tool-calling-capable model. Gemma-4 needs "
                               "--chat_template_path pointing at the vendored gemma4 template "
@@ -328,6 +388,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not args.chat_template_path:
         args.chat_template_path = None
-    if not args.task and not args.tasks_jsonl:
-        parser.error("one of --task or --tasks_jsonl is required")
+    if not args.task and not args.tasks_jsonl and not args.sample_images:
+        parser.error("one of --task, --tasks_jsonl, or --sample_images is required")
     main(args)
