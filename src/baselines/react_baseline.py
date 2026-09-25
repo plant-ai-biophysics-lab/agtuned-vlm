@@ -320,8 +320,13 @@ if __name__ == "__main__":
                          help="Only used with --sample_images.")
     parser.add_argument("--prompts", default="src/config/prompts.yaml",
                          help="Only used with --sample_images.")
-    parser.add_argument("--manifest", default="dataset/selected_images.json",
-                         help="Only used with --sample_images.")
+    parser.add_argument("--manifest", default="dataset/selected_images_10.json",
+                         help="Only used with --sample_images. 10/class, matching "
+                              "vision_baseline_config.yaml's/build_react_tasks.py's own current "
+                              "default (both switched back from the full 50/class "
+                              "dataset/selected_images.json — a full-manifest verifier-cot run was "
+                              "projected at 1+ week). Pass the full manifest explicitly for more "
+                              "than 10/class.")
     parser.add_argument("--images_root", default="dataset/images",
                          help="Only used with --sample_images.")
     parser.add_argument("--n_samples", type=int, default=3,
