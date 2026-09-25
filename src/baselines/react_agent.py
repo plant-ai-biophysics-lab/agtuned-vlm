@@ -246,7 +246,32 @@ def run_episode(
                 content = content[:_MAX_TOOL_RESULT_CHARS]
             except ToolError as e:
                 content = f"ERROR: {e}"
-            observations.append(f"[{call['name']}]\n{content}")
-        messages.append({"role": "tool", "content": "\n\n".join(observations)})
+            observations.append({"name": call["name"], "content": content})
+
+        if tool_call_format == "gemma4":
+            # gemma4's OWN template renders a plain role="tool" message as
+            # NOTHING — its per-message loop is wrapped in `{%- if
+            # message['role'] != 'tool' -%}`, so that role is skipped
+            # entirely; tool responses only render via a "Legacy:
+            # tool_responses embedded on the assistant message (Google/
+            # Gemma native)" path, i.e. set directly on the SAME assistant
+            # message dict just appended above — confirmed against a real
+            # run: without this, the model never saw its own tool results
+            # and kept re-issuing the identical call turn after turn
+            # (verified: 20 consecutive identical `search_agml{query:
+            # "coffee leaf rust"}` calls in one real episode) until
+            # max_iterations. format_tool_response_block (the template's
+            # own renderer for this field) accepts a plain string per
+            # response, wrapped in <|"|> quotes — no need to preserve dict
+            # structure here.
+            messages[-1]["tool_responses"] = [
+                {"name": o["name"], "response": o["content"]} for o in observations
+            ]
+        else:
+            # hermes (Qwen/Hermes convention): a plain role="tool" message
+            # IS rendered by that family's own chat template, no special-
+            # cased attachment needed.
+            combined = "\n\n".join(f"[{o['name']}]\n{o['content']}" for o in observations)
+            messages.append({"role": "tool", "content": combined})
 
     return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, trajectory=messages)
