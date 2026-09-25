@@ -57,6 +57,7 @@ from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS
 from src.baselines.tools import TOOL_SCHEMAS, ToolError, dispatch_tool
 from src.common.chat_prompt import render_chat_template
 from src.common.io import append_jsonl, load_prompts
+from src.common.progress import ProgressBar
 
 _REACT_PROMPTS_PATH = Path(__file__).parent.parent / "config" / "react_prompts.yaml"
 _REACT_PROMPTS = load_prompts(_REACT_PROMPTS_PATH)
@@ -119,14 +120,15 @@ def run_episode(
     one extra turn (counts against max_iterations) only on a genuine miss;
     0 disables nudging entirely, back to the original all-or-nothing check.
 
-    `verbose` (default True): print one short line per turn (step index +
-    what happened — tool call(s), no tool call, or finish) as the episode
-    runs, not just a summary after it's done. A slow episode (generation
-    can genuinely take minutes per turn) would otherwise leave the
-    terminal silent with no way to tell it's still working vs. hung — this
-    is cheap stdout noise, not a real cost, so it defaults on. Set False
-    for a quieter batch run once you trust the loop and just want
-    react_baseline.py's own per-episode summary lines.
+    `verbose` (default True): show a live ProgressBar (src/common/
+    progress.py — same one vision_baseline.py etc. use) tracking steps used
+    against max_iterations, its description updated each turn with what
+    just happened (generating / tool name(s) / finish / nudge). A slow
+    episode (generation can genuinely take minutes per turn) would
+    otherwise leave the terminal silent with no way to tell it's still
+    working vs. hung — this is cheap stdout noise, not a real cost, so it
+    defaults on. Set False for a quieter batch run once you trust the loop
+    and just want react_baseline.py's own per-episode summary lines.
 
     `image`, if given, attaches to the FIRST user turn only (the task
     itself) and is re-sent via multi_modal_data on every generate() call
@@ -211,97 +213,110 @@ def run_episode(
         temperature=temperature, max_tokens=gen_max_tokens, skip_special_tokens=False,
     )
 
-    for step in range(max_iterations):
-        if verbose:
-            # vLLM's own generate() shows a tqdm progress bar per call too,
-            # but that renders as carriage-return updates — useless in a
-            # redirected/SLURM log file. This is a plain line specifically
-            # so a log file (not just an interactive terminal) still shows
-            # forward progress during the slow part (generation itself).
-            print(f"    [react] step {step}: generating...", flush=True)
-        prompt = render_chat_template(
-            tokenizer, messages, enable_thinking=enable_thinking, chat_template=chat_template, tools=tools,
-        )
-        # Same shape self_cot.py/cot_yaml.py already pass for their own
-        # multi-turn image + growing-history loops — vLLM's .generate() has
-        # no persistent multimodal state across separate calls, so `image`
-        # is re-attached every turn, not just the first.
-        gen_input = {"prompt": prompt, "multi_modal_data": {"image": image}} if image is not None else prompt
-        outputs = llm.generate([gen_input], sampling_params)
-        raw_text = outputs[0].outputs[0].text
-        messages.append({"role": "assistant", "content": raw_text})
-        if log_path is not None:
-            append_jsonl(log_path, {"episode_key": episode_key, "step": step, "raw_text": raw_text})
-
-        calls = extract_tool_calls(raw_text)
-        if not calls:
-            if nudges_used < max_nudges:
-                # Real, observed failure mode (not hypothetical): even with
-                # an explicit "call finish, don't just answer in prose"
-                # system-prompt instruction, the model sometimes writes a
-                # complete, well-cited answer as plain text and never calls
-                # `finish`. Give it one more try with a reminder rather than
-                # discarding an answer that was right there — see
-                # NUDGE_PROMPT / max_nudges docstring.
-                nudges_used += 1
-                if verbose:
-                    print(f"    [react] step {step}: no tool call found — nudging ({nudges_used}/{max_nudges})")
-                messages.append({"role": "user", "content": NUDGE_PROMPT})
-                continue
-            if verbose:
-                print(f"    [react] step {step}: no tool call found (stop_reason=no_tool_call)")
-            # Still nothing after every nudge — the loop has nothing to
-            # observe next. Treat as an incomplete episode rather than
-            # silently returning whatever text the model produced (finish
-            # is the only sanctioned way to end with a real result).
-            return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
-
-        finish_call = next((c for c in calls if c["name"] == "finish"), None)
-        if finish_call is not None:
-            if verbose:
-                print(f"    [react] step {step}: finish")
-            return EpisodeResult(
-                result=finish_call["arguments"].get("result"), stop_reason="finished",
-                n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages,
+    # ProgressBar (not vLLM's own per-call tqdm bar — that's carriage-
+    # return-driven and gets corrupted by any other print interleaved with
+    # it, and produces useless output in a redirected/SLURM log file
+    # anyway; this one throttles to whole-percent-point LINES there
+    # instead). total=max_iterations since that's this episode's real step
+    # budget; desc updated each turn with what just happened. Wrapped in
+    # try/finally purely to commit the bar's trailing newline on a real
+    # terminal (finish()'s own completed=True would force n up to total,
+    # misrepresenting an episode that ended early — not what we want here).
+    pbar = ProgressBar(total=max_iterations, desc=episode_key or "episode") if verbose else None
+    try:
+        for step in range(max_iterations):
+            prompt = render_chat_template(
+                tokenizer, messages, enable_thinking=enable_thinking, chat_template=chat_template, tools=tools,
             )
+            # Same shape self_cot.py/cot_yaml.py already pass for their own
+            # multi-turn image + growing-history loops — vLLM's .generate()
+            # has no persistent multimodal state across separate calls, so
+            # `image` is re-attached every turn, not just the first.
+            gen_input = {"prompt": prompt, "multi_modal_data": {"image": image}} if image is not None else prompt
+            outputs = llm.generate([gen_input], sampling_params)
+            raw_text = outputs[0].outputs[0].text
+            messages.append({"role": "assistant", "content": raw_text})
+            if log_path is not None:
+                append_jsonl(log_path, {"episode_key": episode_key, "step": step, "raw_text": raw_text})
 
-        if verbose:
-            print(f"    [react] step {step}: {', '.join(c['name'] for c in calls)}")
-        observations = []
-        for call in calls:
-            tools_used.append(call["name"])
-            try:
-                output = dispatch_tool(call["name"], call["arguments"], sandbox_root=sandbox_root)
-                content = output if isinstance(output, str) else json.dumps(output)
-                content = content[:_MAX_TOOL_RESULT_CHARS]
-            except ToolError as e:
-                content = f"ERROR: {e}"
-            observations.append({"name": call["name"], "content": content})
+            calls = extract_tool_calls(raw_text)
+            if not calls:
+                if nudges_used < max_nudges:
+                    # Real, observed failure mode (not hypothetical): even
+                    # with an explicit "call finish, don't just answer in
+                    # prose" system-prompt instruction, the model sometimes
+                    # writes a complete, well-cited answer as plain text and
+                    # never calls `finish`. Give it one more try with a
+                    # reminder rather than discarding an answer that was
+                    # right there — see NUDGE_PROMPT / max_nudges docstring.
+                    nudges_used += 1
+                    if pbar is not None:
+                        pbar.desc = f"{episode_key + ' ' if episode_key else ''}nudge ({nudges_used}/{max_nudges})"
+                        pbar.update(1)
+                    messages.append({"role": "user", "content": NUDGE_PROMPT})
+                    continue
+                if pbar is not None:
+                    pbar.desc = f"{episode_key + ' ' if episode_key else ''}no tool call"
+                    pbar.update(1)
+                # Still nothing after every nudge — the loop has nothing to
+                # observe next. Treat as an incomplete episode rather than
+                # silently returning whatever text the model produced
+                # (finish is the only sanctioned way to end with a real
+                # result).
+                return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
 
-        if tool_call_format == "gemma4":
-            # gemma4's OWN template renders a plain role="tool" message as
-            # NOTHING — its per-message loop is wrapped in `{%- if
-            # message['role'] != 'tool' -%}`, so that role is skipped
-            # entirely; tool responses only render via a "Legacy:
-            # tool_responses embedded on the assistant message (Google/
-            # Gemma native)" path, i.e. set directly on the SAME assistant
-            # message dict just appended above — confirmed against a real
-            # run: without this, the model never saw its own tool results
-            # and kept re-issuing the identical call turn after turn
-            # (verified: 20 consecutive identical `search_agml{query:
-            # "coffee leaf rust"}` calls in one real episode) until
-            # max_iterations. format_tool_response_block (the template's
-            # own renderer for this field) accepts a plain string per
-            # response, wrapped in <|"|> quotes — no need to preserve dict
-            # structure here.
-            messages[-1]["tool_responses"] = [
-                {"name": o["name"], "response": o["content"]} for o in observations
-            ]
-        else:
-            # hermes (Qwen/Hermes convention): a plain role="tool" message
-            # IS rendered by that family's own chat template, no special-
-            # cased attachment needed.
-            combined = "\n\n".join(f"[{o['name']}]\n{o['content']}" for o in observations)
-            messages.append({"role": "tool", "content": combined})
+            finish_call = next((c for c in calls if c["name"] == "finish"), None)
+            if finish_call is not None:
+                if pbar is not None:
+                    pbar.desc = f"{episode_key + ' ' if episode_key else ''}finish"
+                    pbar.update(1)
+                return EpisodeResult(
+                    result=finish_call["arguments"].get("result"), stop_reason="finished",
+                    n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages,
+                )
 
-    return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
+            if pbar is not None:
+                pbar.desc = f"{episode_key + ' ' if episode_key else ''}{', '.join(c['name'] for c in calls)}"
+                pbar.update(1)
+            observations = []
+            for call in calls:
+                tools_used.append(call["name"])
+                try:
+                    output = dispatch_tool(call["name"], call["arguments"], sandbox_root=sandbox_root)
+                    content = output if isinstance(output, str) else json.dumps(output)
+                    content = content[:_MAX_TOOL_RESULT_CHARS]
+                except ToolError as e:
+                    content = f"ERROR: {e}"
+                observations.append({"name": call["name"], "content": content})
+
+            if tool_call_format == "gemma4":
+                # gemma4's OWN template renders a plain role="tool" message
+                # as NOTHING — its per-message loop is wrapped in `{%- if
+                # message['role'] != 'tool' -%}`, so that role is skipped
+                # entirely; tool responses only render via a "Legacy:
+                # tool_responses embedded on the assistant message (Google/
+                # Gemma native)" path, i.e. set directly on the SAME
+                # assistant message dict just appended above — confirmed
+                # against a real run: without this, the model never saw its
+                # own tool results and kept re-issuing the identical call
+                # turn after turn (verified: 20 consecutive identical
+                # `search_agml{query: "coffee leaf rust"}` calls in one real
+                # episode) until max_iterations. format_tool_response_block
+                # (the template's own renderer for this field) accepts a
+                # plain string per response, wrapped in <|"|> quotes — no
+                # need to preserve dict structure here.
+                messages[-1]["tool_responses"] = [
+                    {"name": o["name"], "response": o["content"]} for o in observations
+                ]
+            else:
+                # hermes (Qwen/Hermes convention): a plain role="tool"
+                # message IS rendered by that family's own chat template,
+                # no special-cased attachment needed.
+                combined = "\n\n".join(f"[{o['name']}]\n{o['content']}" for o in observations)
+                messages.append({"role": "tool", "content": combined})
+
+        return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
+    finally:
+        if pbar is not None and pbar.is_tty:
+            pbar.stream.write("\n")
+            pbar.stream.flush()
