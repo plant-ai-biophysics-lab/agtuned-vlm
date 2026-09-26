@@ -42,7 +42,8 @@ _DEFAULT_IMAGES_ROOT = _flag("--images_root", "dataset/images")
 
 REACT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "image_name", "task", "result",
-    "stop_reason", "n_steps", "tools_used", "nudges_used", "tool_call_format", "elapsed_seconds",
+    "stop_reason", "n_steps", "tools_used", "nudges_used", "wrap_up_nudged", "error",
+    "tool_call_format", "elapsed_seconds",
 ]
 
 
@@ -179,17 +180,19 @@ st.caption(f"{len(filtered)} / {len(episodes)} episode(s) — {model_dir}")
 n_finished = (episodes["stop_reason"] == "finished").sum()
 n_no_tool_call = (episodes["stop_reason"] == "no_tool_call").sum()
 n_max_iter = (episodes["stop_reason"] == "max_iterations").sum()
+n_errors = episodes["stop_reason"].isin(["context_overflow", "error"]).sum()
 elapsed_numeric = pd.to_numeric(episodes["elapsed_seconds"], errors="coerce")
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total episodes", len(episodes))
 c2.metric("Finished", int(n_finished))
 c3.metric("No tool call", int(n_no_tool_call))
 c4.metric("Max iterations", int(n_max_iter))
-c5.metric("Avg. time/episode", f"{elapsed_numeric.mean():.1f}s" if elapsed_numeric.notna().any() else "—")
+c5.metric("Errors", int(n_errors))
+c6.metric("Avg. time/episode", f"{elapsed_numeric.mean():.1f}s" if elapsed_numeric.notna().any() else "—")
 
 overview_cols = [
     "agml_dataset", "class_label", "image_name", "stop_reason", "n_steps",
-    "elapsed_seconds", "tools_used", "nudges_used", "result",
+    "elapsed_seconds", "tools_used", "nudges_used", "wrap_up_nudged", "result",
 ]
 display_df = filtered[overview_cols].copy()
 display_df["result"] = display_df["result"].str.slice(0, 120)
@@ -223,7 +226,10 @@ with col_info:
                 f"**elapsed:** {row['elapsed_seconds'] or '?'}s  |  "
                 f"**tool_call_format:** `{row['tool_call_format']}`  |  "
                 f"**tools_used:** {row['tools_used'] or '(none)'}  |  "
-                f"**nudges_used:** {row['nudges_used'] or '0'}")
+                f"**nudges_used:** {row['nudges_used'] or '0'}  |  "
+                f"**wrap_up_nudged:** {row['wrap_up_nudged'] or 'False'}")
+    if row["error"]:
+        st.error(row["error"])
 
 tab_task, tab_result, tab_trajectory = st.tabs(["Task", "Result", "Trajectory"])
 with tab_task:

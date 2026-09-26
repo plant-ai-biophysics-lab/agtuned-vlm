@@ -44,3 +44,19 @@ nudge_prompt: |
   — do not just restate it as plain text again. If you still need more
   information, call the appropriate tool (retrieve/search_agml/etc.)
   instead.
+
+# Injected once per episode (react_agent.py's run_episode, max_model_len +
+# _WRAP_UP_THRESHOLD) when the conversation has used 80% of the model's
+# context window — a real budget constraint, not a suggestion: continuing
+# to gather more tool results risks hitting the hard limit and ending the
+# episode with NO answer at all (stop_reason="context_overflow"), discarding
+# everything gathered so far. Wrapping up now, even with an imperfect
+# answer, beats that outcome.
+wrap_up_prompt: |
+  You are close to running out of context space for this task (over 80%
+  used). Do not call any more retrieve/search_agml/read/glob/grep calls.
+  Call `finish` now with your best answer based on what you've already
+  gathered. If there's a specific detail you want preserved for the record
+  before answering, you may `write` it to a file first — but call `finish`
+  right after, in this same episode. Running out of room without ever
+  calling `finish` means losing the answer entirely.

@@ -109,6 +109,7 @@ import argparse
 import hashlib
 import re
 import time
+from collections import Counter
 from datetime import datetime
 
 import yaml
@@ -118,6 +119,7 @@ from src.baselines.build_react_tasks import build_tasks
 from src.baselines.react_agent import run_episode
 from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS, tool_call_format_for
 from src.common.io import load_jsonl
+from src.common.progress import ProgressBar
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 
@@ -132,11 +134,16 @@ REACT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "image_name",
     "task",               # the exact prompt text sent as the first user turn
     "result",             # finish()'s reported answer — blank if the episode didn't finish
-    "stop_reason",        # "finished" | "no_tool_call" | "max_iterations"
+    "stop_reason",        # "finished" | "no_tool_call" | "max_iterations" | "context_overflow" | "error"
     "n_steps",
     "tools_used",         # tool names called, in order, ";"-joined — "finish" excluded (see stop_reason)
     "nudges_used",        # how many times the "you didn't call a tool" reminder had to fire — see
                           # run_episode's max_nudges docstring. 0 = never needed one.
+    "wrap_up_nudged",     # did the 80%-of-max_model_len "wrap up now" reminder fire? see
+                          # run_episode's _WRAP_UP_THRESHOLD. "" (falsy)/"True".
+    "error",              # set only for stop_reason in {"context_overflow", "error"} — the specific
+                          # token-budget numbers or exception text, see run_episode's max_model_len
+                          # docstring. Blank for every other stop_reason.
     "tool_call_format",
     "elapsed_seconds",    # wall-clock time for this episode's run_episode() call alone (excludes
                           # model load/destroy, which happen once outside the per-episode loop) —
@@ -244,6 +251,19 @@ def main(args: argparse.Namespace) -> None:
         vision_token_budget=args.vision_token_budget,
         caller_tag="react-baseline",
     )
+    # Per-DATASET progress, not per-episode/per-step — a batch over many
+    # images produced far too much churn at either finer granularity.
+    # remaining_per_dataset tracks how many of THIS dataset's pending
+    # episodes are still outstanding; a tick only fires once that hits 0,
+    # which is robust to any ordering (episodes need not be contiguous by
+    # dataset) rather than assuming build_react_tasks.py's own
+    # one-dataset-at-a-time iteration order always holds. None (no bar) for
+    # an ad-hoc --task/--tasks_jsonl run with no real agml_dataset at all —
+    # falls back to the older one-line-per-episode print in that case,
+    # since there's no dataset concept to summarize against.
+    remaining_per_dataset = Counter(e["agml_dataset"] for e in pending if e["agml_dataset"])
+    n_datasets = len(remaining_per_dataset)
+    dataset_pbar = ProgressBar(total=n_datasets, desc="datasets") if n_datasets else None
     try:
         for i, ep in enumerate(pending, start=1):
             key = "/".join(filter(None, [ep["agml_dataset"], ep["class_label"], ep["image_name"]]))
@@ -258,11 +278,12 @@ def main(args: argparse.Namespace) -> None:
                 max_iterations=args.max_iterations,
                 max_nudges=args.max_nudges,
                 gen_max_tokens=args.gen_max_tokens,
+                max_model_len=args.max_model_len,
                 temperature=args.temperature,
                 enable_thinking=args.enable_thinking,
                 chat_template=chat_template,
                 log_path=trajectory_log_path,
-                verbose=not args.quiet,
+                verbose=args.verbose_steps,
             )
             elapsed = time.time() - t0
             append_ckpt_row(ckpt_path, {
@@ -275,13 +296,32 @@ def main(args: argparse.Namespace) -> None:
                 "n_steps": result.n_steps,
                 "tools_used": ";".join(result.tools_used),
                 "nudges_used": result.nudges_used,
+                "wrap_up_nudged": result.wrap_up_nudged,
+                "error": result.error or "",
                 "tool_call_format": tool_call_format,
                 "elapsed_seconds": round(elapsed, 1),
             }, fields=REACT_CKPT_FIELDS)
-            print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> {result.stop_reason} "
-                  f"in {result.n_steps} step(s), {elapsed:.1f}s")
+            if result.stop_reason == "error":
+                # A real (not just anticipated) generate() exception — print
+                # it immediately rather than only leaving it in the
+                # checkpoint's error column, so a live run surfaces this
+                # the same turn it happens instead of silently absorbing it.
+                print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> ERROR: {result.error}")
+
+            ds = ep["agml_dataset"]
+            if dataset_pbar is not None and ds:
+                dataset_pbar.desc = f"datasets ({ds})"
+                remaining_per_dataset[ds] -= 1
+                if remaining_per_dataset[ds] == 0:
+                    dataset_pbar.update(1)
+            else:
+                print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> {result.stop_reason} "
+                      f"in {result.n_steps} step(s), {elapsed:.1f}s")
     finally:
         destroy_llm(llm)
+        if dataset_pbar is not None and dataset_pbar.is_tty:
+            dataset_pbar.stream.write("\n")
+            dataset_pbar.stream.flush()
 
     print(f"\nDone. Checkpoint: {ckpt_path}")
     print(f"Trajectory log: {trajectory_log_path}")
@@ -373,12 +413,12 @@ if __name__ == "__main__":
                          help="max_tokens per turn. Raise well above this with --enable_thinking, "
                               "same reasoning as every other generation script in this repo.")
     parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--quiet", action="store_true",
-                         help="Suppress run_episode()'s per-turn progress lines (step index + "
-                              "generating/tool-call/finish) — keeps just react-baseline's own "
-                              "per-episode summary lines. On by default (verbose) since a single "
-                              "turn's generation can take real minutes with otherwise zero terminal "
-                              "output to tell it apart from a hang.")
+    parser.add_argument("--verbose_steps", action="store_true",
+                         help="Show run_episode()'s own per-turn progress bar (step index + "
+                              "generating/tool-call/finish/nudge) on top of react-baseline's own "
+                              "per-dataset one. Off by default — too fine-grained for a real batch "
+                              "over many images; turn it on when debugging one specific episode "
+                              "closely (e.g. re-running a single --task by itself).")
     parser.add_argument("--enable_thinking", action="store_true",
                          help="Model's own extended thinking, off by default — same convention as "
                               "chat_prompt.py's render_chat_template (see its module docstring).")
@@ -391,7 +431,14 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="outputs_final/react_baseline/")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
-    parser.add_argument("--max_model_len", type=int, default=24576)
+    parser.add_argument("--max_model_len", type=int, default=32768,
+                         help="Raised from 24576 (every other script's default, sized for single/"
+                              "few-turn generation) — react-baseline's growing multi-turn history "
+                              "genuinely needs more room, and the model itself supports far beyond "
+                              "this (Gemma-4: up to 256K natively). Also the budget run_episode()'s "
+                              "context-overflow check and 80%-used wrap-up nudge are measured "
+                              "against — raising it costs real GPU memory (bigger KV cache), so "
+                              "watch for an OOM instead if you raise it further.")
     parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET,
                          help="Only matters for --tasks_jsonl rows carrying image_path — aligns "
                               "per-image token count across model families, same as vision_baseline.py's "

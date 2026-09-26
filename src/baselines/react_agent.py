@@ -63,6 +63,7 @@ _REACT_PROMPTS_PATH = Path(__file__).parent.parent / "config" / "react_prompts.y
 _REACT_PROMPTS = load_prompts(_REACT_PROMPTS_PATH)
 DEFAULT_SYSTEM_PROMPT = _REACT_PROMPTS["default_system_prompt"]
 NUDGE_PROMPT = _REACT_PROMPTS["nudge_prompt"]
+WRAP_UP_PROMPT = _REACT_PROMPTS["wrap_up_prompt"]
 
 # Tool results are truncated before going back into the conversation — a
 # large retrieve()/grep() payload would otherwise eat the context budget
@@ -71,14 +72,23 @@ NUDGE_PROMPT = _REACT_PROMPTS["nudge_prompt"]
 # model can always narrow its query and re-call.
 _MAX_TOOL_RESULT_CHARS = 20_000
 
+# Fraction of max_model_len at which the wrap-up nudge fires (once per
+# episode) — before the hard context_overflow cutoff at 100%, not instead
+# of it: a nudge can itself fail (model ignores it, or there just isn't
+# room left even for a short reply), so the proactive overflow check still
+# runs every turn regardless of whether this already fired.
+_WRAP_UP_THRESHOLD = 0.8
+
 
 @dataclass
 class EpisodeResult:
     result: str | None
-    stop_reason: str          # "finished" | "no_tool_call" | "max_iterations"
+    stop_reason: str          # "finished" | "no_tool_call" | "max_iterations" | "context_overflow" | "error"
     n_steps: int
     tools_used: list[str] = field(default_factory=list)  # tool names called, in order, "finish" excluded
     nudges_used: int = 0      # see run_episode's `max_nudges` — how many of them this episode needed
+    wrap_up_nudged: bool = False  # did the 80%-of-max_model_len wrap-up nudge fire? see _WRAP_UP_THRESHOLD
+    error: str | None = None  # set only for stop_reason in {"context_overflow", "error"} — see run_episode
     trajectory: list[dict] = field(default_factory=list)  # raw message history, for logging/debugging
 
 
@@ -96,6 +106,7 @@ def run_episode(
     max_iterations: int = 20,
     max_nudges: int = 1,
     gen_max_tokens: int = 1024,
+    max_model_len: int | None = None,
     temperature: float = 0.0,
     enable_thinking: bool = False,
     chat_template: str | None = None,
@@ -107,6 +118,34 @@ def run_episode(
     load_llm) — loading/destroying the model is the caller's job (same
     convention as every other run_model() in this repo), so a harness can
     load once and call run_episode() per task/image without reloading.
+
+    `max_model_len` (default None = no check): the served model's own
+    context window (same value passed to load_llm()). Each turn re-renders
+    the FULL growing message history, and _MAX_TOOL_RESULT_CHARS only caps
+    a SINGLE tool result's size — nothing caps the CUMULATIVE growth across
+    many turns, so a real episode making several retrieve()/search_agml()
+    calls can genuinely exceed the context window. Confirmed on a real
+    cluster run: vLLM raised VLLMValidationError (a hard crash, not a
+    graceful truncation) when a prompt hit 24577 tokens against a 24576
+    max_model_len — with no try/except anywhere, that took the ENTIRE
+    batch process down, not just this one episode, and would keep crashing
+    identically on every retry (already-checkpointed episodes before it
+    are safe, but nothing after it in the batch ever runs). When given,
+    this is checked BEFORE every generate() call (prompt token count +
+    gen_max_tokens + a 1200-token margin for vision-token expansion an
+    `image`'s plain-text tokenization can't account for, against
+    max_model_len) and ends the episode with stop_reason="context_overflow"
+    instead of ever sending the doomed request — `error` on the returned
+    EpisodeResult has the specific numbers. A real (not just anticipated)
+    exception from generate() itself is also now caught and returned as
+    stop_reason="error" rather than propagating, as a second line of
+    defense for whatever this estimate doesn't anticipate. Also gates a
+    separate, earlier warning: at _WRAP_UP_THRESHOLD (80%) of max_model_len,
+    WRAP_UP_PROMPT fires once as a "user" turn telling the model to call
+    `finish` now rather than keep gathering — recovers an answer that would
+    otherwise be lost entirely once the hard 100% cutoff above hits (that
+    ends the episode with NO result at all). `wrap_up_nudged` on the
+    returned EpisodeResult records whether this fired.
 
     `max_nudges` (default 1): a turn with no tool call at all doesn't
     immediately end the episode — NUDGE_PROMPT (react_prompts.yaml) is
@@ -191,6 +230,7 @@ def run_episode(
     ) + [{"role": "user", "content": first_user_content}]
     tools_used: list[str] = []
     nudges_used = 0
+    wrap_up_nudged = False
 
     # skip_special_tokens=False, UNCONDITIONALLY — not just when
     # enable_thinking is True (an earlier version of this line was
@@ -228,12 +268,65 @@ def run_episode(
             prompt = render_chat_template(
                 tokenizer, messages, enable_thinking=enable_thinking, chat_template=chat_template, tools=tools,
             )
+            if max_model_len is not None:
+                prompt_tokens = len(tokenizer(prompt)["input_ids"])
+                # +1200: a fixed margin for vision-token expansion a plain
+                # text tokenization of `prompt` can't account for (the
+                # rendered string carries one small image placeholder;
+                # vLLM's own processor expands that to vision_token_budget
+                # tokens, typically ~1120 — see vlm_load.py's
+                # DEFAULT_VISION_TOKEN_BUDGET — only once generation
+                # actually runs). Approximate, not exact, deliberately on
+                # the generous side.
+                image_margin = 1200 if image is not None else 0
+                if prompt_tokens + gen_max_tokens + image_margin > max_model_len:
+                    msg = (f"prompt has ~{prompt_tokens} tokens (+{gen_max_tokens} requested output"
+                           f"{f', +{image_margin} image margin' if image_margin else ''}) > "
+                           f"max_model_len={max_model_len}")
+                    if pbar is not None:
+                        pbar.desc = f"{episode_key + ' ' if episode_key else ''}context overflow"
+                        pbar.update(1)
+                    return EpisodeResult(
+                        result=None, stop_reason="context_overflow", n_steps=step, error=msg,
+                        tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged,
+                        trajectory=messages,
+                    )
+                if not wrap_up_nudged and prompt_tokens >= _WRAP_UP_THRESHOLD * max_model_len:
+                    # One-time warning BEFORE the hard cutoff above — losing
+                    # the episode entirely to context_overflow (no result,
+                    # even though real progress was made) is worse than
+                    # asking the model to wrap up a turn early. Consumes one
+                    # `step` (a real turn, counted against max_iterations)
+                    # rather than a free pass, same convention as the
+                    # no-tool-call nudge above.
+                    wrap_up_nudged = True
+                    if pbar is not None:
+                        pbar.desc = f"{episode_key + ' ' if episode_key else ''}wrap-up nudge"
+                        pbar.update(1)
+                    messages.append({"role": "user", "content": WRAP_UP_PROMPT})
+                    continue
+
             # Same shape self_cot.py/cot_yaml.py already pass for their own
             # multi-turn image + growing-history loops — vLLM's .generate()
             # has no persistent multimodal state across separate calls, so
             # `image` is re-attached every turn, not just the first.
             gen_input = {"prompt": prompt, "multi_modal_data": {"image": image}} if image is not None else prompt
-            outputs = llm.generate([gen_input], sampling_params)
+            try:
+                outputs = llm.generate([gen_input], sampling_params)
+            except Exception as e:
+                # Second line of defense — whatever the token-count estimate
+                # above didn't anticipate. One bad episode must never take
+                # the whole batch down with it (confirmed as a real,
+                # reproducible risk, not hypothetical — see max_model_len's
+                # own docstring).
+                if pbar is not None:
+                    pbar.desc = f"{episode_key + ' ' if episode_key else ''}error"
+                    pbar.update(1)
+                return EpisodeResult(
+                    result=None, stop_reason="error", n_steps=step, error=str(e),
+                    tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged,
+                    trajectory=messages,
+                )
             raw_text = outputs[0].outputs[0].text
             messages.append({"role": "assistant", "content": raw_text})
             if log_path is not None:
@@ -263,7 +356,7 @@ def run_episode(
                 # silently returning whatever text the model produced
                 # (finish is the only sanctioned way to end with a real
                 # result).
-                return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
+                return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged, trajectory=messages)
 
             finish_call = next((c for c in calls if c["name"] == "finish"), None)
             if finish_call is not None:
@@ -272,7 +365,8 @@ def run_episode(
                     pbar.update(1)
                 return EpisodeResult(
                     result=finish_call["arguments"].get("result"), stop_reason="finished",
-                    n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages,
+                    n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used,
+                    wrap_up_nudged=wrap_up_nudged, trajectory=messages,
                 )
 
             if pbar is not None:
@@ -315,7 +409,7 @@ def run_episode(
                 combined = "\n\n".join(f"[{o['name']}]\n{o['content']}" for o in observations)
                 messages.append({"role": "tool", "content": combined})
 
-        return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, trajectory=messages)
+        return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged, trajectory=messages)
     finally:
         if pbar is not None and pbar.is_tty:
             pbar.stream.write("\n")

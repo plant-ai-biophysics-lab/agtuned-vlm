@@ -34,7 +34,15 @@ quantize: null  # "4bit", "8bit", "awq", "gptq" — separate from the model chec
                 # on-the-fly quantization= kwarg, leave null unless deliberately
                 # double-quantizing
 gpu_memory_utilization: 0.9
-max_model_len: 24576
+max_model_len: 32768  # raised from 24576 (the default every other script in this repo uses,
+                # sized for single/few-turn generation) — react-baseline's growing multi-turn
+                # history genuinely needs more room, and the model itself supports far beyond
+                # this (Gemma-4's own architecture: up to 256K; RedHatAI's own example vLLM
+                # serving command for this exact checkpoint already uses 32768) — this was never
+                # the model's real ceiling, just this repo's own conservative config choice.
+                # Also used as the budget run_episode()'s own context-overflow check (and the
+                # 80%-used "wrap up" nudge) is measured against — raising it independently here
+                # doesn't touch vision_baseline_config.yaml's/verifier_config.yaml's own 24576.
 vision_token_budget: 1120  # only matters for a --tasks_jsonl row carrying image_path (from
                 # react-build-tasks) — aligns per-image token count across model families,
                 # same convention/default as vision_baseline.py's own flag of this name
