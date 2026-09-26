@@ -375,7 +375,15 @@ if __name__ == "__main__":
     parser.add_argument("--subsample", nargs="+", default=None,
                          help="Restrict --sample_images to these dataset(s) only (agml_name, "
                               "space-separated) — same convention as verifier_cot.py's own "
-                              "--subsample.")
+                              "--subsample. Applied BEFORE --num_datasets_per_task if both are given.")
+    parser.add_argument("--num_datasets_per_task", type=int, default=None,
+                         help="Only used with --sample_images. Randomly keep this many DATASETS "
+                              "(not classes) per task_type (disease/pest_damage/"
+                              "species_identification/quality_identification), for a small varied "
+                              "smoke test instead of every active dataset. Seeded by --seed — same "
+                              "convention as build_react_tasks.py's own flag of this name.")
+    parser.add_argument("--seed", type=int, default=42,
+                         help="Seeds --num_datasets_per_task's random selection, for reproducibility.")
     parser.add_argument("--match_images_from", default=None,
                          help="Only used with --sample_images. Path to an existing "
                               "single-prediction-per-row checkpoint (e.g. outputs_final/"

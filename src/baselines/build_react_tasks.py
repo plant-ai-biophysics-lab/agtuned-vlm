@@ -30,6 +30,11 @@ Usage:
         --n_samples 3 \\
         --output outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
 
+    # small varied smoke test — 3 DATASETS per task_type, not every active one:
+    uv run python main.py react-build-tasks \\
+        --n_samples 3 --num_datasets_per_task 3 \\
+        --output outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
+
     # true apples-to-apples against an existing vision-baseline run:
     uv run python main.py react-build-tasks \\
         --match_images_from outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \\
@@ -48,6 +53,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import argparse
 import csv
 import json
+import random
+from collections import defaultdict
 
 from src.common.dataset_config import (
     active_datasets, load_hf_samples, load_manifest, parse_class_label,
@@ -73,10 +80,43 @@ def _load_reference_images(path: Path) -> dict[tuple[str, str], list[str]]:
     return out
 
 
+def _sample_datasets_per_task(datasets: list, n_per_task: int, seed: int) -> list:
+    """Keep `n_per_task` DATASETS (not classes — a dataset with many classes
+    still counts as one) per ds.task_type, randomly, seeded for
+    reproducibility — for a smoke test that wants a small, varied spread
+    across task types (disease/pest_damage/species_identification/
+    quality_identification) rather than every active dataset. Same
+    seeded-shuffle-then-slice pattern as verifier_cot.py's own
+    _sample_random_classes_per_task, at the dataset level instead of the
+    (dataset, class) group level — a task_type with fewer than n_per_task
+    datasets keeps all of them."""
+    rng = random.Random(seed)
+    by_task: dict[str, list] = defaultdict(list)
+    for ds in datasets:
+        by_task[ds.task_type].append(ds)
+    selected = []
+    for task_type in sorted(by_task):
+        task_datasets = by_task[task_type]
+        rng.shuffle(task_datasets)
+        selected.extend(task_datasets[:n_per_task])
+    return selected
+
+
 def build_tasks(args: argparse.Namespace) -> list[dict]:
     prompts = load_prompts(Path(args.prompts))
     manifest = load_manifest(Path(args.manifest))
     reference_images = _load_reference_images(Path(args.match_images_from)) if args.match_images_from else None
+
+    active = [ds for ds in active_datasets(Path(args.config)) if not ds.skip and ds.task_type]
+    if args.subsample is not None:
+        active = [ds for ds in active if ds.agml_name in args.subsample]
+    if getattr(args, "num_datasets_per_task", None):
+        active = _sample_datasets_per_task(active, args.num_datasets_per_task, args.seed)
+        by_task_counts = defaultdict(int)
+        for ds in active:
+            by_task_counts[ds.task_type] += 1
+        print(f"  [num_datasets_per_task={args.num_datasets_per_task}, seed={args.seed}] "
+              f"{len(active)} dataset(s) selected: {dict(by_task_counts)}")
     # --rubric: wrap cls_question()'s output through the SAME fill-in-the-
     # blank criteria chain vision_baseline.py's own --rubric flag uses (its
     # docstring covers the "Baseline with rubric" rationale) — this is ALSO
@@ -91,11 +131,7 @@ def build_tasks(args: argparse.Namespace) -> list[dict]:
         structured_templates, task_type_to_rubric = load_rubric_templates()
 
     rows = []
-    for ds in active_datasets(Path(args.config)):
-        if ds.skip or not ds.task_type:
-            continue
-        if args.subsample is not None and ds.agml_name not in args.subsample:
-            continue
+    for ds in active:
         try:
             samples = load_hf_samples(
                 ds.agml_name, manifest, Path(args.images_root), excluded_classes=ds.excluded_classes,
@@ -165,7 +201,18 @@ if __name__ == "__main__":
                               "react-baseline itself is trusted.")
     parser.add_argument("--subsample", nargs="+", default=None,
                          help="Restrict to these dataset(s) only (agml_name, space-separated) — "
-                              "same convention as verifier_cot.py's own --subsample.")
+                              "same convention as verifier_cot.py's own --subsample. Applied BEFORE "
+                              "--num_datasets_per_task if both are given.")
+    parser.add_argument("--num_datasets_per_task", type=int, default=None,
+                         help="Randomly keep this many DATASETS (not classes — one dataset can have "
+                              "many classes and still counts once) per task_type (disease/pest_damage/"
+                              "species_identification/quality_identification), for a small varied "
+                              "smoke test instead of every active dataset. Seeded by --seed. Same "
+                              "seeded-shuffle-then-slice pattern as verifier_cot.py's own "
+                              "--random_classes_per_task, at the dataset level instead of the "
+                              "(dataset, class) group level.")
+    parser.add_argument("--seed", type=int, default=42,
+                         help="Seeds --num_datasets_per_task's random selection, for reproducibility.")
     parser.add_argument("--match_images_from", default=None,
                          help="Path to an existing single-prediction-per-row checkpoint (e.g. "
                               "outputs_final/vision_baseline_thinking/<model>/ckpt_<model>.csv) — "
