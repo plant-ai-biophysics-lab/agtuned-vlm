@@ -19,11 +19,16 @@ Usage:
     streamlit run app/react_baseline_viewer.py -- --output_dir /path/to/some/folder --images_root dataset/images
 """
 import json
+import re
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 import streamlit as st
+
+from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS  # pure stdlib (json/re) —
+                                                                    # safe to import here, no vllm/torch pulled in
 
 st.set_page_config(layout="wide", page_title="ReAct Baseline Viewer")
 
@@ -140,6 +145,43 @@ def find_image(agml_dataset: str, class_label: str, image_name: str, output_dir:
     return None
 
 
+# ── raw_text parsing for the Trajectory tab ─────────────────────────────────
+# Reuses the SAME extractors (tool_call_formats.py) the loop itself calls at
+# runtime, so what the viewer shows as "the tool calls this turn made" is
+# guaranteed consistent with what react_agent.py actually parsed — not a
+# second, independently-maintained parser that could silently drift from it.
+
+# Gemma-4's thinking channel is always the first thing in a turn's raw_text
+# (either the model emits <|channel>thought\n itself, or — when a prior turn
+# ended in a tool response — the prompt already opened it implicitly and
+# raw_text starts directly with the thinking prose) — so this only needs to
+# match from the start of the string, not search anywhere inside it.
+_GEMMA4_THINK_RE = re.compile(r"^(?:<\|channel>thought\n?)?(.*?)<channel\|>", re.DOTALL)
+_HERMES_THINK_RE = re.compile(r"^<think>(.*?)</think>", re.DOTALL)
+_TOOL_CALL_SPAN_RES = {
+    "gemma4": re.compile(r"<\|tool_call>.*?<tool_call\|>", re.DOTALL),
+    "hermes": re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL),
+}
+
+
+def parse_turn(raw_text: str, tool_call_format: str) -> dict:
+    """{"thinking": str, "calls": [{"name", "arguments"}, ...], "prose": str}
+    — prose is whatever's left after removing the thinking block and every
+    matched tool_call span, e.g. a nudge-recovered explanation, or the full
+    answer text on a turn that skipped calling `finish` (stop_reason=
+    no_tool_call)."""
+    think_re = _GEMMA4_THINK_RE if tool_call_format == "gemma4" else _HERMES_THINK_RE
+    m = think_re.match(raw_text)
+    thinking, remainder = (m.group(1).strip(), raw_text[m.end():]) if m else ("", raw_text)
+
+    extractor = TOOL_CALL_EXTRACTORS.get(tool_call_format)
+    calls = extractor(raw_text) if extractor else []
+
+    span_re = _TOOL_CALL_SPAN_RES.get(tool_call_format)
+    prose = span_re.sub("", remainder).strip() if span_re else remainder.strip()
+    return {"thinking": thinking, "calls": calls, "prose": prose}
+
+
 st.title("ReAct Baseline Viewer")
 
 with st.sidebar:
@@ -241,7 +283,46 @@ with tab_trajectory:
     turns = trajectory.get(key, [])
     if not turns:
         st.warning(f"No trajectory_log.jsonl turns found for episode_key {key!r}.")
+
+    # "tool_response" entries (added alongside "generation" — see
+    # react_agent.py's own log_path docstring) render nested under their
+    # matching step below, not as their own top-level card. An OLDER
+    # trajectory_log.jsonl (predating this) has no "type" key at all —
+    # every one of its lines is implicitly "generation", so
+    # observations_by_step just comes back empty and nothing breaks.
+    observations_by_step: dict[int, list] = {}
     for turn in turns:
-        st.markdown(f"**Step {turn.get('step')}**")
-        st.text(turn.get("raw_text", ""))
+        if turn.get("type") == "tool_response":
+            observations_by_step[turn.get("step")] = turn.get("observations", [])
+
+    for turn in turns:
+        if turn.get("type") == "tool_response":
+            continue
+        step = turn.get("step")
+        raw_text = turn.get("raw_text", "")
+        parsed = parse_turn(raw_text, row["tool_call_format"])
+        st.markdown(f"**Step {step}**")
+
+        if parsed["thinking"]:
+            with st.expander("🤔 Thinking"):
+                st.text(parsed["thinking"])
+
+        for call in parsed["calls"]:
+            if call["name"] == "finish":
+                st.success(f"✅ **finish**\n\n{call['arguments'].get('result', '')}")
+            else:
+                args_str = ", ".join(f"{k}={v!r}" for k, v in call["arguments"].items())
+                st.code(f"{call['name']}({args_str})", language=None)
+
+        for obs in observations_by_step.get(step, []):
+            with st.expander(f"↳ {obs.get('name')} response"):
+                st.text(obs.get("content", ""))
+
+        if parsed["prose"]:
+            st.text(parsed["prose"])
+        if not parsed["calls"] and not parsed["prose"] and not parsed["thinking"]:
+            st.caption("(empty turn)")
+
+        with st.expander("Raw text"):
+            st.text(raw_text)
         st.divider()
