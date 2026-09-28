@@ -48,7 +48,7 @@ _DEFAULT_IMAGES_ROOT = _flag("--images_root", "dataset/images")
 REACT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "image_name", "task", "result",
     "stop_reason", "n_steps", "tools_used", "nudges_used", "wrap_up_nudged", "error",
-    "tool_call_format", "elapsed_seconds",
+    "tool_call_format", "elapsed_seconds", "judge_gt_hint", "judged_correct", "judge_reasoning",
 ]
 
 
@@ -206,11 +206,18 @@ with st.sidebar:
     st.header("Filters")
     stop_reasons = ["(all)"] + sorted(episodes["stop_reason"].unique().tolist())
     stop_reason_filter = st.selectbox("stop_reason", stop_reasons, index=0)
+    judged_filter = st.selectbox("judged", ["(all)", "correct", "incorrect", "unjudged"], index=0)
     search = st.text_input("Search task/result contains")
 
 filtered = episodes
 if stop_reason_filter != "(all)":
     filtered = filtered[filtered["stop_reason"] == stop_reason_filter]
+if judged_filter == "correct":
+    filtered = filtered[filtered["judged_correct"] == "1"]
+elif judged_filter == "incorrect":
+    filtered = filtered[filtered["judged_correct"] == "0"]
+elif judged_filter == "unjudged":
+    filtered = filtered[filtered["judged_correct"] == ""]
 if search:
     mask = filtered["task"].str.contains(search, case=False, na=False) | filtered["result"].str.contains(
         search, case=False, na=False
@@ -224,16 +231,23 @@ n_no_tool_call = (episodes["stop_reason"] == "no_tool_call").sum()
 n_max_iter = (episodes["stop_reason"] == "max_iterations").sum()
 n_errors = episodes["stop_reason"].isin(["context_overflow", "error"]).sum()
 elapsed_numeric = pd.to_numeric(episodes["elapsed_seconds"], errors="coerce")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+judged_mask = episodes["judged_correct"].isin(["0", "1"])
+n_judged = int(judged_mask.sum())
+judge_acc = (
+    f"{100 * (episodes.loc[judged_mask, 'judged_correct'] == '1').mean():.0f}% ({n_judged})"
+    if n_judged else "—"
+)
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 c1.metric("Total episodes", len(episodes))
 c2.metric("Finished", int(n_finished))
 c3.metric("No tool call", int(n_no_tool_call))
 c4.metric("Max iterations", int(n_max_iter))
 c5.metric("Errors", int(n_errors))
-c6.metric("Avg. time/episode", f"{elapsed_numeric.mean():.1f}s" if elapsed_numeric.notna().any() else "—")
+c6.metric("Judge accuracy", judge_acc)
+c7.metric("Avg. time/episode", f"{elapsed_numeric.mean():.1f}s" if elapsed_numeric.notna().any() else "—")
 
 overview_cols = [
-    "agml_dataset", "class_label", "image_name", "stop_reason", "n_steps",
+    "agml_dataset", "class_label", "image_name", "stop_reason", "judged_correct", "n_steps",
     "elapsed_seconds", "tools_used", "nudges_used", "wrap_up_nudged", "result",
 ]
 display_df = filtered[overview_cols].copy()
@@ -264,20 +278,39 @@ with col_img:
     else:
         st.caption("(no image found — checked --images_root and a sibling reference_images/ folder)")
 with col_info:
+    judge_badge = (
+        "✅ correct" if row["judged_correct"] == "1"
+        else "❌ incorrect" if row["judged_correct"] == "0"
+        else "⋯ unjudged"
+    )
     st.markdown(f"**stop_reason:** `{row['stop_reason']}`  |  **n_steps:** {row['n_steps']}  |  "
                 f"**elapsed:** {row['elapsed_seconds'] or '?'}s  |  "
                 f"**tool_call_format:** `{row['tool_call_format']}`  |  "
                 f"**tools_used:** {row['tools_used'] or '(none)'}  |  "
                 f"**nudges_used:** {row['nudges_used'] or '0'}  |  "
-                f"**wrap_up_nudged:** {row['wrap_up_nudged'] or 'False'}")
+                f"**wrap_up_nudged:** {row['wrap_up_nudged'] or 'False'}  |  "
+                f"**judged:** {judge_badge}")
     if row["error"]:
         st.error(row["error"])
 
-tab_task, tab_result, tab_trajectory = st.tabs(["Task", "Result", "Trajectory"])
+tab_task, tab_result, tab_judge, tab_trajectory = st.tabs(["Task", "Result", "Judge", "Trajectory"])
 with tab_task:
     st.text(row["task"])
 with tab_result:
     st.text(row["result"] or "(no result — episode did not finish)")
+with tab_judge:
+    if not row["class_label"]:
+        st.caption("No class_label on this episode (ad-hoc/text-only) — nothing to judge against.")
+    elif row["judged_correct"] == "":
+        st.caption("Not judged yet — run react-baseline again without --skip_judge to backfill.")
+    else:
+        if row["judged_correct"] == "1":
+            st.success("✅ Judged correct")
+        else:
+            st.error("❌ Judged incorrect")
+        st.markdown(f"**Ground truth shown to judge (judge_gt_hint):** {row['judge_gt_hint']}")
+        st.markdown("**Judge's reasoning:**")
+        st.text(row["judge_reasoning"] or "(no reasoning recorded)")
 with tab_trajectory:
     key = row["episode_key"]
     turns = trajectory.get(key, [])

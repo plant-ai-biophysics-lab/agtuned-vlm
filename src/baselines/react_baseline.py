@@ -47,6 +47,18 @@ around the whole batch) — so a slow outlier is visible straight from the
 checkpoint. See docs/stage3_react_baseline.md and app/react_baseline_viewer.py
 (a Streamlit viewer over this exact checkpoint + trajectory log shape).
 
+After generation, a judge phase scores `finish()`'s reported answer
+against each episode's `class_label` — SAME shared machinery every other
+stage in this repo uses (src/common/vision_eval.py's run_judge_phase/
+apply_judge, `--judge_model`/`--judge_confidence_threshold`/etc. below),
+not a reimplementation. Only episodes with a real class_label get judged —
+an ad-hoc/--task text-only episode has no ground truth to compare against,
+so it's left unjudged (same "excluded rows are simply left unjudged"
+convention judge_filter already has elsewhere). Runs unconditionally
+(unless --skip_judge), including on a rerun where generation is already
+fully done — its own resumability (rows_needing_judge) picks up exactly
+where a prior judge phase left off, e.g. after a crash mid-judging.
+
 Three ways to run (checked in this order — --sample_images wins over
 --tasks_jsonl wins over --task):
 
@@ -118,10 +130,12 @@ from PIL import Image as PILImage
 from src.baselines.build_react_tasks import build_tasks
 from src.baselines.react_agent import run_episode
 from src.baselines.tool_call_formats import TOOL_CALL_EXTRACTORS, tool_call_format_for
-from src.common.io import load_jsonl
+from src.common.io import load_jsonl, load_prompts
 from src.common.progress import ProgressBar
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
-from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
+from src.common.vision_eval import (
+    append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, run_judge_phase, safe_model_name,
+)
 
 REACT_CKPT_FIELDS = [
     # (agml_dataset, class_label, image_name) is the exact triple
@@ -150,6 +164,15 @@ REACT_CKPT_FIELDS = [
                           # rounded to 0.1s. Lets you spot a slow outlier (stuck near
                           # --max_iterations, or a slow retrieve()/search_agml() call) straight from
                           # the checkpoint without re-reading trajectory_log.jsonl timestamps.
+    "judge_gt_hint",       # ground truth text shown to the judge — backfilled from class_label by
+                          # run_judge_phase's own ensure_judge_gt_hint() if missing, same convention
+                          # as CKPT_FIELDS elsewhere in this repo.
+    "judged_correct",      # 0/1 from the SAME shared judge machinery (src/common/vision_eval.py's
+                          # run_judge_phase/apply_judge) every other stage uses — "" until judged.
+                          # Only ever set for a row with a real class_label (an ad-hoc/text-only
+                          # --task episode has no ground truth to judge against, so it's skipped —
+                          # see main()'s judge_filter).
+    "judge_reasoning",     # the judge's own (truncated) explanation for judged_correct.
 ]
 
 
@@ -227,101 +250,138 @@ def main(args: argparse.Namespace) -> None:
     if n_skipped:
         print(f"[react-baseline] skipping {n_skipped} episode(s) already in {ckpt_path.name} (resume).")
     if not pending:
-        print("[react-baseline] nothing to run — every episode already checkpointed.")
-        return
+        # NOT an early return — a judging-only rerun (generation already
+        # fully done, e.g. after a crash during the judge phase itself, or
+        # a first run with --skip_judge) needs to still fall through to the
+        # judge phase below rather than exiting here.
+        print("[react-baseline] nothing to generate — every episode already checkpointed.")
+    else:
+        chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
+        tool_call_format = args.tool_call_format or tool_call_format_for(args.model)
+        print(f"[react-baseline] {len(pending)} episode(s) pending, tool_call_format={tool_call_format!r} "
+              + ("(--tool_call_format)" if args.tool_call_format else f"(auto-detected from --model {args.model!r})"))
 
-    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
-    tool_call_format = args.tool_call_format or tool_call_format_for(args.model)
-    print(f"[react-baseline] {len(pending)} episode(s) pending, tool_call_format={tool_call_format!r} "
-          + ("(--tool_call_format)" if args.tool_call_format else f"(auto-detected from --model {args.model!r})"))
+        llm, tokenizer = load_llm(
+            args.model,
+            quantization=args.quantize,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len,
+            max_num_seqs=args.max_num_seqs,
+            enforce_eager=args.enforce_eager,
+            # Set unconditionally, not just when a --tasks_jsonl row actually
+            # carries image_path — this is a per-model-LOAD kwarg (vLLM's
+            # mm_processor_kwargs), not per-request, so it has to be right
+            # before we know which specific rows in this batch have images.
+            # Harmless for a text-only episode (never touched unless
+            # multi_modal_data is actually passed on that generate() call).
+            vision_token_budget=args.vision_token_budget,
+            caller_tag="react-baseline",
+        )
+        # Per-DATASET progress, not per-episode/per-step — a batch over many
+        # images produced far too much churn at either finer granularity.
+        # remaining_per_dataset tracks how many of THIS dataset's pending
+        # episodes are still outstanding; a tick only fires once that hits 0,
+        # which is robust to any ordering (episodes need not be contiguous by
+        # dataset) rather than assuming build_react_tasks.py's own
+        # one-dataset-at-a-time iteration order always holds. None (no bar) for
+        # an ad-hoc --task/--tasks_jsonl run with no real agml_dataset at all —
+        # falls back to the older one-line-per-episode print in that case,
+        # since there's no dataset concept to summarize against.
+        remaining_per_dataset = Counter(e["agml_dataset"] for e in pending if e["agml_dataset"])
+        n_datasets = len(remaining_per_dataset)
+        dataset_pbar = ProgressBar(total=n_datasets, desc="datasets") if n_datasets else None
+        try:
+            for i, ep in enumerate(pending, start=1):
+                key = "/".join(filter(None, [ep["agml_dataset"], ep["class_label"], ep["image_name"]]))
+                image = PILImage.open(ep["image_path"]).convert("RGB") if ep.get("image_path") else None
+                t0 = time.time()
+                result = run_episode(
+                    llm, tokenizer, ep["task"],
+                    image=image,
+                    episode_key=key,
+                    tool_call_format=tool_call_format,
+                    sandbox_root=workspace_root / _safe_component(key),
+                    max_iterations=args.max_iterations,
+                    max_nudges=args.max_nudges,
+                    gen_max_tokens=args.gen_max_tokens,
+                    max_model_len=args.max_model_len,
+                    temperature=args.temperature,
+                    enable_thinking=args.enable_thinking,
+                    chat_template=chat_template,
+                    log_path=trajectory_log_path,
+                    verbose=args.verbose_steps,
+                )
+                elapsed = time.time() - t0
+                append_ckpt_row(ckpt_path, {
+                    "agml_dataset": ep["agml_dataset"],
+                    "class_label": ep["class_label"],
+                    "image_name": ep["image_name"],
+                    "task": ep["task"],
+                    "result": result.result or "",
+                    "stop_reason": result.stop_reason,
+                    "n_steps": result.n_steps,
+                    "tools_used": ";".join(result.tools_used),
+                    "nudges_used": result.nudges_used,
+                    "wrap_up_nudged": result.wrap_up_nudged,
+                    "error": result.error or "",
+                    "tool_call_format": tool_call_format,
+                    "elapsed_seconds": round(elapsed, 1),
+                }, fields=REACT_CKPT_FIELDS)
+                if result.stop_reason == "error":
+                    # A real (not just anticipated) generate() exception — print
+                    # it immediately rather than only leaving it in the
+                    # checkpoint's error column, so a live run surfaces this
+                    # the same turn it happens instead of silently absorbing it.
+                    print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> ERROR: {result.error}")
 
-    llm, tokenizer = load_llm(
-        args.model,
-        quantization=args.quantize,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_model_len,
-        max_num_seqs=args.max_num_seqs,
-        enforce_eager=args.enforce_eager,
-        # Set unconditionally, not just when a --tasks_jsonl row actually
-        # carries image_path — this is a per-model-LOAD kwarg (vLLM's
-        # mm_processor_kwargs), not per-request, so it has to be right
-        # before we know which specific rows in this batch have images.
-        # Harmless for a text-only episode (never touched unless
-        # multi_modal_data is actually passed on that generate() call).
-        vision_token_budget=args.vision_token_budget,
-        caller_tag="react-baseline",
-    )
-    # Per-DATASET progress, not per-episode/per-step — a batch over many
-    # images produced far too much churn at either finer granularity.
-    # remaining_per_dataset tracks how many of THIS dataset's pending
-    # episodes are still outstanding; a tick only fires once that hits 0,
-    # which is robust to any ordering (episodes need not be contiguous by
-    # dataset) rather than assuming build_react_tasks.py's own
-    # one-dataset-at-a-time iteration order always holds. None (no bar) for
-    # an ad-hoc --task/--tasks_jsonl run with no real agml_dataset at all —
-    # falls back to the older one-line-per-episode print in that case,
-    # since there's no dataset concept to summarize against.
-    remaining_per_dataset = Counter(e["agml_dataset"] for e in pending if e["agml_dataset"])
-    n_datasets = len(remaining_per_dataset)
-    dataset_pbar = ProgressBar(total=n_datasets, desc="datasets") if n_datasets else None
-    try:
-        for i, ep in enumerate(pending, start=1):
-            key = "/".join(filter(None, [ep["agml_dataset"], ep["class_label"], ep["image_name"]]))
-            image = PILImage.open(ep["image_path"]).convert("RGB") if ep.get("image_path") else None
-            t0 = time.time()
-            result = run_episode(
-                llm, tokenizer, ep["task"],
-                image=image,
-                episode_key=key,
-                tool_call_format=tool_call_format,
-                sandbox_root=workspace_root / _safe_component(key),
-                max_iterations=args.max_iterations,
-                max_nudges=args.max_nudges,
-                gen_max_tokens=args.gen_max_tokens,
-                max_model_len=args.max_model_len,
-                temperature=args.temperature,
-                enable_thinking=args.enable_thinking,
-                chat_template=chat_template,
-                log_path=trajectory_log_path,
-                verbose=args.verbose_steps,
+                ds = ep["agml_dataset"]
+                if dataset_pbar is not None and ds:
+                    dataset_pbar.desc = f"datasets ({ds})"
+                    remaining_per_dataset[ds] -= 1
+                    if remaining_per_dataset[ds] == 0:
+                        dataset_pbar.update(1)
+                else:
+                    print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> {result.stop_reason} "
+                          f"in {result.n_steps} step(s), {elapsed:.1f}s")
+        finally:
+            destroy_llm(llm)
+            if dataset_pbar is not None and dataset_pbar.is_tty:
+                dataset_pbar.stream.write("\n")
+                dataset_pbar.stream.flush()
+
+    if not args.skip_judge:
+        # Same shared judge machinery every other stage in this repo uses
+        # (src/common/vision_eval.py's run_judge_phase/apply_judge) — not a
+        # react-baseline-specific reimplementation. Runs AFTER generation
+        # is fully done (own model load/destroy, separate from the
+        # generation model above — same load-generate-unload-then-
+        # load-judge-unload pattern vision_baseline.py/verifier_cot.py use),
+        # over the FULL checkpoint (re-read fresh, not just `pending`), so
+        # a judging-only rerun after a crash mid-judge phase picks up
+        # exactly where it left off via run_judge_phase's own
+        # rows_needing_judge() resumability.
+        print("\n[react-baseline] judging...")
+        prompts = load_prompts(Path(args.prompts))
+        all_rows, _ = load_ckpt(ckpt_path, fields=REACT_CKPT_FIELDS)
+        for r in all_rows:
+            # apply_judge (via run_judge_phase) reads pred_key="prediction"
+            # — react-baseline's own column is "result" (finish()'s
+            # reported answer); alias it here rather than storing the same
+            # text under two persisted column names.
+            r["prediction"] = r.get("result", "")
+        if not any(r.get("class_label") for r in all_rows):
+            print("[react-baseline] no episode has a real class_label to judge against "
+                  "(ad-hoc/text-only run) — skipping.")
+        else:
+            run_judge_phase(
+                all_rows, ckpt_path, args, prompts, fields=REACT_CKPT_FIELDS,
+                # Ad-hoc/--task episodes have no ground truth at all — judge_filter
+                # leaves them with blank judged_correct/judge_reasoning (never sent
+                # to the judge) rather than judging free text against "", same
+                # "excluded rows are simply left unjudged" convention judge_filter
+                # already has elsewhere (verifier_cot.py's own --judge_scope).
+                judge_filter=lambda r: bool(r.get("class_label")),
             )
-            elapsed = time.time() - t0
-            append_ckpt_row(ckpt_path, {
-                "agml_dataset": ep["agml_dataset"],
-                "class_label": ep["class_label"],
-                "image_name": ep["image_name"],
-                "task": ep["task"],
-                "result": result.result or "",
-                "stop_reason": result.stop_reason,
-                "n_steps": result.n_steps,
-                "tools_used": ";".join(result.tools_used),
-                "nudges_used": result.nudges_used,
-                "wrap_up_nudged": result.wrap_up_nudged,
-                "error": result.error or "",
-                "tool_call_format": tool_call_format,
-                "elapsed_seconds": round(elapsed, 1),
-            }, fields=REACT_CKPT_FIELDS)
-            if result.stop_reason == "error":
-                # A real (not just anticipated) generate() exception — print
-                # it immediately rather than only leaving it in the
-                # checkpoint's error column, so a live run surfaces this
-                # the same turn it happens instead of silently absorbing it.
-                print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> ERROR: {result.error}")
-
-            ds = ep["agml_dataset"]
-            if dataset_pbar is not None and ds:
-                dataset_pbar.desc = f"datasets ({ds})"
-                remaining_per_dataset[ds] -= 1
-                if remaining_per_dataset[ds] == 0:
-                    dataset_pbar.update(1)
-            else:
-                print(f"[react-baseline] ({i}/{len(pending)}) {key!r} -> {result.stop_reason} "
-                      f"in {result.n_steps} step(s), {elapsed:.1f}s")
-    finally:
-        destroy_llm(llm)
-        if dataset_pbar is not None and dataset_pbar.is_tty:
-            dataset_pbar.stream.write("\n")
-            dataset_pbar.stream.flush()
 
     print(f"\nDone. Checkpoint: {ckpt_path}")
     print(f"Trajectory log: {trajectory_log_path}")
@@ -454,6 +514,45 @@ if __name__ == "__main__":
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
 
+    # ── Judge phase ──────────────────────────────────────────────────────
+    # Same shared machinery (src/common/vision_eval.py's run_judge_phase/
+    # apply_judge) every other stage in this repo uses — same flags, same
+    # meaning. Only judges episodes with a real class_label (ad-hoc/
+    # --task text-only episodes have no ground truth, see main()'s
+    # judge_filter) — scores finish()'s reported answer (aliased to
+    # "prediction" at judge time) against it.
+    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic",
+                         help="Defaults to the SAME checkpoint as --model, matching this repo's own "
+                              "actual usage throughout Stage 2/3 (actor and judge are the same model) "
+                              "— override if you want a different judge.")
+    parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
+    parser.add_argument("--judge_confidence_threshold", type=int, default=1)
+    parser.add_argument("--judge_chunk_size", type=int, default=200,
+                         help="Rows per judge call — drives the judge progress bar and caps how much "
+                              "work a kill mid-judging can lose (checkpoint rewritten after each chunk).")
+    parser.add_argument("--judge_enable_thinking", action="store_true",
+                         help="Off by default, exact original prompt rendering — same convention as "
+                              "every other script's --judge_enable_thinking. A no-op for the default "
+                              "Gemma-4 judge unless --judge_chat_template_path is also given.")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                         help="Override the judge's default max_tokens=1024 — a thinking trace "
+                              "(--judge_enable_thinking) can consume that budget before reaching the "
+                              "final JSON verdict, truncating the response.")
+    parser.add_argument("--judge_chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
+                         help="Same vendored-template requirement as --chat_template_path, for the "
+                              "same reason — REQUIRED for --judge_enable_thinking to do anything with "
+                              "the default Gemma-4 judge (its own bundled template has no "
+                              "enable_thinking support at all). Pass '' if you switch --judge_model to "
+                              "a Qwen3/Qwen2.5 checkpoint.")
+    parser.add_argument("--rejudge", action="store_true",
+                         help="Clear existing judged_correct/judge_reasoning and re-judge every "
+                              "judgeable row from scratch, instead of only rows missing a verdict.")
+    parser.add_argument("--skip_judge", action="store_true",
+                         help="Skip the judge phase entirely — no judge model loaded. For a "
+                              "preliminary/small-GPU run, or to keep generation and judging as "
+                              "separate invocations/jobs. Resume later with a normal (non-skip) run "
+                              "to backfill judging.")
+
     if _pre_args.react_config and Path(_pre_args.react_config).exists():
         _cfg = _load_yaml(Path(_pre_args.react_config)) or {}
         _valid_dests = {a.dest for a in parser._actions}
@@ -465,6 +564,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not args.chat_template_path:
         args.chat_template_path = None
+    if not args.judge_chat_template_path:
+        args.judge_chat_template_path = None
     if not args.task and not args.tasks_jsonl and not args.sample_images:
         parser.error("one of --task, --tasks_jsonl, or --sample_images is required")
     main(args)
