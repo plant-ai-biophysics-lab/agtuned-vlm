@@ -107,13 +107,15 @@ Stages:
                                question, no intermediate reasoning. Spatial-task analog of
                                vision-baseline (Paper 1 Stage 2a). Scored via IoU-based
                                precision/recall/F1 against ground-truth boxes
-                               (src/common/bbox_metrics.py), not classification F1/ROUGE. Pass
-                               --rubric to instead answer a fill-in-the-blank localization
-                               checklist (object/class, location, occlusion, size — same criteria
-                               chain detection-verifier's structured generation uses) before
-                               printing boxes, no tournament machinery — use a different
-                               --output_dir than the plain run. See docs/stage2_object_detection.md
-                               for the full data-prep -> baseline -> rubric -> comparison walkthrough.
+                               (src/common/bbox_metrics.py), not classification F1/ROUGE. See
+                               docs/stage2_object_detection.md for the data-prep -> baseline
+                               walkthrough. --rubric (fill-in-the-blank localization checklist
+                               before printing boxes — same criteria chain detection-verifier's
+                               structured generation uses, no tournament machinery — use a
+                               different --output_dir than the plain run) also exists but isn't
+                               part of Stage 2's current scope; rubric/verifier conditions for
+                               detection are deferred, likely to follow classification's shape
+                               (Stage 3) later.
     detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the
