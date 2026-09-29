@@ -114,6 +114,26 @@ default) more to work with — it already refuses to credit a plausible
 causal guess against a symptom-named reference class, but can only apply
 that logic to whatever detail is actually in the response.
 
+## Splitting the work across multiple GPUs
+
+`--num_shards N --shard_index i` partitions the (dataset, class) groups into N independent single-GPU processes, each generating **and** judging its own shard. Run one process per GPU with its own `--shard_index`:
+
+```bash
+# 4 GPUs, one process each ($SHARD_INDEX = 0, 1, 2, 3):
+uv run python main.py verifier-cot \
+    --model google/gemma-4-26B-A4B-it \
+    --num_shards 4 --shard_index $SHARD_INDEX
+```
+
+Each shard writes its own `ckpt_<model>_shard<i>of4.csv`, `verifier_log_shard<i>of4.jsonl`, and `judge_log_shard<i>of4.jsonl` (never the canonical filenames), so all 4 can run concurrently with zero write contention. Once every shard finishes, merge them into the canonical checkpoint:
+
+```bash
+uv run python main.py verifier-cot \
+    --model google/gemma-4-26B-A4B-it \
+    --output_dir outputs_final/verifier_cot/ \
+    --merge_shards
+```
+
 ## Parameters
 
 | Flag | Default | What it does |
