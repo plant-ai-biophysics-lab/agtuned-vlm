@@ -13,7 +13,7 @@ This script re-derives both charts directly from a real verifier_cot run's
 own output — no model calls, no GPU, nothing beyond files already on disk
 — so the failure mode can be inspected BEFORE picking a fix (a rescoring
 prompt change, a different scale, temperature, etc. — see docs/
-stage1_judge_improvements.md's judge-improvements plan, which this
+stage0_judge_improvements.md's judge-improvements plan, which this
 script's findings are meant to inform, not preempt).
 
 Two independent signals, both worth checking (they can disagree — see
@@ -65,6 +65,7 @@ import argparse
 import json
 from collections import defaultdict
 
+from src.common.bootstrap import point_biserial as _point_biserial
 from src.common.io import load_jsonl
 from src.common.metrics import contains_match
 from src.common.vision_eval import safe_model_name, load_ckpt
@@ -81,27 +82,6 @@ def _score_to_letter(score: float) -> str:
     idx = round(_LETTER_MAX - value)  # A(=20) -> 0, T(=1) -> 19
     idx = max(0, min(19, idx))
     return chr(65 + idx)
-
-
-def _point_biserial(scores: list[float], binary: list[int]) -> float | None:
-    """Correlation between a continuous score and a 0/1 outcome. Returns
-    None if either side has zero variance (undefined) or too few points."""
-    if len(scores) < 2:
-        return None
-    try:
-        from scipy.stats import pointbiserialr
-        r, _p = pointbiserialr(binary, scores)
-        return None if r != r else float(r)  # NaN check without numpy import
-    except ImportError:
-        n = len(scores)
-        mean_s = sum(scores) / n
-        mean_b = sum(binary) / n
-        cov = sum((s - mean_s) * (b - mean_b) for s, b in zip(scores, binary)) / n
-        var_s = sum((s - mean_s) ** 2 for s in scores) / n
-        var_b = sum((b - mean_b) ** 2 for b in binary) / n
-        if var_s == 0 or var_b == 0:
-            return None
-        return cov / (var_s ** 0.5 * var_b ** 0.5)
 
 
 def _threshold_curve(scores: list[float], correct: list[int], n_thresholds: int = 25) -> tuple[list[float], list[float | None], list[int]]:

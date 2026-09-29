@@ -56,6 +56,31 @@ def bootstrap_diff_ci(
     return (float(lo), float(hi))
 
 
+def point_biserial(scores: list[float], binary: list[int]) -> float | None:
+    """Correlation between a continuous score and a 0/1 outcome (e.g. a
+    verifier's own confidence score vs. judged correctness) — shared by
+    verifier_score_analysis.py (PPT tournament win_rate) and verifier_cot.py's
+    --verifier_type simple mode (summed/normalized per-criterion grade).
+    Returns None if either side has zero variance (undefined) or fewer than
+    2 points."""
+    if len(scores) < 2:
+        return None
+    try:
+        from scipy.stats import pointbiserialr
+        r, _p = pointbiserialr(binary, scores)
+        return None if r != r else float(r)  # NaN check without a numpy import
+    except ImportError:
+        n = len(scores)
+        mean_s = sum(scores) / n
+        mean_b = sum(binary) / n
+        cov = sum((s - mean_s) * (b - mean_b) for s, b in zip(scores, binary)) / n
+        var_s = sum((s - mean_s) ** 2 for s in scores) / n
+        var_b = sum((b - mean_b) ** 2 for b in binary) / n
+        if var_s == 0 or var_b == 0:
+            return None
+        return cov / (var_s ** 0.5 * var_b ** 0.5)
+
+
 def ci_to_yerr(value: float, ci: tuple[float, float]) -> tuple[float, float]:
     """(lo, hi) -> (lower_err, upper_err) relative to `value`, for
     matplotlib's yerr=[[lower_errs], [upper_errs]] convention. Clips at 0 —

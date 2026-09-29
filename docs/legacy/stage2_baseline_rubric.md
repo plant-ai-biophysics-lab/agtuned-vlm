@@ -1,6 +1,19 @@
-# Paper 2, Stage 2 — Baseline with Rubric
+# [RETIRED] Paper 2, Stage 2 — Baseline with Rubric
 
-[← Back to README](../README.md)
+[← Back to README](../../README.md)
+
+Retired 2026-09 — this dedicated stage was removed from the active
+pipeline; the "rubric" idea lives on as `vision-baseline --rubric` (still
+a working flag, just not its own numbered stage) and, more centrally, as
+`verifier-cot`'s own rubric-shaped generation step
+(`docs/stage3_verifier_grade.md`, the current Paper 2 Stage 3). Preserved
+here for the Step 3 verifier-fix findings (sum-not-max scoring, rewritten
+pairwise prompt) and historical context. Current stage numbering:
+`docs/stage0_judge_improvements.md` (0), `docs/stage1_baseline_classification.md`
+(1), `docs/stage2_object_detection.md` (2), `docs/stage3_verifier_grade.md`
+(3), `docs/stage4_react_baseline.md` (4).
+
+---
 
 An additional baseline, not a replacement for Stage 1's plain
 thinking-enabled checkpoint — same single-shot pipeline (`vision-baseline`),
@@ -113,9 +126,15 @@ results are directly comparable:
   still exists for a deliberately smaller/cheaper run — pass `--manifest`
   explicitly to opt into it.
 
+`--verifier_type ppt` is required explicitly now — `verifier-cot`'s default
+flipped to `simple` (Paper 2 Stage 3, [docs/stage3_verifier_grade.md](stage3_verifier_grade.md)),
+a cheaper single-trajectory per-criterion grading mode with no K-candidate
+pool/tournament at all, unrelated to the PPT-fix diagnosis this step runs.
+
 ```bash
 uv run python main.py verifier-cot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type ppt \
     --match_images_from outputs_final/vision_baseline_rubric_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
     --k_candidates 5 --k_pivots 3 --temperature 1.0 \
     --enable_thinking --gen_max_tokens 4096 \

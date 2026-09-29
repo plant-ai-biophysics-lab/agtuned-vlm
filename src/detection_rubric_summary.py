@@ -1,8 +1,9 @@
-"""Stage 2.5-report — Detection-Baseline vs. Detection-Baseline-with-Rubric
+"""Paper 2 Stage 2-report — Detection-Baseline vs. Detection-Baseline-with-Rubric
 comparison (no GPU, no model).
 
-Same idea as vision_baseline.py's own "Baseline with rubric" ablation
-(docs/stage2_baseline_rubric.md), applied to the spatial task: does
+Same idea as vision_baseline.py's own "Baseline with rubric" (--rubric) and
+verifier_cot.py's rubric-shaped generation step (docs/stage3_verifier_grade.md),
+applied to the spatial task: does
 answering a fill-in-the-blank localization checklist (object/class,
 location, occlusion, size — src/config/verifier_prompts_detection.yaml's
 structured_templates["object_detection"], see detection_baseline.py's

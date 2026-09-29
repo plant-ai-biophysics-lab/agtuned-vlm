@@ -1,20 +1,29 @@
 """
-Stage 4 — Verifier-CoT: single-round K-candidate + PPT-tournament verifier
-(our contribution), per docs/stage4_verifier.md.
+Verifier-CoT — two interchangeable verifier mechanisms over the same
+structured, criteria-based candidate generation (vprompts["structured_templates"],
+filled with the task's rubric), selected via --verifier_type:
 
-Per image: generate K candidates from a structured, criteria-based
-template (vprompts["structured_templates"], filled with the task's
-rubric), then run the FULL Probabilistic Pivot Tournament from the paper
-(arXiv:2607.05391 Section 3.2 — ring pass, pivot selection, pivot rounds,
-via llm_verifier.pivot_tournament, UNMODIFIED, the same library
-src/verifier_lmv.py uses) exactly once over that one pool of K
-candidates. Every scheduled pair is scored via the PPT paper's own
-dual-trajectory logprob mechanism (src/common/ppt_scoring.py — the exact
-same scoring the full-tournament baseline uses), aggregated into
-Bradley-Terry win-mass to rank the pool. The reported prediction is
-simply argmax(win_rate) over that single tournament pass — no incumbent
-carried across rounds, no persistent per-answer clusters, no stopping
-rule; there is only one round.
+- **simple** (default, Paper 2 Stage 3, see docs/stage3_verifier_grade.md) —
+  generate exactly ONE trajectory (no K-candidate pool), then grade it
+  against EACH numbered rubric criterion independently on a 1-3 scale
+  (vprompts["grading_prompt"], run_group_simple), summed and normalized to
+  [0, 1] as verifier_score. No tournament, no pairwise duel — a
+  deliberately cheaper, coarser signal, testing whether it still
+  correlates with correctness enough to be useful as a stopping/feedback
+  gate (e.g. in the ReAct setup, docs/stage4_react_baseline.md).
+- **ppt** (Paper 1 Stage 4, see docs/stage4_verifier.md, our contribution)
+  — generate K candidates from the same structured template, then run the
+  FULL Probabilistic Pivot Tournament from the paper (arXiv:2607.05391
+  Section 3.2 — ring pass, pivot selection, pivot rounds, via
+  llm_verifier.pivot_tournament, UNMODIFIED, the same library
+  src/verifier_lmv.py uses) exactly once over that one pool of K
+  candidates. Every scheduled pair is scored via the PPT paper's own
+  dual-trajectory logprob mechanism (src/common/ppt_scoring.py — the exact
+  same scoring the full-tournament baseline uses), aggregated into
+  Bradley-Terry win-mass to rank the pool. The reported prediction is
+  simply argmax(win_rate) over that single tournament pass — no incumbent
+  carried across rounds, no persistent per-answer clusters, no stopping
+  rule; there is only one round.
 
 This is a deliberate simplification (2026-08-23) from an earlier
 multi-round design that carried a persistent per-trajectory net score
@@ -38,6 +47,7 @@ verifier-specific extras — see VERIFIER_EXTRA_FIELDS):
 
 Usage:
     uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it
+    uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --verifier_type ppt
 
 Collate after all models have run:
     uv run python main.py verifier-cot --collate
@@ -57,6 +67,7 @@ from collections import Counter, defaultdict
 
 from PIL import Image as PILImage
 
+from src.common.bootstrap import point_biserial
 from src.common.chat_prompt import render_chat_template
 from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
@@ -67,11 +78,12 @@ from src.common.metrics import (
     contains_match, extract_answer_tag, extract_channel_thought, resolve_class, rouge_scores_per_sample,
     sample_class_images,
 )
-from src.common.ppt_scoring import score_prefill_params
+from src.common.ppt_scoring import _truncate_keep_answer, score_prefill_params
 from src.common.ppt_orchestration import (
     PairScoreResult, run_ppt_tournament, score_pairs_batch as _shared_score_pairs_batch,
 )
 from src.common.progress import ProgressBar
+from src.vision_baseline import VISION_BASELINE_CKPT_FIELDS
 
 try:
     from llm_verifier.pivot_tournament import DEFAULT_PIVOTS
@@ -105,9 +117,15 @@ _CONFIDENCE_MARKERS_RE = re.compile(
 _VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.yaml"
 
 # Extra columns inserted right after image_name — same convention as
-# every other CKPT_FIELDS-based stage's own extras.
+# every other CKPT_FIELDS-based stage's own extras. pool_size/n_comparisons/
+# top1_win_rate/verifier_feedback are --verifier_type ppt's own fields
+# (blank for simple rows); verifier_score/criterion_scores are --verifier_type
+# simple's own fields (blank for ppt rows) — one shared checkpoint schema so
+# both modes' output can sit in the same directory/collation tooling.
 VERIFIER_EXTRA_FIELDS = [
+    "verifier_type",
     "pool_size", "n_comparisons", "top1_win_rate", "verifier_feedback",
+    "verifier_score", "criterion_scores",
     "prompt_tokens", "completion_tokens", "elapsed_s", "avg_time_per_sample_s",
 ]
 VERIFIER_CKPT_FIELDS = (
@@ -131,14 +149,26 @@ def _sys_msg(prompts: dict) -> list[dict]:
 
 
 def _cls_question(task_type: str, crop_val, prompts: dict) -> str:
+    """The BARE question only — deliberately NOT wrapped through
+    prompts["assessment_classification"] (unlike vision_baseline.py's own
+    cls_question, which needs that wrapper since it's the model's only
+    instruction). This text is embedded as {question} inside both
+    structured_templates (the generation prompt — already supplies its own
+    complete "fill in each field, THEN answer" instructions and <answer>
+    tag convention) and pairwise_prompt/grading_prompt's "Task: {question}"
+    line. Wrapping it through assessment_classification used to prepend a
+    contradictory "Answer the following question in one to two
+    sentences... Answer:" cue immediately before structured_templates'
+    OWN instructions continued — a real, confusing double-instruction bug
+    (the model is primed to answer right at that first "Answer:", then the
+    prompt keeps going with unrelated fill-in-the-blank fields) fixed here
+    by never wrapping cls_q at all."""
     crop = crop_display(crop_val)
     if task_type in DISEASE_TASK_TYPES:
-        inner = prompts["visual_classification_disease"].format(crop=crop)
+        return prompts["visual_classification_disease"].format(crop=crop)
     elif task_type == "quality_identification":
-        inner = prompts["visual_classification_quality"].format(crop=crop)
-    else:
-        inner = prompts["visual_classification_weed"]
-    return prompts["assessment_classification"].format(question=inner)
+        return prompts["visual_classification_quality"].format(crop=crop)
+    return prompts["visual_classification_weed"]
 
 
 def _clean(text: str) -> str:
@@ -240,6 +270,30 @@ def _load_reference_images(path: Path) -> dict[tuple[str, str], list[str]]:
     return out
 
 
+def _load_ckpt_trajectories(path: Path) -> dict[tuple[str, str, str], str]:
+    """--from_ckpt (--verifier_type simple only): read an existing
+    vision_baseline.py checkpoint (optionally --rubric — same schema either
+    way, VISION_BASELINE_CKPT_FIELDS) and return {(agml_dataset,
+    class_label, image_name): trajectory_text}, so run_model can grade
+    those ALREADY-GENERATED trajectories directly instead of this stage
+    generating its own — same idea as --match_images_from (guaranteed
+    overlap with an existing run) but skipping generation entirely, not
+    just image selection. Prefers `raw_response` (the untouched generation
+    text, what vision_baseline.py's own --rubric run actually filled in);
+    falls back to `prediction` for an older checkpoint predating that
+    column, or a plain (non-rubric) vision-baseline run where the two are
+    closer to identical anyway. A row with neither populated is skipped."""
+    rows, _ = load_ckpt(path, fields=VISION_BASELINE_CKPT_FIELDS)
+    out: dict[tuple[str, str, str], str] = {}
+    for r in rows:
+        traj = r.get("raw_response") or r.get("prediction") or ""
+        if not traj:
+            continue
+        key = (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
+        out[key] = traj
+    return out
+
+
 def _build_groups(
     args: argparse.Namespace, manifest: dict, dataset_filter: set[str] | None = None,
     reference_images: dict[tuple[str, str], list[str]] | None = None,
@@ -307,6 +361,171 @@ def _sample_random_classes_per_task(groups: list, n_per_task: int, seed: int) ->
         rng.shuffle(task_groups)
         selected.extend(task_groups[:n_per_task])
     return selected
+
+
+_CRITERION_LINE_RE = re.compile(r"^\s*\d+\.", re.MULTILINE)
+_CRITERION_TAG_RE = re.compile(r"<criterion_(\d+)>\s*([123])\s*</criterion_\1>")
+
+
+def _count_rubric_criteria(rubric: str) -> int:
+    """Number of numbered lines in a vprompts["rubrics"] entry (e.g. 6 for
+    disease_pest, 4 for species_identification) — the grading prompt asks
+    for exactly this many <criterion_N> tags back."""
+    return len(_CRITERION_LINE_RE.findall(rubric))
+
+
+def _parse_criterion_scores(text: str, n_expected: int) -> dict[int, int]:
+    """Parse <criterion_N>SCORE</criterion_N> tags out of a grading call's
+    raw output. Only tags with N in [1, n_expected] and SCORE in {1,2,3} are
+    kept (a stray/duplicate/out-of-range tag is dropped rather than
+    corrupting the sum) — a model that skips or mangles a tag just leaves
+    that criterion out of the returned dict, handled by
+    _normalize_criterion_scores below."""
+    scores: dict[int, int] = {}
+    for n_str, score_str in _CRITERION_TAG_RE.findall(text):
+        n = int(n_str)
+        if 1 <= n <= n_expected:
+            scores[n] = int(score_str)
+    return scores
+
+
+def _normalize_criterion_scores(scores: dict[int, int], n_expected: int) -> float:
+    """Sum every criterion 1..n_expected (a criterion the grading call
+    failed to tag is conservatively scored 1 — "not satisfied" — rather
+    than excluded, so a partially-parsed grading response can't inflate
+    verifier_score by shrinking its own denominator), normalized to [0, 1]
+    by the maximum possible sum (3 * n_expected)."""
+    if n_expected <= 0:
+        return 0.0
+    total = sum(scores.get(i, 1) for i in range(1, n_expected + 1))
+    return total / (3 * n_expected)
+
+
+def run_group_simple(
+    llm, tokenizer, images: list, cls_q: str, gen_template: str, rubric: str, prompts: dict, vprompts: dict,
+    gen_temperature: float, rng: random.Random,
+    agml_dataset: str, class_label: str, image_names: list[str],
+    log_path: Path | None = None, call_stats: dict | None = None,
+    seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
+    chat_template: str | None = None, grading_max_tokens: int = 300,
+    existing_trajectories: dict[str, str] | None = None,
+) -> list[dict]:
+    """--verifier_type simple (Paper 2 Stage 3, docs/stage3_verifier_grade.md):
+    ONE trajectory per image (no K-candidate pool, no PPT tournament) via
+    the same structured fill-in-the-blank template run_group's ppt mode
+    uses, then a single text-only grading call that scores the trajectory
+    against EACH numbered rubric criterion independently on a 1-3 scale
+    (vprompts["grading_prompt"]), summed/normalized to verifier_score in
+    [0, 1]. Returns one result dict per image, same key shape as run_group
+    (prediction/reasoning/pool_size/n_comparisons/top1_win_rate/
+    verifier_feedback/prompt_tokens/completion_tokens/elapsed_s/
+    avg_time_per_sample_s) plus verifier_score/criterion_scores, so both
+    modes write through the same _result_row.
+
+    existing_trajectories (--from_ckpt): {image_name: trajectory_text}, one
+    entry per name in image_names (run_model filters each group down to
+    this before calling, see _load_ckpt_trajectories) — when given, the
+    generation call above is skipped entirely and these are graded as-is,
+    saving one full generation pass per image (the whole point of
+    --from_ckpt: grade an existing vision-baseline/--rubric run's own
+    output instead of regenerating it here)."""
+    t_start = time.perf_counter()
+    n = len(images)
+    active = list(range(n))
+
+    if existing_trajectories is not None:
+        trajectories = {i: existing_trajectories[image_names[i]] for i in active}
+        prompt_tokens = {i: 0 for i in active}
+        completion_tokens = {i: 0 for i in active}
+        for i in active:
+            extracted, _ = extract_answer_tag(trajectories[i])
+            _log_verifier_call(
+                log_path, agml_dataset=agml_dataset, class_label=class_label,
+                image_name=image_names[i], call_type="candidate_reused",
+                raw_text=trajectories[i], extracted_answer=extracted,
+                prompt_tokens=0, completion_tokens=0,
+            )
+    else:
+        gen_q = gen_template.format(question=cls_q)
+        hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": gen_q},
+        ]}] for _ in range(n)]
+
+        gen_params = SamplingParams(
+            temperature=gen_temperature, max_tokens=gen_max_tokens,
+            repetition_penalty=1.1, n=1, seed=seed,
+            skip_special_tokens=not enable_thinking,
+        )
+        gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats,
+                               enable_thinking=enable_thinking, chat_template=chat_template)
+        trajectories = {i: gen_out[i][0]["text"] for i in active}
+        prompt_tokens = {i: gen_out[i][0]["prompt_tokens"] for i in active}
+        completion_tokens = {i: gen_out[i][0]["completion_tokens"] for i in active}
+
+        for i in active:
+            extracted, _ = extract_answer_tag(trajectories[i])
+            _log_verifier_call(
+                log_path, agml_dataset=agml_dataset, class_label=class_label,
+                image_name=image_names[i], call_type="candidate",
+                candidate_index=0, raw_text=trajectories[i], extracted_answer=extracted,
+                prompt_tokens=prompt_tokens[i], completion_tokens=completion_tokens[i],
+            )
+
+    # Grading call includes the image alongside the trajectory text — same
+    # convention run_ppt_tournament's own pairwise duel uses (ppt_orchestration.
+    # score_pairs_batch): the trajectory states what it observed, but showing
+    # the image too lets the grader check a citation against the actual
+    # picture rather than just taking the trajectory's own claims at face value.
+    n_criteria = _count_rubric_criteria(rubric)
+    grading_template = vprompts["grading_prompt"]
+    grading_texts = [
+        grading_template.format(rubric=rubric, question=cls_q, trajectory=_truncate_keep_answer(trajectories[i]))
+        for i in active
+    ]
+    grading_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": t},
+    ]}] for t in grading_texts]
+    grading_prompts = [
+        {"prompt": render_chat_template(tokenizer, h, enable_thinking=False), "multi_modal_data": {"image": images[i]}}
+        for i, h in zip(active, grading_hist)
+    ]
+    grading_params = SamplingParams(temperature=0.0, max_tokens=grading_max_tokens, seed=seed)
+    grading_outs = llm.generate(grading_prompts, sampling_params=grading_params)
+    if call_stats is not None:
+        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
+        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(grading_prompts)
+
+    elapsed = time.perf_counter() - t_start
+    avg_time_per_sample_s = elapsed / n if n else 0.0
+
+    results = []
+    for i, out in zip(active, grading_outs):
+        grading_text = _clean(out.outputs[0].text)
+        g_prompt_tokens = len(getattr(out, "prompt_token_ids", None) or [])
+        g_completion_tokens = len(getattr(out.outputs[0], "token_ids", None) or [])
+        criterion_scores = _parse_criterion_scores(grading_text, n_criteria)
+        verifier_score = _normalize_criterion_scores(criterion_scores, n_criteria)
+        _log_verifier_call(
+            log_path, agml_dataset=agml_dataset, class_label=class_label,
+            image_name=image_names[i], call_type="grading",
+            user_prompt=grading_texts[i], analysis=grading_text,
+            criterion_scores=criterion_scores, n_criteria=n_criteria, verifier_score=verifier_score,
+            prompt_tokens=g_prompt_tokens, completion_tokens=g_completion_tokens,
+        )
+        results.append({
+            "prediction": trajectories[i],
+            "reasoning": (f"verifier_score={verifier_score:.3f} "
+                          f"({len(criterion_scores)}/{n_criteria} criteria parsed)"),
+            "pool_size": 1, "n_comparisons": 0, "top1_win_rate": "",
+            "verifier_feedback": grading_text,
+            "verifier_score": round(verifier_score, 4),
+            "criterion_scores": json.dumps(criterion_scores),
+            "prompt_tokens": prompt_tokens[i] + g_prompt_tokens,
+            "completion_tokens": completion_tokens[i] + g_completion_tokens,
+            "elapsed_s": round(elapsed, 3),
+            "avg_time_per_sample_s": round(avg_time_per_sample_s, 3),
+        })
+    return results
 
 
 # ── Single-round tournament ──────────────────────────────────────────────────
@@ -476,7 +695,9 @@ def run_group(
     return results
 
 
-def _result_row(result: dict, ds, clean_label: str, crop_val, task_type: str, name: str, gt_hint: str) -> dict:
+def _result_row(
+    result: dict, ds, clean_label: str, crop_val, task_type: str, name: str, gt_hint: str, verifier_type: str,
+) -> dict:
     resolved = resolve_class(result["prediction"], ds.clean_classes)
     correct = resolved is not None and resolved.lower() == clean_label.lower()
     c_match = contains_match(resolved or result["prediction"], clean_label)
@@ -485,8 +706,10 @@ def _result_row(result: dict, ds, clean_label: str, crop_val, task_type: str, na
         "agml_dataset": ds.agml_name, "class_label": clean_label,
         "task_type": task_type, "crop": crop_display(crop_val),
         "image_name": name,
+        "verifier_type": verifier_type,
         "pool_size": result["pool_size"], "n_comparisons": result["n_comparisons"],
         "top1_win_rate": result["top1_win_rate"], "verifier_feedback": result["verifier_feedback"],
+        "verifier_score": result.get("verifier_score", ""), "criterion_scores": result.get("criterion_scores", ""),
         "prompt_tokens": result["prompt_tokens"], "completion_tokens": result["completion_tokens"],
         "elapsed_s": result["elapsed_s"], "avg_time_per_sample_s": result["avg_time_per_sample_s"],
         "prediction": result["prediction"], "resolved_class": resolved or "",
@@ -585,7 +808,22 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [resume] {len(rows)} row(s) already scored in {ckpt_path.name}")
 
     dataset_filter = set(args.subsample) if args.subsample else None
+    from_ckpt_trajectories: dict[tuple[str, str, str], str] | None = None
+    if args.from_ckpt:
+        from_ckpt_trajectories = _load_ckpt_trajectories(Path(args.from_ckpt))
+        print(f"  [from_ckpt] {len(from_ckpt_trajectories)} trajectory(ies) loaded from {args.from_ckpt} "
+              f"— generation skipped for every matching image, only grading runs")
+
     match_images_from = args.match_images_from
+    if match_images_from is None and args.from_ckpt:
+        # --from_ckpt's own trajectories only help if this run's own image
+        # sampling actually lands on the SAME images they were generated
+        # from — reuse --from_ckpt as the match_images_from source too
+        # (same file, no separate flag to remember) unless the caller
+        # explicitly picked a different one.
+        match_images_from = args.from_ckpt
+        print(f"  [match_images_from] defaulting to --from_ckpt ({match_images_from}) so sampled "
+              f"images actually overlap with the loaded trajectories")
     if match_images_from is None:
         # Auto-detected default: vision_baseline.py's own checkpoint for
         # THIS model — every apples-to-apples comparison in verifier-
@@ -616,7 +854,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [random_classes_per_task={args.random_classes_per_task}, seed={args.seed}] "
               f"{len(all_groups)} (dataset, class) group(s) selected: {dict(by_task_counts)}")
 
-    if args.k_candidates > 1 and args.temperature <= 0:
+    if args.verifier_type == "ppt" and args.k_candidates > 1 and args.temperature <= 0:
         print(f"  [warn] k_candidates={args.k_candidates} with temperature={args.temperature}: "
               f"greedy decoding returns identical samples — raise --temperature above 0 or the "
               f"extra candidates are wasted compute")
@@ -664,7 +902,20 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
         t_start = time.perf_counter()
         pbar = ProgressBar(total=len(groups), desc="Classes")
+        n_from_ckpt_missing = 0
         for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in groups:
+            existing_trajectories = None
+            if from_ckpt_trajectories is not None:
+                existing_trajectories = {
+                    n: from_ckpt_trajectories[(ds.agml_name, clean_label, n)]
+                    for n in names if (ds.agml_name, clean_label, n) in from_ckpt_trajectories
+                }
+                n_from_ckpt_missing += len(names) - len(existing_trajectories)
+                names = [n for n in names if n in existing_trajectories]
+                if not names:
+                    pbar.update()
+                    continue
+
             pbar.desc = f"Classes ({ds.agml_name} / {clean_label})"
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             cls_q = _cls_question(task_type, crop_val, prompts)
@@ -672,22 +923,36 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             rubric = vprompts["rubrics"][rubric_key]
             gen_template = vprompts["structured_templates"][rubric_key]
 
-            results = run_group(
-                llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
-                k_candidates=args.k_candidates, k_pivots=args.k_pivots,
-                gen_temperature=args.temperature, rng=rng,
-                agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
-                log_path=log_path, call_stats=call_stats,
-                seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
-                chat_template=chat_template,
-            )
+            if args.verifier_type == "ppt":
+                results = run_group(
+                    llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
+                    k_candidates=args.k_candidates, k_pivots=args.k_pivots,
+                    gen_temperature=args.temperature, rng=rng,
+                    agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
+                    log_path=log_path, call_stats=call_stats,
+                    seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
+                    chat_template=chat_template,
+                )
+            else:
+                results = run_group_simple(
+                    llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
+                    gen_temperature=args.temperature, rng=rng,
+                    agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
+                    log_path=log_path, call_stats=call_stats,
+                    seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
+                    chat_template=chat_template, existing_trajectories=existing_trajectories,
+                )
 
             for name, result in zip(names, results):
-                row = _result_row(result, ds, clean_label, crop_val, task_type, name, gt_hint)
+                row = _result_row(result, ds, clean_label, crop_val, task_type, name, gt_hint, args.verifier_type)
                 append_ckpt_row(ckpt_path, row, fields=VERIFIER_CKPT_FIELDS)
                 rows.append(row)
             pbar.update()
         pbar.finish()
+        if from_ckpt_trajectories is not None and n_from_ckpt_missing:
+            print(f"  [from_ckpt] {n_from_ckpt_missing} pending image(s) had no matching row in "
+                  f"{args.from_ckpt} — skipped (no trajectory to grade). Check --match_images_from/"
+                  f"--manifest line up with the checkpoint this was loaded from.")
 
         elapsed = time.perf_counter() - t_start
         print(f"\n  Inference time: {elapsed:.1f}s")
@@ -708,6 +973,30 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         return
 
     metrics = compute_model_metrics(rows)
+    if args.verifier_type == "simple":
+        # verifier_score vs. judged correctness (falls back to the
+        # deterministic `correct` column if this checkpoint was never
+        # judged, e.g. --skip_judge) — point-biserial r, the same
+        # signal-check convention verifier-score-analysis runs for the ppt
+        # mode's top1_win_rate. Not a separate stage/script since it's a
+        # handful of numbers, not a chart — see docs/stage3_verifier_grade.md.
+        vs_rows = [r for r in rows if r.get("verifier_score") not in (None, "")]
+        judge_key = "judged_correct" if any(r.get("judged_correct") not in (None, "") for r in vs_rows) else "correct"
+        vs_scored = [r for r in vs_rows if r.get(judge_key) not in (None, "")]
+        if vs_scored:
+            vscores = [float(r["verifier_score"]) for r in vs_scored]
+            vcorrect = [int(r[judge_key]) for r in vs_scored]
+            r_value = point_biserial(vscores, vcorrect)
+            metrics["verifier_score_correlation"] = {
+                "n": len(vs_scored), "against": judge_key, "point_biserial_r": r_value,
+                "mean_verifier_score_correct": (
+                    sum(s for s, c in zip(vscores, vcorrect) if c) / max(sum(vcorrect), 1)),
+                "mean_verifier_score_incorrect": (
+                    sum(s for s, c in zip(vscores, vcorrect) if not c) / max(len(vcorrect) - sum(vcorrect), 1)),
+            }
+            print(f"  verifier_score vs. {judge_key}: point-biserial r={r_value} (n={len(vs_scored)}), "
+                  f"mean correct={metrics['verifier_score_correlation']['mean_verifier_score_correct']:.3f} "
+                  f"vs. incorrect={metrics['verifier_score_correlation']['mean_verifier_score_incorrect']:.3f}")
     (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
@@ -772,6 +1061,11 @@ def main(args: argparse.Namespace) -> None:
         print(f"ERROR: --shard_index must be in [0, {args.num_shards}) — got {args.shard_index}.")
         sys.exit(1)
 
+    if args.from_ckpt and args.verifier_type != "simple":
+        print("ERROR: --from_ckpt only applies to --verifier_type simple (there's no candidate "
+              "generation step to skip in ppt mode's K-candidate pool).")
+        sys.exit(1)
+
     run_model(args.model, args)
 
 
@@ -806,6 +1100,17 @@ if __name__ == "__main__":
                               "(confirmed: only ~64%% overlap between independent 25- and 50-image "
                               "draws from the same seed), so this is the only way to guarantee "
                               "overlap without re-running the larger baseline.")
+    parser.add_argument("--from_ckpt", default=None,
+                         help="--verifier_type simple only. Path to an existing vision_baseline.py "
+                              "checkpoint (plain or --rubric — same schema either way, e.g. "
+                              "outputs_final/vision_baseline_rubric_thinking/<model>/ckpt_<model>.csv) "
+                              "— grade its ALREADY-GENERATED trajectories (raw_response, falling back "
+                              "to prediction) directly instead of this stage generating its own, "
+                              "saving one full generation pass per image. Also defaults "
+                              "--match_images_from to this same path (unless set explicitly), so "
+                              "image sampling actually lands on the images these trajectories came "
+                              "from. A pending image with no matching row in --from_ckpt is skipped "
+                              "(printed at the end of the run), not regenerated.")
     parser.add_argument("--subsample", nargs="+", default=None,
                          help="Restrict to these dataset(s) only (agml_name, space-separated) "
                               "instead of the whole active config — for fast testing. Same "
@@ -831,12 +1136,22 @@ if __name__ == "__main__":
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
+    parser.add_argument("--verifier_type", choices=["simple", "ppt"], default="simple",
+                         help="\"simple\" (default, Paper 2 Stage 3, docs/stage3_verifier_grade.md): "
+                              "ONE trajectory per image, graded against each rubric criterion "
+                              "independently on a 1-3 scale, summed/normalized to verifier_score — "
+                              "no K-candidate pool, no tournament, --k_candidates/--k_pivots ignored. "
+                              "\"ppt\" (Paper 1 Stage 4, docs/stage4_verifier.md): the original "
+                              "K-candidate + PPT-tournament verifier, unchanged — pass this to "
+                              "reproduce any pre-existing verifier-cot workflow (e.g. Paper 2 Stage "
+                              "2's Step 3), which relied on the old ppt-only default.")
     parser.add_argument("--k_candidates", type=int, default=3,
-                         help="Candidates generated per image (K) via temperature sampling — the "
-                              "single tournament pool size.")
+                         help="--verifier_type ppt only: candidates generated per image (K) via "
+                              "temperature sampling — the tournament pool size.")
     parser.add_argument("--k_pivots", type=int, default=DEFAULT_PIVOTS,
-                         help="k — pivot-set size for the full PPT tournament (arXiv:2607.05391 "
-                              "Section 3.2, via llm_verifier.pivot_tournament) that ranks the pool.")
+                         help="--verifier_type ppt only: k — pivot-set size for the full PPT "
+                              "tournament (arXiv:2607.05391 Section 3.2, via "
+                              "llm_verifier.pivot_tournament) that ranks the pool.")
     parser.add_argument("--temperature", type=float, default=1.0,
                          help="Sampling temperature for the K candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "

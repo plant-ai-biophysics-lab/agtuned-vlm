@@ -1,6 +1,20 @@
-# Verifier prompt templates for Stage 4 (verifier-cot) — single-round
-# K-candidate + PPT-tournament verifier, see docs/stage4_verifier.md.
+# Verifier prompt templates for verifier-cot (--verifier_type simple, the
+# default, Paper 2 Stage 3, see docs/stage3_verifier_grade.md; and
+# --verifier_type ppt, the single-round K-candidate + PPT-tournament
+# verifier, see docs/stage4_verifier.md).
 #
+# - grading_prompt — --verifier_type simple's own scoring call: ONE
+#   trajectory (no pool, no pairwise duel), graded against EACH numbered
+#   rubric criterion independently on a 1-3 scale, via
+#   <criterion_N>score</criterion_N> tags (parsed by verifier_cot.py's
+#   _parse_criterion_scores). Summed and normalized to [0, 1] as
+#   verifier_score. This is a deliberately simpler mechanism than
+#   pairwise_prompt below — absolute per-criterion grading of a single
+#   answer instead of a comparative letter-scale judgment between two —
+#   meant to test whether a coarser, cheaper signal (no K-candidate
+#   generation, no tournament) still correlates with correctness enough to
+#   be useful as e.g. a stopping/feedback gate in the ReAct setup
+#   (docs/stage4_react_baseline.md). Params: {rubric} {question} {trajectory}
 # - pairwise_prompt — used by the single-round verifier's PPT tournament
 #   duels (ranking the pool) AND by src/verifier_lmv.py's own PPT baseline — the
 #   dual-trajectory scoring template (arXiv:2607.05391 Section 3.2:
@@ -51,6 +65,34 @@
 # content, same precedent as src/verifier_vision.py's inline
 # _RUBRIC_DISEASE/_RUBRIC_WEED (moved here so they're edit-without-redeploy,
 # same convention as cot_prompts.yaml's step chains).
+#
+# disease_pest criterion 7 (added after a real-run observation, Slack
+# 2026-09): the model was consistently predicting a specific causal pest
+# ("rice stem borer") for images whose ground-truth label was the symptom
+# it causes ("dead heart") — factually related, arguably not even wrong,
+# but a real category slip between "the symptom/condition" and "the
+# specific organism that causes it" that the classification prompt alone
+# (visual_classification_disease, src/config/prompts.yaml) doesn't
+# disambiguate, and datasets themselves aren't consistent about which
+# convention a given ground-truth label uses (sometimes it's the symptom,
+# sometimes the specific disease/pest) — so a rubric criterion can't just
+# require ONE or the other. Deliberately NOT solved by splitting
+# disease/pest_damage into separate rubrics either: visually, a disease and
+# a pest's damage can look identical, so which task_type a class happens
+# to be tagged doesn't reliably tell you which naming convention applies.
+# The actual fix, scoped to the verifier's own grading (not the baseline
+# prompt): don't force a single guess — structured_templates.disease_pest's
+# Diagnosis line now explicitly allows the model to state BOTH the symptom
+# AND its probable cause together (e.g. "Dead heart, likely caused by stem
+# borer") when it has an opinion on both, instead of only ever printing the
+# specific causal guess with the symptom it's based on left unstated. This
+# criterion then checks for exactly that — a causal claim grounded in its
+# own supporting symptom, not a bare guess. Since verifier-cot's
+# --verifier_type simple grading and --verifier_type ppt's pairwise
+# comparison both read this same {rubric} text, this applies to both
+# without any code change — only --verifier_type simple's metrics.json
+# verifier_score_correlation (docs/stage3_verifier_grade.md) will show
+# whether it actually moves anything.
 
 rubrics:
   disease_pest: |
@@ -60,6 +102,7 @@ rubrics:
     4. If pest-related, does it account for visible pest signs (webbing, frass, eggs, insect bodies)?
     5. Does it reflect whether the damage is systemic/uniform or isolated/localized?
     6. Is the stated condition (disease name, pest, or stress type) visually consistent with the image?
+    7. If it names a specific causal pest or disease, does it also name (in the Diagnosis line or the answer itself) the visible symptom/damage pattern that diagnosis is based on — rather than stating only the specific cause with no mention of the symptom it was inferred from? (E.g. "dead heart" is a symptom several rice pests can cause — "dead heart, likely caused by stem borer" grounds the guess; "stem borer" alone does not.) A trajectory that instead states only the symptom/damage pattern, with no specific causal guess at all, still fully satisfies this criterion — this only penalizes a bare, ungrounded causal guess.
   species_identification: &species_identification_rubric |
     1. Does it match the visible leaf arrangement, shape, margins, and venation pattern?
     2. Does it align with the plant's growth habit (erect, prostrate, climbing) and stem characteristics?
@@ -90,9 +133,9 @@ structured_templates:
     Symptom color, shape, and texture:
     Visible pest signs, if any (webbing, frass, eggs, insect bodies — or "none observed"):
     Damage pattern (systemic/uniform across the plant, or isolated/localized):
-    Diagnosis (disease name, pest, or stress type):
+    Diagnosis (disease name, pest, or stress type — if you can identify the specific disease/pest causing what you see, name it; if you're only confident about the symptom/damage pattern itself and not its specific cause, state that instead of guessing; if you're confident about both, state both together, e.g. "Dead heart, likely caused by stem borer" — don't state only a specific causal guess without the symptom it's based on):
 
-    After filling in every line above, restate your Diagnosis line's answer wrapped in <answer></answer> tags (e.g. <answer>Early Blight</answer>) — as briefly and precisely as you can state it, not a full sentence.
+    After filling in every line above, restate your Diagnosis line's answer wrapped in <answer></answer> tags (e.g. <answer>Early Blight</answer>, or <answer>Dead heart, likely caused by stem borer</answer> if stating both a symptom and its probable cause) — as briefly and precisely as you can state it, not a full sentence.
   species_identification: &species_identification_template |
     {question}
 
@@ -125,6 +168,33 @@ task_type_to_rubric:
   species_identification:  species_identification
   weed_identification:     weed_identification
   quality_identification:  quality_identification
+
+# --verifier_type simple's own grading call (verifier_cot.py's
+# run_group_simple). Text-only, no image — the trajectory already states
+# what it observed, same convention pairwise_prompt below uses. One line
+# per numbered rubric criterion is expected back; N in each <criterion_N>
+# tag must match that criterion's own number in {rubric} so
+# _parse_criterion_scores can key off it directly.
+# Params: {rubric} {question} {trajectory}
+grading_prompt: |
+  You are an expert agricultural scientist reviewer grading a single trajectory (there is no second trajectory to compare it against).
+
+  Evaluation Criteria:
+  {rubric}
+
+  Task: {question}
+
+  Trajectory: {trajectory}
+
+  Grade how well the trajectory satisfies EACH numbered criterion above, independently, on this 3-point scale:
+    1 = not satisfied — no supporting evidence cited for this criterion
+    2 = partially satisfied — some supporting evidence cited, but incomplete or unclear
+    3 = fully satisfied — clear, specific supporting evidence cited from the trajectory's own text
+
+  Output exactly one line per numbered criterion above, in this format (N is that criterion's own number, SCORE is 1, 2, or 3):
+  <criterion_N>SCORE</criterion_N>
+
+  Grades:
 
 # The single-round verifier's PPT tournament duels AND src/verifier_lmv.py's PPT
 # baseline. This is the free-generation (pass 1) prompt only — it

@@ -61,10 +61,10 @@ Stages:
                                detection-type datasets already found by catalog-datasets
     migrate-detection-datasets  Stage 5 (prep) — regenerate src/config/detection_datasets.yaml
                                from catalog-detection-datasets' output
-    download-detection-datasets Stage 2.5/5 — download + class-balanced sample detection datasets,
-                               write selection manifest (--output, e.g.
-                               dataset/selected_images_detection_10.json for Stage 2.5's 10/class run;
-                               default dataset/selected_images_detection.json)
+    download-detection-datasets Paper 2 Stage 2 / Paper 1 Stage 5 — download + class-balanced
+                               sample detection datasets, write selection manifest (--output, e.g.
+                               dataset/selected_images_detection_10.json for Paper 2 Stage 2's
+                               10/class run; default dataset/selected_images_detection.json)
     build-reference-db Stage 0  — fetch Wikipedia + live web-search sources per class (run this first)
     data-gen           Stage 0  — synthesize agml_classification.jsonl from build-reference-db's
                                    fetched sources (no vision pass)
@@ -87,7 +87,7 @@ Stages:
                                GPUs) + --merge_shards, --backfill_judge_results + --rechecked_csv (copy a
                                Phase 1-4 template's full-response verdict into this checkpoint's own
                                judged_correct), --compare_templates + --template_rechecked_csv — see
-                               docs/stage1_judge_improvements.md.
+                               docs/stage0_judge_improvements.md.
     desc-aug-v2     Stage 2b — vision upper bound: image + reference description +
                                classification question, same resumable per-model setup
     vision-baseline-collate  Stage 2c — combine vision-baseline + desc-aug-v2 across all
@@ -103,32 +103,41 @@ Stages:
                                output (no GPU needed)
     cot-compare              — win rate / mean gain / mean loss / top-5 gains & losses for
                                desc-aug-v2, self-cot, cot-yaml vs. vision-baseline (no GPU needed)
-    detection-baseline  Stage 2.5 — object detection: image + direct box-localization question,
-                               no intermediate reasoning. Spatial-task analog of vision-baseline
-                               (Stage 2a). Scored via IoU-based precision/recall/F1 against
-                               ground-truth boxes (src/common/bbox_metrics.py), not classification
-                               F1/ROUGE. Pass --rubric to instead answer a fill-in-the-blank
-                               localization checklist (object/class, location, occlusion, size —
-                               same criteria chain detection-verifier's structured generation uses)
-                               before printing boxes, no tournament machinery — use a different
-                               --output_dir than the plain run. See docs/stage2_5_object_detection.md
+    detection-baseline  Paper 2 Stage 2 — object detection: image + direct box-localization
+                               question, no intermediate reasoning. Spatial-task analog of
+                               vision-baseline (Paper 1 Stage 2a). Scored via IoU-based
+                               precision/recall/F1 against ground-truth boxes
+                               (src/common/bbox_metrics.py), not classification F1/ROUGE. Pass
+                               --rubric to instead answer a fill-in-the-blank localization
+                               checklist (object/class, location, occlusion, size — same criteria
+                               chain detection-verifier's structured generation uses) before
+                               printing boxes, no tournament machinery — use a different
+                               --output_dir than the plain run. See docs/stage2_object_detection.md
                                for the full data-prep -> baseline -> rubric -> comparison walkthrough.
     detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the
-                               same ground truth for the same images (Stage 2.5).
-    detection-rubric-summary Stage 2.5-report — bar charts comparing detection-baseline vs.
+                               same ground truth for the same images (Paper 2 Stage 2).
+    detection-rubric-summary Paper 2 Stage 2-report — bar charts comparing detection-baseline vs.
                                detection-baseline --rubric at an equal image budget (mean
                                precision/recall/F1/IoU with 95% CI, per-dataset breakdown, F1 vs.
                                IoU-threshold sweep) — no GPU needed.
-    verifier-cot    Stage 4 — single-round K-candidate + PPT-tournament verifier
-                               (docs/stage4_verifier.md). K candidates generated per image, ranked
+    verifier-cot    --verifier_type simple (default, Paper 2 Stage 3, docs/stage3_verifier_grade.md):
+                               ONE trajectory per image, graded against each rubric criterion
+                               independently on a 1-3 scale, summed/normalized to verifier_score in
+                               [0, 1] — no K-candidate pool, no tournament. Reports a point-biserial
+                               correlation between verifier_score and judged correctness in
+                               metrics.json, to see whether this cheaper signal is usable as a
+                               filter/gate before adopting it elsewhere (e.g. react-baseline).
+                               --verifier_type ppt (Paper 1 Stage 4, docs/stage4_verifier.md, our
+                               contribution): the original single-round K-candidate +
+                               PPT-tournament verifier — K candidates generated per image, ranked
                                once by the Probabilistic Pivot Tournament, argmax(win_rate) reported.
-                               --k_candidates/--k_pivots are the main tunables. Compared against
-                               src/verifier_lmv.py's full PPT tournament (run separately, not wired
-                               into main.py — see its own --help) in `cot-compare`. --num_shards/
-                               --shard_index (data-parallel across GPUs, same convention as
-                               vision-baseline) + --merge_shards.
+                               --k_candidates/--k_pivots are the main tunables (ppt only). Compared
+                               against src/verifier_lmv.py's full PPT tournament (run separately,
+                               not wired into main.py — see its own --help) in `cot-compare`.
+                               --num_shards/--shard_index (data-parallel across GPUs, same
+                               convention as vision-baseline) + --merge_shards work with either mode.
     verifier-score-analysis   — diagnostic (no GPU needed): re-derives the paper's Appendix C
                                Figure 8/9 checks (score distribution + retained-set accuracy vs.
                                threshold, nearest-letter histogram) from an existing verifier-cot
@@ -157,7 +166,7 @@ Stages:
                                template — see judge-template-sensitivity), --limit, --judge_model
                                (default RedHatAI/gemma-4-31B-it-FP8-dynamic),
                                --judge_enable_thinking/--judge_max_tokens/--judge_chat_template_path
-                               (off/unset by default — see docs/stage1_judge_improvements.md).
+                               (off/unset by default — see docs/stage0_judge_improvements.md).
                                Writes leniency_gap_T<temp>.png,
                                leniency_gap_by_temperature.png, disagreement_matrix_T<temp>.png
                                (the full-response/resolved-class 2x2 breakdown — raw counts in
@@ -224,7 +233,7 @@ Stages:
                                (default dataset/judge_qa_review/judge_qa_review.csv — dataset/, not
                                outputs_final/, so it's git-tracked for reproducibility).
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
-    react-build-tasks  Stage 3 (Paper 2/3) — builds a PERSISTED --tasks_jsonl file for
+    react-build-tasks  Stage 4 (Paper 2/4) — builds a PERSISTED --tasks_jsonl file for
                                react-baseline (below) from REAL AgML images: same
                                active_datasets/load_hf_samples/sample_class_images sampling AND the
                                same cls_question() prompt text vision_baseline.py itself uses (pass
@@ -237,8 +246,8 @@ Stages:
                                react-baseline's own --sample_images does the same sampling
                                IN-MEMORY (no file) for a one-off run — use this script instead when
                                you want the task list reviewable/reusable across multiple runs. See
-                               docs/stage3_react_baseline.md.
-    react-baseline  Stage 3 (Paper 2/3) — a tool-using ReAct agent (src/baselines/) over a
+                               docs/stage4_react_baseline.md.
+    react-baseline  Stage 4 (Paper 2/4) — a tool-using ReAct agent (src/baselines/) over a
                                locally-served vLLM model's own native tool calling (same
                                load_llm/render_chat_template machinery as every other script here,
                                NOT a hosted API) — read/glob/grep/write (write sandboxed per
@@ -258,7 +267,7 @@ Stages:
                                elapsed_seconds; browse with `streamlit run
                                app/react_baseline_viewer.py`. Defaults in
                                src/config/react_baseline_config.yaml — see
-                               docs/stage3_react_baseline.md.
+                               docs/stage4_react_baseline.md.
 
 Examples:
     python main.py probe \\

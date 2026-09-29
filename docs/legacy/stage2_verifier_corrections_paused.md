@@ -1,16 +1,18 @@
 # [PAUSED] Paper 2, Stage 2 — Verifier Corrections
 
-Paused 2026-09 — real diagnosis (see `docs/stage2_baseline_rubric.md`'s
-predecessor slot in the README) found `top1_win_rate` unusable as a
-confidence/filtering threshold at the tested config (`--k_candidates 3
---k_pivots 2`): near-ceiling raw pair-level scores get compressed and
-sign-flipped by the Bradley-Terry aggregation (a real, load-bearing
-finding — see the verifier-score-analysis conversation history), and ~41%
-of tournament pools collapsed to identical candidates (temperature=1.0
-sampling converging), leaving nothing for the tournament to discriminate
-between. Paper 2's Stage 2 slot now covers the "Baseline with rubric"
-work instead (`docs/stage2_baseline_rubric.md`) — this doc and all the
-code it describes (`verifier-score-analysis`, the granularity logging in
+Paused 2026-09 — real diagnosis (see `docs/legacy/stage2_baseline_rubric.md`'s
+predecessor slot in the README, since retired — its content was absorbed
+into `verifier-cot`'s own generation step, `docs/stage3_verifier_grade.md`)
+found `top1_win_rate` unusable as a confidence/filtering threshold at the
+tested config (`--k_candidates 3 --k_pivots 2`): near-ceiling raw
+pair-level scores get compressed and sign-flipped by the Bradley-Terry
+aggregation (a real, load-bearing finding — see the
+verifier-score-analysis conversation history), and ~41% of tournament
+pools collapsed to identical candidates (temperature=1.0 sampling
+converging), leaving nothing for the tournament to discriminate between.
+Paper 2's Stage 2 slot (at the time) covered the "Baseline with rubric"
+work instead — this doc and all the code it describes
+(`verifier-score-analysis`, the granularity logging in
 `verifier_cot.py`/`ppt_scoring.py`/`ppt_orchestration.py`) still exist and
 still work, just not the active line of work right now.
 
@@ -23,8 +25,8 @@ fine-grained-reward letter score (`src/common/ppt_scoring.py`, A–T scale) is
 both **under-varied** (92%/80% of scored letters land in A–C, regardless of
 model) and **inverted** in the specific sense that matters for filtering:
 retained-set accuracy *declines*, not rises, as the win-rate acceptance
-threshold is raised. Stage 1 (`stage1_judge_improvements.md`) fixed judge
-leniency/consistency on plain classification predictions; Stage 2 targets
+threshold is raised. Stage 1 (at the time — now `docs/stage0_judge_improvements.md`)
+fixed judge leniency/consistency on plain classification predictions; Stage 2 targets
 this separate, upstream problem in the verifier (`verifier-cot`) itself —
 diagnose before prescribing, same principle as Stage 1's Phase 1/2.
 

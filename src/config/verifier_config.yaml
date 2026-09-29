@@ -1,8 +1,12 @@
-# Stage 4 (verifier_cot.py) defaults — edit these directly instead of
-# remembering CLI flags. Loaded automatically (default --verifier_config
-# path is this file). Any flag you DO pass on the command line still
-# overrides whatever is set here — see docs/stage4_verifier.md for what
-# each of these actually controls.
+# verifier_cot.py defaults — edit these directly instead of remembering CLI
+# flags. Loaded automatically (default --verifier_config path is this
+# file). Any flag you DO pass on the command line still overrides whatever
+# is set here. Shared by both --verifier_type simple (Paper 2 Stage 3,
+# docs/stage3_verifier_grade.md, the default) and --verifier_type ppt
+# (Paper 1 Stage 4, docs/stage4_verifier.md) — the "Single-round K-candidate
+# + PPT-tournament hyperparameters" section below (k_candidates/k_pivots)
+# only takes effect in ppt mode; simple mode always generates one
+# trajectory and ignores them.
 #
 # You run this per model (--model overrides "model" below).
 

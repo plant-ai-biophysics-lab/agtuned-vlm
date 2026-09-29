@@ -16,11 +16,11 @@ job can resume exactly where it left off:
   <output_dir>/<safe_model_name>/ckpt_<safe_model_name>.csv
   <output_dir>/<safe_model_name>/metrics.json
 
---rubric (Stage 2.5, docs/stage2_5_object_detection.md): same single-shot
+--rubric (Paper 2 Stage 2, docs/stage2_object_detection.md): same single-shot
 script, wraps the question through detection_verifier.py's own
 fill-in-the-blank localization checklist (object/class, location,
 occlusion, size) before the model prints boxes — no tournament/verifier
-machinery. Spatial-task analog of vision_baseline.py's --rubric (Stage 2).
+machinery. Spatial-task analog of vision_baseline.py's --rubric.
 Compared against the plain run at an equal image budget via
 src/detection_rubric_summary.py.
 

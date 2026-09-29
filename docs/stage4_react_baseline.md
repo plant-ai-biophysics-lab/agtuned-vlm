@@ -1,4 +1,4 @@
-# Paper 2, Stage 3 — ReAct Baseline
+# Paper 2, Stage 4 — ReAct Baseline
 
 [← Back to README](../README.md)
 
@@ -18,9 +18,10 @@ classification question the exact same way `vision_baseline.py` does
 (`active_datasets`/`load_hf_samples`/`sample_class_images`/`cls_question`)
 — a `react-baseline` run is scoring the same task on the same images, not a
 different one. Pass `--rubric` to instead use the same fill-in-the-blank
-criteria chain `vision-baseline --rubric` (Stage 2) and `verifier-cot`'s
-own k-candidate generation always use, if that's the comparison you want
-instead.
+criteria chain `vision-baseline --rubric` and `verifier-cot`'s own
+candidate generation (Stage 3, `--verifier_type simple` by default, or
+Paper 1 Stage 4's `--verifier_type ppt`) always use, if that's the
+comparison you want instead.
 
 ## Step 0 — smoke test (3 examples, text-only, no GPU-hungry image step)
 
@@ -62,24 +63,13 @@ gets loaded and attached (`react_agent.py`'s `image` param), so the model
 actually sees the image this time, not just the question text:
 
 ```bash
-uv run python main.py react-baseline --sample_images --n_samples 3
+uv run python main.py react-baseline --sample_images
 ```
 
-Add `--rubric` to compare against "Baseline with rubric" (Stage 2) /
-`verifier-cot` instead of plain `vision-baseline`:
-
-```bash
-uv run python main.py react-baseline --sample_images --n_samples 3 --rubric
-```
-
-For a true apples-to-apples comparison against an existing
-`vision-baseline` run (same exact images, not just the same sampling
-*procedure*), add `--match_images_from`:
-
-```bash
-uv run python main.py react-baseline --sample_images --n_samples 3 \
-    --match_images_from outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
-```
+Add `--rubric` to compare against `vision-baseline --rubric`/`verifier-cot`
+instead of plain `vision-baseline`. For a true apples-to-apples comparison
+against an existing `vision-baseline` run (same exact images, not just the
+same sampling *procedure*), add `--match_images_from <that checkpoint>`.
 
 Prefer a **persisted, reviewable** task list instead (e.g. before spending
 GPU time on a full 10/class run, or to reuse the exact same task list across
@@ -89,8 +79,8 @@ immediately — same flags (`--rubric`, `--match_images_from`, `--n_samples`,
 ...), see its own `--help`:
 
 ```bash
-uv run python main.py react-build-tasks --n_samples 3 --output outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
-uv run python main.py react-baseline --tasks_jsonl outputs_final/react_baseline/tasks/react_tasks_smoke3.jsonl
+uv run python main.py react-build-tasks --output outputs_final/react_baseline/tasks/react_tasks.jsonl
+uv run python main.py react-baseline --tasks_jsonl outputs_final/react_baseline/tasks/react_tasks.jsonl
 ```
 
 ## Step 2 — view the results
@@ -138,3 +128,19 @@ call) is visible straight from the checkpoint without re-reading
   `react-build-tasks`'s output carries `class_label` per row, so this is a
   straightforward next step once you're ready to compare accuracy, not a
   redesign of the images/task-format work above.
+
+## Parameters
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--model` | `RedHatAI/gemma-4-31B-it-FP8-dynamic` | Model to run |
+| `--chat_template_path` | vendored Gemma-4 template | Custom chat template |
+| `--sample_images` / `--tasks_jsonl` / `--task` | — | Which of the three run modes (priority order) |
+| `--n_samples` | `3` | Images per class (`--sample_images`/`react-build-tasks`) |
+| `--rubric` | off | Fill-in-the-blank criteria chain instead of plain question |
+| `--match_images_from` | none | Reference checkpoint for guaranteed image overlap |
+| `--max_iterations` | `20` | Hard cap on Thought/Action/Observation rounds per episode |
+| `--gen_max_tokens` | `1024` | Per-turn generation budget |
+| `--temperature` | `0.0` | Generation temperature |
+| `--output_dir` | `outputs_final/react_baseline/` | Checkpoint output dir |
+| `--rerun` | off | Archive existing checkpoint + regenerate from scratch |

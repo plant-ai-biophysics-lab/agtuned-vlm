@@ -1,5 +1,5 @@
 """
-Paper 2, Stage 1 — Judge QA review export. See docs/stage1_judge_improvements.md's
+Paper 2, Stage 0 — Judge QA review export. See docs/stage0_judge_improvements.md's
 "Judge QA review export" section (docs/legacy/stage2_verifier_corrections_paused.md
 is a different, paused diagnostic — the PPT verifier's own score, not the judge).
 

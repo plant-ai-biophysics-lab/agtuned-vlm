@@ -52,10 +52,41 @@ assessment_classification: "Answer the following question in one to two sentence
 # which already appends its own separate <answer></answer> instruction after
 # the rubric fields — adding a second, earlier <answer> instruction here would
 # make extract_answer_tag's first-match regex grab the wrong (premature) tag.
-assessment_classification_tagged: "Answer the following question. Clearly state your answer (general or scientific name) in your response. Do not include greetings, headers, or bullet points. Then, on a new line, restate just the class name on its own wrapped in <answer></answer> tags — as briefly and precisely as you can state it, not a full sentence.\n\nQuestion: {question}\n\nAnswer:"
+#
+# The leading "briefly state the visual evidence" sentence (added 2026-09)
+# is the fix for a real gap: assessment_system (above) tells every model to
+# ground its conclusion in visual evidence, but for vision_baseline.py this
+# IS the only generation call the model ever makes (self_cot.py/cot_yaml.py
+# have an earlier description/reasoning turn too, but the JUDGE never sees
+# it — apply_judge always reads pred_key="prediction", this turn's own
+# output, never the separate `reasoning` column) — so a system-prompt
+# instruction alone did nothing here: "clearly state your answer" is fully
+# satisfied by one word, and real checkpoints showed exactly that. This
+# line makes the evidence a required part of THIS turn's own response, not
+# just an unenforced system-prompt hint.
+assessment_classification_tagged: "Answer the following question. First, in one to two sentences, state the specific visual evidence supporting your answer (symptom pattern, color, shape, texture, pest signs, growth habit, etc. — whichever apply). Then clearly state your answer (general or scientific name). Do not include greetings, headers, or bullet points. Finally, on a new line, restate just the class name on its own wrapped in <answer></answer> tags — as briefly and precisely as you can state it, not a full sentence.\n\nQuestion: {question}\n\nAnswer:"
 
-# System prompt applied to all models during assessment
-assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."
+# System prompt applied to all models during assessment — shared across
+# every classification/detection stage in this repo (vision_baseline.py,
+# desc_augmented_vision_v2.py, self_cot.py, cot_yaml.py, cot_vision.py,
+# verifier_cot.py's own generation AND grading/pairwise-duel calls,
+# detection_baseline.py, detection_verifier.py — see any of their own
+# `prompts.get("assessment_system", "")` call sites). The second sentence
+# (added 2026-09, generalized from an earlier verifier_cot.py-only version)
+# asks every model, across every stage, to state the specific visual
+# evidence behind its answer rather than a bare conclusion — the point is
+# giving the judge (judge_classification_hybrid_template,
+# DEFAULT_JUDGE_TEMPLATE_KEY, src/common/metrics.py) more to work with:
+# that template already refuses to credit "a plausible CAUSE offered for a
+# generically-described reference class" as a match (e.g. naming a
+# specific pest like "stem borer" for a reference class that's actually
+# the symptom it causes, "dead heart") — but it can only apply that logic
+# to whatever detail is actually IN the response. A model that states both
+# the symptom and its probable cause (e.g. "Dead heart, likely caused by
+# stem borer") gives the judge enough to match whichever convention the
+# reference class actually uses, instead of a bare single-word guess that
+# only matches one of the two.
+assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, weeds, and produce quality. When you answer, briefly ground your conclusion in the specific visual evidence you observed — connect it to what you actually saw (symptom pattern, color, shape, texture, pest signs, growth habit, etc., whichever apply), rather than stating a conclusion on its own. If there's a similar-looking alternative your answer could be confused with, briefly note what rules it out."
 
 # LLM judge prompts
 judge_system_language: "You are an expert agricultural scientist evaluating model answers on agricultural knowledge questions."

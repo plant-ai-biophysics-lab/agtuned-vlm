@@ -65,8 +65,13 @@ verifier — for both classification (`verifier_cot.py`) and object detection
 
 ## Step 1 — run verifier-cot and verifier-lmv
 
+`--verifier_type ppt` is required explicitly — `verifier-cot`'s default is
+now `simple` (Paper 2 Stage 3, a different, cheaper single-trajectory
+verifier, see [docs/stage3_verifier_grade.md](stage3_verifier_grade.md)),
+not this stage's K-candidate + PPT-tournament mechanism.
+
 ```bash
-uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it
+uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --verifier_type ppt
 uv run python src/verifier_lmv.py --model google/gemma-4-26B-A4B-it \
     --output_dir outputs_final/verifier_lmv/
 ```
