@@ -595,12 +595,14 @@ if __name__ == "__main__":
                              "to 0 (falls back to each model's own default).")
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
-    parser.add_argument("--enable_thinking", action="store_true",
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
                          help="Let the model being evaluated use its own extended thinking "
                               "(<think>/<thought> tags) for the classification generation step, instead "
-                              "of suppressing it (this script's default, matching every other generation "
-                              "script in the repo — see src/common/chat_prompt.py's module docstring). "
-                              "Does NOT affect the judge phase's own calls (see judge-leniency's "
+                              "of suppressing it (every other generation script in the repo still "
+                              "suppresses by default — see src/common/chat_prompt.py's module docstring). "
+                              "vision_baseline_config.yaml's own default is True (the pipeline's standard "
+                              "thinking-enabled workflow) — pass --no-enable_thinking to opt out. Does NOT "
+                              "affect the judge phase's own calls (see judge-leniency's "
                               "--judge_enable_thinking for that, a separate flag on a separate call). "
                               "Raise --gen_max_tokens when using this, or thinking traces will routinely "
                               "get truncated before the model reaches its <answer> tag.")

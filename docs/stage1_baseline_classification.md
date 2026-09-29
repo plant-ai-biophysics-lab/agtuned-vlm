@@ -9,12 +9,10 @@ The plain, thinking-enabled single-shot classification checkpoint — no rubric,
 ```bash
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --enable_thinking --gen_max_tokens 4096 \
-    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
     --output_dir outputs_final/vision_baseline_thinking/
 ```
 
-Gemma-4's own bundled chat template has no `enable_thinking` support — `--chat_template_path` is required alongside `--enable_thinking` for it to actually produce a `<|channel>thought...<channel|>` trace (Qwen models don't need this). `--gen_max_tokens 4096` matters: at the default, a real thinking trace routinely truncates before reaching `<answer>`.
+Thinking is **on by default** (`vision_baseline_config.yaml`'s `enable_thinking: true` — the pipeline's standard workflow), along with the matching `gen_max_tokens: 4096` and `chat_template_path` (Gemma-4's own bundled template has no `enable_thinking` support at all, so this is required for it to actually produce a `<|channel>thought...<channel|>` trace). Pass `--no-enable_thinking` to opt out (see "Without thinking" below); for a non-Gemma model (e.g. Qwen, whose bundled template already supports thinking directly), also pass `--chat_template_path ""` to unset the Gemma-4-specific template.
 
 The checkpoint's `raw_response` column holds the fully untouched generation; `reasoning` holds the extracted thinking text; `prediction` — the ONLY column the judge ever reads — is required to include a brief evidence statement before the answer (`assessment_classification_tagged`, `src/config/prompts.yaml`), not just a bare class name.
 
@@ -22,7 +20,7 @@ Judging runs automatically as part of this same command (the pipeline-wide `hybr
 
 ## Without thinking (optional, for a thinking-vs-not comparison)
 
-Drop `--enable_thinking`/`--chat_template_path`/`--gen_max_tokens` — same command otherwise, a different `--output_dir` (e.g. `outputs_final/vision_baseline/`) so the two checkpoints don't collide.
+Add `--no-enable_thinking` — same command otherwise, a different `--output_dir` (e.g. `outputs_final/vision_baseline/`) so the two checkpoints don't collide.
 
 ## What's next
 
@@ -33,13 +31,11 @@ Stage 0 (judge tests), Stage 2 (same idea for detection), Stage 3 (`verifier-cot
 `--num_shards N --shard_index i` partitions the work into N independent single-GPU processes, each generating **and** judging its own shard — real multi-GPU parallelism for both phases, not just generation. Run one process per GPU with its own `--shard_index` (e.g. one array task per GPU on a cluster scheduler):
 
 ```bash
-# 4 GPUs, one process each ($SHARD_INDEX = 0, 1, 2, 3):
+# 4 GPUs, one process each ($SLURM_ARRAY_TASK_ID = 0, 1, 2, 3):
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --enable_thinking --gen_max_tokens 4096 \
-    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
     --output_dir outputs_final/vision_baseline_thinking/ \
-    --num_shards 4 --shard_index $SHARD_INDEX
+    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID
 ```
 
 Each shard writes its own `ckpt_<model>_shard<i>of4.csv` (never the canonical filename) plus its own `judge_log_shard<i>of4.jsonl`, so all 4 can run concurrently with zero write contention. Once every shard finishes, merge them into the canonical checkpoint (single job, after all array tasks complete):
@@ -58,9 +54,9 @@ Don't leave shard files sitting alongside the merged canonical file when pointin
 | Flag | Default | What it does |
 |---|---|---|
 | `--model` | *(config: `google/gemma-4-26B-A4B-it`)* | Model to run |
-| `--enable_thinking` | off | Turn on extended thinking |
-| `--gen_max_tokens` | `256` | Generation budget (raise with thinking on) |
-| `--chat_template_path` | none | Custom chat template (required for Gemma-4 + thinking) |
+| `--enable_thinking` / `--no-enable_thinking` | **on** (config) | Extended thinking — `--no-enable_thinking` to opt out |
+| `--gen_max_tokens` | `4096` (config) | Generation budget (`256` if thinking is off) |
+| `--chat_template_path` | vendored Gemma-4 template (config) | Custom chat template — pass `""` to unset for a non-Gemma model |
 | `--output_dir` | `outputs_final/vision_baseline/` | Checkpoint output dir |
 | `--skip_judge` | off | Skip the judge phase (F1/ROUGE only) |
 | `--num_shards` / `--shard_index` | `1` / `0` | Data-parallel sharding across GPUs |

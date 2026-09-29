@@ -35,6 +35,25 @@ images_root: dataset/images
 # an even faster/cheaper run.
 n_samples: null
 
+# ── Thinking (Paper 2's standard workflow) ──────────────────────────────────
+# On by default — Stage 1's own doc (docs/stage1_baseline_classification.md)
+# treats the thinking-enabled run as the standard checkpoint every later
+# stage builds on. Pass --no-enable_thinking on the command line to opt out
+# (argparse.BooleanOptionalAction — plain --enable_thinking can only ever
+# turn a False default on, never override a True one back off).
+#
+# chat_template_path assumes a Gemma-4-family `model` (its own bundled
+# template has NO enable_thinking support at all — see --enable_thinking's
+# own --help text) — if you override `model` to a Qwen checkpoint, ALSO pass
+# --chat_template_path "" on the command line to unset this (Qwen's bundled
+# template already supports enable_thinking directly; forcing the vendored
+# Gemma-4 template onto a Qwen model would render the wrong prompt format
+# entirely, not just fail to enable thinking).
+enable_thinking: true
+gen_max_tokens: 4096  # a real thinking trace routinely truncates before <answer> at the
+                       # non-thinking default (256) — see --gen_max_tokens's own --help text
+chat_template_path: src/config/tool_chat_template_gemma4.jinja  # Gemma-4 only, see note above
+
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"
 gpu_memory_utilization: 0.9
