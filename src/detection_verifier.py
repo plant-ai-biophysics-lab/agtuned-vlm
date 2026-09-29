@@ -40,7 +40,7 @@ answers the research question, analogous to judge_f1_macro for
 classification.
 
 Usage:
-    uv run python main.py detection-verifier --model google/gemma-4-E4B-it
+    uv run python main.py detection-verifier --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 """
 from __future__ import annotations
 

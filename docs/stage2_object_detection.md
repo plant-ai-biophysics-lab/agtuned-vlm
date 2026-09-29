@@ -23,7 +23,7 @@ Writes the manifest plus per-image annotation sidecars under `dataset/images_det
 
 ```bash
 uv run python main.py detection-baseline \
-    --model google/gemma-4-E4B-it \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --manifest dataset/selected_images_detection_10.json
 ```
 
@@ -31,7 +31,7 @@ uv run python main.py detection-baseline \
 
 ```bash
 uv run python main.py detection-qc-plot \
-    --ckpt outputs_final/detection_baseline/google_gemma-4-E4B-it/ckpt_google_gemma-4-E4B-it.csv
+    --ckpt outputs_final/detection_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
 ```
 
 The only reliable way to catch a bbox-coordinate-alignment bug — run on a handful of images before trusting the checkpoint at scale.

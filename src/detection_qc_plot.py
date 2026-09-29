@@ -14,7 +14,7 @@ BEFORE trusting any run at scale — see docs/stage5_object_detection.md.
 
 Usage:
     uv run python main.py detection-qc-plot \\
-      --ckpt outputs_final/detection_baseline/google_gemma-4-E4B-it/ckpt_google_gemma-4-E4B-it.csv \\
+      --ckpt outputs_final/detection_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \\
       --n_per_dataset 3
 
 Stage 2.5 side-by-side mode — pass --compare_ckpt (a second
@@ -23,8 +23,8 @@ conditions' predictions against the same ground truth, side by side, for
 the same sampled images (only images scored by BOTH checkpoints are
 eligible):
     uv run python main.py detection-qc-plot \\
-      --ckpt outputs_final/detection_baseline/google_gemma-4-E4B-it/ckpt_google_gemma-4-E4B-it.csv \\
-      --compare_ckpt outputs_final/detection_baseline_rubric/google_gemma-4-E4B-it/ckpt_google_gemma-4-E4B-it.csv \\
+      --ckpt outputs_final/detection_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \\
+      --compare_ckpt outputs_final/detection_baseline_rubric/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \\
       --compare_labels Baseline,Rubric --n_per_dataset 3
 """
 from __future__ import annotations

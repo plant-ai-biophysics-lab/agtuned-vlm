@@ -25,8 +25,8 @@ Compared against the plain run at an equal image budget via
 src/detection_rubric_summary.py.
 
 Usage:
-    uv run python main.py detection-baseline --model google/gemma-4-E4B-it
-    uv run python main.py detection-baseline --model google/gemma-4-E4B-it \\
+    uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic
+    uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic \\
         --rubric --output_dir outputs_final/detection_baseline_rubric/
 """
 from __future__ import annotations

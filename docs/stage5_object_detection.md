@@ -111,14 +111,14 @@ echo "=== finished: $n_ok ok, $n_timeout timed out, $n_fail failed out of $TOTAL
 ## Step 3 — baseline inference
 
 ```bash
-uv run python main.py detection-baseline --model google/gemma-4-E4B-it
+uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 ```
 
 ## Step 4 — QC: plot predicted vs. ground-truth boxes
 
 ```bash
 uv run python main.py detection-qc-plot \
-  --ckpt outputs_final/detection_baseline/google_gemma-4-E4B-it/ckpt_google_gemma-4-E4B-it.csv \
+  --ckpt outputs_final/detection_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
   --n_per_dataset 3
 ```
 
@@ -132,7 +132,7 @@ rescale-back fix in `src/common/bbox_parse.py`).
 ## Step 5 — verifier
 
 ```bash
-uv run python main.py detection-verifier --model google/gemma-4-E4B-it
+uv run python main.py detection-verifier --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 ```
 
 Emits one row per image (same single-round shape as `verifier_cot.py`):

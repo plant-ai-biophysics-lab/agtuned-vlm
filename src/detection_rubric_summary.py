@@ -24,7 +24,7 @@ Usage:
     uv run python main.py detection-rubric-summary \\
         --baseline_dir outputs_final/detection_baseline/ \\
         --rubric_dir outputs_final/detection_baseline_rubric/ \\
-        --model google/gemma-4-E4B-it
+        --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--baseline_dir", default="outputs_final/detection_baseline/")
     p.add_argument("--rubric_dir", default="outputs_final/detection_baseline_rubric/")
-    p.add_argument("--model", default="google/gemma-4-E4B-it")
+    p.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
     p.add_argument("--output_dir", default="outputs_final/detection_rubric_summary/")
     p.add_argument("--n_boot", type=int, default=2000)
     p.add_argument("--seed", type=int, default=42)
