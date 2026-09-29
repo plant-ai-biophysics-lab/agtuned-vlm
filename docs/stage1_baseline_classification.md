@@ -9,7 +9,6 @@ The plain, thinking-enabled single-shot classification checkpoint — no rubric,
 ```bash
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --skip_judge \
     --enable_thinking --gen_max_tokens 4096 \
     --chat_template_path src/config/tool_chat_template_gemma4.jinja \
     --output_dir outputs_final/vision_baseline_thinking/
@@ -19,7 +18,7 @@ Gemma-4's own bundled chat template has no `enable_thinking` support — `--chat
 
 The checkpoint's `raw_response` column holds the fully untouched generation; `reasoning` holds the extracted thinking text; `prediction` — the ONLY column the judge ever reads — is required to include a brief evidence statement before the answer (`assessment_classification_tagged`, `src/config/prompts.yaml`), not just a bare class name.
 
-**Splitting across multiple GPUs**: `--num_shards N --shard_index i` partitions the work into N independent single-GPU processes; `--merge_shards` combines them afterward. Don't leave shard files sitting alongside the merged canonical file when pointing Stage 0's tooling at that directory — its `--ckpt` glob matches both and double-judges every row.
+Judging runs automatically as part of this same command (the pipeline-wide `hybrid` template, `DEFAULT_JUDGE_TEMPLATE_KEY`) — pass `--skip_judge` to generate first and judge later instead.
 
 ## Without thinking (optional, for a thinking-vs-not comparison)
 
@@ -28,6 +27,31 @@ Drop `--enable_thinking`/`--chat_template_path`/`--gen_max_tokens` — same comm
 ## What's next
 
 Stage 0 (judge tests), Stage 2 (same idea for detection), Stage 3 (`verifier-cot --from_ckpt` grades these trajectories directly), Stage 4 (ReAct agent answers the same question for comparison).
+
+## Splitting the work across multiple GPUs
+
+`--num_shards N --shard_index i` partitions the work into N independent single-GPU processes, each generating **and** judging its own shard — real multi-GPU parallelism for both phases, not just generation. Run one process per GPU with its own `--shard_index` (e.g. one array task per GPU on a cluster scheduler):
+
+```bash
+# 4 GPUs, one process each ($SHARD_INDEX = 0, 1, 2, 3):
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --enable_thinking --gen_max_tokens 4096 \
+    --chat_template_path src/config/tool_chat_template_gemma4.jinja \
+    --output_dir outputs_final/vision_baseline_thinking/ \
+    --num_shards 4 --shard_index $SHARD_INDEX
+```
+
+Each shard writes its own `ckpt_<model>_shard<i>of4.csv` (never the canonical filename) plus its own `judge_log_shard<i>of4.jsonl`, so all 4 can run concurrently with zero write contention. Once every shard finishes, merge them into the canonical checkpoint (single job, after all array tasks complete):
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_thinking/ \
+    --merge_shards
+```
+
+Don't leave shard files sitting alongside the merged canonical file when pointing Stage 0's tooling at that directory afterward — its `--ckpt` glob matches both and double-judges every row.
 
 ## Parameters
 
