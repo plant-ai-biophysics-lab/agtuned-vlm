@@ -75,6 +75,15 @@ DET_CKPT_FIELDS = [
 ]
 
 
+
+# --smoketest: a single small, known-good dataset for validating the whole
+# pipeline (manifest -> config -> generation -> box parsing -> scoring) end
+# to end before committing to a full multi-dataset run. 990 real images,
+# genuinely detection-type — see src/config/hf_catalog_excluded.json's own
+# entry for it.
+SMOKETEST_DATASET = "GEMINI_cowpea_flower_detection"
+
+
 def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
@@ -157,14 +166,27 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     # per-(dataset,class) grouping (class_names here means EVERY class in
     # the dataset, not one — a detection prompt asks about the whole
     # vocabulary at once, not one class at a time).
+    all_active = list(active_datasets(Path(args.config)))
+    if args.smoketest:
+        all_active = [ds for ds in all_active if ds.agml_name == SMOKETEST_DATASET]
+        if not all_active:
+            raise SystemExit(
+                f"--smoketest: {SMOKETEST_DATASET!r} not found (or not active) in --config "
+                f"{args.config} — catalog/migrate it first (see docs/stage2_object_detection.md's "
+                f"smoke test section)."
+            )
+        print(f"  [smoketest] restricting to {SMOKETEST_DATASET} only")
+
     groups = []
-    for ds in active_datasets(Path(args.config)):
+    for ds in all_active:
         if ds.skip:
             continue
         try:
             samples = load_hf_detection_samples(ds.agml_name, manifest, Path(args.images_root))
         except KeyError:
-            print(f"  [skip] {ds.agml_name} — not in manifest")
+            print(f"  [skip] {ds.agml_name} — not in manifest"
+                  + (f" — run download-detection-datasets --only '^{SMOKETEST_DATASET}$' "
+                     f"--skip_existing first" if args.smoketest else ""))
             continue
         # "seen" keys are (agml_dataset, class_label, image_name) — but
         # class_label here would require re-deriving the primary category
@@ -273,6 +295,12 @@ if __name__ == "__main__":
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
+    parser.add_argument("--smoketest", action="store_true",
+                         help=f"Restrict the run to just {SMOKETEST_DATASET!r} (10 images), for "
+                              "validating the whole pipeline (manifest -> generation -> box parsing "
+                              "-> scoring) before committing to a full multi-dataset run. Needs that "
+                              "dataset present in both --config and --manifest — see "
+                              "docs/stage2_object_detection.md's smoke test section for how to add it.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)
