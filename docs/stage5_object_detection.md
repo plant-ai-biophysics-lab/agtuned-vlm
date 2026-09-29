@@ -24,6 +24,13 @@ budget:
 Status: **in progress** — this doc is updated as each sub-stage lands. See
 the implementation plan for full design rationale and the exact file list.
 
+**See [docs/stage2_5_object_detection.md](stage2_5_object_detection.md)
+first** — a simpler, earlier Paper 1 stage (Detection-Baseline vs.
+Detection-Baseline-with-Rubric, no tournament machinery) that shares this
+stage's data-prep pipeline (5a below) and `detection_baseline.py` script.
+This doc (Stage 5) is the later Paper 2 extension: adding the
+K-candidate + PPT-tournament Detection-Verifier on top.
+
 ## Sub-stages
 
 | Sub-stage | Script | Status | Output |

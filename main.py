@@ -15,6 +15,7 @@ STAGES = {
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
     "detection-summary":           "src.detection_summary",
+    "detection-rubric-summary":    "src.detection_rubric_summary",
     "build-reference-db": "src.data_generation.build_reference_db",
     "data-gen":           "src.data_generation.generate",
     "check-vision-towers": "src.linear_probe.check_vision_towers",
@@ -60,8 +61,10 @@ Stages:
                                detection-type datasets already found by catalog-datasets
     migrate-detection-datasets  Stage 5 (prep) — regenerate src/config/detection_datasets.yaml
                                from catalog-detection-datasets' output
-    download-detection-datasets Stage 5 — download + class-balanced sample detection datasets,
-                               write selection manifest (dataset/selected_images_detection.json)
+    download-detection-datasets Stage 2.5/5 — download + class-balanced sample detection datasets,
+                               write selection manifest (--output, e.g.
+                               dataset/selected_images_detection_10.json for Stage 2.5's 10/class run;
+                               default dataset/selected_images_detection.json)
     build-reference-db Stage 0  — fetch Wikipedia + live web-search sources per class (run this first)
     data-gen           Stage 0  — synthesize agml_classification.jsonl from build-reference-db's
                                    fetched sources (no vision pass)
@@ -100,6 +103,24 @@ Stages:
                                output (no GPU needed)
     cot-compare              — win rate / mean gain / mean loss / top-5 gains & losses for
                                desc-aug-v2, self-cot, cot-yaml vs. vision-baseline (no GPU needed)
+    detection-baseline  Stage 2.5 — object detection: image + direct box-localization question,
+                               no intermediate reasoning. Spatial-task analog of vision-baseline
+                               (Stage 2a). Scored via IoU-based precision/recall/F1 against
+                               ground-truth boxes (src/common/bbox_metrics.py), not classification
+                               F1/ROUGE. Pass --rubric to instead answer a fill-in-the-blank
+                               localization checklist (object/class, location, occlusion, size —
+                               same criteria chain detection-verifier's structured generation uses)
+                               before printing boxes, no tournament machinery — use a different
+                               --output_dir than the plain run. See docs/stage2_5_object_detection.md
+                               for the full data-prep -> baseline -> rubric -> comparison walkthrough.
+    detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
+                               visually catch a coordinate-alignment bug. --compare_ckpt plots a
+                               second checkpoint (e.g. the --rubric run) side by side against the
+                               same ground truth for the same images (Stage 2.5).
+    detection-rubric-summary Stage 2.5-report — bar charts comparing detection-baseline vs.
+                               detection-baseline --rubric at an equal image budget (mean
+                               precision/recall/F1/IoU with 95% CI, per-dataset breakdown, F1 vs.
+                               IoU-threshold sweep) — no GPU needed.
     verifier-cot    Stage 4 — single-round K-candidate + PPT-tournament verifier
                                (docs/stage4_verifier.md). K candidates generated per image, ranked
                                once by the Probabilistic Pivot Tournament, argmax(win_rate) reported.

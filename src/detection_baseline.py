@@ -16,8 +16,18 @@ job can resume exactly where it left off:
   <output_dir>/<safe_model_name>/ckpt_<safe_model_name>.csv
   <output_dir>/<safe_model_name>/metrics.json
 
+--rubric (Stage 2.5, docs/stage2_5_object_detection.md): same single-shot
+script, wraps the question through detection_verifier.py's own
+fill-in-the-blank localization checklist (object/class, location,
+occlusion, size) before the model prints boxes — no tournament/verifier
+machinery. Spatial-task analog of vision_baseline.py's --rubric (Stage 2).
+Compared against the plain run at an equal image budget via
+src/detection_rubric_summary.py.
+
 Usage:
     uv run python main.py detection-baseline --model google/gemma-4-E4B-it
+    uv run python main.py detection-baseline --model google/gemma-4-E4B-it \\
+        --rubric --output_dir outputs_final/detection_baseline_rubric/
 """
 from __future__ import annotations
 
@@ -89,6 +99,29 @@ def det_question(ds, prompts: dict, use_json: bool = False) -> str:
     return prompts[key].format(class_names=names, crop=crop_display(ds.crop))
 
 
+_VERIFIER_PROMPTS_DETECTION_PATH = Path(__file__).parent / "config" / "verifier_prompts_detection.yaml"
+
+
+def load_rubric_templates_detection(path: Path = _VERIFIER_PROMPTS_DETECTION_PATH) -> dict:
+    """Stage 2.5 — "Baseline with rubric" for detection: reuses
+    detection_verifier.py's own model-facing fill-in-the-blank localization
+    criteria chain (src/config/verifier_prompts_detection.yaml's
+    structured_templates/structured_templates_json, object_detection key)
+    as a --rubric flag on the plain single-shot baseline, with no
+    tournament/verifier machinery at all — exact spatial-task analog of
+    vision_baseline.py's own load_rubric_templates/--rubric (Stage 2).
+    Returns the raw yaml dict; apply_rubric_detection reads the right key
+    off it directly."""
+    import yaml as _yaml
+    with open(path) as f:
+        return _yaml.safe_load(f)
+
+
+def apply_rubric_detection(question: str, use_json: bool, vprompts: dict) -> str:
+    key = "structured_templates_json" if use_json else "structured_templates"
+    return vprompts[key]["object_detection"].format(question=question)
+
+
 def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float = 0.5) -> dict:
     matches, unmatched_pred, unmatched_gt = match_boxes(pred_boxes, gt_boxes, iou_threshold)
     return precision_recall_f1(matches, unmatched_pred, unmatched_gt)
@@ -100,6 +133,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     manifest = load_manifest(Path(args.manifest))
     rescale_1000 = needs_1000_scale_boxes(model_id)
     use_json = uses_json_box_format(model_id)
+    vprompts = load_rubric_templates_detection() if args.rubric else None
+    if args.rubric:
+        print(f"  [rubric] wrapping every question through the fill-in-the-blank "
+              f"localization checklist before box output (see load_rubric_templates_detection)")
     if rescale_1000:
         print(f"  [bbox] {model_id}: rescaling predicted boxes from Gemma's native 0-1000 "
               f"normalized scale to real pixel coordinates (see bbox_parse.needs_1000_scale_boxes)")
@@ -164,6 +201,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             pbar.desc = f"Datasets ({ds.agml_name})"
             images = [PILImage.open(s["path"]).convert("RGB") for s in samples]
             question = det_question(ds, prompts, use_json=use_json)
+            if args.rubric:
+                question = apply_rubric_detection(question, use_json, vprompts)
 
             preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
 
@@ -223,6 +262,14 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="outputs_final/detection_baseline/")
     parser.add_argument("--iou_threshold", type=float, default=0.5,
                          help="IoU threshold for counting a prediction as a true-positive match.")
+    parser.add_argument("--rubric", action="store_true",
+                         help="Stage 2.5 — wrap the question through the fill-in-the-blank "
+                              "localization checklist (object/class, location, occlusion, size; "
+                              "see verifier_prompts_detection.yaml's structured_templates) before "
+                              "the model prints boxes, instead of asking for boxes directly with "
+                              "no reasoning. No tournament/verifier machinery — same single-shot "
+                              "generation, just a different prompt. Pass a different --output_dir "
+                              "so this doesn't overwrite the plain baseline's checkpoint.")
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")

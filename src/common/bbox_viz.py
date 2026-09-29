@@ -64,3 +64,42 @@ def plot_predictions(
         plt.close(fig)
     else:
         plt.close(fig)
+
+
+def plot_predictions_comparison(
+    image: PILImage.Image,
+    pred_boxes_a: list[dict], pred_boxes_b: list[dict], gt_boxes: list[dict] | None,
+    label_a: str, label_b: str,
+    out_path: str | Path | None = None, title: str = "",
+) -> None:
+    """Stage 2.5 QC — same image, two side-by-side panels: condition A's
+    predictions (left) vs condition B's (right), each against the SAME
+    ground truth, for a direct "did the rubric change what the model saw"
+    visual check (detection_qc_plot.py's --compare_ckpt). Reuses
+    draw_boxes/plot_predictions's own color convention (predicted=lime,
+    ground truth=dashed red) so a QC-plots reader doesn't have to learn a
+    second legend."""
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8 * image.height / max(image.width, 1)))
+    for ax, label, pred_boxes in ((axes[0], label_a, pred_boxes_a), (axes[1], label_b, pred_boxes_b)):
+        ax.imshow(image)
+        draw_boxes(ax, pred_boxes, color="lime", linestyle="-")
+        if gt_boxes:
+            draw_boxes(ax, gt_boxes, color="red", linestyle="--")
+        handles = [plt.Line2D([0], [0], color="lime", lw=2, label=f"predicted ({len(pred_boxes)})")]
+        if gt_boxes is not None:
+            handles.append(plt.Line2D([0], [0], color="red", lw=2, linestyle="--",
+                                       label=f"ground truth ({len(gt_boxes)})"))
+        ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.7)
+        ax.set_title(label, fontsize=10)
+        ax.axis("off")
+
+    fig.suptitle(title, fontsize=10)
+    plt.tight_layout()
+    if out_path is not None:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.close(fig)
