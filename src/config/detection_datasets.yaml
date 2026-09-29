@@ -18,7 +18,7 @@
 datasets:
 
   - agml_name: CocoaMFDB_detection
-    crop: null
+    crop: cocoa
     task_type: object_detection
     n_images: 1254
     classes:
@@ -34,7 +34,7 @@ datasets:
     notes: ''
 
   - agml_name: ERWIAM_blight_detection
-    crop: null
+    crop: apple
     task_type: object_detection
     n_images: 1698
     classes:
@@ -73,7 +73,7 @@ datasets:
     notes: ''
 
   - agml_name: ImageWeeds_weed_detection
-    crop: null
+    crop: corn
     task_type: object_detection
     n_images: 3208
     classes:
@@ -93,7 +93,7 @@ datasets:
     notes: ''
 
   - agml_name: MH_Weed16_weed_detection
-    crop: null
+    crop: soybean
     task_type: object_detection
     n_images: 6656
     classes:
@@ -123,7 +123,7 @@ datasets:
     notes: ''
 
   - agml_name: Medjool_date_ripeness_detection
-    crop: null
+    crop: date
     task_type: object_detection
     n_images: 1415
     classes:
@@ -140,7 +140,7 @@ datasets:
     notes: ''
 
   - agml_name: QuinceSet_detection
-    crop: null
+    crop: quince
     task_type: object_detection
     n_images: 1515
     classes:
@@ -157,7 +157,7 @@ datasets:
     notes: ''
 
   - agml_name: RoCoLe_disease_detection
-    crop: null
+    crop: coffee
     task_type: object_detection
     n_images: 1560
     classes:
@@ -178,7 +178,7 @@ datasets:
     notes: ''
 
   - agml_name: Strawberry-DS_strawberry_detection
-    crop: null
+    crop: strawberry
     task_type: object_detection
     n_images: 247
     classes:
@@ -199,7 +199,7 @@ datasets:
     notes: ''
 
   - agml_name: TealeafAgeQuality_detection
-    crop: null
+    crop: tea
     task_type: object_detection
     n_images: 2208
     classes:
@@ -218,7 +218,7 @@ datasets:
     notes: ''
 
   - agml_name: almond_bloom_2023
-    crop: null
+    crop: almond
     task_type: object_detection
     n_images: 100
     classes:
@@ -234,7 +234,7 @@ datasets:
     notes: ''
 
   - agml_name: almond_harvest_2021
-    crop: null
+    crop: almond
     task_type: object_detection
     n_images: 50
     classes:
@@ -253,7 +253,7 @@ datasets:
     notes: ''
 
   - agml_name: apple_detection_drone_brazil
-    crop: null
+    crop: apple
     task_type: object_detection
     n_images: 689
     classes:
@@ -269,7 +269,7 @@ datasets:
     notes: ''
 
   - agml_name: apple_detection_spain
-    crop: null
+    crop: apple
     task_type: object_detection
     n_images: 967
     classes:
@@ -285,7 +285,7 @@ datasets:
     notes: ''
 
   - agml_name: apple_detection_usa
-    crop: null
+    crop: apple
     task_type: object_detection
     n_images: 2290
     classes:
@@ -301,7 +301,7 @@ datasets:
     notes: ''
 
   - agml_name: banana_bunch_detection
-    crop: null
+    crop: banana
     task_type: object_detection
     n_images: 2179
     classes:
@@ -317,7 +317,7 @@ datasets:
     notes: ''
 
   - agml_name: cashew_detection
-    crop: null
+    crop: cashew
     task_type: object_detection
     n_images: 3098
     classes:
@@ -338,7 +338,7 @@ datasets:
     notes: ''
 
   - agml_name: coffee_detection
-    crop: null
+    crop: coffee
     task_type: object_detection
     n_images: 3254
     classes:
@@ -375,7 +375,7 @@ datasets:
     notes: ''
 
   - agml_name: date_cluster_detection
-    crop: null
+    crop: date
     task_type: object_detection
     n_images: 5530
     classes:
@@ -391,7 +391,7 @@ datasets:
     notes: ''
 
   - agml_name: date_fruit_maturity_detection
-    crop: null
+    crop: date
     task_type: object_detection
     n_images: 9010
     classes:
@@ -410,7 +410,7 @@ datasets:
     notes: ''
 
   - agml_name: embrapa_wgisd_grape_detection
-    crop: null
+    crop: grape
     task_type: object_detection
     n_images: 249
     classes:
@@ -426,7 +426,7 @@ datasets:
     notes: ''
 
   - agml_name: fortunella_margarita_growth_detection
-    crop: null
+    crop: kumquat
     task_type: object_detection
     n_images: 6611
     classes:
@@ -445,7 +445,7 @@ datasets:
     notes: ''
 
   - agml_name: fruit_detection_worldwide
-    crop: null
+    crop: fruit
     task_type: object_detection
     n_images: 565
     classes:
@@ -467,7 +467,7 @@ datasets:
     notes: ''
 
   - agml_name: fruits_detection_australia
-    crop: null
+    crop: fruit
     task_type: object_detection
     n_images: 3704
     classes:
@@ -485,7 +485,7 @@ datasets:
     notes: ''
 
   - agml_name: gemini_flower_detection
-    crop: null
+    crop: cowpea
     task_type: object_detection
     n_images: 134
     classes:
@@ -501,7 +501,7 @@ datasets:
     notes: ''
 
   - agml_name: gemini_leaf_detection
-    crop: null
+    crop: cowpea
     task_type: object_detection
     n_images: 25
     classes:
@@ -517,7 +517,7 @@ datasets:
     notes: ''
 
   - agml_name: gemini_plant_detection
-    crop: null
+    crop: cowpea
     task_type: object_detection
     n_images: 402
     classes:
@@ -534,7 +534,7 @@ datasets:
     notes: ''
 
   - agml_name: gemini_pod_detection
-    crop: null
+    crop: cowpea
     task_type: object_detection
     n_images: 98
     classes:
@@ -550,7 +550,7 @@ datasets:
     notes: ''
 
   - agml_name: ghai_broccoli_detection
-    crop: null
+    crop: broccoli
     task_type: object_detection
     n_images: 500
     classes:
@@ -568,7 +568,7 @@ datasets:
     notes: ''
 
   - agml_name: ghai_green_cabbage_detection
-    crop: null
+    crop: cabbage
     task_type: object_detection
     n_images: 500
     classes:
@@ -584,7 +584,7 @@ datasets:
     notes: ''
 
   - agml_name: ghai_iceberg_lettuce_detection
-    crop: null
+    crop: lettuce
     task_type: object_detection
     n_images: 500
     classes:
@@ -600,7 +600,7 @@ datasets:
     notes: ''
 
   - agml_name: ghai_romaine_detection
-    crop: null
+    crop: lettuce
     task_type: object_detection
     n_images: 500
     classes:
@@ -616,7 +616,7 @@ datasets:
     notes: ''
 
   - agml_name: ghai_strawberry_fruit_detection
-    crop: null
+    crop: strawberry
     task_type: object_detection
     n_images: 500
     classes:
@@ -641,7 +641,7 @@ datasets:
     notes: ''
 
   - agml_name: grape_detection_californiaday
-    crop: null
+    crop: grape
     task_type: object_detection
     n_images: 126
     classes:
@@ -657,7 +657,7 @@ datasets:
     notes: ''
 
   - agml_name: grape_detection_californianight
-    crop: null
+    crop: grape
     task_type: object_detection
     n_images: 150
     classes:
@@ -673,7 +673,7 @@ datasets:
     notes: ''
 
   - agml_name: grape_detection_syntheticday
-    crop: null
+    crop: grape
     task_type: object_detection
     n_images: 448
     classes:
@@ -690,7 +690,7 @@ datasets:
     notes: ''
 
   - agml_name: maize_weed_detection
-    crop: null
+    crop: maize
     task_type: object_detection
     n_images: 500
     classes:
@@ -707,7 +707,7 @@ datasets:
     notes: ''
 
   - agml_name: mango_detection_australia
-    crop: null
+    crop: mango
     task_type: object_detection
     n_images: 1242
     classes:
@@ -723,7 +723,7 @@ datasets:
     notes: ''
 
   - agml_name: mango_growth_detection
-    crop: null
+    crop: mango
     task_type: object_detection
     n_images: 2000
     classes:
@@ -742,7 +742,7 @@ datasets:
     notes: ''
 
   - agml_name: onionfoliageset_detection
-    crop: null
+    crop: onion
     task_type: object_detection
     n_images: 245
     classes:
@@ -760,7 +760,7 @@ datasets:
     notes: ''
 
   - agml_name: plant_doc_detection
-    crop: null
+    crop: mixed
     task_type: object_detection
     n_images: 2346
     classes:
@@ -804,7 +804,7 @@ datasets:
     notes: ''
 
   - agml_name: pomegranate_growth_detection
-    crop: null
+    crop: pomegranate
     task_type: object_detection
     n_images: 5857
     classes:
@@ -824,7 +824,7 @@ datasets:
     notes: ''
 
   - agml_name: rice_panicle_detection
-    crop: null
+    crop: rice
     task_type: object_detection
     n_images: 2193
     classes:
@@ -840,7 +840,7 @@ datasets:
     notes: ''
 
   - agml_name: strawberry_detection_2022
-    crop: null
+    crop: strawberry
     task_type: object_detection
     n_images: 175
     classes:
@@ -862,7 +862,7 @@ datasets:
     notes: ''
 
   - agml_name: strawberry_detection_2023
-    crop: null
+    crop: strawberry
     task_type: object_detection
     n_images: 204
     classes:
@@ -884,7 +884,7 @@ datasets:
     notes: ''
 
   - agml_name: sunflower_detection
-    crop: null
+    crop: sunflower
     task_type: object_detection
     n_images: 1649
     classes:
@@ -901,7 +901,7 @@ datasets:
     notes: ''
 
   - agml_name: tomato_factory_detection
-    crop: null
+    crop: tomato
     task_type: object_detection
     n_images: 520
     classes:
@@ -918,7 +918,7 @@ datasets:
     notes: ''
 
   - agml_name: tomato_ripeness_detection
-    crop: null
+    crop: tomato
     task_type: object_detection
     n_images: 804
     classes:
@@ -939,7 +939,7 @@ datasets:
     notes: ''
 
   - agml_name: vegetable_crop_early_detection
-    crop: null
+    crop: mixed
     task_type: object_detection
     n_images: 2801
     classes:
@@ -960,7 +960,7 @@ datasets:
     notes: ''
 
   - agml_name: weed_crop_detection
-    crop: null
+    crop: mixed
     task_type: object_detection
     n_images: 1120
     classes:
@@ -988,7 +988,7 @@ datasets:
     notes: ''
 
   - agml_name: wheat_head_counting
-    crop: null
+    crop: wheat
     task_type: object_detection
     n_images: 6512
     classes:
@@ -1004,7 +1004,7 @@ datasets:
     notes: ''
 
   - agml_name: CBDA_Cotton_Ball_Detection_Augmented
-    crop: null
+    crop: cotton
     task_type: object_detection
     n_images: 180
     classes: []
@@ -1054,7 +1054,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: GYMNSA_pear_rust_detection
-    crop: null
+    crop: pear
     task_type: object_detection
     n_images: 746
     classes: []
@@ -1070,7 +1070,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: MTDC_Maize_Tassels_Detection_Counting_Dataset
-    crop: null
+    crop: maize
     task_type: object_detection
     n_images: 361
     classes: []
@@ -1086,7 +1086,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: YOLOPOD_Soyabean_Pod_Counting_Dataset
-    crop: null
+    crop: soybean
     task_type: object_detection
     n_images: 1448
     classes: []
@@ -1102,7 +1102,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: cotton_weed_detection
-    crop: null
+    crop: cotton
     task_type: object_detection
     n_images: 262
     classes: []
@@ -1118,7 +1118,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: date_fruit_detection
-    crop: null
+    crop: date
     task_type: object_detection
     n_images: 1071
     classes: []
@@ -1134,7 +1134,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: olive_tree_crown_detection
-    crop: null
+    crop: olive
     task_type: object_detection
     n_images: 5842
     classes: []
@@ -1150,7 +1150,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: oyster_mushroom_maturity_detection
-    crop: null
+    crop: oyster_mushroom
     task_type: object_detection
     n_images: 555
     classes: []
@@ -1166,7 +1166,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: tomato_disease_detection
-    crop: null
+    crop: tomato
     task_type: object_detection
     n_images: 1026
     classes: []
@@ -1182,7 +1182,7 @@ datasets:
       dataset card, and a sample row) — needs manual class-list lookup before use.
 
   - agml_name: wGrapeUNIPD-DL_white_grape_bunch_detection
-    crop: null
+    crop: grape
     task_type: object_detection
     n_images: 216
     classes: []

@@ -3,7 +3,7 @@
 # from classification's single class-label answer; keeping them apart
 # avoids overloading one file with two incompatible answer conventions.
 
-assessment_system: "You are an expert agricultural computer vision assistant, skilled at precisely localizing plants, pests, diseases, and produce in photographs."
+assessment_system: "You are an expert agricultural computer vision assistant skilled at precisely localizing plant features."
 
 # detection_baseline: direct box prediction, NO intermediate reasoning —
 # deliberately the spatial-task analog of prompts.yaml's
