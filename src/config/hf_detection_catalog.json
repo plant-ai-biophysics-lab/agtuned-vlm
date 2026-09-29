@@ -1,0 +1,1846 @@
+{
+  "CBDA_Cotton_Ball_Detection_Augmented": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 348,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.006
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'category': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 180
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/CBDA_Cotton_Ball_Detection_Augmented"
+  },
+  "CocoaMFDB_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 25,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "Cacao"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "maturity": "Value('string')",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Cacao']))}",
+          "variety": "Value('string')"
+        },
+        "splits": {
+          "train": 1254
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/CocoaMFDB_detection"
+  },
+  "ERWIAM_blight_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 30,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "Flower",
+      "Shoot",
+      "Maybe",
+      "Leaf"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Flower', 'Shoot', 'Maybe', 'Leaf']))}"
+        },
+        "splits": {
+          "train": 1698
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ERWIAM_blight_detection"
+  },
+  "GEMINI_cowpea_flower_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 92,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "genotype": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "location": "Value('string')",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}",
+          "year": "Value('string')"
+        },
+        "splits": {
+          "train": 990
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/GEMINI_cowpea_flower_detection"
+  },
+  "GEMINI_cowpea_pod_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 141,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.028
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "genotype": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "location": "Value('string')",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}",
+          "year": "Value('string')"
+        },
+        "splits": {
+          "train": 579
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/GEMINI_cowpea_pod_detection"
+  },
+  "GYMNSA_pear_rust_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 862,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.01
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 746
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/GYMNSA_pear_rust_detection"
+  },
+  "ImageWeeds_aerial_weed_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 67,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "ragweed",
+      "waterhemp",
+      "horseweed",
+      "redrootpigweed",
+      "kochia"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['ragweed', 'waterhemp', 'horseweed', 'redrootpigweed', 'kochia']))}"
+        },
+        "splits": {
+          "train": 551
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ImageWeeds_aerial_weed_detection"
+  },
+  "ImageWeeds_weed_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 94,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.064
+    },
+    "class_names": [
+      "horseweed",
+      "kochia",
+      "corn",
+      "ragweed",
+      "redrootpigweed"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['horseweed', 'kochia', 'corn', 'ragweed', 'redrootpigweed']))}"
+        },
+        "splits": {
+          "train": 3208
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ImageWeeds_weed_detection"
+  },
+  "MH_Weed16_weed_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 130,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.192
+    },
+    "class_names": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14']))}"
+        },
+        "splits": {
+          "train": 6656
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MH_Weed16_weed_detection"
+  },
+  "MTDC_Maize_Tassels_Detection_Counting_Dataset": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 515,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.019
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'category': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 361
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/MTDC_Maize_Tassels_Detection_Counting_Dataset"
+  },
+  "Medjool_date_ripeness_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 31,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.065
+    },
+    "class_names": [
+      "Ripe_DateFruit",
+      "Unripe_DateFruit"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Ripe_DateFruit', 'Unripe_DateFruit']))}"
+        },
+        "splits": {
+          "train": 1415
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/Medjool_date_ripeness_detection"
+  },
+  "QuinceSet_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 210,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.019
+    },
+    "class_names": [
+      "Ripe quince",
+      "Unripe quince"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Ripe quince', 'Unripe quince']))}"
+        },
+        "splits": {
+          "train": 1515
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/QuinceSet_detection"
+  },
+  "RoCoLe_disease_detection": {
+    "bbox_convention": {
+      "format": "xyxy",
+      "n_probed": 20,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 1.0
+    },
+    "class_names": [
+      "healthy",
+      "red_spider_mite",
+      "rust_level_1",
+      "rust_level_2",
+      "rust_level_3",
+      "rust_level_4"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "mask": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['healthy', 'red_spider_mite', 'rust_level_1', 'rust_level_2', 'rust_level_3', 'rust_level_4'])), 'segmentation': List(List(List(Value('float64'))))}"
+        },
+        "splits": {
+          "train": 1560
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/RoCoLe_disease_detection"
+  },
+  "Strawberry-DS_strawberry_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 81,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.025
+    },
+    "class_names": [
+      "Early-Turning",
+      "Green",
+      "Late-Turning",
+      "Red",
+      "Turning",
+      "White"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Early-Turning', 'Green', 'Late-Turning', 'Red', 'Turning', 'White']))}",
+          "split": "Value('string')"
+        },
+        "splits": {
+          "train": 247
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/Strawberry-DS_strawberry_detection"
+  },
+  "TealeafAgeQuality_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 22,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.182
+    },
+    "class_names": [
+      "T1",
+      "T2",
+      "T3",
+      "T4"
+    ],
+    "configs": {
+      "augmented": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['T1', 'T2', 'T3', 'T4']))}"
+        },
+        "splits": {
+          "train": 5740
+        }
+      },
+      "raw": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['T1', 'T2', 'T3', 'T4']))}"
+        },
+        "splits": {
+          "train": 2208
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/TealeafAgeQuality_detection"
+  },
+  "YOLOPOD_Soyabean_Pod_Counting_Dataset": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 462,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'category': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 1448
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/YOLOPOD_Soyabean_Pod_Counting_Dataset"
+  },
+  "almond_bloom_2023": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 1626,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.008
+    },
+    "class_names": [
+      "Visible Fruit/Flower"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Visible Fruit/Flower'])), 'category_names': List(Value('string'))}"
+        },
+        "splits": {
+          "train": 100
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/almond_bloom_2023"
+  },
+  "almond_harvest_2021": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 629,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.002
+    },
+    "class_names": [
+      "Visible Fruit/Flower",
+      "Partially Visible Fruit/Flower",
+      "Visible Occluded Fruit/Flower",
+      "Partially Visible Occluded Fruit/Flower"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Visible Fruit/Flower', 'Partially Visible Fruit/Flower', 'Visible Occluded Fruit/Flower', 'Partially Visible Occluded Fruit/Flower'])), 'category_names': List(Value('string'))}"
+        },
+        "splits": {
+          "train": 50
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/almond_harvest_2021"
+  },
+  "apple_detection_drone_brazil": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 149,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.007
+    },
+    "class_names": [
+      "apple"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['apple'])), 'category_names': List(Value('string'))}"
+        },
+        "splits": {
+          "train": 689
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/apple_detection_drone_brazil"
+  },
+  "apple_detection_spain": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 268,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.03
+    },
+    "class_names": [
+      "apple"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['apple'])), 'category_names': List(Value('string'))}"
+        },
+        "splits": {
+          "train": 967
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/apple_detection_spain"
+  },
+  "apple_detection_usa": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 93,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.011
+    },
+    "class_names": [
+      "apple"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['apple']))}"
+        },
+        "splits": {
+          "train": 2290
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/apple_detection_usa"
+  },
+  "banana_bunch_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 34,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.294
+    },
+    "class_names": [
+      "0"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['0']))}"
+        },
+        "splits": {
+          "train": 2179
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/banana_bunch_detection"
+  },
+  "cashew_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 629,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.032
+    },
+    "class_names": [
+      "tree",
+      "flower",
+      "premature",
+      "unripe",
+      "ripe",
+      "spoiled"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['tree', 'flower', 'premature', 'unripe', 'ripe', 'spoiled']))}"
+        },
+        "splits": {
+          "train": 3098
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/cashew_detection"
+  },
+  "coffee_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 147,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.129
+    },
+    "class_names": [
+      "unripe",
+      "ripening",
+      "ripe",
+      "spoiled",
+      "coffee_tree"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "batch": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['unripe', 'ripening', 'ripe', 'spoiled', 'coffee_tree']))}"
+        },
+        "splits": {
+          "train": 3254
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/coffee_detection"
+  },
+  "cotton_weed_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 2361,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64')), 'category_names': List(Value('string'))}"
+        },
+        "splits": {
+          "train": 262
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/cotton_weed_detection"
+  },
+  "crop_weed_detection_latvia": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 40,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "weed",
+      "crop"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['weed', 'crop']))}"
+        },
+        "splits": {
+          "train": 1176
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/crop_weed_detection_latvia"
+  },
+  "date_cluster_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 135,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.015
+    },
+    "class_names": [
+      "0"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['0']))}"
+        },
+        "splits": {
+          "train": 5530
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/date_cluster_detection"
+  },
+  "date_fruit_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 73,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.205
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "location": "Value('string')",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}",
+          "species": "Value('string')"
+        },
+        "splits": {
+          "train": 1071
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/date_fruit_detection"
+  },
+  "date_fruit_maturity_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 65,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['0', '1', '2', '3']))}",
+          "variety": "Value('string')"
+        },
+        "splits": {
+          "train": 9010
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/date_fruit_maturity_detection"
+  },
+  "embrapa_wgisd_grape_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 401,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "grape"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['grape']))}"
+        },
+        "splits": {
+          "train": 249
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/embrapa_wgisd_grape_detection"
+  },
+  "fortunella_margarita_growth_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 105,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "Immature",
+      "Growing",
+      "Mature",
+      "cavity"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Immature', 'Growing', 'Mature', 'cavity']))}"
+        },
+        "splits": {
+          "train": 6611
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/fortunella_margarita_growth_detection"
+  },
+  "fruit_detection_worldwide": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 83,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.072
+    },
+    "class_names": [
+      "avocado",
+      "rockmelon",
+      "apple",
+      "orange",
+      "strawberry",
+      "mango",
+      "capsicum"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['avocado', 'rockmelon', 'apple', 'orange', 'strawberry', 'mango', 'capsicum']))}"
+        },
+        "splits": {
+          "train": 565
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/fruit_detection_worldwide"
+  },
+  "fruits_detection_australia": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 71,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.028
+    },
+    "class_names": [
+      "apple",
+      "mango",
+      "almond"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['apple', 'mango', 'almond']))}"
+        },
+        "splits": {
+          "train": 3704
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/fruits_detection_australia"
+  },
+  "gemini_flower_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 201,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "object"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['object']))}"
+        },
+        "splits": {
+          "train": 134
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/gemini_flower_detection"
+  },
+  "gemini_leaf_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 791,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "object"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['object']))}"
+        },
+        "splits": {
+          "train": 25
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/gemini_leaf_detection"
+  },
+  "gemini_plant_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 21,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "plant",
+      "weed"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['plant', 'weed']))}"
+        },
+        "splits": {
+          "train": 402
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/gemini_plant_detection"
+  },
+  "gemini_pod_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 122,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "object"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['object']))}"
+        },
+        "splits": {
+          "train": 98
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/gemini_pod_detection"
+  },
+  "ghai_broccoli_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 412,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.238
+    },
+    "class_names": [
+      "Canopy",
+      "Crown",
+      "crop"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Canopy', 'Crown', 'crop']))}"
+        },
+        "splits": {
+          "train": 500
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ghai_broccoli_detection"
+  },
+  "ghai_green_cabbage_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 85,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.776
+    },
+    "class_names": [
+      "Crop"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Crop']))}"
+        },
+        "splits": {
+          "train": 500
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ghai_green_cabbage_detection"
+  },
+  "ghai_iceberg_lettuce_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 105,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.676
+    },
+    "class_names": [
+      "Crop"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Crop']))}"
+        },
+        "splits": {
+          "train": 500
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ghai_iceberg_lettuce_detection"
+  },
+  "ghai_romaine_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 85,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.565
+    },
+    "class_names": [
+      "Crop"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Crop']))}"
+        },
+        "splits": {
+          "train": 500
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ghai_romaine_detection"
+  },
+  "ghai_strawberry_fruit_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 133,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.571
+    },
+    "class_names": [
+      "Bud",
+      "Calyx",
+      "Detached Fruit",
+      "Flower",
+      "Large green",
+      "Leaf",
+      "Ripe fruit",
+      "Small Green",
+      "Stem",
+      "Unripe fruit"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Bud', 'Calyx', 'Detached Fruit', 'Flower', 'Large green', 'Leaf', 'Ripe fruit', 'Small Green', 'Stem', 'Unripe fruit']))}"
+        },
+        "splits": {
+          "train": 500
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/ghai_strawberry_fruit_detection"
+  },
+  "grape_detection_californiaday": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 239,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "grape"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['grape']))}"
+        },
+        "splits": {
+          "train": 126
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grape_detection_californiaday"
+  },
+  "grape_detection_californianight": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 384,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "grape"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['grape']))}"
+        },
+        "splits": {
+          "train": 150
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grape_detection_californianight"
+  },
+  "grape_detection_syntheticday": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 212,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "grape",
+      "1"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['grape', '1']))}"
+        },
+        "splits": {
+          "train": 448
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/grape_detection_syntheticday"
+  },
+  "maize_weed_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 302,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.156
+    },
+    "class_names": [
+      "maize",
+      "weed"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['maize', 'weed']))}"
+        },
+        "splits": {
+          "train": 500
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/maize_weed_detection"
+  },
+  "mango_detection_australia": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 179,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.017
+    },
+    "class_names": [
+      "mango"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['mango']))}"
+        },
+        "splits": {
+          "train": 1242
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/mango_detection_australia"
+  },
+  "mango_growth_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 34,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.206
+    },
+    "class_names": [
+      "Early-Fruit",
+      "Mature",
+      "Premature",
+      "Ripe"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 2000
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/mango_growth_detection"
+  },
+  "olive_tree_crown_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 6592,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.003
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}",
+          "scale": "Value('string')"
+        },
+        "splits": {
+          "train": 5842
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/olive_tree_crown_detection"
+  },
+  "onionfoliageset_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 278,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.086
+    },
+    "class_names": [
+      "onion",
+      "no_crop",
+      "foliage"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "mask": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['onion', 'no_crop', 'foliage'])), 'segmentation': List(List(List(Value('float64'))))}"
+        },
+        "splits": {
+          "train": 245
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/onionfoliageset_detection"
+  },
+  "oyster_mushroom_maturity_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 290,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 555
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/oyster_mushroom_maturity_detection"
+  },
+  "plant_doc_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 86,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.163
+    },
+    "class_names": [
+      "Corn leaf blight",
+      "Tomato Early blight leaf",
+      "Potato leaf early blight",
+      "Potato leaf late blight",
+      "Blueberry leaf",
+      "grape leaf black rot",
+      "Bell_pepper leaf spot",
+      "Cherry leaf",
+      "Peach leaf",
+      "Soyabean leaf",
+      "Strawberry leaf",
+      "Apple Scab Leaf",
+      "Corn rust leaf",
+      "Apple leaf",
+      "Corn Gray leaf spot",
+      "Tomato leaf mosaic virus",
+      "Tomato mold leaf",
+      "Tomato leaf yellow virus",
+      "Tomato leaf bacterial spot",
+      "Tomato leaf late blight",
+      "Squash Powdery mildew leaf",
+      "Bell_pepper leaf",
+      "grape leaf",
+      "Apple rust leaf",
+      "Tomato Septoria leaf spot",
+      "Tomato leaf",
+      "Raspberry leaf",
+      "Potato leaf",
+      "Tomato two spotted spider mites leaf"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['Corn leaf blight', 'Tomato Early blight leaf', 'Potato leaf early blight', 'Potato leaf late blight', 'Blueberry leaf', 'grape leaf black rot', 'Bell_pepper leaf spot', 'Cherry leaf', 'Peach leaf', 'Soyabean leaf', 'Strawberry leaf', 'Apple Scab Leaf', 'Corn rust leaf', 'Apple leaf', 'Corn Gray leaf spot', 'Tomato leaf mosaic virus', 'Tomato mold leaf', 'Tomato leaf yellow virus', 'Tomato leaf bacterial spot', 'Tomato leaf late blight', 'Squash Powdery mildew leaf', 'Bell_pepper leaf', 'grape leaf', 'Apple rust leaf', 'Tomato Septoria leaf spot', 'Tomato leaf', 'Raspberry leaf', 'Potato leaf', 'Tomato two spotted spider mites leaf']))}"
+        },
+        "splits": {
+          "train": 2346
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/plant_doc_detection"
+  },
+  "pomegranate_growth_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 55,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "bud",
+      "flower",
+      "early-fruit",
+      "mid-growth",
+      "mature"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['bud', 'flower', 'early-fruit', 'mid-growth', 'mature']))}"
+        },
+        "splits": {
+          "train": 5857
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/pomegranate_growth_detection"
+  },
+  "rice_panicle_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 387,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.016
+    },
+    "class_names": [
+      "Rice-Panicle"
+    ],
+    "configs": {
+      "augmented": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Rice-Panicle']))}"
+        },
+        "splits": {
+          "train": 5701
+        }
+      },
+      "raw": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Rice-Panicle']))}"
+        },
+        "splits": {
+          "train": 2193
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/rice_panicle_detection"
+  },
+  "strawberry_detection_2022": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 270,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.007
+    },
+    "class_names": [
+      "strawberry",
+      "flower",
+      "green",
+      "large_white",
+      "pink",
+      "red",
+      "small_white"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['strawberry', 'flower', 'green', 'large_white', 'pink', 'red', 'small_white']))}"
+        },
+        "splits": {
+          "train": 175
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/strawberry_detection_2022"
+  },
+  "strawberry_detection_2023": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 1106,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.001
+    },
+    "class_names": [
+      "strawberry",
+      "flower",
+      "green",
+      "lw",
+      "pink",
+      "red",
+      "sw"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['strawberry', 'flower', 'green', 'lw', 'pink', 'red', 'sw']))}"
+        },
+        "splits": {
+          "train": 204
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/strawberry_detection_2023"
+  },
+  "sunflower_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 3430,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "Sunflower",
+      "Backside-Sunflower"
+    ],
+    "configs": {
+      "augmented": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Sunflower', 'Backside-Sunflower']))}"
+        },
+        "splits": {
+          "train": 4286
+        }
+      },
+      "raw": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Sunflower', 'Backside-Sunflower']))}"
+        },
+        "splits": {
+          "train": 1649
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "raw",
+    "repo_id": "Project-AgML/sunflower_detection"
+  },
+  "tomato_disease_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 57,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.386
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "disease": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(Value('int64'))}"
+        },
+        "splits": {
+          "train": 1026
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tomato_disease_detection"
+  },
+  "tomato_factory_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 310,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.016
+    },
+    "class_names": [
+      "green",
+      "red"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['green', 'red']))}"
+        },
+        "splits": {
+          "train": 520
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tomato_factory_detection"
+  },
+  "tomato_ripeness_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 73,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.041
+    },
+    "class_names": [
+      "b_fully_ripened",
+      "b_half_ripened",
+      "b_green",
+      "l_fully_ripened",
+      "l_half_ripened",
+      "l_green"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['b_fully_ripened', 'b_half_ripened', 'b_green', 'l_fully_ripened', 'l_half_ripened', 'l_green']))}"
+        },
+        "splits": {
+          "train": 804
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/tomato_ripeness_detection"
+  },
+  "vegetable_crop_early_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 197,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": [
+      "bean",
+      "leek",
+      "maize",
+      "stem_bean",
+      "stem_leek",
+      "stem_maize"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "crop": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['bean', 'leek', 'maize', 'stem_bean', 'stem_leek', 'stem_maize']))}"
+        },
+        "splits": {
+          "train": 2801
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/vegetable_crop_early_detection"
+  },
+  "wGrapeUNIPD-DL_white_grape_bunch_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 139,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.0
+    },
+    "class_names": null,
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': Value('float64')}",
+          "species": "Value('string')"
+        },
+        "splits": {
+          "train": 216
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/wGrapeUNIPD-DL_white_grape_bunch_detection"
+  },
+  "weed_crop_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 152,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.132
+    },
+    "class_names": [
+      "Blackbean",
+      "Canola",
+      "Corn",
+      "Field Pea",
+      "Flax",
+      "Horseweed",
+      "Kochia",
+      "Lentil",
+      "Ragweed",
+      "Redroot Pigweed",
+      "Soybean",
+      "Sugar beet",
+      "Waterhemp"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "crop": "Value('string')",
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('float64'))), 'categories': List(ClassLabel(names=['Blackbean', 'Canola', 'Corn', 'Field Pea', 'Flax', 'Horseweed', 'Kochia', 'Lentil', 'Ragweed', 'Redroot Pigweed', 'Soybean', 'Sugar beet', 'Waterhemp']))}"
+        },
+        "splits": {
+          "train": 1120
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/weed_crop_detection"
+  },
+  "wheat_head_counting": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 982,
+      "scale": "pixel",
+      "xyxy_consistent_frac": 0.02
+    },
+    "class_names": [
+      "Wheat Head"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {
+          "image": "Image(mode=None, decode=True)",
+          "objects": "{'bbox': List(List(Value('int64'))), 'categories': List(ClassLabel(names=['Wheat Head']))}"
+        },
+        "splits": {
+          "train": 6512
+        }
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/wheat_head_counting"
+  }
+}
