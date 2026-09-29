@@ -46,8 +46,8 @@ _DEFAULT_OUTPUT_DIR = _flag("--output_dir", "outputs_final/react_baseline")
 _DEFAULT_IMAGES_ROOT = _flag("--images_root", "dataset/images")
 
 REACT_CKPT_FIELDS = [
-    "agml_dataset", "class_label", "image_name", "task", "result",
-    "stop_reason", "n_steps", "tools_used", "nudges_used", "wrap_up_nudged", "error",
+    "agml_dataset", "class_label", "image_name", "task", "result", "summary", "justification",
+    "stop_reason", "n_steps", "tools_used", "nudges_used", "wrap_up_nudged", "auto_verified", "error",
     "tool_call_format", "elapsed_seconds", "judge_gt_hint", "judged_correct", "judge_reasoning",
 ]
 
@@ -248,7 +248,7 @@ c7.metric("Avg. time/episode", f"{elapsed_numeric.mean():.1f}s" if elapsed_numer
 
 overview_cols = [
     "agml_dataset", "class_label", "image_name", "stop_reason", "judged_correct", "n_steps",
-    "elapsed_seconds", "tools_used", "nudges_used", "wrap_up_nudged", "result",
+    "elapsed_seconds", "tools_used", "nudges_used", "wrap_up_nudged", "auto_verified", "result",
 ]
 display_df = filtered[overview_cols].copy()
 display_df["result"] = display_df["result"].str.slice(0, 120)
@@ -289,6 +289,7 @@ with col_info:
                 f"**tools_used:** {row['tools_used'] or '(none)'}  |  "
                 f"**nudges_used:** {row['nudges_used'] or '0'}  |  "
                 f"**wrap_up_nudged:** {row['wrap_up_nudged'] or 'False'}  |  "
+                f"**auto_verified:** {row['auto_verified'] or 'False'}  |  "
                 f"**judged:** {judge_badge}")
     if row["error"]:
         st.error(row["error"])
@@ -298,6 +299,12 @@ with tab_task:
     st.text(row["task"])
 with tab_result:
     st.text(row["result"] or "(no result — episode did not finish)")
+    if row["summary"] or row["justification"]:
+        st.divider()
+        st.markdown("**Summary (what was investigated):**")
+        st.text(row["summary"] or "(none)")
+        st.markdown("**Justification (why this answer):**")
+        st.text(row["justification"] or "(none)")
 with tab_judge:
     if not row["class_label"]:
         st.caption("No class_label on this episode (ad-hoc/text-only) — nothing to judge against.")
@@ -343,6 +350,8 @@ with tab_trajectory:
         for call in parsed["calls"]:
             if call["name"] == "finish":
                 st.success(f"✅ **finish**\n\n{call['arguments'].get('result', '')}")
+            elif call["name"] == "verify":
+                st.info(f"🔎 **verify:** {call['arguments'].get('claim', '')}")
             else:
                 args_str = ", ".join(f"{k}={v!r}" for k, v in call["arguments"].items())
                 st.code(f"{call['name']}({args_str})", language=None)

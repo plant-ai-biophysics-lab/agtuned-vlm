@@ -148,6 +148,8 @@ REACT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "image_name",
     "task",               # the exact prompt text sent as the first user turn
     "result",             # finish()'s reported answer — blank if the episode didn't finish
+    "summary",             # finish()'s own "what I investigated" — see tools.py's finish schema
+    "justification",       # finish()'s own "why this answer" — separate from result itself
     "stop_reason",        # "finished" | "no_tool_call" | "max_iterations" | "context_overflow" | "error"
     "n_steps",
     "tools_used",         # tool names called, in order, ";"-joined — "finish" excluded (see stop_reason)
@@ -155,6 +157,9 @@ REACT_CKPT_FIELDS = [
                           # run_episode's max_nudges docstring. 0 = never needed one.
     "wrap_up_nudged",     # did the 80%-of-max_model_len "wrap up now" reminder fire? see
                           # run_episode's _WRAP_UP_THRESHOLD. "" (falsy)/"True".
+    "auto_verified",       # did the mandatory finish-time verification gate fire? False if the model
+                          # called the `verify` tool itself before finishing (already visible in
+                          # tools_used) — see run_episode's own docstring on the verify gate.
     "error",              # set only for stop_reason in {"context_overflow", "error"} — the specific
                           # token-budget numbers or exception text, see run_episode's max_model_len
                           # docstring. Blank for every other stop_reason.
@@ -318,11 +323,14 @@ def main(args: argparse.Namespace) -> None:
                     "image_name": ep["image_name"],
                     "task": ep["task"],
                     "result": result.result or "",
+                    "summary": result.summary or "",
+                    "justification": result.justification or "",
                     "stop_reason": result.stop_reason,
                     "n_steps": result.n_steps,
                     "tools_used": ";".join(result.tools_used),
                     "nudges_used": result.nudges_used,
                     "wrap_up_nudged": result.wrap_up_nudged,
+                    "auto_verified": result.auto_verified,
                     "error": result.error or "",
                     "tool_call_format": tool_call_format,
                     "elapsed_seconds": round(elapsed, 1),

@@ -66,6 +66,7 @@ _REACT_PROMPTS = load_prompts(_REACT_PROMPTS_PATH)
 DEFAULT_SYSTEM_PROMPT = _REACT_PROMPTS["default_system_prompt"]
 NUDGE_PROMPT = _REACT_PROMPTS["nudge_prompt"]
 WRAP_UP_PROMPT = _REACT_PROMPTS["wrap_up_prompt"]
+AUTO_VERIFY_PROMPT = _REACT_PROMPTS["auto_verify_prompt"]
 
 # Tool results are truncated before going back into the conversation — a
 # large retrieve()/grep() payload would otherwise eat the context budget
@@ -87,9 +88,14 @@ class EpisodeResult:
     result: str | None
     stop_reason: str          # "finished" | "no_tool_call" | "max_iterations" | "context_overflow" | "error"
     n_steps: int
+    summary: str | None = None        # finish()'s own "what I investigated" — see tools.py's finish schema
+    justification: str | None = None  # finish()'s own "why this answer" — separate from `result` itself
     tools_used: list[str] = field(default_factory=list)  # tool names called, in order, "finish" excluded
     nudges_used: int = 0      # see run_episode's `max_nudges` — how many of them this episode needed
     wrap_up_nudged: bool = False  # did the 80%-of-max_model_len wrap-up nudge fire? see _WRAP_UP_THRESHOLD
+    auto_verified: bool = False  # did the automatic finish-time verification gate fire? False if the
+                                 # model called `verify` itself before finishing (no auto-gate needed),
+                                 # or if the episode never reached a finish attempt at all.
     error: str | None = None  # set only for stop_reason in {"context_overflow", "error"} — see run_episode
     trajectory: list[dict] = field(default_factory=list)  # raw message history, for logging/debugging
 
@@ -160,6 +166,28 @@ def run_episode(
     nudge-free behavior) throws away a result that was right there. Costs
     one extra turn (counts against max_iterations) only on a genuine miss;
     0 disables nudging entirely, back to the original all-or-nothing check.
+
+    Verification: `verify` is a real tool (tools.py) the model can call at
+    ANY point, not just before finishing — see its own docstring for why
+    it makes no network/LLM call of its own (a deliberate "reflection
+    point", not a second verifier model). If `finish` is called WITHOUT
+    the model ever having called `verify` first, this loop auto-injects
+    AUTO_VERIFY_PROMPT as one "user" turn (same shape as the nudges above)
+    instead of accepting that finish immediately — a MANDATORY gate, not
+    left to the model's own discretion, since this repo has repeatedly
+    found the model isn't a reliable judge of when to double-check itself.
+    Fires at most once per episode: the second `finish` call (same or
+    revised answer) is always accepted, regardless of whether the model
+    called `verify` again in between. `auto_verified` on the returned
+    EpisodeResult records whether this gate fired.
+
+    `finish` itself now takes 3 arguments (tools.py's own schema):
+    `result` (the answer, unchanged), `summary` (what was investigated —
+    which sources/tools, what was found), `justification` (why this
+    specific answer — how the gathered evidence supports it). Populated on
+    the returned EpisodeResult as `summary`/`justification`, separate from
+    `result` itself — a structured audit trail per episode, not just
+    whatever prose the model happened to put in `result`.
 
     `verbose` (default True): show a live ProgressBar (src/common/
     progress.py — same one vision_baseline.py etc. use) tracking steps used
@@ -241,6 +269,8 @@ def run_episode(
     tools_used: list[str] = []
     nudges_used = 0
     wrap_up_nudged = False
+    has_verified = False    # True once the model has called `verify` at least once
+    auto_verified = False   # True once the automatic finish-time verification gate has fired
 
     # skip_special_tokens=False, UNCONDITIONALLY — not just when
     # enable_thinking is True (an earlier version of this line was
@@ -299,7 +329,7 @@ def run_episode(
                     return EpisodeResult(
                         result=None, stop_reason="context_overflow", n_steps=step, error=msg,
                         tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged,
-                        trajectory=messages,
+                        auto_verified=auto_verified, trajectory=messages,
                     )
                 if not wrap_up_nudged and prompt_tokens >= _WRAP_UP_THRESHOLD * max_model_len:
                     # One-time warning BEFORE the hard cutoff above — losing
@@ -335,7 +365,7 @@ def run_episode(
                 return EpisodeResult(
                     result=None, stop_reason="error", n_steps=step, error=str(e),
                     tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged,
-                    trajectory=messages,
+                    auto_verified=auto_verified, trajectory=messages,
                 )
             raw_text = outputs[0].outputs[0].text
             messages.append({"role": "assistant", "content": raw_text})
@@ -368,17 +398,33 @@ def run_episode(
                 # silently returning whatever text the model produced
                 # (finish is the only sanctioned way to end with a real
                 # result).
-                return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged, trajectory=messages)
+                return EpisodeResult(result=None, stop_reason="no_tool_call", n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged, auto_verified=auto_verified, trajectory=messages)
 
             finish_call = next((c for c in calls if c["name"] == "finish"), None)
             if finish_call is not None:
+                if not has_verified and not auto_verified:
+                    # Mandatory gate: `finish` without the model ever having
+                    # called `verify` itself doesn't end the episode — one
+                    # auto-injected reflection first, same "inject a user
+                    # turn and continue" shape as the nudges above. Fires at
+                    # most once (auto_verified latches True), so a second
+                    # finish call is always accepted regardless of what the
+                    # model does with the reflection.
+                    auto_verified = True
+                    if pbar is not None:
+                        pbar.desc = f"{episode_key + ' ' if episode_key else ''}auto-verify"
+                        pbar.update(1)
+                    messages.append({"role": "user", "content": AUTO_VERIFY_PROMPT})
+                    continue
                 if pbar is not None:
                     pbar.desc = f"{episode_key + ' ' if episode_key else ''}finish"
                     pbar.update(1)
                 return EpisodeResult(
                     result=finish_call["arguments"].get("result"), stop_reason="finished",
                     n_steps=step + 1, tools_used=tools_used, nudges_used=nudges_used,
-                    wrap_up_nudged=wrap_up_nudged, trajectory=messages,
+                    summary=finish_call["arguments"].get("summary"),
+                    justification=finish_call["arguments"].get("justification"),
+                    wrap_up_nudged=wrap_up_nudged, auto_verified=auto_verified, trajectory=messages,
                 )
 
             if pbar is not None:
@@ -387,6 +433,8 @@ def run_episode(
             observations = []
             for call in calls:
                 tools_used.append(call["name"])
+                if call["name"] == "verify":
+                    has_verified = True
                 try:
                     output = dispatch_tool(call["name"], call["arguments"], sandbox_root=sandbox_root)
                     content = output if isinstance(output, str) else json.dumps(output)
@@ -435,7 +483,7 @@ def run_episode(
                 combined = "\n\n".join(f"[{o['name']}]\n{o['content']}" for o in observations)
                 messages.append({"role": "tool", "content": combined})
 
-        return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged, trajectory=messages)
+        return EpisodeResult(result=None, stop_reason="max_iterations", n_steps=max_iterations, tools_used=tools_used, nudges_used=nudges_used, wrap_up_nudged=wrap_up_nudged, auto_verified=auto_verified, trajectory=messages)
     finally:
         if pbar is not None and pbar.is_tty:
             pbar.stream.write("\n")

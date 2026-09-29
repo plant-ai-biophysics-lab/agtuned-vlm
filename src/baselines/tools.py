@@ -147,6 +147,34 @@ def _search_agml(input: dict, **_) -> dict:
     )
 
 
+# ── verify ───────────────────────────────────────────────────────────────────
+# Deliberately makes NO network/model call of its own — dispatch_tool has no
+# LLM access at all (every other tool here is plain Python; keeping this one
+# the same way avoids threading llm/tokenizer through the dispatch layer for
+# just this one tool). Instead, the "observation" is just the claim handed
+# back with a directive — the model's OWN next turn (which already sees
+# everything retrieved so far in its context) does the actual checking. This
+# keeps `verify` cheap and stateless, while still making it a REAL, tracked
+# Act step (appears in tools_used, dispatched like any other tool) that can
+# lead to more retrieve/search_agml calls afterward — an open-ended
+# reflection point, not a terminal check bolted onto `finish` alone. See
+# also react_agent.py's automatic finish-time verification gate: `finish`
+# without ever having called this tool first triggers one auto-injected
+# copy of this same reflection (AUTO_VERIFY_PROMPT), so verification isn't
+# purely optional even if the model never calls this tool on its own.
+
+def _verify(input: dict, **_) -> str:
+    claim = input.get("claim", "")
+    return (
+        f"Claim under review: {claim!r}\n\n"
+        "Check this against everything you've already retrieved in this "
+        "conversation. If the existing evidence clearly supports it, you "
+        "may proceed (e.g. call finish). If it doesn't, call "
+        "retrieve/search_agml again for more specific evidence before "
+        "relying on this claim."
+    )
+
+
 # ── finish ───────────────────────────────────────────────────────────────────
 # Never dispatched through TOOL_DISPATCH — react_agent.run_episode() checks
 # for a `finish` tool_use block before reaching the dispatch step at all,
@@ -275,6 +303,23 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "verify",
+            "description": "Check a specific claim against what you've already retrieved. "
+                            "Doesn't fetch anything new itself — a structured checkpoint to "
+                            "reconsider a claim before relying on it. Use any time you're not "
+                            "confident, not just right before finishing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "description": "The specific claim to check."},
+                },
+                "required": ["claim"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "finish",
             "description": "End the episode and report the final answer. Call "
                             "this exactly once, when the task is complete.",
@@ -282,8 +327,12 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "result": {"type": "string", "description": "The complete final answer."},
+                    "summary": {"type": "string", "description": "Brief summary of what you "
+                                "investigated — which sources/tools you used and what you found."},
+                    "justification": {"type": "string", "description": "Why you chose this "
+                                "specific answer — how the evidence you gathered supports it."},
                 },
-                "required": ["result"],
+                "required": ["result", "summary", "justification"],
             },
         },
     },
@@ -296,6 +345,7 @@ TOOL_DISPATCH = {
     "write": _write,
     "retrieve": _retrieve,
     "search_agml": _search_agml,
+    "verify": _verify,
 }
 
 

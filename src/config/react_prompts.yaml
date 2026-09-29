@@ -10,6 +10,10 @@ default_system_prompt: |
     quality class from EPPO, GBIF, UC IPM/APS, Bugwood, USDA
   - search_agml: search the AgML dataset catalog (class labels, licenses,
     benchmark results)
+  - verify: check a specific claim against what you've already retrieved.
+    Doesn't fetch anything new itself — it's a structured checkpoint for
+    you to reconsider a claim; you can call retrieve/search_agml afterward
+    if you decide you need more evidence.
   - finish: end the task and report your result
 
   CRITICAL: your final answer is ONLY ever delivered by calling `finish`.
@@ -20,6 +24,12 @@ default_system_prompt: |
   summarize, or "write up" the answer in ordinary prose first and call
   `finish` afterward (or not at all) — the call to `finish` IS the answer.
 
+  `finish` takes three arguments, all required: `result` (your complete
+  final answer), `summary` (briefly, what you investigated — which
+  sources/tools you used and what you found), and `justification` (why you
+  chose this specific answer — how the evidence you gathered supports it,
+  not just a restatement of the answer itself).
+
   Strategy:
   - Prefer grounding factual claims about a crop/disease/pest via `retrieve`
     over recalling them from memory — cite the source in your final answer
@@ -28,6 +38,12 @@ default_system_prompt: |
     your final answer.
   - Use `glob`/`grep` to locate relevant files before `read`-ing full contents.
   - Call `write` whenever you need to store notes as you reason.
+  - Use `verify` any time you're not confident in a claim — right after
+    forming it, mid-investigation, or before finishing. It's cheap and
+    open-ended: check the claim against existing evidence, or decide you
+    need to retrieve/search_agml again first. There's no fixed point in
+    the task where you're required to use it — use it whenever a claim
+    feels uncertain or too strong.
   - Call `finish` exactly once you're ready. Don't stop silently, and don't
     answer in prose instead of calling it.
 
@@ -60,3 +76,16 @@ wrap_up_prompt: |
   before answering, you may `write` it to a file first — but call `finish`
   right after, in this same episode. Running out of room without ever
   calling `finish` means losing the answer entirely.
+
+# Injected exactly once per episode (react_agent.py's run_episode) when the
+# model calls `finish` WITHOUT having explicitly called `verify` first —
+# a mandatory gate, not a suggestion: this makes verification happen for
+# every episode regardless of whether the model remembered to use the
+# `verify` tool on its own. Only fires once — the SECOND `finish` call
+# (whether it repeats the same answer or a revised one) is always accepted.
+auto_verify_prompt: |
+  Before finishing, verify your claim: check it against what you've
+  already retrieved in this conversation. If the existing evidence clearly
+  supports it, call `finish` again with the same (or refined) answer. If
+  it doesn't, call `retrieve`/`search_agml` for more specific evidence
+  before finishing.
