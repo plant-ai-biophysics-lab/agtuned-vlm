@@ -24,8 +24,16 @@ machinery. Spatial-task analog of vision_baseline.py's --rubric.
 Compared against the plain run at an equal image budget via
 src/detection_rubric_summary.py.
 
+--enable_thinking is ON by default (matching vision_baseline.py's own
+standard thinking-enabled workflow) — pass --no-enable_thinking to opt
+out. --chat_template_path defaults to the vendored Gemma-4 template
+alongside it; pass --chat_template_path "" too if overriding --model to a
+non-Gemma checkpoint.
+
 Usage:
-    uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic
+    uv run python main.py detection-baseline \\
+        --model RedHatAI/gemma-4-31B-it-FP8-dynamic \\
+        --output_dir outputs_final/detection_baseline_thinking/
     uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic \\
         --rubric --output_dir outputs_final/detection_baseline_rubric/
 """
@@ -317,24 +325,36 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="outputs_final/detection_baseline/")
     parser.add_argument("--iou_threshold", type=float, default=0.5,
                          help="IoU threshold for counting a prediction as a true-positive match.")
-    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
                          help="Let the model use its own extended thinking for the box-localization "
-                              "step, same mechanism as vision_baseline.py's own --enable_thinking — "
-                              "off by default, matching this script's plain single-shot design. For "
-                              "Gemma-4, --chat_template_path is ALSO required (its stock template has "
-                              "no enable_thinking support at all, so this alone is a silent no-op). "
-                              "Raise --gen_max_tokens when using this, or the thinking trace will "
-                              "truncate before the model reaches its boxes. Captured into the "
-                              "checkpoint's `reasoning` column, same convention as vision_baseline.py.")
-    parser.add_argument("--chat_template_path", default=None,
+                              "step, same mechanism as vision_baseline.py's own --enable_thinking. "
+                              "On by default — the pipeline's standard workflow, matching "
+                              "vision_baseline_config.yaml's own default for classification. Pass "
+                              "--no-enable_thinking to opt out. The default --chat_template_path "
+                              "(below) assumes a Gemma-4-family model; if you override --model to a "
+                              "non-Gemma checkpoint (e.g. Qwen), ALSO pass --chat_template_path \"\" "
+                              "to unset it — Qwen's own bundled template already supports "
+                              "enable_thinking directly, and forcing the vendored Gemma-4 template "
+                              "onto it would render the wrong prompt format entirely. Captured into "
+                              "the checkpoint's `reasoning` column, same convention as "
+                              "vision_baseline.py.")
+    parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
                          help="Override the tokenizer's own bundled chat template with a Jinja file "
-                              "at this path — needed for --enable_thinking to do anything on Gemma-4. "
-                              "Pass src/config/tool_chat_template_gemma4.jinja alongside "
-                              "--enable_thinking for Gemma-4. Not needed for Qwen models.")
-    parser.add_argument("--gen_max_tokens", type=int, default=256,
-                         help="max_tokens for the box-localization generation step. 256 fits a direct "
-                              "answer with no thinking; raise substantially (e.g. 1024+) when "
-                              "--enable_thinking is set.")
+                              "at this path — needed for --enable_thinking to do anything on Gemma-4 "
+                              "(its stock template has no enable_thinking support at all, so this is "
+                              "on by default alongside --enable_thinking). Pass \"\" to unset for a "
+                              "non-Gemma model (e.g. Qwen, whose own bundled template already "
+                              "supports enable_thinking directly).")
+    parser.add_argument("--gen_max_tokens", type=int, default=4096,
+                         help="max_tokens for the box-localization generation step. A plain "
+                              "(non-thinking) direct box answer needs nowhere near this — the "
+                              "default is high specifically for --enable_thinking, which needs real "
+                              "headroom (confirmed empirically: at 1024, 4/10 rows on a real smoketest "
+                              "never even finished the thinking block before truncating, let alone "
+                              "reached box output — see docs/stage1_baseline_classification.md's own "
+                              "note on the same failure mode for classification). vLLM only generates "
+                              "until the model naturally stops, so this high a ceiling costs nothing "
+                              "extra for a plain run that finishes early on its own.")
     parser.add_argument("--rubric", action="store_true",
                          help="Stage 2.5 — wrap the question through the fill-in-the-blank "
                               "localization checklist (object/class, location, occlusion, size; "

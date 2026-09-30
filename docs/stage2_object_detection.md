@@ -27,27 +27,39 @@ Validate the whole pipeline — manifest → generation → box parsing → scor
 uv run python main.py detection-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --manifest dataset/selected_images_detection_10.json \
+    --output_dir outputs_final/detection_baseline_thinking_smoketest/ \
     --smoketest
 ```
 
 `--smoketest` restricts the run to just this one dataset (10 images) regardless of what else is in the manifest/config. Confirm the checkpoint looks sane (non-empty `pred_boxes_json`, plausible precision/recall) and run Step 2's QC plot on it before moving on to the full Step 1 run below.
 
-## Step 1 — baseline
+## Step 1 — baseline (thinking enabled)
 
 ```bash
 uv run python main.py detection-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --manifest dataset/selected_images_detection_10.json
+    --manifest dataset/selected_images_detection_10.json \
+    --output_dir outputs_final/detection_baseline_thinking/
 ```
+
+Thinking is **on by default** — same standard workflow as [Stage 1](stage1_baseline_classification.md)'s classification baseline. `--chat_template_path` defaults to the vendored Gemma-4 template alongside it (its stock template has no thinking support at all); `--gen_max_tokens` defaults to `4096`, enough headroom that a real thinking trace won't truncate before reaching box output (confirmed empirically: at `1024`, 4/10 rows on a real run never even finished the thinking block).
+
+## Without thinking (optional, for a thinking-vs-not comparison)
+
+Add `--no-enable_thinking` — same command otherwise, a different `--output_dir` (e.g. `outputs_final/detection_baseline/`) so the two checkpoints don't collide.
 
 ## Step 2 — QC: plot predicted vs. ground-truth boxes
 
 ```bash
 uv run python main.py detection-qc-plot \
-    --ckpt outputs_final/detection_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+    --ckpt outputs_final/detection_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
 ```
 
 The only reliable way to catch a bbox-coordinate-alignment bug — run on a handful of images before trusting the checkpoint at scale.
+
+## For a non-Gemma model
+
+`--chat_template_path`'s default assumes Gemma-4. If you override `--model` to a Qwen checkpoint (whose own bundled template already supports thinking directly), also pass `--chat_template_path ""` to unset the Gemma-4-specific template — otherwise it renders the wrong prompt format entirely, not just fail to enable thinking.
 
 ## Parameters
 
@@ -60,4 +72,7 @@ The only reliable way to catch a bbox-coordinate-alignment bug — run on a hand
 | `--output_dir` (`detection-baseline`) | `outputs_final/detection_baseline/` | Checkpoint output dir |
 | `--smoketest` (`detection-baseline`) | off | Restrict to `GEMINI_cowpea_flower_detection` only |
 | `--iou_threshold` (`detection-baseline`) | `0.5` | IoU cutoff for precision/recall/F1 |
+| `--enable_thinking` / `--no-enable_thinking` (`detection-baseline`) | **on** | Extended thinking before box output |
+| `--chat_template_path` (`detection-baseline`) | vendored Gemma-4 template | Custom chat template — pass `""` to unset for a non-Gemma model |
+| `--gen_max_tokens` (`detection-baseline`) | `4096` | Generation budget |
 | `--n_per_dataset` (`detection-qc-plot`) | `3` | Sampled images per dataset |
