@@ -50,16 +50,15 @@ from src.common.bbox_parse import (
 from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import load_prompts
+from src.common.metrics import extract_channel_thought
 from src.common.progress import ProgressBar
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
 try:
     from vllm import SamplingParams
-    _DET_PARAMS = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
-    _DET_PARAMS = None
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
@@ -67,9 +66,12 @@ _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL 
 # CKPT_FIELDS, but "class_label" here is the PRIMARY category the manifest
 # balanced on (see download_and_sample_detection.py), not the only label —
 # gt_boxes_json/pred_boxes_json carry the FULL per-image box list.
+# "reasoning" mirrors vision_baseline.py's own column: blank unless
+# --enable_thinking actually produced a Gemma-4 <|channel>thought...<channel|>
+# block (extracted before box parsing, see run_batch).
 DET_CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "image_name",
-    "raw_prediction", "pred_boxes_json", "gt_boxes_json",
+    "raw_prediction", "reasoning", "pred_boxes_json", "gt_boxes_json",
     "n_pred", "n_gt", "n_matched", "precision_at_iou50", "recall_at_iou50",
     "f1_at_iou50", "mean_iou_matched",
 ]
@@ -88,10 +90,34 @@ def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = "") -> list[str]:
-    prompts = [build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt) for img in images]
-    outputs = llm.generate(prompts, sampling_params=_DET_PARAMS)
-    return [_clean(o.outputs[0].text) for o in outputs]
+def run_batch(
+    llm, tokenizer, images: list, question: str, system_prompt: str = "",
+    enable_thinking: bool = False, chat_template: str | None = None, gen_max_tokens: int = 256,
+) -> list[dict]:
+    """Returns one {"prediction": cleaned_text, "reasoning": thinking_text}
+    dict per image. `reasoning` is "" unless enable_thinking is set AND it
+    actually produces a Gemma-4 <|channel>thought...<channel|> block —
+    extracted BEFORE box parsing (extract_boxes/extract_boxes_json), same
+    as vision_baseline.py's own run_batch, so a leftover channel block
+    never pollutes the text those functions try to parse boxes out of.
+    skip_special_tokens=not enable_thinking — Gemma-4's <|channel>/
+    <channel|> markers are real special tokens vLLM strips by default."""
+    prompts = [
+        build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt,
+                                 enable_thinking=enable_thinking, chat_template=chat_template)
+        for img in images
+    ]
+    params = SamplingParams(
+        temperature=0.0, max_tokens=gen_max_tokens, repetition_penalty=1.1,
+        skip_special_tokens=not enable_thinking,
+    )
+    outputs = llm.generate(prompts, sampling_params=params)
+    results = []
+    for o in outputs:
+        raw = o.outputs[0].text
+        thinking, cleaned = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        results.append({"prediction": _clean(cleaned), "reasoning": thinking})
+    return results
 
 
 def det_question(ds, prompts: dict, use_json: bool = False) -> str:
@@ -139,6 +165,7 @@ def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     manifest = load_manifest(Path(args.manifest))
     rescale_1000 = needs_1000_scale_boxes(model_id)
     use_json = uses_json_box_format(model_id)
@@ -226,9 +253,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             if args.rubric:
                 question = apply_rubric_detection(question, use_json, vprompts)
 
-            preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
+            results = run_batch(
+                llm, tokenizer, images, question, system_prompt=system_prompt,
+                enable_thinking=args.enable_thinking, chat_template=chat_template,
+                gen_max_tokens=args.gen_max_tokens,
+            )
 
-            for s, img, pred in zip(samples, images, preds):
+            for s, img, result in zip(samples, images, results):
+                pred = result["prediction"]
                 gt_boxes = s["boxes"]
                 pred_boxes_raw = extract_boxes_json(pred) if use_json else extract_boxes(pred)
                 pred_boxes = []
@@ -241,6 +273,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "agml_dataset": ds.agml_name, "class_label": primary_label,
                     "task_type": ds.task_type, "image_name": Path(s["path"]).name,
                     "raw_prediction": pred,
+                    "reasoning": result["reasoning"],
                     "pred_boxes_json": json.dumps(pred_boxes),
                     "gt_boxes_json": json.dumps(gt_boxes),
                     "n_pred": metrics["n_pred"], "n_gt": metrics["n_gt"], "n_matched": metrics["n_matched"],
@@ -284,6 +317,24 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="outputs_final/detection_baseline/")
     parser.add_argument("--iou_threshold", type=float, default=0.5,
                          help="IoU threshold for counting a prediction as a true-positive match.")
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
+                         help="Let the model use its own extended thinking for the box-localization "
+                              "step, same mechanism as vision_baseline.py's own --enable_thinking — "
+                              "off by default, matching this script's plain single-shot design. For "
+                              "Gemma-4, --chat_template_path is ALSO required (its stock template has "
+                              "no enable_thinking support at all, so this alone is a silent no-op). "
+                              "Raise --gen_max_tokens when using this, or the thinking trace will "
+                              "truncate before the model reaches its boxes. Captured into the "
+                              "checkpoint's `reasoning` column, same convention as vision_baseline.py.")
+    parser.add_argument("--chat_template_path", default=None,
+                         help="Override the tokenizer's own bundled chat template with a Jinja file "
+                              "at this path — needed for --enable_thinking to do anything on Gemma-4. "
+                              "Pass src/config/tool_chat_template_gemma4.jinja alongside "
+                              "--enable_thinking for Gemma-4. Not needed for Qwen models.")
+    parser.add_argument("--gen_max_tokens", type=int, default=256,
+                         help="max_tokens for the box-localization generation step. 256 fits a direct "
+                              "answer with no thinking; raise substantially (e.g. 1024+) when "
+                              "--enable_thinking is set.")
     parser.add_argument("--rubric", action="store_true",
                          help="Stage 2.5 — wrap the question through the fill-in-the-blank "
                               "localization checklist (object/class, location, occlusion, size; "
