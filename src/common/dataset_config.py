@@ -499,10 +499,23 @@ def load_hf_detection_samples(
                 # CBDA_Cotton_Ball_Detection_Augmented uses "category") — check
                 # both rather than assuming either.
                 cat_list = objs.get("category") if objs.get("category") is not None else objs.get("categories", [])
+                bbox_list = objs.get("bbox", [])
+                # Some repos store a SINGLE summary category_id per row even
+                # when multiple box instances are present (confirmed on
+                # GEMINI_cowpea_flower_detection: bbox count=4, categories
+                # count=1) — zip() was silently stopping at the shorter
+                # list, dropping every box past the first. Broadcast the
+                # single category across every box instead of truncating.
+                if len(cat_list) == 1 and len(bbox_list) > 1:
+                    cat_list = list(cat_list) * len(bbox_list)
+                elif cat_list and len(cat_list) != len(bbox_list):
+                    print(f"  [warn] {agml_name} row {idx}: bbox count ({len(bbox_list)}) != "
+                          f"categories count ({len(cat_list)}) and not a 1-vs-many case — "
+                          f"truncating to the shorter list via zip, some boxes may be dropped.")
                 boxes = [
                     {"bbox": _to_pixel_xyxy(list(bbox), image.width, image.height),
                      "category_id": int(cat_id), "category_name": _category_name(int(cat_id))}
-                    for bbox, cat_id in zip(objs.get("bbox", []), cat_list)
+                    for bbox, cat_id in zip(bbox_list, cat_list)
                 ]
                 ann_path.write_text(_json.dumps(boxes))
             samples.append({"path": str(img_path), "boxes": boxes})
