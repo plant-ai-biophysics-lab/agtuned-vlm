@@ -2,7 +2,7 @@
 comparison (no GPU, no model).
 
 Same idea as vision_baseline.py's own "Baseline with rubric" (--rubric) and
-verifier_cot.py's rubric-shaped generation step (docs/stage3_verifier_grade.md),
+verifier_cot.py's rubric-shaped generation step (docs/stage3_classification_verifier.md),
 applied to the spatial task: does
 answering a fill-in-the-blank localization checklist (object/class,
 location, occlusion, size — src/config/verifier_prompts_detection.yaml's

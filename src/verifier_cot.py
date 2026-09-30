@@ -3,14 +3,14 @@ Verifier-CoT — two interchangeable verifier mechanisms over the same
 structured, criteria-based candidate generation (vprompts["structured_templates"],
 filled with the task's rubric), selected via --verifier_type:
 
-- **simple** (default, Paper 2 Stage 3, see docs/stage3_verifier_grade.md) —
+- **simple** (default, Paper 2 Stage 3, see docs/stage3_classification_verifier.md) —
   generate exactly ONE trajectory (no K-candidate pool), then grade it
   against EACH numbered rubric criterion independently on a 1-3 scale
   (vprompts["grading_prompt"], run_group_simple), summed and normalized to
   [0, 1] as verifier_score. No tournament, no pairwise duel — a
   deliberately cheaper, coarser signal, testing whether it still
   correlates with correctness enough to be useful as a stopping/feedback
-  gate (e.g. in the ReAct setup, docs/stage4_react_baseline.md).
+  gate (e.g. in the ReAct setup, docs/stage5_react_baseline.md).
 - **ppt** (Paper 1 Stage 4, see docs/stage4_verifier.md, our contribution)
   — generate K candidates from the same structured template, then run the
   FULL Probabilistic Pivot Tournament from the paper (arXiv:2607.05391
@@ -410,7 +410,7 @@ def run_group_simple(
     chat_template: str | None = None, grading_max_tokens: int = 300,
     existing_trajectories: dict[str, str] | None = None,
 ) -> list[dict]:
-    """--verifier_type simple (Paper 2 Stage 3, docs/stage3_verifier_grade.md):
+    """--verifier_type simple (Paper 2 Stage 3, docs/stage3_classification_verifier.md):
     ONE trajectory per image (no K-candidate pool, no PPT tournament) via
     the same structured fill-in-the-blank template run_group's ppt mode
     uses, then a single text-only grading call that scores the trajectory
@@ -979,7 +979,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         # judged, e.g. --skip_judge) — point-biserial r, the same
         # signal-check convention verifier-score-analysis runs for the ppt
         # mode's top1_win_rate. Not a separate stage/script since it's a
-        # handful of numbers, not a chart — see docs/stage3_verifier_grade.md.
+        # handful of numbers, not a chart — see docs/stage3_classification_verifier.md.
         vs_rows = [r for r in rows if r.get("verifier_score") not in (None, "")]
         judge_key = "judged_correct" if any(r.get("judged_correct") not in (None, "") for r in vs_rows) else "correct"
         vs_scored = [r for r in vs_rows if r.get(judge_key) not in (None, "")]
@@ -1137,7 +1137,7 @@ if __name__ == "__main__":
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
     parser.add_argument("--verifier_type", choices=["simple", "ppt"], default="simple",
-                         help="\"simple\" (default, Paper 2 Stage 3, docs/stage3_verifier_grade.md): "
+                         help="\"simple\" (default, Paper 2 Stage 3, docs/stage3_classification_verifier.md): "
                               "ONE trajectory per image, graded against each rubric criterion "
                               "independently on a 1-3 scale, summed/normalized to verifier_score — "
                               "no K-candidate pool, no tournament, --k_candidates/--k_pivots ignored. "

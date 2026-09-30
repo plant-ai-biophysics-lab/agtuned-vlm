@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md)
 
-The plain, thinking-enabled single-shot classification checkpoint — no rubric, no verifier, no tournament, just the model answering the classification question directly. Every later Paper 2 stage builds on this: Stage 0 tests the judge against it, Stage 3's `verifier-cot --from_ckpt` can grade its trajectories directly, and it's the reference point for Stage 3's verifier score and Stage 4's ReAct agent.
+The plain, thinking-enabled single-shot classification checkpoint — no rubric, no verifier, no tournament, just the model answering the classification question directly. Every later Paper 2 stage builds on this: Stage 0 tests the judge against it, Stage 3's `verifier-cot --from_ckpt` can grade its trajectories directly, and it's the reference point for Stage 3's verifier score and Stage 5's ReAct agent.
 
 ## Generate the checkpoint (thinking enabled)
 
@@ -24,7 +24,7 @@ Add `--no-enable_thinking` — same command otherwise, a different `--output_dir
 
 ## What's next
 
-Stage 0 (judge tests), Stage 2 (same idea for detection), Stage 3 (`verifier-cot --from_ckpt` grades these trajectories directly), Stage 4 (ReAct agent answers the same question for comparison).
+Stage 0 (judge tests), Stage 2 (same idea for detection), Stage 3 (`verifier-cot --from_ckpt` grades these trajectories directly), Stage 5 (ReAct agent answers the same question for comparison).
 
 ## Splitting the work across multiple GPUs
 

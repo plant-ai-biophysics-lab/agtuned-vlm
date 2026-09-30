@@ -114,8 +114,8 @@ Stages:
                                structured generation uses, no tournament machinery — use a
                                different --output_dir than the plain run) also exists but isn't
                                part of Stage 2's current scope; rubric/verifier conditions for
-                               detection are deferred, likely to follow classification's shape
-                               (Stage 3) later.
+                               detection are deferred to Stage 4 (docs/stage4_detection_verifier.md,
+                               design not started yet).
     detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the
@@ -124,7 +124,7 @@ Stages:
                                detection-baseline --rubric at an equal image budget (mean
                                precision/recall/F1/IoU with 95% CI, per-dataset breakdown, F1 vs.
                                IoU-threshold sweep) — no GPU needed.
-    verifier-cot    --verifier_type simple (default, Paper 2 Stage 3, docs/stage3_verifier_grade.md):
+    verifier-cot    --verifier_type simple (default, Paper 2 Stage 3, docs/stage3_classification_verifier.md):
                                ONE trajectory per image, graded against each rubric criterion
                                independently on a 1-3 scale, summed/normalized to verifier_score in
                                [0, 1] — no K-candidate pool, no tournament. Reports a point-biserial
@@ -235,7 +235,7 @@ Stages:
                                (default dataset/judge_qa_review/judge_qa_review.csv — dataset/, not
                                outputs_final/, so it's git-tracked for reproducibility).
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
-    react-build-tasks  Stage 4 (Paper 2/4) — builds a PERSISTED --tasks_jsonl file for
+    react-build-tasks  Stage 5 (Paper 2/5) — builds a PERSISTED --tasks_jsonl file for
                                react-baseline (below) from REAL AgML images: same
                                active_datasets/load_hf_samples/sample_class_images sampling AND the
                                same cls_question() prompt text vision_baseline.py itself uses (pass
@@ -248,8 +248,8 @@ Stages:
                                react-baseline's own --sample_images does the same sampling
                                IN-MEMORY (no file) for a one-off run — use this script instead when
                                you want the task list reviewable/reusable across multiple runs. See
-                               docs/stage4_react_baseline.md.
-    react-baseline  Stage 4 (Paper 2/4) — a tool-using ReAct agent (src/baselines/) over a
+                               docs/stage5_react_baseline.md.
+    react-baseline  Stage 5 (Paper 2/5) — a tool-using ReAct agent (src/baselines/) over a
                                locally-served vLLM model's own native tool calling (same
                                load_llm/render_chat_template machinery as every other script here,
                                NOT a hosted API) — read/glob/grep/write (write sandboxed per
@@ -269,7 +269,7 @@ Stages:
                                elapsed_seconds; browse with `streamlit run
                                app/react_baseline_viewer.py`. Defaults in
                                src/config/react_baseline_config.yaml — see
-                               docs/stage4_react_baseline.md.
+                               docs/stage5_react_baseline.md.
 
 Examples:
     python main.py probe \\

@@ -1,4 +1,4 @@
-# Paper 2, Stage 3 — Simple Verifier (Rubric Grading)
+# Paper 2, Stage 3 — Classification Verifier (Rubric Grading)
 
 [← Back to README](../README.md)
 
@@ -13,7 +13,7 @@ The question this stage answers: does this coarser, cheaper score still
 correlate with correctness? `verifier-cot` prints that correlation
 (point-biserial `r`) at the end of every run and writes it into
 `metrics.json`. If it's meaningfully positive, `verifier_score` is a
-candidate signal for gating [Stage 4](stage4_react_baseline.md)'s ReAct
+candidate signal for gating [Stage 5](stage5_react_baseline.md)'s ReAct
 agent later; if not, that's a real finding too.
 
 ## Just run this
@@ -76,7 +76,7 @@ diagnostic.
 This stage only checks the correlation — it doesn't wire `verifier_score`
 into anything yet. If the result looks useful, the next step (a separate
 piece of work, not part of this stage) is threading `verifier_score` into
-`docs/stage4_react_baseline.md`'s ReAct loop as a confidence signal the
+`docs/stage5_react_baseline.md`'s ReAct loop as a confidence signal the
 agent can check before committing to `finish()`.
 
 ## For reference: everything above is `--verifier_type simple`
