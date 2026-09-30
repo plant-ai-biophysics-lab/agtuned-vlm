@@ -56,11 +56,27 @@ test section for the `download-detection-datasets --only` pattern if
 either isn't downloaded yet.
 
 What to check in the checkpoint: `pred_boxes_json`'s `category_name` field
-per box should now contain a specific stage/condition (e.g. `"bud"`,
-`"open flower"`, `"dead flower"`) instead of just repeating the dataset's
-one class name — if every box still comes back labeled identically to the
-dataset's class name, the model isn't actually differentiating stages and
-the prompt needs another pass.
+per box should now contain `"category: sub_type_or_condition"` (e.g.
+`"flower: open flower"`, `"flower: bud"`) instead of just repeating the
+dataset's one class name — if every box still comes back labeled
+identically to the dataset's class name, the model isn't actually
+differentiating sub-types and the prompt needs another pass.
+
+`detection-multiclass` only runs generation + scoring — it does not plot
+anything itself. `detection_multiclass.py` writes the same
+`DET_CKPT_FIELDS`-shaped checkpoint `detection_baseline.py` does, so
+[Stage 2](stage2_object_detection.md)'s QC plotter works on it unchanged,
+just pointed at the new checkpoint:
+
+```bash
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+This is the visual confirmation that the model is actually drawing boxes
+around different growth stages/conditions (not just ground truth's one
+labeled stage) — the same QC step that originally surfaced this stage's
+motivating finding.
 
 ## Planned: per-box verifier (not built yet)
 
