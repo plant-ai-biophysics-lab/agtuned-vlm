@@ -82,10 +82,17 @@ enforce_eager: false
 # one, regardless of which model is being judged, so judge_accuracy is
 # comparable across all four. Runs as a separate phase after the
 # classification model for a given run is unloaded.
-# google/gemma-4-31B-it 404'd (gated/unavailable in this environment) —
-# defaulting to the 26B variant already used elsewhere in this pipeline.
-judge_model: google/gemma-4-26B-A4B-it
-judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
+# RedHatAI/gemma-4-31B-it-FP8-dynamic — matches vision_baseline.py's own
+# argparse default AND judge_leniency.py/judge_consistency.py/
+# judge_template_sensitivity.py's --judge_model default; this file used to
+# override it to the unquantized google/gemma-4-26B-A4B-it (26B params in
+# bf16 needs ~52GB of weights alone), which OOM'd on real hardware — the
+# quantized checkpoint is what every other judge call in this repo already
+# uses successfully.
+judge_model: RedHatAI/gemma-4-31B-it-FP8-dynamic
+judge_quantize: null  # "4bit", "8bit", "awq", "gptq" — not needed, judge_model is already
+                        # FP8-quantized via its own checkpoint (RedHatAI's own dynamic FP8
+                        # export), this is for an ADDITIONAL bitsandbytes/AWQ/GPTQ pass on top
 judge_confidence_threshold: 1
 judge_chunk_size: 200  # rows per judge call — drives the judge progress bar
                         # and caps how much work a kill mid-judging can lose
