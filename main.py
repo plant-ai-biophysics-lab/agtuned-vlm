@@ -12,6 +12,7 @@ STAGES = {
     "migrate-detection-datasets":  "scripts.agml_hf.migrate_detection_datasets_yaml",
     "download-detection-datasets": "scripts.agml_hf.download_and_sample_detection",
     "detection-baseline":          "src.detection_baseline",
+    "detection-multiclass":        "src.detection_multiclass",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
     "detection-summary":           "src.detection_summary",
@@ -114,8 +115,22 @@ Stages:
                                structured generation uses, no tournament machinery — use a
                                different --output_dir than the plain run) also exists but isn't
                                part of Stage 2's current scope; rubric/verifier conditions for
-                               detection are deferred to Stage 4 (docs/stage4_detection_verifier.md,
-                               design not started yet).
+                               detection are deferred to Stage 4 (docs/stage4_detection_verifier.md).
+    detection-multiclass  Paper 2 Stage 4 (docs/stage4_detection_verifier.md) — same single-shot
+                               box prediction as detection-baseline, but the prompt asks the model
+                               to report EVERY visible instance at ANY growth stage/condition
+                               (e.g. bud/open/dead flower), labeling each box with its own
+                               specific stage instead of the dataset's one coarse class name.
+                               Motivated by a real QC finding: ground truth often only labels ONE
+                               stage as the target class, so the plain baseline's single-class
+                               scoring counts correctly-detected other-stage instances as false
+                               positives. Scoring is still class-agnostic IoU matching
+                               (bbox_metrics.match_boxes), unchanged from detection-baseline — only
+                               the prompt and each box's stage label differ. --smoketest restricts
+                               to GEMINI_cowpea_flower_detection + GEMINI_cowpea_pod_detection.
+                               Generation only for now — the planned per-box confidence-grading
+                               verifier pass (crop each box, re-grade it independently against a
+                               rubric, filter low-confidence boxes) is not built yet, see the doc.
     detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the

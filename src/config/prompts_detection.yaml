@@ -53,3 +53,86 @@ detection_baseline_json: |
   "label": the class name for that instance.
 
   If none are visible, respond with exactly: []
+
+# detection_multiclass: Stage 4's own generation step
+# (docs/stage4_detection_verifier.md) — spatial-task analog of
+# detection_baseline above, but instead of asking for one coarse class per
+# instance, asks the model to ALSO report each instance's specific
+# visually-distinguishable sub-type/condition (whatever that means for
+# THIS object — growth stage for a flower, ripeness for a fruit, damage
+# severity for a pest-damage dataset, etc.) as its own free-text label.
+# Motivated by a real QC finding on GEMINI_cowpea_flower_detection
+# (thinking-enabled detection-baseline smoketest): the model correctly
+# detects buds and dead flowers too, but ground truth only labeled open/
+# senesced blooms as "flower" — a class-definition mismatch, not a
+# localization bug, that deflates precision under detection_baseline's
+# single-class scoring. Deliberately worded to NOT assume growth-stage
+# vocabulary (no "immature/senesced/past its prime" language) — this
+# prompt runs across ~50+ detection datasets spanning very different
+# object types (fruit, weeds, disease lesions, whole plants), most of
+# which have nothing to do with flower maturity; the instruction only
+# asks for "whatever specific term best describes what you see," not a
+# fixed taxonomy. Deliberately a general, zero-shot instruction (no
+# per-dataset stage taxonomy curation, unlike crop) — the point is to
+# recover the real sub-type variation directly from each image, not guess
+# a dataset's own labeling convention up front. Scoring stays class-agnostic
+# (bbox_metrics.match_boxes never reads category_name) — this prompt only
+# changes what free-text label a box carries, never how it's matched
+# against ground truth; Stage 4's later verifier phase is what reconciles
+# which stage(s) actually correspond to a given dataset's GT convention.
+#
+# The label MUST carry both which of {class_names} the instance is AND
+# its stage — not stage alone. {class_names} is every class in the
+# dataset at once (same convention as detection_baseline's own
+# {class_names}), and on a genuinely multi-class dataset (e.g.
+# weed_crop_detection: "weed, crop") a stage-only label like "young" is
+# ambiguous between a young weed and a young crop, unrecoverable
+# downstream. For a single-class dataset (e.g. GEMINI_cowpea_flower_
+# detection: just "flower") this is redundant but harmless — the label
+# just repeats the one class name alongside its stage.
+# Params: {class_names} {crop}
+detection_multiclass: |
+  Identify and localize EVERY visible instance of {class_names} in this
+  image of {crop}. Instances of the same category can still look very
+  different from each other — differing in size, maturity, ripeness,
+  health, or other visually distinguishable sub-types or conditions. Find
+  and report ALL of them, not just the ones that look like a typical or
+  "ideal" example of that category — do not skip an instance just because
+  it looks atypical, immature, damaged, or otherwise different.
+
+  For each instance you find, report its bounding box AND a label naming
+  BOTH which category it belongs to (from {class_names}) AND the specific
+  sub-type or condition you observed for that instance (use whatever
+  specific term best describes what you see, if any is apparent), on its
+  own line, using this exact format:
+  <box>x1,y1,x2,y2</box>category: sub_type_or_condition_label
+
+  Coordinates are pixel positions in the image as shown: (x1,y1) is the
+  top-left corner, (x2,y2) is the bottom-right corner. Report one box per
+  line, nothing else. If none are visible, respond with exactly:
+  <box>none</box>
+
+# Gemma-family variant of detection_multiclass above — same semantics, but
+# asks for Gemma's own native box_2d JSON output format, same rationale as
+# detection_baseline_json above.
+# Params: {class_names} {crop}
+detection_multiclass_json: |
+  Identify and localize EVERY visible instance of {class_names} in this
+  image of {crop}. Instances of the same category can still look very
+  different from each other — differing in size, maturity, ripeness,
+  health, or other visually distinguishable sub-types or conditions. Find
+  and report ALL of them, not just the ones that look like a typical or
+  "ideal" example of that category — do not skip an instance just because
+  it looks atypical, immature, damaged, or otherwise different.
+
+  Respond with ONLY a JSON array, one object per instance found, each with
+  exactly these two keys:
+  "box_2d": [y_min, x_min, y_max, x_max] — coordinates on a 0-1000
+  normalized scale (top-left corner of the image is [0, 0]), in that exact
+  order.
+  "label": BOTH which category it belongs to (from {class_names}) AND any
+  specific sub-type, stage, or condition you can visually distinguish,
+  formatted as "category: sub_type_or_condition" (use whatever specific
+  term best describes what you see, if any is apparent).
+
+  If none are visible, respond with exactly: []
