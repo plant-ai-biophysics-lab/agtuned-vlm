@@ -859,22 +859,40 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
               f"greedy decoding returns identical samples — raise --temperature above 0 or the "
               f"extra candidates are wasted compute")
 
+    if dataset_filter is not None:
+        # Checked against the FULL (unsharded, pending-filtered) set — a
+        # dataset that lands entirely in a different shard shouldn't
+        # trigger a false "not found" warning here.
+        covered = {ds.agml_name for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in all_groups
+                   if any((ds.agml_name, clean_label, n) not in seen for n in names)}
+        missing = dataset_filter - covered
+        if missing:
+            print(f"  [warn] --subsample not found (skip/not in manifest/already complete?): {sorted(missing)}")
+
+    # --num_shards slices the FULL, unfiltered group list — BEFORE any
+    # checkpoint-based "pending" filtering below — so group->shard
+    # assignment only depends on _build_groups()'s deterministic order,
+    # never on how much any shard has already completed. Confirmed bug
+    # (2026-10-01, same root cause found in vision_baseline.py's
+    # run_model): filtering a shard's own already-finished groups out of
+    # the list before this slice shifts every later group's index,
+    # silently reassigning it to a DIFFERENT shard on the next resume —
+    # a shard can end up redoing another shard's work, or a group can
+    # fall through both shards' shifted slices and never get processed by
+    # either. Slicing first keeps the assignment stable regardless of
+    # which groups any shard has already finished.
+    if args.num_shards > 1:
+        n_before = len(all_groups)
+        all_groups = all_groups[args.shard_index :: args.num_shards]
+        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(all_groups)}/{n_before} (dataset, class) "
+              f"group(s) assigned to this shard")
+
     groups = []
     for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in all_groups:
         pending = [n for n in names if (ds.agml_name, clean_label, n) not in seen]
         if not pending:
             continue
         groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
-    if dataset_filter is not None:
-        missing = dataset_filter - {ds.agml_name for ds, *_ in groups}
-        if missing:
-            print(f"  [warn] --subsample not found (skip/not in manifest/already complete?): {sorted(missing)}")
-
-    if args.num_shards > 1:
-        n_before = len(groups)
-        groups = groups[args.shard_index :: args.num_shards]
-        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(groups)}/{n_before} (dataset, class) "
-              f"group(s) assigned to this shard")
 
     n_rows_before = len(rows)
     call_stats: dict = {"n_calls": 0, "n_prompts": 0}

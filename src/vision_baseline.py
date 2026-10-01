@@ -242,8 +242,11 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     if rows:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")
 
-    # Collect (dataset, raw_label, clean_label, crop, task_type, [(name, path)]) groups
-    groups = []
+    # Collect (dataset, raw_label, clean_label, crop, task_type, [(name, path)]) groups.
+    # Deliberately NOT filtered against `seen`/checkpoint state yet — see the
+    # shard-assignment comment below for why this full, unfiltered
+    # enumeration has to come first.
+    all_groups = []
     for ds in active_datasets(Path(args.config)):
         if ds.skip or not ds.task_type:
             continue
@@ -264,16 +267,31 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             task_type = ds.effective_task_type(raw_label)
             aliases = ds.effective_search_terms(raw_label)[1:]  # [1:] drops raw_label itself
             gt_hint = judge_gt_hint(clean_label, aliases)
-            pending = [n for n in names if (ds.agml_name, clean_label, n) not in seen]
-            if not pending:
-                continue
-            groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
+            all_groups.append((ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name))
 
+    # --num_shards slices the FULL, unfiltered group list — BEFORE any
+    # checkpoint-based "pending" filtering below — so the group->shard
+    # assignment only ever depends on active_datasets()/manifest order
+    # (deterministic, identical across every run), never on how much any
+    # shard has already completed. Confirmed bug (2026-10-01): filtering out
+    # a shard's own already-finished groups before this slice shifts every
+    # later group's list index, silently reassigning it to a DIFFERENT
+    # shard on the next resume — a shard could end up redoing another
+    # shard's work, or worse, a group could fall through both shards'
+    # shifted slices and never get processed by either. Slicing first makes
+    # the assignment stable no matter which groups any shard has finished.
     if args.num_shards > 1:
-        n_before = len(groups)
-        groups = groups[args.shard_index :: args.num_shards]
-        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(groups)}/{n_before} (dataset, class) "
+        n_before = len(all_groups)
+        all_groups = all_groups[args.shard_index :: args.num_shards]
+        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(all_groups)}/{n_before} (dataset, class) "
               f"group(s) assigned to this shard")
+
+    groups = []
+    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in all_groups:
+        pending = [n for n in names if (ds.agml_name, clean_label, n) not in seen]
+        if not pending:
+            continue
+        groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
 
     if not groups:
         print("  Nothing to do — all samples already checkpointed.")
