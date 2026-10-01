@@ -1461,28 +1461,36 @@ if __name__ == "__main__":
                          help="Sampling temperature for the K candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "
                               "greedy decoding (temperature=0) returns identical copies.")
-    parser.add_argument("--enable_thinking", action="store_true",
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
                          help="Turn on the model-being-tested's own extended thinking "
-                              "(<think>...</think>) for the k_candidates generation step only — every "
-                              "other generation script in this repo disables it by default (see "
-                              "src/common/chat_prompt.py's module docstring: it compounds badly across "
-                              "multi-turn pipelines). Off by default to match that convention. Does NOT "
-                              "affect the verifier's own pairwise-duel calls — see run_batch_n's "
-                              "docstring. Raise --gen_max_tokens when using this, or thinking traces "
-                              "will routinely get truncated before the model reaches its actual answer. "
-                              "For Gemma-4, also pass --chat_template_path — its own bundled template "
-                              "has no enable_thinking support at all, so this alone is a silent no-op "
-                              "for it (same root cause vision_baseline.py's --chat_template_path fixes).")
+                              "(<think>...</think>, or Gemma-4's <|channel>thought block with "
+                              "--chat_template_path) for the k_candidates generation step only. Bare "
+                              "code default is off; --verifier_config (default "
+                              "src/config/verifier_config.yaml) turns it ON by default, matching "
+                              "vision_baseline.py's own standard thinking-enabled workflow (Stage 1) — "
+                              "pass --no-enable_thinking on the command line to opt out "
+                              "(argparse.BooleanOptionalAction — plain --enable_thinking can only ever "
+                              "turn a False default on, never override a True one back off). Does NOT "
+                              "affect the verifier's own pairwise-duel/grading calls — see "
+                              "run_batch_n's docstring. --gen_max_tokens/--chat_template_path's own "
+                              "config defaults already assume this is on — see their own --help text.")
     parser.add_argument("--chat_template_path", default=None,
                          help="Override the tokenizer's own bundled chat template with a Jinja file at "
                               "this path, for the k_candidates generation step — needed for "
-                              "--enable_thinking to do anything on a Gemma-4 model. Pass "
-                              "src/config/tool_chat_template_gemma4.jinja alongside --enable_thinking "
-                              "for Gemma-4. Not needed for Qwen models.")
+                              "--enable_thinking to do anything on a Gemma-4 model (its own bundled "
+                              "template has no enable_thinking support at all — same root cause "
+                              "vision_baseline.py's --chat_template_path fixes). Bare code default is "
+                              "None; --verifier_config defaults this to the vendored "
+                              "src/config/tool_chat_template_gemma4.jinja alongside --enable_thinking. "
+                              "Pass \"\" on the command line to unset for a non-Gemma model (e.g. Qwen, "
+                              "whose own bundled template already supports enable_thinking directly).")
     parser.add_argument("--gen_max_tokens", type=int, default=180,
-                         help="max_tokens for the k_candidates generation step. 180 fits a direct "
-                              "fill-in-the-blank answer with no thinking; raise substantially (e.g. "
-                              "600-1000) when --enable_thinking is set.")
+                         help="max_tokens for the k_candidates generation step. Bare code default "
+                              "(180) fits a direct fill-in-the-blank answer with no thinking; "
+                              "--verifier_config defaults this to 4096 to match --enable_thinking's "
+                              "own config default — a real thinking trace routinely truncates before "
+                              "<answer> at 180 (same failure mode documented in "
+                              "docs/stage1_baseline_classification.md).")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)

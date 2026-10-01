@@ -17,12 +17,17 @@ pairwise duel, no tournament. Two modes, run in order:
 ## Step 1 — one trajectory (`--verifier_type simple`)
 
 ```bash
-uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it
+uv run python main.py verifier-cot --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 ```
 
 That's it — no other flags needed. Defaults do everything:
 - `--verifier_type simple` (the default) — one trajectory, per-criterion
   grading, no tournament.
+- Thinking is **on by default** — same standard workflow as [Stage 1](stage1_baseline_classification.md)'s
+  classification baseline. `--chat_template_path` defaults to the vendored
+  Gemma-4 template alongside it; `--gen_max_tokens` defaults to `4096`, enough
+  headroom that a real thinking trace won't truncate before reaching
+  `<answer>`. Pass `--no-enable_thinking` to opt out.
 - Images auto-match an existing `vision-baseline` run for the same
   `--model`, if one exists, so results are directly comparable.
 - Judging runs automatically unless you pass `--skip_judge`.
@@ -37,8 +42,8 @@ skip generation entirely and just grade what it already produced:
 
 ```bash
 uv run python main.py verifier-cot \
-    --model google/gemma-4-26B-A4B-it \
-    --from_ckpt outputs_final/vision_baseline_rubric_thinking/google_gemma-4-26B-A4B-it/ckpt_google_gemma-4-26B-A4B-it.csv
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --from_ckpt outputs_final/vision_baseline_rubric_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
 ```
 
 One flag. It grades that checkpoint's own trajectories directly (one
@@ -71,13 +76,17 @@ diagnostic.
 
 ```bash
 uv run python main.py verifier-cot \
-    --model google/gemma-4-26B-A4B-it \
-    --verifier_type top3 \
-    --output_dir outputs_final/verifier_cot_top3/
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type top3
 ```
 
-(Different `--output_dir` from Step 1 — same model, a different mode,
-don't collide checkpoints.)
+Same `--output_dir` as Step 1 is fine — `top3` writes its own
+`ckpt_<model>_top3.csv` (Step 1's own `ckpt_<model>.csv` stays untouched),
+so both modes' checkpoints coexist in one directory without colliding.
+Thinking/`--gen_max_tokens`/`--chat_template_path` default the same way
+Step 1's do (on, `4096`, vendored Gemma-4 template) — raising
+`--gen_max_tokens` matters even more here, since a truncated thinking
+trace now costs you 3 generations instead of 1.
 
 Mechanism: one generation call draws `--top3_n_candidates` (default 3)
 independent trajectories per image (needs `--temperature` > 0, the
@@ -149,20 +158,22 @@ that logic to whatever detail is actually in the response.
 
 ## Splitting the work across multiple GPUs
 
-`--num_shards N --shard_index i` partitions the (dataset, class) groups into N independent single-GPU processes, each generating **and** judging its own shard. Run one process per GPU with its own `--shard_index`:
+`--num_shards N --shard_index i` partitions the (dataset, class) groups into N independent single-GPU processes, each generating **and** judging its own shard. Run one process per GPU with its own `--shard_index` — pass the SAME `--verifier_type` to every shard and to the merge call below, or the merge will look for the wrong filenames and find nothing:
 
 ```bash
 # 4 GPUs, one process each ($SHARD_INDEX = 0, 1, 2, 3):
 uv run python main.py verifier-cot \
-    --model google/gemma-4-26B-A4B-it \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type top3 \
     --num_shards 4 --shard_index $SHARD_INDEX
 ```
 
-Each shard writes its own `ckpt_<model>_shard<i>of4.csv`, `verifier_log_shard<i>of4.jsonl`, and `judge_log_shard<i>of4.jsonl` (never the canonical filenames), so all 4 can run concurrently with zero write contention. Once every shard finishes, merge them into the canonical checkpoint:
+Each shard writes its own `ckpt_<model>_top3_shard<i>of4.csv`, `verifier_log_top3_shard<i>of4.jsonl`, and `judge_log_top3_shard<i>of4.jsonl` (`simple` drops the `_top3` part — `ckpt_<model>_shard<i>of4.csv` — everything else is identical) — never the canonical filenames, so all 4 can run concurrently with zero write contention, and `simple`/`top3`/`ppt` can all share one `--output_dir` without colliding with each other either. Once every shard finishes, merge them into the canonical checkpoint:
 
 ```bash
 uv run python main.py verifier-cot \
-    --model google/gemma-4-26B-A4B-it \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type top3 \
     --output_dir outputs_final/verifier_cot/ \
     --merge_shards
 ```
@@ -182,8 +193,11 @@ only for Paper 1 reproducibility.
 | `--model` | *(required)* | Model to run |
 | `--verifier_type` | `simple` | `simple` (Step 1), `top3` (Step 2), or `ppt` (legacy, Paper 1 Stage 4) |
 | `--top3_n_candidates` | `3` | `--verifier_type top3` only — independent trajectories per image |
+| `--enable_thinking` / `--no-enable_thinking` | **on** | Extended thinking for the generation step (not the grading/pairwise calls) |
+| `--chat_template_path` | vendored Gemma-4 template | Custom chat template — pass `""` to unset for a non-Gemma model |
+| `--gen_max_tokens` | `4096` | Generation budget for the k_candidates/top3 step |
 | `--from_ckpt` | none | `--verifier_type simple` only — grade an existing checkpoint's trajectories instead of regenerating |
-| `--output_dir` | `outputs_final/verifier_cot/` | Checkpoint output dir |
+| `--output_dir` | `outputs_final/verifier_cot/` | Checkpoint output dir — shared safely across all 3 `--verifier_type`s (distinct filenames) |
 | `--manifest` | `dataset/selected_images_10.json` | Which manifest to sample from |
 | `--match_images_from` | *(auto-detected)* | Reference checkpoint for guaranteed image overlap |
 | `--n_samples` | `10` | Images per class |

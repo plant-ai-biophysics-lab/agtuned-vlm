@@ -63,14 +63,23 @@ k_pivots: 2             # k -- pivot-set size for the full PPT tournament (arXiv
                          # matches llm_verifier.pivot_tournament.DEFAULT_PIVOTS, repeated here as a
                          # literal rather than imported so this file has no Python-side dependency
 temperature: 0.8        # sampling temperature for the K candidates; needs to be > 0 for
-                         # k_candidates > 1 to actually differ (greedy decoding repeats itself)
-enable_thinking: false  # model-being-tested's own extended thinking for the k_candidates
-                         # generation step only (not the verifier's own pairwise calls) — off by
-                         # default, matching every other generation script in this repo
-                         # (src/common/chat_prompt.py). Raise gen_max_tokens well above its
-                         # default when this is true, or thinking traces get truncated before the
-                         # model reaches its actual answer.
-gen_max_tokens: 180      # max_tokens for the k_candidates generation step
+                         # k_candidates > 1 (ppt) / top3_n_candidates > 1 (top3) to actually differ
+                         # (greedy decoding repeats itself)
+# On by default (2026-10-01) — matches vision_baseline_config.yaml's own
+# standard thinking-enabled workflow (Stage 1). Pass --no-enable_thinking
+# on the command line to opt out (argparse.BooleanOptionalAction — plain
+# --enable_thinking can only ever turn a False default on, never override
+# a True one back off). chat_template_path/gen_max_tokens below assume
+# this is on; see their own comments if you override model to non-Gemma.
+enable_thinking: true
+gen_max_tokens: 4096    # a real thinking trace routinely truncates before <answer> at the
+                         # non-thinking default (180) — see --gen_max_tokens's own --help text
+chat_template_path: src/config/tool_chat_template_gemma4.jinja  # Gemma-4 only — its own bundled
+                         # template has no enable_thinking support at all, so this is on by
+                         # default alongside enable_thinking above. Override model to a Qwen
+                         # checkpoint? ALSO pass --chat_template_path "" on the command line to
+                         # unset this (Qwen's own bundled template already supports
+                         # enable_thinking directly).
 
 # Candidate generation prompt is ALWAYS the fill-in-the-blank
 # structured_templates entry for the group's task type (verifier_prompts.yaml)
