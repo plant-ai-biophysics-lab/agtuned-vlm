@@ -43,3 +43,5 @@ experiments/**/**/*.npy
 /legacy/outputs/verifier_lmv
 /experiments/ag_finetune/.DS_Store
 /dataset/images
+/dataset/.DS_Store
+/dataset/images_detection

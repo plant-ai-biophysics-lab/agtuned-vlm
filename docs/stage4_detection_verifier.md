@@ -2,10 +2,11 @@
 
 [← Back to README](../README.md)
 
-Status: **generation step built, smoke test not yet run on real hardware.
-Verifier (scoring/filtering) step designed but not built.** This stage is
-the spatial-task analog of [Stage 3](stage3_classification_verifier.md)'s
-classification verifier, applied to object detection instead.
+Status: **generation step (Step 0) confirmed working on real hardware.
+Verifier/filtering step (Step 1) built, not yet run on real hardware.**
+This stage is the spatial-task analog of
+[Stage 3](stage3_classification_verifier.md)'s classification verifier,
+applied to object detection instead.
 
 ## Why this stage exists
 
@@ -88,35 +89,75 @@ around different growth stages/conditions (not just ground truth's one
 labeled stage) — the same QC step that originally surfaced this stage's
 motivating finding.
 
-## Planned: per-box verifier (not built yet)
+## Step 1 — per-box verifier: crop, grade, filter
 
-Once multi-class generation is confirmed working, the next piece is
-scoring *confidence* per predicted box rather than trusting every box
+Once multi-class generation is confirmed working (Step 0 above), this
+step scores *confidence* per predicted box rather than trusting every box
 equally:
 
 1. **Crop-and-regrade.** For each predicted box, crop it out of the
-   source image (with some padding) and show *just that crop* to the
-   verifier model, independently of the other boxes and the full-image
-   context — a genuine second opinion, not the same generation call
-   grading its own output.
-2. **Rubric, not a single trajectory score.** Grade each crop against a
-   small rubric (e.g. "is this really an instance of the object," "is the
-   box reasonably tight," "is the stage label plausible given what's
-   visible") and sum to a confidence in `[0, 1]` — same summed-rubric
-   mechanic Stage 3 uses, just applied per-box instead of per-trajectory,
-   so there's no single `verifier_score` per image, only one confidence
-   per predicted box.
-3. **Filter before reporting.** Drop boxes below some confidence
-   threshold from the final prediction set before computing precision/
-   recall/F1 — the multi-class generation step over-generates by design
-   (every stage, every instance), and this is what prunes it back down to
-   a trustworthy final set.
+   source image (padded 15% of the box's own width/height per side by
+   default — `--crop_pad_frac`) and show *just that crop* to the verifier
+   model, independently of the other boxes and the full-image context —
+   a genuine second opinion, not the same generation call grading its own
+   output.
+2. **Rubric, not a single trajectory score.** Grade each crop against
+   `src/config/verifier_prompts_detection.yaml`'s `box_rubric` (4
+   criteria: is this a real instance of the stated category, is the box
+   reasonably tight, is it exactly one instance not several merged, is
+   the stated sub-type/condition plausible) independently on a 1-3 scale,
+   summed to a confidence in `[0, 1]` — same summed-rubric mechanic Stage
+   3 uses (`src/verifier_cot.py`'s own `_parse_criterion_scores`/
+   `_normalize_criterion_scores`, reused directly), just applied per-box
+   instead of per-trajectory. No ground truth is shown to the grader —
+   purely a visual plausibility check against the box's own stated label.
+   Each box's individual `criterion_scores` and `verifier_feedback` (not
+   just the summed confidence) are stored in the checkpoint, same
+   convention as Stage 3's own per-criterion storage.
+3. **Filter before reporting.** Boxes with confidence below
+   `--confidence_threshold` (default `0.5`, no principled value yet — see
+   below) are dropped into `pred_boxes_filtered_json`, a *separate* field
+   from the original (unfiltered) `pred_boxes_json` — the checkpoint keeps
+   both, so you can directly compare before/after instead of only seeing
+   the filtered number.
 4. **Scoring stays class-agnostic.** IoU-match the filtered box set
    against ground truth exactly as Step 0 already does
-   (`bbox_metrics.match_boxes`) — no new scoring machinery needed there,
-   the verifier only changes which boxes make it into that matching step.
+   (`bbox_metrics.match_boxes`) — no new scoring machinery, re-scored at
+   `--iou_threshold` (default `0.5`, independent of the input
+   checkpoint's own threshold).
 
-Open questions for when this gets built: the crop-padding amount (too
-tight loses context the model needs to judge plausibility; too loose
-re-includes neighboring instances), and how many rubric criteria are
-worth the extra GPU call per box before diminishing returns.
+```bash
+uv run python main.py detection-box-verifier \
+    --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/detection_box_verifier_smoketest/
+```
+
+**Read the result**: `metrics.json` reports mean precision/recall/F1 for
+both `unfiltered` (identical to the input checkpoint's own numbers) and
+`filtered` (after dropping low-confidence boxes) side by side — this is
+the direct before/after comparison that answers whether filtering
+actually helps, same "compare relatively, don't trust one absolute
+number" approach already used for classification's judge/verifier
+results in this project (ground-truth conventions are fuzzy here too, not
+just for disease naming).
+
+`--confidence_threshold`'s default (`0.5`) is a starting guess, not a
+tuned value. To actually find the threshold that maximizes performance,
+sweep it — no GPU/re-grading needed, since confidence was already graded
+once and is stored on every box:
+
+```bash
+uv run python main.py detection-box-verifier-summary \
+    --ckpt outputs_final/detection_box_verifier_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+Re-derives precision/recall/F1 at every `confidence_threshold` (`0.0`-`0.9`
+in steps of `0.1`) × `iou_threshold` (`0.3`/`0.5`/`0.75`) combination
+directly from the checkpoint's own stored per-box `confidence` — pure CPU
+re-filtering, not new grading calls. Writes `f1_vs_confidence_threshold.png`
+(one F1 line per IoU threshold, peak marked) and `threshold_sweep.csv`
+(the full grid), and prints the single best combination to stdout.
+
+Open question not yet resolved: how many rubric criteria are worth the
+extra GPU call per box before diminishing returns — 4 was a starting
+point, not validated against alternatives.

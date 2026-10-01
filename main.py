@@ -13,6 +13,8 @@ STAGES = {
     "download-detection-datasets": "scripts.agml_hf.download_and_sample_detection",
     "detection-baseline":          "src.detection_baseline",
     "detection-multiclass":        "src.detection_multiclass",
+    "detection-box-verifier":      "src.detection_box_verifier",
+    "detection-box-verifier-summary": "src.detection_box_verifier_summary",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
     "detection-summary":           "src.detection_summary",
@@ -128,9 +130,27 @@ Stages:
                                (bbox_metrics.match_boxes), unchanged from detection-baseline — only
                                the prompt and each box's stage label differ. --smoketest restricts
                                to GEMINI_cowpea_flower_detection + GEMINI_cowpea_pod_detection.
-                               Generation only for now — the planned per-box confidence-grading
-                               verifier pass (crop each box, re-grade it independently against a
-                               rubric, filter low-confidence boxes) is not built yet, see the doc.
+    detection-box-verifier  Paper 2 Stage 4, Step 1 (docs/stage4_detection_verifier.md) — per-box
+                               confidence grading over a detection-multiclass checkpoint: crops
+                               each predicted box (padded, --crop_pad_frac) and shows ONLY that
+                               crop to a verifier model, independent of the other boxes/full
+                               image — graded against verifier_prompts_detection.yaml's box_rubric
+                               (4 criteria) on a 1-3 scale, summed to a per-box confidence in
+                               [0, 1] (src/verifier_cot.py's own criterion-scoring helpers, reused
+                               unchanged). Boxes below --confidence_threshold (default 0.5, not
+                               yet tuned) are dropped into a SEPARATE pred_boxes_filtered_json —
+                               the original unfiltered pred_boxes_json/metrics are preserved
+                               alongside, so metrics.json reports unfiltered vs. filtered
+                               precision/recall/F1 side by side for direct comparison. Scoring
+                               stays class-agnostic IoU matching, unchanged from detection-baseline.
+    detection-box-verifier-summary  Paper 2 Stage 4, Step 1-report (docs/stage4_detection_verifier.md,
+                               no GPU needed) — sweeps confidence_threshold (0.0-0.9) x iou_threshold
+                               (0.3/0.5/0.75) directly from a detection-box-verifier checkpoint's
+                               already-stored per-box confidence (pure CPU re-filtering/re-matching,
+                               no new grading calls), to find which threshold combination actually
+                               maximizes F1 instead of trusting whatever --confidence_threshold the
+                               run happened to use. Writes f1_vs_confidence_threshold.png +
+                               threshold_sweep.csv, prints the best combination.
     detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the
