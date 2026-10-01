@@ -70,8 +70,18 @@ just pointed at the new checkpoint:
 
 ```bash
 uv run python main.py detection-qc-plot \
-    --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+    --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --color_by_subclass
 ```
+
+`--color_by_subclass` colors each predicted box by its own `category_name`
+value (e.g. `"flower: bud"` vs. `"flower: open flower"`) instead of one
+flat lime — the whole point of this stage's QC is seeing whether the model
+actually differentiates sub-types, which a single color would hide. Ground
+truth stays dashed red regardless. Off by default on
+`detection-qc-plot` — a plain `detection-baseline` checkpoint's
+`category_name` is just the dataset's one class repeated on every box, so
+this flag would add a legend with no real information there.
 
 This is the visual confirmation that the model is actually drawing boxes
 around different growth stages/conditions (not just ground truth's one

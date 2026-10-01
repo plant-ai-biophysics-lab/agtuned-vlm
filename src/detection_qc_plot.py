@@ -56,6 +56,15 @@ def main() -> None:
     ap.add_argument("--out_dir", default=None,
                      help="Default: <ckpt's own directory>/qc_plots/")
     ap.add_argument("--n_per_dataset", type=int, default=3, help="Sample images per dataset.")
+    ap.add_argument("--color_by_subclass", action="store_true",
+                     help="Color each predicted box by its own category_name value instead of a "
+                          "flat lime — for detection-multiclass checkpoints, where category_name "
+                          "already carries a sub-class/condition (e.g. \"flower: bud\" vs "
+                          "\"flower: open flower\"), not just the dataset's one coarse class. "
+                          "Ground truth stays dashed red either way. Off by default — a plain "
+                          "detection-baseline checkpoint's category_name is just the dataset's one "
+                          "class repeated on every box, so this would add a legend with no real "
+                          "information.")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -111,14 +120,16 @@ def main() -> None:
                          f"{label_a}: P={r.get('precision_at_iou50', '?')} R={r.get('recall_at_iou50', '?')} "
                          f"| {label_b}: P={r_b.get('precision_at_iou50', '?')} R={r_b.get('recall_at_iou50', '?')}")
                 plot_predictions_comparison(image, pred_boxes, pred_boxes_b, gt_boxes,
-                                             label_a, label_b, out_path=out_path, title=title)
+                                             label_a, label_b, out_path=out_path, title=title,
+                                             color_by_subclass=args.color_by_subclass)
             else:
                 title = (f"{dataset} / {r['image_name']}\n"
                          f"pred={r.get('n_pred', len(pred_boxes))} gt={r.get('n_gt', len(gt_boxes))} "
                          f"matched={r.get('n_matched', '?')} "
                          f"P={r.get('precision_at_iou50', '?')} R={r.get('recall_at_iou50', '?')} "
                          f"IoU={r.get('mean_iou_matched', '?')}")
-                plot_predictions(image, pred_boxes, gt_boxes, out_path=out_path, title=title)
+                plot_predictions(image, pred_boxes, gt_boxes, out_path=out_path, title=title,
+                                  color_by_subclass=args.color_by_subclass)
             n_plotted += 1
 
     print(f"\nPlotted {n_plotted} image(s) across {len(by_dataset)} dataset(s) -> {out_dir}")
