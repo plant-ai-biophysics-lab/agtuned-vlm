@@ -922,14 +922,23 @@ def _result_row(
     }
 
 
-def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VERIFIER_CKPT_FIELDS) -> None:
-    """Combine every ckpt_<model>_shard<i>of<n>.csv in output_dir/<model>/
-    into the canonical ckpt_<model>.csv (rewritten fresh, not appended —
-    safe to re-run), same convention as vision_baseline.py's own
-    merge_shards. Rows are joined on (agml_dataset, class_label,
-    image_name); a duplicate key across shards (shouldn't happen — shards
-    partition disjoint groups — but checked rather than assumed) keeps the
-    first-seen row and prints a warning.
+def merge_shards(
+    output_dir: Path, model_id: str, verifier_type: str = "simple", fields: list[str] = VERIFIER_CKPT_FIELDS,
+) -> None:
+    """Combine every ckpt_<model>[_<verifier_type>]_shard<i>of<n>.csv in
+    output_dir/<model>/ into the canonical ckpt_<model>[_<verifier_type>].csv
+    (rewritten fresh, not appended — safe to re-run), same convention as
+    vision_baseline.py's own merge_shards. Rows are joined on
+    (agml_dataset, class_label, image_name); a duplicate key across shards
+    (shouldn't happen — shards partition disjoint groups — but checked
+    rather than assumed) keeps the first-seen row and prints a warning.
+
+    verifier_type: must match whatever --verifier_type the shards were
+    RUN with (the stem suffix run_model's own ckpt_stem applies) — "simple"
+    (default, no suffix) glob/writes the bare ckpt_<model>[_shard...].csv
+    filenames; "top3"/"ppt" glob/write their own _<verifier_type>-suffixed
+    filenames, so merging the wrong --verifier_type here silently finds
+    zero shards rather than merging the wrong mode's data.
 
     IMPORTANT: leaves the shard files in place (never deletes them).
     judge-leniency/judge-consistency/judge-template-sensitivity's own
@@ -938,10 +947,13 @@ def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VERIFIER_C
     into a directory those scripts are still reading from concurrently,
     prefer merging into a directory they haven't looked at yet."""
     model_dir = output_dir / safe_model_name(model_id)
-    shard_paths = sorted(model_dir.glob(f"ckpt_{safe_model_name(model_id)}_shard*of*.csv"))
+    type_suffix = "" if verifier_type == "simple" else f"_{verifier_type}"
+    stem = f"ckpt_{safe_model_name(model_id)}{type_suffix}"
+    shard_paths = sorted(model_dir.glob(f"{stem}_shard*of*.csv"))
     if not shard_paths:
         print(f"  No shard checkpoints found under {model_dir} (expected "
-              f"ckpt_{safe_model_name(model_id)}_shard<i>of<n>.csv).")
+              f"{stem}_shard<i>of<n>.csv — pass --verifier_type to match whatever the shards "
+              f"were run with, if this isn't \"simple\").")
         return
 
     merged: list[dict] = []
@@ -963,10 +975,10 @@ def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VERIFIER_C
               f"shards — kept the first-seen row for each. Shards should partition disjoint groups; "
               f"investigate if this number is large.")
 
-    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    ckpt_path = model_dir / f"{stem}.csv"
     rewrite_ckpt(ckpt_path, merged, fields=fields)
     metrics = compute_model_metrics(merged)
-    (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    (model_dir / f"metrics{type_suffix}.json").write_text(json.dumps(metrics, indent=2))
     print(f"  Merged {len(merged)} row(s) from {len(shard_paths)} shard(s) into {ckpt_path.name}")
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
@@ -988,17 +1000,32 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     # — N independent single-GPU processes can run concurrently against the
     # SAME model_dir with zero write contention. num_shards=1 (default) is
     # byte-for-byte the original filename.
+    #
+    # --verifier_type: "simple" keeps the bare ckpt_<model>.csv filename
+    # (backward-compatible with every existing simple checkpoint); "top3"/
+    # "ppt" get their own _<verifier_type> suffix so the three modes can
+    # share one --output_dir/model_dir without colliding. Confirmed bug
+    # (2026-10-01): before this suffix existed, simple and ppt silently
+    # shared the SAME filename — resume's `seen` key is (dataset, class,
+    # image_name) with no verifier_type in it, so running one mode after
+    # the other against the same output_dir made the second mode see every
+    # image as "already done" and skip it, producing zero rows for that
+    # mode with no error.
     ckpt_stem = f"ckpt_{safe_model_name(model_id)}"
+    if args.verifier_type != "simple":
+        ckpt_stem += f"_{args.verifier_type}"
     if args.num_shards > 1:
         ckpt_stem += f"_shard{args.shard_index}of{args.num_shards}"
     ckpt_path = model_dir / f"{ckpt_stem}.csv"
     # verifier_log.jsonl is this script's own raw per-call log (every
-    # tournament_pair/candidate prompt+response). Shard-aware name (matching
-    # run_judge_phase's own judge_log.jsonl fix, src/common/vision_eval.py)
-    # — model_dir is the SAME directory for every shard, so a fixed name
-    # would have concurrent shard processes appending to one shared file at
-    # the same time.
-    _log_suffix = f"_shard{args.shard_index}of{args.num_shards}" if args.num_shards > 1 else ""
+    # tournament_pair/candidate prompt+response). verifier_type + shard-aware
+    # name (matching run_judge_phase's own judge_log.jsonl fix, src/common/
+    # vision_eval.py) — model_dir is the SAME directory for every mode/shard,
+    # so a fixed name would have concurrent processes appending to one
+    # shared file at the same time (or, pre-fix, silently mixing modes).
+    _type_suffix = "" if args.verifier_type == "simple" else f"_{args.verifier_type}"
+    _shard_suffix = f"_shard{args.shard_index}of{args.num_shards}" if args.num_shards > 1 else ""
+    _log_suffix = _type_suffix + _shard_suffix
     verifier_log_name = f"verifier_log{_log_suffix}.jsonl"
     judge_log_name = f"judge_log{_log_suffix}.jsonl"
     log_path = model_dir / verifier_log_name
@@ -1257,7 +1284,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             pick_str = f"{pick_accuracy:.3f}" if pick_accuracy is not None else "n/a"
             print(f"  top3 pool analysis: answer_in_pool={pool_coverage:.3f} ({n_in_pool}/{len(ip_rows)}), "
                   f"verifier picks it correctly {pick_str} of the time when it's in the pool")
-    (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    (model_dir / f"metrics{_type_suffix}.json").write_text(json.dumps(metrics, indent=2))
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
 
@@ -1280,7 +1307,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             "total_completion_tokens": sum(int(r.get("completion_tokens") or 0) for r in rows),
         },
     }
-    (model_dir / "compute_summary.json").write_text(json.dumps(compute_summary, indent=2))
+    (model_dir / f"compute_summary{_type_suffix}.json").write_text(json.dumps(compute_summary, indent=2))
     print(f"  Compute: {compute_summary['this_run']['n_llm_calls']} LLM call(s) this run "
           f"({compute_summary['this_run']['n_prompts_sent']} prompts), "
           f"{compute_summary['cumulative_all_rows']['total_prompt_tokens']}+"
@@ -1290,11 +1317,17 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
 def main(args: argparse.Namespace) -> None:
     if args.collate:
+        # Collates whichever --verifier_type's checkpoint filename (default
+        # "simple", the bare ckpt_<model>.csv — see run_model's ckpt_stem
+        # comment) exists per model_dir; pass --verifier_type top3/ppt to
+        # collate that mode's own _<verifier_type>-suffixed checkpoints
+        # instead.
+        type_suffix = "" if args.verifier_type == "simple" else f"_{args.verifier_type}"
         collated: dict[str, dict] = {}
         base = Path(args.output_dir)
         if base.exists():
             for model_dir in sorted(p for p in base.iterdir() if p.is_dir()):
-                ckpt_path = model_dir / f"ckpt_{model_dir.name}.csv"
+                ckpt_path = model_dir / f"ckpt_{model_dir.name}{type_suffix}.csv"
                 if not ckpt_path.exists():
                     continue
                 rows, _ = load_ckpt(ckpt_path, fields=VERIFIER_CKPT_FIELDS)
@@ -1310,7 +1343,7 @@ def main(args: argparse.Namespace) -> None:
         if not args.model:
             print("ERROR: --model is required with --merge_shards.")
             sys.exit(1)
-        merge_shards(Path(args.output_dir), args.model, fields=VERIFIER_CKPT_FIELDS)
+        merge_shards(Path(args.output_dir), args.model, verifier_type=args.verifier_type, fields=VERIFIER_CKPT_FIELDS)
         return
 
     if not args.model:
