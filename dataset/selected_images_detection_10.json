@@ -93,6 +93,56 @@
       "hf_config": "default",
       "hf_repo_id": "Project-AgML/ERWIAM_blight_detection"
     },
+    "GEMINI_cowpea_flower_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 92,
+        "scale": "normalized",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": null,
+      "classes": {
+        "category_0": [
+          84,
+          87,
+          92,
+          198,
+          423,
+          429,
+          639,
+          684,
+          755,
+          841
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/GEMINI_cowpea_flower_detection"
+    },
+    "GEMINI_cowpea_pod_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 141,
+        "scale": "normalized",
+        "xyxy_consistent_frac": 0.028
+      },
+      "class_names": null,
+      "classes": {
+        "category_0": [
+          49,
+          50,
+          54,
+          116,
+          248,
+          251,
+          374,
+          402,
+          441,
+          493
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/GEMINI_cowpea_pod_detection"
+    },
     "ImageWeeds_aerial_weed_detection": {
       "bbox_convention": {
         "format": "xywh",
@@ -3162,7 +3212,7 @@
     }
   },
   "failed": {},
-  "generated_at": "2026-09-29T01:41:36.709663+00:00",
+  "generated_at": "2026-09-29T21:53:29.090430+00:00",
   "n_per_class": 10,
   "reproduced_from": null,
   "seed": 42
