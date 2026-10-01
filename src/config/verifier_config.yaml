@@ -47,7 +47,15 @@ seed: 42       # seeds the k-candidate sampling AND the pairwise duel's A/B-slot
                # analysis sampling, so runs over the same images/config are reproducible rather
                # than drawing fresh randomness each time.
 
-# ── Single-round K-candidate + PPT-tournament hyperparameters ────────────────
+# ── --verifier_type top3 ─────────────────────────────────────────────────────
+top3_n_candidates: 3    # independent trajectories generated per image in ONE generation call,
+                         # each graded independently via the same per-criterion rubric call
+                         # --verifier_type simple uses — argmax(verifier_score) wins. temperature
+                         # (below) must be > 0 for these to actually differ.
+
+# ── Single-round K-candidate + PPT-tournament hyperparameters (--verifier_type
+# ppt only — LEGACY as of 2026-10-01, no longer actively tested/extended for
+# Paper 2, kept for Paper 1 reproducibility only) ────────────────────────────
 k_candidates: 4        # K -- candidates generated per image via temperature sampling; the
                          # tournament pool size.
 k_pivots: 2             # k -- pivot-set size for the full PPT tournament (arXiv:2607.05391

@@ -1,5 +1,5 @@
 """
-Verifier-CoT — two interchangeable verifier mechanisms over the same
+Verifier-CoT — interchangeable verifier mechanisms over the same
 structured, criteria-based candidate generation (vprompts["structured_templates"],
 filled with the task's rubric), selected via --verifier_type:
 
@@ -11,11 +11,28 @@ filled with the task's rubric), selected via --verifier_type:
   deliberately cheaper, coarser signal, testing whether it still
   correlates with correctness enough to be useful as a stopping/feedback
   gate (e.g. in the ReAct setup, docs/stage5_react_baseline.md).
+- **top3** (Paper 2 Stage 3, see docs/stage3_classification_verifier.md) —
+  same idea as simple, but draws N (default 3) independent trajectories
+  per image in ONE generation call (vLLM's own SamplingParams(n=...),
+  same mechanism ppt's K-candidate pool below uses), then grades EACH
+  candidate independently via the exact same per-criterion rubric call
+  simple uses (run_group_top3) — N independent absolute scores, no
+  tournament, no pairwise duel. The candidate with the highest
+  verifier_score (argmax) is reported as the final answer; the other
+  candidates' extracted answers + rank + score are appended as plain text
+  AFTER that one <answer> tag (never inside a second <answer> tag), so
+  resolve_class/the judge only ever see the winner, while the full ranked
+  pool stays visible for inspection. Answers two questions simple's single
+  trajectory can't: is the ground truth present ANYWHERE in the pool
+  (answer_in_pool), and when it is, does the verifier's own grading
+  actually pick it (verifier_picked_correct)?
 - **ppt** (Paper 1 Stage 4, see docs/stage4_verifier.md, our contribution)
-  — generate K candidates from the same structured template, then run the
-  FULL Probabilistic Pivot Tournament from the paper (arXiv:2607.05391
-  Section 3.2 — ring pass, pivot selection, pivot rounds, via
-  llm_verifier.pivot_tournament, UNMODIFIED, the same library
+  — LEGACY as of 2026-10-01: no longer actively tested/extended for Paper
+  2 (simple/top3 above are the current line of work); kept for Paper 1
+  reproducibility only. Generates K candidates from the same structured
+  template, then runs the FULL Probabilistic Pivot Tournament from the
+  paper (arXiv:2607.05391 Section 3.2 — ring pass, pivot selection, pivot
+  rounds, via llm_verifier.pivot_tournament, UNMODIFIED, the same library
   src/verifier_lmv.py uses) exactly once over that one pool of K
   candidates. Every scheduled pair is scored via the PPT paper's own
   dual-trajectory logprob mechanism (src/common/ppt_scoring.py — the exact
@@ -47,7 +64,8 @@ verifier-specific extras — see VERIFIER_EXTRA_FIELDS):
 
 Usage:
     uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it
-    uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --verifier_type ppt
+    uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --verifier_type top3
+    uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --verifier_type ppt  # legacy
 
 Collate after all models have run:
     uv run python main.py verifier-cot --collate
@@ -119,13 +137,19 @@ _VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.ya
 # Extra columns inserted right after image_name — same convention as
 # every other CKPT_FIELDS-based stage's own extras. pool_size/n_comparisons/
 # top1_win_rate/verifier_feedback are --verifier_type ppt's own fields
-# (blank for simple rows); verifier_score/criterion_scores are --verifier_type
-# simple's own fields (blank for ppt rows) — one shared checkpoint schema so
-# both modes' output can sit in the same directory/collation tooling.
+# (blank for simple/top3 rows); verifier_score/criterion_scores are shared
+# by simple AND top3 (top3's own are the WINNING candidate's values; blank
+# for ppt rows); answer_in_pool/verifier_picked_correct/
+# candidate_predictions/candidate_verifier_scores are --verifier_type
+# top3's own fields (blank for simple/ppt rows) — one shared checkpoint
+# schema so all three modes' output can sit in the same directory/
+# collation tooling.
 VERIFIER_EXTRA_FIELDS = [
     "verifier_type",
     "pool_size", "n_comparisons", "top1_win_rate", "verifier_feedback",
     "verifier_score", "criterion_scores",
+    "answer_in_pool", "verifier_picked_correct",
+    "candidate_predictions", "candidate_verifier_scores",
     "prompt_tokens", "completion_tokens", "elapsed_s", "avg_time_per_sample_s",
 ]
 VERIFIER_CKPT_FIELDS = (
@@ -528,6 +552,161 @@ def run_group_simple(
     return results
 
 
+def run_group_top3(
+    llm, tokenizer, images: list, cls_q: str, gen_template: str, rubric: str, prompts: dict, vprompts: dict,
+    gen_temperature: float, rng: random.Random,
+    agml_dataset: str, class_label: str, image_names: list[str],
+    log_path: Path | None = None, call_stats: dict | None = None,
+    seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
+    chat_template: str | None = None, grading_max_tokens: int = 300, n_candidates: int = 3,
+) -> list[dict]:
+    """--verifier_type top3 (Paper 2 Stage 3, docs/stage3_classification_verifier.md):
+    same structured fill-in-the-blank generation as run_group_simple, but
+    draws n_candidates (default 3) independent trajectories per image in
+    ONE generation call (SamplingParams(n=n_candidates) — the same
+    mechanism run_group's K-candidate pool uses) instead of one, then
+    grades EACH candidate independently via the exact same per-criterion
+    rubric grading call run_group_simple uses (vprompts["grading_prompt"]),
+    batched into one llm.generate() call across every (image, candidate)
+    pair. No tournament, no pairwise duel — N independent absolute scores,
+    not a relative ranking.
+
+    The candidate with the highest verifier_score (ties broken toward the
+    lowest candidate_index, i.e. the model's own first-generated guess) is
+    reported as the final answer — its own trajectory (with its own
+    <answer> tag) is what resolve_class/the judge see. The other
+    candidates' extracted answers, rank, and verifier_score are appended
+    as plain text AFTER that one <answer> tag (never inside a second
+    <answer> tag), purely for qualitative inspection.
+
+    Returns one result dict per image, same key shape as run_group_simple
+    plus a "candidates" list ([{"candidate_index", "trajectory",
+    "extracted_answer", "verifier_score", "criterion_scores",
+    "verifier_feedback"}, ...] for every candidate, not just the winner) —
+    consumed by _result_row to compute answer_in_pool/verifier_picked_correct/
+    candidate_predictions/candidate_verifier_scores, which need
+    ds.clean_classes/clean_label _result_row already has.
+
+    temperature must be > 0 for n_candidates > 1 to actually differ
+    (greedy decoding repeats itself) — same caveat run_group's own
+    k_candidates has, checked by the caller (run_model)."""
+    t_start = time.perf_counter()
+    n = len(images)
+    active = list(range(n))
+    gen_q = gen_template.format(question=cls_q)
+    hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": gen_q},
+    ]}] for _ in range(n)]
+
+    gen_params = SamplingParams(
+        temperature=gen_temperature, max_tokens=gen_max_tokens,
+        repetition_penalty=1.1, n=n_candidates, seed=seed,
+        skip_special_tokens=not enable_thinking,
+    )
+    gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats,
+                           enable_thinking=enable_thinking, chat_template=chat_template)
+    prompt_tokens = {i: gen_out[i][0]["prompt_tokens"] for i in active}
+    gen_completion_tokens = {i: sum(c["completion_tokens"] for c in gen_out[i]) for i in active}
+
+    for i in active:
+        for cand_idx, c in enumerate(gen_out[i]):
+            extracted, _ = extract_answer_tag(c["text"])
+            _log_verifier_call(
+                log_path, agml_dataset=agml_dataset, class_label=class_label,
+                image_name=image_names[i], call_type="candidate",
+                candidate_index=cand_idx, raw_text=c["text"], extracted_answer=extracted,
+                prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"],
+            )
+
+    # Grade every candidate of every image independently, batched into ONE
+    # llm.generate() call (n_images * n_candidates prompts) — same
+    # grading_prompt/rubric mechanism run_group_simple uses, just applied
+    # per-candidate instead of once.
+    n_criteria = _count_rubric_criteria(rubric)
+    grading_template = vprompts["grading_prompt"]
+    flat = [(i, cand_idx) for i in active for cand_idx in range(len(gen_out[i]))]
+    grading_texts = [
+        grading_template.format(rubric=rubric, question=cls_q,
+                                 trajectory=_truncate_keep_answer(gen_out[i][cand_idx]["text"]))
+        for i, cand_idx in flat
+    ]
+    grading_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": t},
+    ]}] for t in grading_texts]
+    grading_prompts = [
+        {"prompt": render_chat_template(tokenizer, h, enable_thinking=False),
+         "multi_modal_data": {"image": images[i]}}
+        for (i, _), h in zip(flat, grading_hist)
+    ]
+    grading_params = SamplingParams(temperature=0.0, max_tokens=grading_max_tokens, seed=seed)
+    grading_outs = llm.generate(grading_prompts, sampling_params=grading_params)
+    if call_stats is not None:
+        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
+        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(grading_prompts)
+
+    per_image_candidates: dict[int, list[dict]] = {i: [] for i in active}
+    grading_prompt_tokens: dict[int, int] = {i: 0 for i in active}
+    grading_completion_tokens: dict[int, int] = {i: 0 for i in active}
+    for (i, cand_idx), grading_text_sent, out in zip(flat, grading_texts, grading_outs):
+        grading_text = _clean(out.outputs[0].text)
+        g_prompt_tokens = len(getattr(out, "prompt_token_ids", None) or [])
+        g_completion_tokens = len(getattr(out.outputs[0], "token_ids", None) or [])
+        criterion_scores = _parse_criterion_scores(grading_text, n_criteria)
+        verifier_score = _normalize_criterion_scores(criterion_scores, n_criteria)
+        extracted_answer, _ = extract_answer_tag(gen_out[i][cand_idx]["text"])
+        _log_verifier_call(
+            log_path, agml_dataset=agml_dataset, class_label=class_label,
+            image_name=image_names[i], call_type="grading", candidate_index=cand_idx,
+            user_prompt=grading_text_sent, analysis=grading_text,
+            criterion_scores=criterion_scores, n_criteria=n_criteria, verifier_score=verifier_score,
+            prompt_tokens=g_prompt_tokens, completion_tokens=g_completion_tokens,
+        )
+        per_image_candidates[i].append({
+            "candidate_index": cand_idx,
+            "trajectory": gen_out[i][cand_idx]["text"],
+            "extracted_answer": extracted_answer,
+            "verifier_score": round(verifier_score, 4),
+            "criterion_scores": criterion_scores,
+            "verifier_feedback": grading_text,
+        })
+        grading_prompt_tokens[i] += g_prompt_tokens
+        grading_completion_tokens[i] += g_completion_tokens
+
+    elapsed = time.perf_counter() - t_start
+    avg_time_per_sample_s = elapsed / n if n else 0.0
+
+    results = []
+    for i in active:
+        cands = sorted(per_image_candidates[i], key=lambda c: c["candidate_index"])
+        winner = max(cands, key=lambda c: (c["verifier_score"], -c["candidate_index"]))
+        others_ranked = sorted((c for c in cands if c is not winner), key=lambda c: -c["verifier_score"])
+
+        final_response = winner["trajectory"]
+        if others_ranked:
+            other_lines = "\n".join(
+                f"  Rank {rank}: {c['extracted_answer']} (verifier_score={c['verifier_score']:.3f})"
+                for rank, c in enumerate(others_ranked, start=2)
+            )
+            final_response += f"\n\n--- Other candidates considered (not the final answer) ---\n{other_lines}"
+
+        results.append({
+            "prediction": final_response,
+            "reasoning": (f"verifier_score={winner['verifier_score']:.3f} (winner of {len(cands)} "
+                          f"candidates); " +
+                          ", ".join(f"cand{c['candidate_index']}={c['verifier_score']:.3f}" for c in cands)),
+            "pool_size": len(cands), "n_comparisons": 0, "top1_win_rate": "",
+            "verifier_feedback": winner["verifier_feedback"],
+            "verifier_score": winner["verifier_score"],
+            "criterion_scores": json.dumps(winner["criterion_scores"]),
+            "candidates": cands,
+            "prompt_tokens": prompt_tokens[i] + grading_prompt_tokens[i],
+            "completion_tokens": gen_completion_tokens[i] + grading_completion_tokens[i],
+            "elapsed_s": round(elapsed, 3),
+            "avg_time_per_sample_s": round(avg_time_per_sample_s, 3),
+        })
+    return results
+
+
 # ── Single-round tournament ──────────────────────────────────────────────────
 # The tournament mechanics (two-pass pairwise scoring + ring-pass/pivot-round
 # schedule/aggregation) live in src/common/ppt_orchestration.py — shared,
@@ -702,6 +881,28 @@ def _result_row(
     correct = resolved is not None and resolved.lower() == clean_label.lower()
     c_match = contains_match(resolved or result["prediction"], clean_label)
     scores = rouge_scores_per_sample(result["prediction"], clean_label, include_rouge=False)
+
+    # --verifier_type top3 only (blank "" for simple/ppt rows, result has no
+    # "candidates" key): does the ground truth appear in ANY of the N
+    # candidates regardless of which one the verifier picked
+    # (answer_in_pool), and when it does, did the verifier's own argmax
+    # selection actually land on it (verifier_picked_correct)? Answers the
+    # two questions run_group_simple's single trajectory structurally
+    # can't.
+    answer_in_pool = ""
+    verifier_picked_correct = ""
+    candidate_predictions = ""
+    candidate_verifier_scores = ""
+    candidates = result.get("candidates")
+    if candidates:
+        cand_resolved = [resolve_class(c["extracted_answer"], ds.clean_classes) for c in candidates]
+        in_pool = any(r is not None and r.lower() == clean_label.lower() for r in cand_resolved)
+        answer_in_pool = int(in_pool)
+        if in_pool:
+            verifier_picked_correct = int(correct)
+        candidate_predictions = json.dumps([c["extracted_answer"] for c in candidates])
+        candidate_verifier_scores = json.dumps([c["verifier_score"] for c in candidates])
+
     return {
         "agml_dataset": ds.agml_name, "class_label": clean_label,
         "task_type": task_type, "crop": crop_display(crop_val),
@@ -710,6 +911,8 @@ def _result_row(
         "pool_size": result["pool_size"], "n_comparisons": result["n_comparisons"],
         "top1_win_rate": result["top1_win_rate"], "verifier_feedback": result["verifier_feedback"],
         "verifier_score": result.get("verifier_score", ""), "criterion_scores": result.get("criterion_scores", ""),
+        "answer_in_pool": answer_in_pool, "verifier_picked_correct": verifier_picked_correct,
+        "candidate_predictions": candidate_predictions, "candidate_verifier_scores": candidate_verifier_scores,
         "prompt_tokens": result["prompt_tokens"], "completion_tokens": result["completion_tokens"],
         "elapsed_s": result["elapsed_s"], "avg_time_per_sample_s": result["avg_time_per_sample_s"],
         "prediction": result["prediction"], "resolved_class": resolved or "",
@@ -858,6 +1061,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [warn] k_candidates={args.k_candidates} with temperature={args.temperature}: "
               f"greedy decoding returns identical samples — raise --temperature above 0 or the "
               f"extra candidates are wasted compute")
+    if args.verifier_type == "top3" and args.top3_n_candidates > 1 and args.temperature <= 0:
+        print(f"  [warn] top3_n_candidates={args.top3_n_candidates} with temperature={args.temperature}: "
+              f"greedy decoding returns identical candidates — raise --temperature above 0 or the "
+              f"extra candidates are wasted compute")
 
     if dataset_filter is not None:
         # Checked against the FULL (unsharded, pending-filtered) set — a
@@ -951,6 +1158,15 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
                     chat_template=chat_template,
                 )
+            elif args.verifier_type == "top3":
+                results = run_group_top3(
+                    llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
+                    gen_temperature=args.temperature, rng=rng,
+                    agml_dataset=ds.agml_name, class_label=clean_label, image_names=names,
+                    log_path=log_path, call_stats=call_stats,
+                    seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
+                    chat_template=chat_template, n_candidates=args.top3_n_candidates,
+                )
             else:
                 results = run_group_simple(
                     llm, tokenizer, images, cls_q, gen_template, rubric, prompts, vprompts,
@@ -991,13 +1207,15 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         return
 
     metrics = compute_model_metrics(rows)
-    if args.verifier_type == "simple":
+    if args.verifier_type in ("simple", "top3"):
         # verifier_score vs. judged correctness (falls back to the
         # deterministic `correct` column if this checkpoint was never
         # judged, e.g. --skip_judge) — point-biserial r, the same
         # signal-check convention verifier-score-analysis runs for the ppt
-        # mode's top1_win_rate. Not a separate stage/script since it's a
-        # handful of numbers, not a chart — see docs/stage3_classification_verifier.md.
+        # mode's top1_win_rate. For top3, verifier_score is the WINNING
+        # candidate's score (see run_group_top3/_result_row). Not a
+        # separate stage/script since it's a handful of numbers, not a
+        # chart — see docs/stage3_classification_verifier.md.
         vs_rows = [r for r in rows if r.get("verifier_score") not in (None, "")]
         judge_key = "judged_correct" if any(r.get("judged_correct") not in (None, "") for r in vs_rows) else "correct"
         vs_scored = [r for r in vs_rows if r.get(judge_key) not in (None, "")]
@@ -1015,6 +1233,30 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             print(f"  verifier_score vs. {judge_key}: point-biserial r={r_value} (n={len(vs_scored)}), "
                   f"mean correct={metrics['verifier_score_correlation']['mean_verifier_score_correct']:.3f} "
                   f"vs. incorrect={metrics['verifier_score_correlation']['mean_verifier_score_incorrect']:.3f}")
+    if args.verifier_type == "top3":
+        # Does the ground truth even appear in the N-candidate pool
+        # (answer_in_pool, regardless of which one won), and when it does,
+        # does the verifier's own per-candidate grading actually pick it
+        # (verifier_picked_correct)? The two questions a single-trajectory
+        # mode (simple) can't answer on its own — see run_group_top3's
+        # docstring.
+        ip_rows = [r for r in rows if r.get("answer_in_pool") not in (None, "")]
+        if ip_rows:
+            n_in_pool = sum(int(r["answer_in_pool"]) for r in ip_rows)
+            pool_coverage = n_in_pool / len(ip_rows)
+            picked_rows = [r for r in ip_rows if r.get("verifier_picked_correct") not in (None, "")]
+            pick_accuracy = (
+                sum(int(r["verifier_picked_correct"]) for r in picked_rows) / len(picked_rows)
+                if picked_rows else None
+            )
+            metrics["top3_pool_analysis"] = {
+                "n": len(ip_rows), "n_answer_in_pool": n_in_pool, "pool_coverage": round(pool_coverage, 4),
+                "verifier_pick_accuracy_given_in_pool": (
+                    round(pick_accuracy, 4) if pick_accuracy is not None else None),
+            }
+            pick_str = f"{pick_accuracy:.3f}" if pick_accuracy is not None else "n/a"
+            print(f"  top3 pool analysis: answer_in_pool={pool_coverage:.3f} ({n_in_pool}/{len(ip_rows)}), "
+                  f"verifier picks it correctly {pick_str} of the time when it's in the pool")
     (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
           f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
@@ -1154,22 +1396,34 @@ if __name__ == "__main__":
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
-    parser.add_argument("--verifier_type", choices=["simple", "ppt"], default="simple",
+    parser.add_argument("--verifier_type", choices=["simple", "top3", "ppt"], default="simple",
                          help="\"simple\" (default, Paper 2 Stage 3, docs/stage3_classification_verifier.md): "
                               "ONE trajectory per image, graded against each rubric criterion "
                               "independently on a 1-3 scale, summed/normalized to verifier_score — "
-                              "no K-candidate pool, no tournament, --k_candidates/--k_pivots ignored. "
-                              "\"ppt\" (Paper 1 Stage 4, docs/stage4_verifier.md): the original "
-                              "K-candidate + PPT-tournament verifier, unchanged — pass this to "
-                              "reproduce any pre-existing verifier-cot workflow (e.g. Paper 2 Stage "
-                              "2's Step 3), which relied on the old ppt-only default.")
+                              "no K-candidate pool, no tournament. "
+                              "\"top3\" (Paper 2 Stage 3, docs/stage3_classification_verifier.md): same "
+                              "per-criterion grading as simple, but draws --top3_n_candidates (default "
+                              "3) independent trajectories per image in one generation call and grades "
+                              "each independently — the highest-verifier_score candidate wins "
+                              "(argmax), the rest are appended to the response as plain text for "
+                              "inspection, never inside a second <answer> tag. "
+                              "\"ppt\" (Paper 1 Stage 4, docs/stage4_verifier.md) — LEGACY, no longer "
+                              "actively tested/extended for Paper 2 (kept for Paper 1 reproducibility "
+                              "only): the original K-candidate + PPT-tournament verifier, unchanged. "
+                              "--k_candidates/--k_pivots apply to ppt only; --top3_n_candidates applies "
+                              "to top3 only.")
     parser.add_argument("--k_candidates", type=int, default=3,
-                         help="--verifier_type ppt only: candidates generated per image (K) via "
-                              "temperature sampling — the tournament pool size.")
+                         help="--verifier_type ppt only (legacy): candidates generated per image (K) "
+                              "via temperature sampling — the tournament pool size.")
     parser.add_argument("--k_pivots", type=int, default=DEFAULT_PIVOTS,
-                         help="--verifier_type ppt only: k — pivot-set size for the full PPT "
+                         help="--verifier_type ppt only (legacy): k — pivot-set size for the full PPT "
                               "tournament (arXiv:2607.05391 Section 3.2, via "
                               "llm_verifier.pivot_tournament) that ranks the pool.")
+    parser.add_argument("--top3_n_candidates", type=int, default=3,
+                         help="--verifier_type top3 only: independent trajectories generated per "
+                              "image in one generation call, each graded independently. --temperature "
+                              "must be > 0 for these to actually differ (greedy decoding repeats "
+                              "itself).")
     parser.add_argument("--temperature", type=float, default=1.0,
                          help="Sampling temperature for the K candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "

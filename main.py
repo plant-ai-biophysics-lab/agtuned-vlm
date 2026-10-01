@@ -146,15 +146,27 @@ Stages:
                                correlation between verifier_score and judged correctness in
                                metrics.json, to see whether this cheaper signal is usable as a
                                filter/gate before adopting it elsewhere (e.g. react-baseline).
-                               --verifier_type ppt (Paper 1 Stage 4, docs/stage4_verifier.md, our
-                               contribution): the original single-round K-candidate +
-                               PPT-tournament verifier — K candidates generated per image, ranked
-                               once by the Probabilistic Pivot Tournament, argmax(win_rate) reported.
-                               --k_candidates/--k_pivots are the main tunables (ppt only). Compared
-                               against src/verifier_lmv.py's full PPT tournament (run separately,
-                               not wired into main.py — see its own --help) in `cot-compare`.
+                               --verifier_type top3 (Paper 2 Stage 3, docs/stage3_classification_verifier.md):
+                               same per-criterion grading, but draws --top3_n_candidates (default 3)
+                               independent trajectories per image in ONE generation call and grades
+                               each independently — no tournament, just N absolute scores. The
+                               highest-verifier_score candidate wins (argmax); the other candidates'
+                               answers/ranks are appended to the response as plain text, never inside
+                               a second <answer> tag. Also reports top3_pool_analysis in
+                               metrics.json: pool_coverage (does the right answer appear in ANY
+                               candidate) and verifier_pick_accuracy_given_in_pool (when it does,
+                               does the verifier's own grading actually pick it).
+                               --verifier_type ppt (Paper 1 Stage 4, docs/stage4_verifier.md) — LEGACY
+                               as of 2026-10-01, no longer actively tested/extended for Paper 2 (kept
+                               for Paper 1 reproducibility only): the original single-round
+                               K-candidate + PPT-tournament verifier — K candidates generated per
+                               image, ranked once by the Probabilistic Pivot Tournament,
+                               argmax(win_rate) reported. --k_candidates/--k_pivots are the main
+                               tunables (ppt only). Compared against src/verifier_lmv.py's full PPT
+                               tournament (run separately, not wired into main.py — see its own
+                               --help) in `cot-compare`.
                                --num_shards/--shard_index (data-parallel across GPUs, same
-                               convention as vision-baseline) + --merge_shards work with either mode.
+                               convention as vision-baseline) + --merge_shards work with every mode.
     verifier-score-analysis   — diagnostic (no GPU needed): re-derives the paper's Appendix C
                                Figure 8/9 checks (score distribution + retained-set accuracy vs.
                                threshold, nearest-letter histogram) from an existing verifier-cot

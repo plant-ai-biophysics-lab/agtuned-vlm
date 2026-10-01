@@ -2,21 +2,19 @@
 
 [← Back to README](../README.md)
 
-A cheaper alternative to Paper 1 Stage 4's K-candidate + PPT-tournament
-verifier (`docs/stage4_verifier.md`): grade **one** trajectory per image
-against each rubric criterion independently on a 1-3 scale, sum and
-normalize to a single `verifier_score` in `[0, 1]`. No K-candidate pool,
-no pairwise duel, no tournament — this is `verifier-cot`'s **default**
-mode.
+Grade model trajectories against each rubric criterion independently on a
+1-3 scale, sum and normalize to a `verifier_score` in `[0, 1]`. No
+pairwise duel, no tournament. Two modes, run in order:
 
-The question this stage answers: does this coarser, cheaper score still
-correlate with correctness? `verifier-cot` prints that correlation
-(point-biserial `r`) at the end of every run and writes it into
-`metrics.json`. If it's meaningfully positive, `verifier_score` is a
-candidate signal for gating [Stage 5](stage5_react_baseline.md)'s ReAct
-agent later; if not, that's a real finding too.
+- **Step 1 — `--verifier_type simple`** (the default): grade **one**
+  trajectory per image. Does this coarse, cheap score correlate with
+  correctness at all?
+- **Step 2 — `--verifier_type top3`**: grade **three** independently
+  generated trajectories per image, report the highest-scoring one. Is
+  three trajectories better than one, and when the right answer is
+  generated, does the verifier's own grading actually find it?
 
-## Just run this
+## Step 1 — one trajectory (`--verifier_type simple`)
 
 ```bash
 uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it
@@ -33,9 +31,8 @@ Swap in whatever model you're testing for `--model`. Everything else
 (`--output_dir`, `--subsample`, `--num_shards`, etc.) is there if you need
 it later — see `--help` — but you don't need to touch it to get a result.
 
-## Faster: grade an existing baseline run instead of regenerating
-
-If you already have a `vision-baseline --rubric` checkpoint for this model,
+**Faster — grade an existing baseline run instead of regenerating:** if
+you already have a `vision-baseline --rubric` checkpoint for this model,
 skip generation entirely and just grade what it already produced:
 
 ```bash
@@ -47,12 +44,11 @@ uv run python main.py verifier-cot \
 One flag. It grades that checkpoint's own trajectories directly (one
 grading call per image instead of a generation call + a grading call),
 and automatically samples the same images that checkpoint used — nothing
-else to set.
+else to set. `--from_ckpt` only applies to `--verifier_type simple` (there's
+no single existing trajectory to replay for `top3`'s 3-candidate pool).
 
-## Read the result
-
-Look at the end of the run's own printed output, or open
-`outputs_final/verifier_cot/<safe_model_name>/metrics.json` and check
+**Read the result**: look at the end of the run's own printed output, or
+open `outputs_final/verifier_cot/<safe_model_name>/metrics.json` and check
 `verifier_score_correlation`:
 
 ```json
@@ -66,24 +62,62 @@ Look at the end of the run's own printed output, or open
 ```
 
 A meaningfully positive `point_biserial_r` (and a visible gap between the
-two means) means the signal is real and worth trying as a gate; near zero
-(or reversed) means it isn't — a legitimate negative finding, same as
+two means) means the signal is real; near zero (or reversed) means it
+isn't — a legitimate negative finding, same as
 `docs/legacy/stage2_verifier_corrections_paused.md`'s earlier verifier
 diagnostic.
 
-## If it correlates: what's next
+## Step 2 — three trajectories (`--verifier_type top3`)
 
-This stage only checks the correlation — it doesn't wire `verifier_score`
-into anything yet. If the result looks useful, the next step (a separate
-piece of work, not part of this stage) is threading `verifier_score` into
-`docs/stage5_react_baseline.md`'s ReAct loop as a confidence signal the
-agent can check before committing to `finish()`.
+```bash
+uv run python main.py verifier-cot \
+    --model google/gemma-4-26B-A4B-it \
+    --verifier_type top3 \
+    --output_dir outputs_final/verifier_cot_top3/
+```
 
-## For reference: everything above is `--verifier_type simple`
+(Different `--output_dir` from Step 1 — same model, a different mode,
+don't collide checkpoints.)
 
-Pass `--verifier_type ppt` instead to run Paper 1 Stage 4's original
-K-candidate + PPT-tournament verifier (`docs/stage4_verifier.md`) — a
-different, heavier mechanism, not part of this stage.
+Mechanism: one generation call draws `--top3_n_candidates` (default 3)
+independent trajectories per image (needs `--temperature` > 0, the
+default, or all 3 come back identical). Each candidate is graded
+independently against the same rubric Step 1 uses — three separate
+`verifier_score`s, not a tournament or pairwise comparison. The candidate
+with the highest `verifier_score` (argmax) is reported as the row's final
+answer; the other two candidates' extracted answers, rank, and score are
+appended to the response as plain text for inspection, **never inside a
+second `<answer>` tag** — the judge and `resolved_class` only ever see the
+winner.
+
+**Read the result**: same `verifier_score_correlation` as Step 1 (now
+measuring the winning candidate's score), plus a new block that answers
+the two questions a single trajectory structurally can't:
+
+```json
+"top3_pool_analysis": {
+  "n": 480,
+  "n_answer_in_pool": 312,
+  "pool_coverage": 0.65,
+  "verifier_pick_accuracy_given_in_pool": 0.74
+}
+```
+
+- `pool_coverage` — out of all 3 candidates, how often does the ground
+  truth show up in *at least one* of them (regardless of which one wins)?
+  This is the ceiling: if the model never generates the right answer in
+  any of the 3 tries, no amount of grading can save it.
+- `verifier_pick_accuracy_given_in_pool` — when the right answer *is*
+  somewhere in the pool, how often does the verifier's own per-candidate
+  grading actually pick it as the winner? The gap between this and 1.0 is
+  the verifier's own selection error, separate from the model's
+  generation error `pool_coverage` measures.
+
+Compare Step 1's `correct`/`judged_correct` rate against Step 2's to see
+whether 3 trajectories + grading beats 1 trajectory + grading outright;
+compare `pool_coverage` against that same rate to see how much of any gap
+is "the model didn't even try the right answer" vs. "the verifier picked
+the wrong one out of a pool that had it."
 
 ## Rubric criteria (what's actually being graded)
 
@@ -100,10 +134,9 @@ caused by stem borer") instead of only ever printing a bare causal guess,
 and criterion 7 checks for exactly that grounding — a trajectory that
 states only the symptom with no causal guess at all still fully satisfies
 it; only an ungrounded causal guess with no symptom mentioned doesn't.
-Since both `--verifier_type simple` and `--verifier_type ppt` read this
-same rubric text, this applies to both automatically. Edit the YAML
-directly to add/change criteria for other task types — no code change
-needed.
+Both `simple` and `top3` read this same rubric text, so this applies to
+both automatically. Edit the YAML directly to add/change criteria for
+other task types — no code change needed.
 
 `prompts.yaml`'s shared `assessment_system` (every classification/detection
 stage, not just this one) reinforces this at the system-prompt level: every
@@ -134,15 +167,24 @@ uv run python main.py verifier-cot \
     --merge_shards
 ```
 
+## Legacy: `--verifier_type ppt`
+
+Paper 1 Stage 4's original K-candidate + PPT-tournament verifier
+(`docs/stage4_verifier.md`) still exists and still runs (`--k_candidates`/
+`--k_pivots`), but is no longer actively tested or extended for Paper 2 as
+of 2026-10-01 — `simple`/`top3` above are the current line of work. Kept
+only for Paper 1 reproducibility.
+
 ## Parameters
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--model` | *(required)* | Model to run |
-| `--verifier_type` | `simple` | `simple` (this stage) or `ppt` (Paper 1 Stage 4) |
-| `--from_ckpt` | none | Grade an existing checkpoint's trajectories instead of regenerating |
+| `--verifier_type` | `simple` | `simple` (Step 1), `top3` (Step 2), or `ppt` (legacy, Paper 1 Stage 4) |
+| `--top3_n_candidates` | `3` | `--verifier_type top3` only — independent trajectories per image |
+| `--from_ckpt` | none | `--verifier_type simple` only — grade an existing checkpoint's trajectories instead of regenerating |
 | `--output_dir` | `outputs_final/verifier_cot/` | Checkpoint output dir |
-| `--manifest` | `dataset/selected_images.json` | Which manifest to sample from |
+| `--manifest` | `dataset/selected_images_10.json` | Which manifest to sample from |
 | `--match_images_from` | *(auto-detected)* | Reference checkpoint for guaranteed image overlap |
 | `--n_samples` | `10` | Images per class |
 | `--skip_judge` | off | Skip the judge phase |
