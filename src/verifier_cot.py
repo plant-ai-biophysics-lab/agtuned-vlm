@@ -552,6 +552,28 @@ def run_group_simple(
     return results
 
 
+_TOP3_EXPLICIT_ANSWER_RE = re.compile(r"<answer_(\d)>(.*?)</answer_\1>", re.DOTALL)
+
+
+def _extract_top3_explicit_answers(text: str, n: int = 3) -> list[str]:
+    """--top3_mode explicit: parse <answer_1>.../<answer_2>.../<answer_3>...
+    tags out of a SINGLE generation response (the model states all N
+    possibilities itself, one call) — ordered by tag number, not
+    occurrence order, in case the model emits them out of sequence. Only
+    tags with index in [1, n] are kept. Returns whatever was actually
+    found, NOT padded to n — a response that only used 2 distinct tags
+    returns a 2-candidate pool, not an error (pool_size/pool_coverage
+    downstream naturally reflect this, same "don't let one bad piece
+    break everything" spirit as extract_boxes/extract_answer_tag
+    elsewhere in this repo)."""
+    found: dict[int, str] = {}
+    for idx_str, content in _TOP3_EXPLICIT_ANSWER_RE.findall(text):
+        idx = int(idx_str)
+        if 1 <= idx <= n:
+            found[idx] = content.strip()
+    return [found[i] for i in sorted(found)]
+
+
 def run_group_top3(
     llm, tokenizer, images: list, cls_q: str, gen_template: str, rubric: str, prompts: dict, vprompts: dict,
     gen_temperature: float, rng: random.Random,
@@ -559,25 +581,48 @@ def run_group_top3(
     log_path: Path | None = None, call_stats: dict | None = None,
     seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
     chat_template: str | None = None, grading_max_tokens: int = 300, n_candidates: int = 3,
+    top3_mode: str = "explicit", rubric_key: str = "",
 ) -> list[dict]:
     """--verifier_type top3 (Paper 2 Stage 3, docs/stage3_classification_verifier.md):
-    same structured fill-in-the-blank generation as run_group_simple, but
-    draws n_candidates (default 3) independent trajectories per image in
-    ONE generation call (SamplingParams(n=n_candidates) — the same
-    mechanism run_group's K-candidate pool uses) instead of one, then
-    grades EACH candidate independently via the exact same per-criterion
-    rubric grading call run_group_simple uses (vprompts["grading_prompt"]),
-    batched into one llm.generate() call across every (image, candidate)
-    pair. No tournament, no pairwise duel — N independent absolute scores,
-    not a relative ranking.
+    generates an N-candidate pool per image, then grades EACH candidate
+    independently via the exact same per-criterion rubric grading call
+    run_group_simple uses (vprompts["grading_prompt"]), batched into one
+    llm.generate() call across every (image, candidate) pair. No
+    tournament, no pairwise duel — N independent absolute scores, not a
+    relative ranking. --top3_mode picks how that pool is generated:
+
+    - "explicit" (default): ONE generation call per image, asking the
+      model to state its observations once then give N EXPLICITLY
+      DIFFERENT ranked possibilities itself
+      (vprompts["structured_templates_top3_explicit"][rubric_key],
+      <answer_1>/<answer_2>/<answer_3> tags parsed by
+      _extract_top3_explicit_answers). NOTE: a near-identical approach
+      ("multi_hypothesis") was tried and reverted for the ppt/K-candidate
+      design — see verifier_prompts.yaml's header comment — because
+      forcing deliberate diversity competed against the model's own
+      best-calibrated guess (only 15.6% of wrong predictions had the
+      correct answer among 6 forced-diverse hypotheses there). Being
+      retried here (2026-10-01) because the downstream mechanism differs:
+      here each possibility is graded independently and the winner is an
+      argmax over absolute per-candidate scores, not a pairwise/tournament
+      ranking — not guaranteed to avoid the same failure mode, NOT yet
+      validated at scale. Check top3_pool_analysis's pool_coverage before
+      trusting this over "resample".
+    - "resample": draws n_candidates independent trajectories in ONE
+      generation call via SamplingParams(n=n_candidates) — the same
+      mechanism run_group's (ppt) K-candidate pool uses — each a full,
+      independent restart of the SAME single-answer gen_template
+      (vprompts["structured_templates"][rubric_key]). Needs
+      gen_temperature > 0 to actually differ (greedy decoding repeats
+      itself).
 
     The candidate with the highest verifier_score (ties broken toward the
-    lowest candidate_index, i.e. the model's own first-generated guess) is
-    reported as the final answer — its own trajectory (with its own
-    <answer> tag) is what resolve_class/the judge see. The other
-    candidates' extracted answers, rank, and verifier_score are appended
-    as plain text AFTER that one <answer> tag (never inside a second
-    <answer> tag), purely for qualitative inspection.
+    lowest candidate_index, i.e. the model's own first-generated/first-
+    ranked guess) is reported as the final answer — its own trajectory
+    (with its own <answer> tag) is what resolve_class/the judge see. The
+    other candidates' extracted answers, rank, and verifier_score are
+    appended as plain text AFTER that one <answer> tag (never inside a
+    second <answer> tag), purely for qualitative inspection.
 
     Returns one result dict per image, same key shape as run_group_simple
     plus a "candidates" list ([{"candidate_index", "trajectory",
@@ -585,26 +630,59 @@ def run_group_top3(
     "verifier_feedback"}, ...] for every candidate, not just the winner) —
     consumed by _result_row to compute answer_in_pool/verifier_picked_correct/
     candidate_predictions/candidate_verifier_scores, which need
-    ds.clean_classes/clean_label _result_row already has.
-
-    temperature must be > 0 for n_candidates > 1 to actually differ
-    (greedy decoding repeats itself) — same caveat run_group's own
-    k_candidates has, checked by the caller (run_model)."""
+    ds.clean_classes/clean_label _result_row already has."""
     t_start = time.perf_counter()
     n = len(images)
     active = list(range(n))
-    gen_q = gen_template.format(question=cls_q)
-    hist = [_sys_msg(prompts) + [{"role": "user", "content": [
-        {"type": "image"}, {"type": "text", "text": gen_q},
-    ]}] for _ in range(n)]
 
-    gen_params = SamplingParams(
-        temperature=gen_temperature, max_tokens=gen_max_tokens,
-        repetition_penalty=1.1, n=n_candidates, seed=seed,
-        skip_special_tokens=not enable_thinking,
-    )
-    gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats,
-                           enable_thinking=enable_thinking, chat_template=chat_template)
+    if top3_mode == "explicit":
+        explicit_template = vprompts["structured_templates_top3_explicit"][rubric_key]
+        gen_q = explicit_template.format(question=cls_q)
+        hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": gen_q},
+        ]}] for _ in range(n)]
+        gen_params = SamplingParams(
+            temperature=gen_temperature, max_tokens=gen_max_tokens,
+            repetition_penalty=1.1, n=1, seed=seed,
+            skip_special_tokens=not enable_thinking,
+        )
+        gen_out_raw = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats,
+                                   enable_thinking=enable_thinking, chat_template=chat_template)
+        gen_out: list[list[dict]] = []
+        for i in active:
+            raw = gen_out_raw[i][0]
+            raw_text = raw["text"]
+            m = _TOP3_EXPLICIT_ANSWER_RE.search(raw_text)
+            preamble = raw_text[:m.start()].rstrip() if m else raw_text.rstrip()
+            answers = _extract_top3_explicit_answers(raw_text, n=n_candidates)
+            if not answers:
+                # Model didn't use the <answer_N> tags at all — fall back to
+                # a single degenerate 1-candidate pool via the plain
+                # <answer> tag convention, rather than erroring out.
+                fallback, _ = extract_answer_tag(raw_text)
+                answers = [fallback]
+            # completion_tokens is ONE real call shared across every
+            # candidate — attribute the real total to candidate 0 only, 0
+            # for the rest, so summing across candidates doesn't multiply
+            # it by n_candidates.
+            gen_out.append([
+                {"text": f"{preamble}\n\n<answer>{ans}</answer>", "prompt_tokens": raw["prompt_tokens"],
+                 "completion_tokens": raw["completion_tokens"] if idx == 0 else 0}
+                for idx, ans in enumerate(answers)
+            ])
+    else:
+        gen_q = gen_template.format(question=cls_q)
+        hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+            {"type": "image"}, {"type": "text", "text": gen_q},
+        ]}] for _ in range(n)]
+        gen_params = SamplingParams(
+            temperature=gen_temperature, max_tokens=gen_max_tokens,
+            repetition_penalty=1.1, n=n_candidates, seed=seed,
+            skip_special_tokens=not enable_thinking,
+        )
+        gen_out = run_batch_n(llm, tokenizer, images, hist, gen_params, call_stats,
+                               enable_thinking=enable_thinking, chat_template=chat_template)
+
     prompt_tokens = {i: gen_out[i][0]["prompt_tokens"] for i in active}
     gen_completion_tokens = {i: sum(c["completion_tokens"] for c in gen_out[i]) for i in active}
 
@@ -1088,7 +1166,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [warn] k_candidates={args.k_candidates} with temperature={args.temperature}: "
               f"greedy decoding returns identical samples — raise --temperature above 0 or the "
               f"extra candidates are wasted compute")
-    if args.verifier_type == "top3" and args.top3_n_candidates > 1 and args.temperature <= 0:
+    if (args.verifier_type == "top3" and args.top3_mode == "resample"
+            and args.top3_n_candidates > 1 and args.temperature <= 0):
         print(f"  [warn] top3_n_candidates={args.top3_n_candidates} with temperature={args.temperature}: "
               f"greedy decoding returns identical candidates — raise --temperature above 0 or the "
               f"extra candidates are wasted compute")
@@ -1193,6 +1272,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     log_path=log_path, call_stats=call_stats,
                     seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
                     chat_template=chat_template, n_candidates=args.top3_n_candidates,
+                    top3_mode=args.top3_mode, rubric_key=rubric_key,
                 )
             else:
                 results = run_group_simple(
@@ -1453,10 +1533,28 @@ if __name__ == "__main__":
                               "tournament (arXiv:2607.05391 Section 3.2, via "
                               "llm_verifier.pivot_tournament) that ranks the pool.")
     parser.add_argument("--top3_n_candidates", type=int, default=3,
-                         help="--verifier_type top3 only: independent trajectories generated per "
-                              "image in one generation call, each graded independently. --temperature "
-                              "must be > 0 for these to actually differ (greedy decoding repeats "
-                              "itself).")
+                         help="--verifier_type top3 only: how many candidates make up the pool "
+                              "(default 3). For --top3_mode explicit, this is how many <answer_N> "
+                              "tags are read from the model's own response (fewer than N found is "
+                              "not an error, just a smaller pool). For --top3_mode resample, this "
+                              "many independent trajectories are drawn per image in one generation "
+                              "call — needs --temperature > 0 to actually differ (greedy decoding "
+                              "repeats itself).")
+    parser.add_argument("--top3_mode", choices=["explicit", "resample"], default="explicit",
+                         help="--verifier_type top3 only, how the N-candidate pool is generated. "
+                              "\"explicit\" (default): ONE generation call, asking the model to "
+                              "state its observations once then give N EXPLICITLY DIFFERENT ranked "
+                              "possibilities itself (<answer_1>/<answer_2>/<answer_3> tags, "
+                              "verifier_prompts.yaml's structured_templates_top3_explicit). A "
+                              "near-identical approach was tried and reverted for the legacy ppt "
+                              "mode's K-candidate design (forcing diversity competed against the "
+                              "model's own best guess there) — being retried here because each "
+                              "candidate is graded independently and argmax-selected rather than "
+                              "tournament-ranked; check metrics.json's top3_pool_analysis before "
+                              "trusting this at scale. \"resample\": draws --top3_n_candidates "
+                              "independent trajectories via temperature sampling instead (no "
+                              "explicit-diversity instruction) — see run_group_top3's docstring for "
+                              "the full comparison.")
     parser.add_argument("--temperature", type=float, default=1.0,
                          help="Sampling temperature for the K candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "

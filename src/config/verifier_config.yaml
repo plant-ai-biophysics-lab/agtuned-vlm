@@ -48,9 +48,21 @@ seed: 42       # seeds the k-candidate sampling AND the pairwise duel's A/B-slot
                # than drawing fresh randomness each time.
 
 # ── --verifier_type top3 ─────────────────────────────────────────────────────
-top3_n_candidates: 3    # independent trajectories generated per image in ONE generation call,
-                         # each graded independently via the same per-criterion rubric call
-                         # --verifier_type simple uses — argmax(verifier_score) wins. temperature
+top3_mode: explicit     # "explicit" (default): ONE generation call, model states its
+                         # observations once then gives N EXPLICITLY DIFFERENT ranked
+                         # possibilities itself (<answer_1>/<answer_2>/<answer_3> tags). A
+                         # near-identical approach was tried and reverted for the legacy ppt
+                         # mode (forcing diversity competed against the model's own best guess
+                         # there) — being retried here since each candidate is graded
+                         # independently and argmax-selected, not tournament-ranked. Run the
+                         # smoke test (docs/stage3_classification_verifier.md) and check
+                         # metrics.json's top3_pool_analysis before trusting this at scale.
+                         # "resample": independent trajectories via temperature sampling
+                         # instead (no explicit-diversity instruction) — see
+                         # run_group_top3's docstring for the full comparison.
+top3_n_candidates: 3    # pool size. "explicit": how many <answer_N> tags are read back (fewer
+                         # found is not an error, just a smaller pool). "resample": independent
+                         # trajectories generated per image in ONE generation call — temperature
                          # (below) must be > 0 for these to actually differ.
 
 # ── Single-round K-candidate + PPT-tournament hyperparameters (--verifier_type

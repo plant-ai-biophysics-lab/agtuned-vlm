@@ -160,6 +160,75 @@ structured_templates:
 
     After filling in every line above, restate your Quality/ripeness assessment line's answer wrapped in <answer></answer> tags (e.g. <answer>Overripe</answer>) — as briefly and precisely as you can state it, not a full sentence.
 
+# --verifier_type top3 --top3_mode explicit (verifier_cot.py's
+# run_group_top3): ONE generation call per image, asking the model to
+# state its observations ONCE (shared evidence, same fields as
+# structured_templates above) then give 3 EXPLICITLY DIFFERENT ranked
+# possibilities instead of one. NOTE the header comment above already
+# documents a near-identical earlier attempt at this
+# ("multi_hypothesis") that was tried and reverted for the K-candidate/
+# PPT design — only 15.6% of wrong predictions had the correct answer
+# among 6 forced-diverse hypotheses, because forcing diversity competed
+# against the model's own best-calibrated guess. This is being retried
+# here anyway (2026-10-01, explicit user request) because the downstream
+# mechanism is different: back then the pool was ranked by a PPT
+# tournament; here each possibility is graded independently against the
+# rubric (run_group_top3's existing per-candidate grading, unchanged) and
+# the highest-scoring one wins by argmax, not a pairwise comparison — a
+# priori not guaranteed to fail the same way, but NOT yet validated
+# either. Run the smoke test (docs/stage3_classification_verifier.md)
+# before trusting this at scale; top3_pool_analysis's pool_coverage is
+# the metric that tells you whether this explicit-diversity instruction
+# is actually working better than --top3_mode resample's independent
+# temperature sampling.
+# Params: {question}
+structured_templates_top3_explicit:
+  disease_pest: |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Crop or plant species affected:
+    Plant part(s) showing symptoms (leaves / stem / fruit / roots):
+    Symptom color, shape, and texture:
+    Visible pest signs, if any (webbing, frass, eggs, insect bodies — or "none observed"):
+    Damage pattern (systemic/uniform across the plant, or isolated/localized):
+
+    Based on everything you observed above, give your 3 most likely diagnoses (disease name, pest, or stress type), ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same diagnosis restated or trivial variations of it — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence (e.g. "Dead heart, likely caused by stem borer" if stating both a symptom and its probable cause), one per tag:
+
+    <answer_1></answer_1>
+    <answer_2></answer_2>
+    <answer_3></answer_3>
+  species_identification: &species_identification_top3_explicit_template |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Leaf arrangement, shape, margins, and venation pattern:
+    Growth habit (erect / prostrate / climbing) and stem characteristics:
+    Flower or seed structures, if visible (or "not visible"):
+
+    Based on everything you observed above, give your 3 most likely species identifications (Scientific Name and/or Common Name), ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same species restated — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence, one per tag:
+
+    <answer_1></answer_1>
+    <answer_2></answer_2>
+    <answer_3></answer_3>
+  weed_identification: *species_identification_top3_explicit_template
+  quality_identification: |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Size and shape relative to a typical mature specimen:
+    Observed color and its position between unripe and overripe/spoiled:
+    Surface texture and firmness cues (bruising, wrinkling, gloss, softness):
+
+    Based on everything you observed above, give your 3 most likely quality/ripeness assessments, ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same assessment restated — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence, one per tag:
+
+    <answer_1></answer_1>
+    <answer_2></answer_2>
+    <answer_3></answer_3>
+
 # Maps dataset task_type (src/config/datasets.yaml) -> rubric key above —
 # mirrors cot_prompts.yaml's task_type_to_cot routing.
 task_type_to_rubric:

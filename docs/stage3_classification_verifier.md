@@ -74,6 +74,39 @@ diagnostic.
 
 ## Step 2 — three trajectories (`--verifier_type top3`)
 
+Two ways to generate the 3-candidate pool (`--top3_mode`), both graded the
+same way afterward (3 independent grading calls against the same rubric
+Step 1 uses — no tournament, no pairwise comparison):
+
+- **`explicit`** (the default): **ONE** generation call per image. The
+  model states its observations once, then is explicitly asked to give 3
+  genuinely different ranked possibilities itself
+  (`<answer_1>`/`<answer_2>`/`<answer_3>` tags) — not three separate calls.
+- **`resample`**: draws 3 independent trajectories via temperature
+  sampling (`SamplingParams(n=3)`) instead — no explicit-diversity
+  instruction, just independent re-draws of the same single-answer prompt.
+
+**Smoke test first** — confirm the model actually produces 3 distinct
+possibilities (not the same one restated 3 times) before committing to a
+full run:
+
+```bash
+uv run python main.py verifier-cot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type top3 \
+    --subsample arabica_coffee_leaf_disease_classification \
+    --n_samples 2 \
+    --output_dir outputs_final/verifier_cot_top3_smoketest/
+```
+
+Check the checkpoint's `candidate_predictions` column — it should show 3
+genuinely different strings per row, not the same label 3 times. If the
+model is just restating the same guess, `--top3_mode explicit`'s own
+diversity instruction isn't working on this model, and `--top3_mode
+resample` (or a smaller/larger `--temperature`) is worth trying instead.
+
+**Full run:**
+
 ```bash
 uv run python main.py verifier-cot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
@@ -86,18 +119,25 @@ so both modes' checkpoints coexist in one directory without colliding.
 Thinking/`--gen_max_tokens`/`--chat_template_path` default the same way
 Step 1's do (on, `4096`, vendored Gemma-4 template) — raising
 `--gen_max_tokens` matters even more here, since a truncated thinking
-trace now costs you 3 generations instead of 1.
+trace costs you the whole 3-candidate response, not just one.
 
-Mechanism: one generation call draws `--top3_n_candidates` (default 3)
-independent trajectories per image (needs `--temperature` > 0, the
-default, or all 3 come back identical). Each candidate is graded
-independently against the same rubric Step 1 uses — three separate
-`verifier_score`s, not a tournament or pairwise comparison. The candidate
-with the highest `verifier_score` (argmax) is reported as the row's final
-answer; the other two candidates' extracted answers, rank, and score are
-appended to the response as plain text for inspection, **never inside a
-second `<answer>` tag** — the judge and `resolved_class` only ever see the
-winner.
+**Known risk with `explicit`**: a near-identical approach ("ask for
+several different hypotheses in one response") was tried and reverted for
+the legacy `ppt` mode's K-candidate design — forcing deliberate diversity
+competed against the model's own best-calibrated guess rather than
+sharpening it (only 15.6% of wrong predictions had the correct answer
+among 6 forced-diverse hypotheses there). `explicit` is being retried here
+because the downstream mechanism differs — each candidate is graded
+independently and argmax-selected, not tournament-ranked — but this is
+*not yet validated*. The smoke test above and `top3_pool_analysis` below
+are exactly how to check whether it's actually working better than
+`resample` before trusting it at scale.
+
+The candidate with the highest `verifier_score` (argmax) is reported as
+the row's final answer; the other two candidates' extracted answers,
+rank, and score are appended to the response as plain text for
+inspection, **never inside a second `<answer>` tag** — the judge and
+`resolved_class` only ever see the winner.
 
 **Read the result**: same `verifier_score_correlation` as Step 1 (now
 measuring the winning candidate's score), plus a new block that answers
@@ -192,7 +232,8 @@ only for Paper 1 reproducibility.
 |---|---|---|
 | `--model` | *(required)* | Model to run |
 | `--verifier_type` | `simple` | `simple` (Step 1), `top3` (Step 2), or `ppt` (legacy, Paper 1 Stage 4) |
-| `--top3_n_candidates` | `3` | `--verifier_type top3` only — independent trajectories per image |
+| `--top3_mode` | `explicit` | `--verifier_type top3` only — `explicit` (one call, model states N possibilities itself) or `resample` (N independent temperature-sampled draws) |
+| `--top3_n_candidates` | `3` | `--verifier_type top3` only — pool size (candidates read back, or drawn, depending on `--top3_mode`) |
 | `--enable_thinking` / `--no-enable_thinking` | **on** | Extended thinking for the generation step (not the grading/pairwise calls) |
 | `--chat_template_path` | vendored Gemma-4 template | Custom chat template — pass `""` to unset for a non-Gemma model |
 | `--gen_max_tokens` | `4096` | Generation budget for the k_candidates/top3 step |
