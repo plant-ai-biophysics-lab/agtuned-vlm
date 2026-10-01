@@ -55,6 +55,7 @@ from src.common.chat_prompt import build_multimodal_prompt
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.progress import ProgressBar
+from src.detection_multiclass import SMOKETEST_DATASETS
 from src.verifier_cot import _count_rubric_criteria, _normalize_criterion_scores, _parse_criterion_scores
 
 try:
@@ -155,6 +156,19 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         input_rows = list(csv.DictReader(f))
     if not input_rows:
         raise SystemExit(f"ERROR: {ckpt_path} has no rows.")
+
+    if args.smoketest:
+        wanted = set(SMOKETEST_DATASETS)
+        input_rows = [r for r in input_rows if r["agml_dataset"] in wanted]
+        found = {r["agml_dataset"] for r in input_rows}
+        missing = wanted - found
+        if missing:
+            print(f"  [smoketest] WARNING: {sorted(missing)} not found in --ckpt — "
+                  f"was it generated with detection-multiclass --smoketest too?")
+        print(f"  [smoketest] restricting to {sorted(found)} ({len(input_rows)} row(s))")
+        if not input_rows:
+            raise SystemExit(f"--smoketest: none of {sorted(wanted)} found in {ckpt_path} — "
+                              f"this doesn't look like a detection-multiclass --smoketest checkpoint.")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
     out_ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
@@ -335,6 +349,12 @@ if __name__ == "__main__":
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
+    parser.add_argument("--smoketest", action="store_true",
+                         help=f"Restrict --ckpt's rows to just {SMOKETEST_DATASETS!r} — same "
+                              f"dataset scope as detection-multiclass --smoketest, for validating "
+                              f"the whole crop -> grade -> filter pipeline before committing to a "
+                              f"full --ckpt. Warns (not errors) if --ckpt has neither dataset, since "
+                              f"--ckpt might just be from a different smoketest run.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=8192,

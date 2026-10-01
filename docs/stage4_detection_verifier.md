@@ -129,8 +129,30 @@ equally:
 ```bash
 uv run python main.py detection-box-verifier \
     --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --output_dir outputs_final/detection_box_verifier_smoketest/
+    --output_dir outputs_final/detection_box_verifier_smoketest/ \
+    --smoketest
 ```
+
+`--smoketest` here restricts `--ckpt`'s own rows to the same two GEMINI
+cowpea datasets Step 0's `--smoketest` uses — same explicit-intent
+convention as `detection-multiclass`, not just "whichever checkpoint path
+you happened to point `--ckpt` at."
+
+**QC**: same plotter as Step 0, pointed at the box-verifier's own checkpoint:
+
+```bash
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_box_verifier_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --color_by_subclass
+```
+
+Note: this reads `pred_boxes_json` (the full graded pool, every box's
+`confidence`/`criterion_scores` now attached but not yet distinguished by
+color) — it does NOT currently plot `pred_boxes_filtered_json` separately,
+so a filtered-out low-confidence box still renders the same as a kept one
+here. Useful for confirming the grading step ran and attached real scores
+(inspect a box's JSON directly for its `confidence`), not yet a visual
+kept-vs-dropped comparison.
 
 **Read the result**: `metrics.json` reports mean precision/recall/F1 for
 both `unfiltered` (identical to the input checkpoint's own numbers) and
@@ -161,3 +183,46 @@ re-filtering, not new grading calls. Writes `f1_vs_confidence_threshold.png`
 Open question not yet resolved: how many rubric criteria are worth the
 extra GPU call per box before diminishing returns — 4 was a starting
 point, not validated against alternatives.
+
+## Full pipeline (after the smoke tests pass)
+
+Same three scripts, no `--smoketest`, run in order over the whole active
+detection manifest:
+
+```bash
+# 1. Multi-class generation — every active detection dataset.
+uv run python main.py detection-multiclass \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/detection_multiclass/
+
+# 2. Per-box verifier — crop, grade, filter (default --confidence_threshold 0.5).
+uv run python main.py detection-box-verifier \
+    --ckpt outputs_final/detection_multiclass/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/detection_box_verifier/
+
+# 3. Sweep to find the threshold that actually maximizes F1 (no GPU needed).
+uv run python main.py detection-box-verifier-summary \
+    --ckpt outputs_final/detection_box_verifier/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+If step 3's best `confidence_threshold` differs meaningfully from the
+default (`0.5`) used in step 2, re-run step 2 with that value to
+regenerate the final `pred_boxes_filtered_json`/`metrics.json` at the
+tuned threshold:
+
+```bash
+uv run python main.py detection-box-verifier \
+    --ckpt outputs_final/detection_multiclass/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/detection_box_verifier/ \
+    --confidence_threshold <tuned value> \
+    --rerun
+```
+
+`--rerun` is required here, not just a different threshold flag — every
+box's `confidence` is graded once and the result is keyed by
+`(dataset, class, image_name)` in the verifier's own checkpoint, so a
+plain resume would see those rows as already done and skip them instead
+of re-filtering at the new threshold. This re-grades every box (the same
+GPU cost as step 2 again) — there is no cheaper "just re-filter, don't
+re-grade" path built yet, since grading and filtering happen in the same
+pass.
