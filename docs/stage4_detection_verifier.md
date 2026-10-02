@@ -191,14 +191,18 @@ reports mean precision/recall/F1 for this *unfiltered* final set (every
 surviving box counted, matching Step 2's own `confidence_threshold=0.0`
 row in its sweep).
 
-**QC**: same plotter, pointed at this checkpoint — `category_name` now
-reflects any reclassification, and boxes are whatever survived
-split/tighten/drop:
+**QC #2 — after refinement, pre-filter**: same plotter, pointed at this
+checkpoint — `category_name` now reflects any reclassification, and boxes
+are whatever survived split/tighten/drop. Pass `--out_dir` explicitly
+(same collision reason as the filtered QC further down) so this doesn't
+land in the same default `qc_plots/` folder a later filtered run would
+also use:
 
 ```bash
 uv run python main.py detection-qc-plot \
     --ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --color_by_subclass
+    --color_by_subclass \
+    --out_dir outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/qc_plots_unfiltered
 ```
 
 (Confidence numbers show up in each box's label automatically — same
@@ -301,7 +305,7 @@ Writes `final_metrics_conf<X>_iou<Y>.json` (to `--out_dir`, default
 both variants, plus (Variant B) which sub-class won each image, pooled
 into a per-dataset `chosen_subclass_counts`.
 
-## QC with the chosen filter applied
+## QC #3 — after filtering
 
 `detection-qc-plot` now takes `--confidence_threshold` — drops boxes below
 it before plotting (boxes with no `confidence` at all, e.g. a plain
@@ -312,7 +316,7 @@ on the filtered set at `--iou_threshold`, not the checkpoint's own stored
 
 **IMPORTANT — always pass `--out_dir` explicitly here.** Without it,
 `detection-qc-plot` defaults to `<ckpt's own dir>/qc_plots/` **every
-time**, regardless of `--confidence_threshold` — an unfiltered run and a
+time**, regardless of `--confidence_threshold` — QC #2 (above) and this
 filtered run against the same checkpoint will silently write into the
 exact same folder and overwrite each other's images, with no warning.
 Give the filtered run its own name:
@@ -322,8 +326,51 @@ uv run python main.py detection-qc-plot \
     --ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
     --confidence_threshold 0.6 --iou_threshold 0.3 \
     --color_by_subclass \
-    --out_dir outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/qc_plots_refined
+    --out_dir outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/qc_plots_filtered
 ```
+
+**The three QC checkpoints in this stage, all using the same
+`detection-qc-plot --color_by_subclass` command, just pointed at a
+different checkpoint/threshold each time:**
+
+| # | After | Checkpoint | `--confidence_threshold` | Folder |
+|---|---|---|---|---|
+| 1 | multi-class generation | `detection_multiclass`'s own ckpt | *(none)* | `qc_plots/` (under the multiclass output dir) |
+| 2 | refinement, pre-filter | `detection_box_refine`'s own ckpt | *(none)* | `qc_plots_unfiltered/` (under the refine output dir) |
+| 3 | filtering | `detection_box_refine`'s own ckpt | your chosen value | `qc_plots_filtered/` (under the refine output dir) |
+
+## Step 4 — compare against baseline
+
+```bash
+uv run python main.py detection-comparison-summary \
+    --baseline_ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --verifier_ckpt outputs_final/detection_box_verifier_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --refine_ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --confidence_threshold 0.6 --iou_threshold 0.3
+```
+
+No GPU needed. One grouped bar chart, Precision/Recall/F1 on the x-axis,
+four conditions compared at the exact same `--iou_threshold` (so the
+comparison is fair regardless of what IoU threshold each checkpoint's own
+original run happened to use):
+
+- **Baseline** (`--baseline_ckpt`, plain `detection-multiclass`/
+  `detection-baseline`, no confidence field) — drawn as a **dashed red
+  reference line**, not a bar, one short segment per metric at that
+  metric's own baseline value (not a single flat line — baseline's
+  precision/recall/F1 are 3 different numbers).
+- **Verifier (no refine)** (`--verifier_ckpt`, `detection-box-verifier`) —
+  grades but never corrects, filtered at `--confidence_threshold`.
+- **Verifier + refine** (`--refine_ckpt`, unfiltered — every surviving
+  box kept regardless of confidence).
+- **Verifier + refine + filter** (`--refine_ckpt` again, this time
+  filtered at `--confidence_threshold`) — the actual end-to-end pipeline
+  result.
+
+Writes `comparison_conf<X>_iou<Y>.png` + the same numbers as
+`comparison_conf<X>_iou<Y>.json` (to `--out_dir`, default
+`<refine_ckpt's own dir>/comparison/`), and prints all four conditions'
+P/R/F1 to stdout.
 
 ## Optional simpler alternative: detection-box-verifier (grade + filter, no correction)
 
@@ -348,25 +395,69 @@ instead to sweep thresholds for it the same way.
 ## Full pipeline (after the smoke tests pass)
 
 Recommended flow, no `--smoketest`, over the whole active detection
-manifest:
+manifest — everything from the smoke-test walkthrough above, in order,
+with every output folder named so nothing overwrites anything else:
 
 ```bash
-# Step 0 — multi-class generation, every active detection dataset.
+MODEL=RedHatAI/gemma-4-31B-it-FP8-dynamic
+SAFE=RedHatAI_gemma-4-31B-it-FP8-dynamic   # safe_model_name(MODEL) — matches every ckpt filename below
+
+# ── Step 0 — multi-class generation, every active detection dataset. ──────────
 uv run python main.py detection-multiclass \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --model $MODEL \
     --output_dir outputs_final/detection_multiclass/
 
-# Step 1 — crop, grade, correct-and-reverify (no filtering).
+# QC #1 — after multi-class generation.
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_multiclass/$SAFE/ckpt_$SAFE.csv \
+    --color_by_subclass
+
+# ── Step 1 — crop, grade, correct-and-reverify (no filtering). ────────────────
 uv run python main.py detection-box-refine \
-    --ckpt outputs_final/detection_multiclass/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --ckpt outputs_final/detection_multiclass/$SAFE/ckpt_$SAFE.csv \
     --output_dir outputs_final/detection_box_refine/
 
-# Step 2 — sweep to find the threshold that actually maximizes F1 (no GPU needed).
+# QC #2 — after refinement, pre-filter.
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_box_refine/$SAFE/ckpt_$SAFE.csv \
+    --color_by_subclass \
+    --out_dir outputs_final/detection_box_refine/$SAFE/qc_plots_unfiltered
+
+# ── Step 2 — sweep to find the threshold that actually maximizes F1 (no GPU needed). ──
 uv run python main.py detection-box-verifier-summary \
-    --ckpt outputs_final/detection_box_refine/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+    --ckpt outputs_final/detection_box_refine/$SAFE/ckpt_$SAFE.csv
+# Note the best (confidence_threshold, iou_threshold) it prints — used as
+# CONF/IOU below.
+CONF=0.6   # <- replace with the sweep's own best confidence_threshold
+IOU=0.3    # <- replace with the sweep's own best iou_threshold
+
+# ── Step 3 — final metrics at that threshold. ──────────────────────────────────
+uv run python main.py detection-final-metrics \
+    --ckpt outputs_final/detection_box_refine/$SAFE/ckpt_$SAFE.csv \
+    --confidence_threshold $CONF --iou_threshold $IOU
+
+# QC #3 — after filtering.
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_box_refine/$SAFE/ckpt_$SAFE.csv \
+    --confidence_threshold $CONF --iou_threshold $IOU \
+    --color_by_subclass \
+    --out_dir outputs_final/detection_box_refine/$SAFE/qc_plots_filtered
+
+# ── Optional — the simpler, non-corrective alternative, for comparison. ───────
+uv run python main.py detection-box-verifier \
+    --ckpt outputs_final/detection_multiclass/$SAFE/ckpt_$SAFE.csv \
+    --output_dir outputs_final/detection_box_verifier/
+
+# ── Step 4 — compare baseline vs. verifier (no refine) vs. verifier+refine vs. verifier+refine+filter. ──
+uv run python main.py detection-comparison-summary \
+    --baseline_ckpt outputs_final/detection_multiclass/$SAFE/ckpt_$SAFE.csv \
+    --verifier_ckpt outputs_final/detection_box_verifier/$SAFE/ckpt_$SAFE.csv \
+    --refine_ckpt outputs_final/detection_box_refine/$SAFE/ckpt_$SAFE.csv \
+    --confidence_threshold $CONF --iou_threshold $IOU
 ```
 
-Not yet validated: whether Step 1's active correction actually beats the
-simpler `detection-box-verifier` grade-and-filter alternative on real
-data — run both over the same `--ckpt`, sweep both with Step 2, and
-compare their best F1.
+Not yet validated on the full dataset: whether Step 1's active correction
+actually beats the simpler `detection-box-verifier` grade-and-filter
+alternative, or either beats plain baseline detection — Step 4's bar
+chart is exactly what answers that, once the full run (not just the
+20-image smoketest) has real numbers to compare.

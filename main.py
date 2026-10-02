@@ -17,6 +17,7 @@ STAGES = {
     "detection-box-refine":        "src.detection_box_refine",
     "detection-final-metrics":     "src.detection_final_metrics",
     "detection-split-report":      "src.detection_split_report",
+    "detection-comparison-summary": "src.detection_comparison_summary",
     "detection-box-verifier-summary": "src.detection_box_verifier_summary",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
@@ -173,6 +174,16 @@ Stages:
                                whichever wins; an upper bound, since the selection itself looks at
                                ground truth, not something a real filter could do). Writes
                                final_metrics_conf<X>_iou<Y>.json.
+    detection-comparison-summary  Paper 2 Stage 4, Step 4-report (docs/stage4_detection_verifier.md,
+                               no GPU needed) — grouped bar chart comparing 4 conditions at the SAME
+                               --iou_threshold: Baseline (--baseline_ckpt, plain detection-multiclass/
+                               -baseline, no confidence field — drawn as a dashed red REFERENCE LINE,
+                               one segment per metric at that metric's own baseline value, not a bar),
+                               Verifier no-refine (--verifier_ckpt, detection-box-verifier, filtered
+                               at --confidence_threshold), Verifier+refine (--refine_ckpt,
+                               detection-box-refine, unfiltered), Verifier+refine+filter
+                               (--refine_ckpt again, filtered). Precision/Recall/F1 on the x-axis.
+                               Writes comparison_conf<X>_iou<Y>.png/.json.
     detection-box-refine  Paper 2 Stage 4, Step 2 (docs/stage4_detection_verifier.md) — iterative
                                correct-and-reverify loop on top of detection-box-verifier's own
                                crop/grade mechanism (box_rubric, now 3 criteria). Any criterion

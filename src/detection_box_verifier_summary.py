@@ -248,10 +248,21 @@ def plot_criterion_score_distribution(rows: list[dict], out_path: Path, title: s
     plt.close(fig)
 
 
+def _numbered_path(out_path: Path, part: int, n_parts: int) -> Path:
+    """out_path unchanged if n_parts == 1 (no pagination needed); else
+    out_path with "_2", "_3", ... inserted before the suffix (part 1 is
+    always the bare out_path, never "_1" — keeps the single-figure case's
+    filename identical to before pagination existed)."""
+    if n_parts <= 1 or part == 1:
+        return out_path
+    return out_path.with_name(f"{out_path.stem}_{part}{out_path.suffix}")
+
+
 def plot_refinement_timeline(
     rows: list[dict], images_root: Path, out_path: Path, n_samples: int = 8,
     crop_pad_frac: float = 0.15, title: str = "", first_action: str | None = None,
-) -> None:
+    max_rows_per_figure: int = 6,
+) -> list[Path]:
     """One row per sampled box, one column per round in its own
     `history` (detection_box_refine.py's own per-round snapshot list —
     bbox/label/scores/confidence/action AT that round) — shows how a
@@ -276,7 +287,12 @@ def plot_refinement_timeline(
     (passed on the very first grade, no correction ever applied) are
     also skipped — there's no "change" to show for them; this plot is
     specifically for the interesting cases. Sampled longest-history-first
-    (the most corrections applied = the most to show), not randomly."""
+    (the most corrections applied = the most to show), not randomly.
+
+    max_rows_per_figure (default 6): once `sampled` exceeds this, output
+    is PAGINATED into multiple files ("<name>.png", "<name>_2.png",
+    "<name>_3.png", ...) instead of one arbitrarily tall image. Returns
+    the list of paths actually written."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -295,61 +311,70 @@ def plot_refinement_timeline(
         label = f" with first action {first_action!r}" if first_action else ""
         print(f"  [warn] no boxes{label} with a multi-round refinement history found — skipping "
               f"timeline (is this checkpoint from detection-box-refine, not detection-box-verifier?)")
-        return
+        return []
 
     candidates.sort(key=lambda c: -len(c[0]))
     sampled = candidates[:n_samples]
     max_cols = max(len(h) for h, *_ in sampled)
 
-    fig, axes = plt.subplots(len(sampled), max_cols, figsize=(3.6 * max_cols, 3.8 * len(sampled)),
-                              squeeze=False)
+    chunks = [sampled[i:i + max_rows_per_figure] for i in range(0, len(sampled), max_rows_per_figure)]
+    written: list[Path] = []
+    n_skipped_total = 0
 
-    n_skipped = 0
-    for row_i, (history, dataset, image_name, box) in enumerate(sampled):
-        img_path = images_root / dataset / image_name
-        image = None
-        if img_path.exists():
-            image = PILImage.open(img_path).convert("RGB")
-        else:
-            n_skipped += 1
+    for part, chunk in enumerate(chunks, start=1):
+        fig, axes = plt.subplots(len(chunk), max_cols, figsize=(3.6 * max_cols, 3.8 * len(chunk)),
+                                  squeeze=False)
 
-        for col_i in range(max_cols):
-            ax = axes[row_i][col_i]
-            ax.axis("off")
-            if col_i >= len(history):
-                continue
-            step = history[col_i]
-            if image is None:
-                ax.set_title("[image not found]", fontsize=7, color="crimson")
-                continue
-            crop = crop_box(image, step["bbox"], pad_frac=crop_pad_frac)
-            ax.imshow(crop)
-            crit = step.get("criterion_scores") or {}
-            crit_str = "  ".join(f"c{n}={s}" for n, s in sorted(crit.items(), key=lambda kv: int(kv[0])))
-            action = step.get("action") or "?"
-            ax.set_title(
-                f"round {step['round']}: {step['category_name']}\n"
-                f"conf={step['confidence']:.2f}  ({crit_str})\n"
-                f"-> {action}",
-                fontsize=7.5,
-            )
+        for row_i, (history, dataset, image_name, box) in enumerate(chunk):
+            img_path = images_root / dataset / image_name
+            image = None
+            if img_path.exists():
+                image = PILImage.open(img_path).convert("RGB")
+            else:
+                n_skipped_total += 1
 
-    subtitle = f": {title}" if title else ""
-    fig.suptitle(f"Box refinement timeline{subtitle} ({len(sampled)}/{len(candidates)} "
-                 f"multi-round boxes shown)", fontsize=11)
-    plt.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    if n_skipped:
-        print(f"  [warn] {n_skipped}/{len(sampled)} sampled timeline row(s) had no source image found "
-              f"under {images_root}")
+            for col_i in range(max_cols):
+                ax = axes[row_i][col_i]
+                ax.axis("off")
+                if col_i >= len(history):
+                    continue
+                step = history[col_i]
+                if image is None:
+                    ax.set_title("[image not found]", fontsize=7, color="crimson")
+                    continue
+                crop = crop_box(image, step["bbox"], pad_frac=crop_pad_frac)
+                ax.imshow(crop)
+                crit = step.get("criterion_scores") or {}
+                crit_str = "  ".join(f"c{n}={s}" for n, s in sorted(crit.items(), key=lambda kv: int(kv[0])))
+                action = step.get("action") or "?"
+                ax.set_title(
+                    f"round {step['round']}: {step['category_name']}\n"
+                    f"conf={step['confidence']:.2f}  ({crit_str})\n"
+                    f"-> {action}",
+                    fontsize=7.5,
+                )
+
+        subtitle = f": {title}" if title else ""
+        page_str = f" (page {part}/{len(chunks)})" if len(chunks) > 1 else ""
+        fig.suptitle(f"Box refinement timeline{subtitle}{page_str} ({len(sampled)}/{len(candidates)} "
+                     f"multi-round boxes shown)", fontsize=11)
+        plt.tight_layout()
+        page_path = _numbered_path(out_path, part, len(chunks))
+        page_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(page_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        written.append(page_path)
+
+    if n_skipped_total:
+        print(f"  [warn] {n_skipped_total}/{len(sampled)} sampled timeline row(s) had no source "
+              f"image found under {images_root}")
+    return written
 
 
 def plot_crop_gallery(
     rows: list[dict], images_root: Path, out_path: Path, n_samples: int = 20,
-    crop_pad_frac: float = 0.15, title: str = "",
-) -> None:
+    crop_pad_frac: float = 0.15, title: str = "", max_rows_per_figure: int = 5,
+) -> list[Path]:
     """A grid of actual box crops (re-cropped from the source image via
     the SAME crop_box() the verifier itself graded — not re-derived or
     approximated) paired with their own confidence + per-criterion
@@ -364,7 +389,13 @@ def plot_crop_gallery(
     real data — see plot_confidence_distribution) — a plain random sample
     would mostly just show more examples from the dominant end and leave
     the (usually more diagnostically interesting) low-confidence tail
-    completely unrepresented."""
+    completely unrepresented.
+
+    max_rows_per_figure (default 5, i.e. 20 crops at the fixed 4-column
+    grid): once the sampled set needs more GRID rows than this, output is
+    PAGINATED into multiple files ("<name>.png", "<name>_2.png", ...)
+    instead of one arbitrarily tall image. Returns the list of paths
+    actually written."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -379,7 +410,7 @@ def plot_crop_gallery(
     if not candidates:
         print("  [warn] no per-box confidence scores found — skipping crop gallery (is this "
               "checkpoint from detection-box-verifier, not detection-multiclass directly?)")
-        return
+        return []
 
     candidates.sort(key=lambda c: c[0])
     n = min(n_samples, len(candidates))
@@ -390,48 +421,58 @@ def plot_crop_gallery(
     sampled = [candidates[i] for i in idxs]
 
     n_cols = 4
-    n_rows = (len(sampled) + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4.2 * n_rows))
-    # n_cols is always 4 (fixed above), so plt.subplots() here NEVER
-    # returns a bare scalar Axes (that only happens at nrows=ncols=1) —
-    # .flatten() is always safe and correct, regardless of len(sampled).
-    # Confirmed bug (2026-10-02): the old `if len(sampled) > 1` branch
-    # wrapped the whole 4-element axes ARRAY in a single-element list for
-    # len(sampled)==1, so ax.imshow() below was called on a numpy array
-    # instead of an Axes.
-    axes = axes.flatten()
+    items_per_figure = max_rows_per_figure * n_cols
+    chunks = [sampled[i:i + items_per_figure] for i in range(0, len(sampled), items_per_figure)]
+    written: list[Path] = []
+    n_skipped_total = 0
 
-    n_skipped = 0
-    for ax, (confidence, dataset, image_name, box) in zip(axes, sampled):
-        img_path = images_root / dataset / image_name
-        if not img_path.exists():
+    for part, chunk in enumerate(chunks, start=1):
+        n_rows = (len(chunk) + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4.2 * n_rows))
+        # n_cols is always 4 (fixed above), so plt.subplots() here NEVER
+        # returns a bare scalar Axes (that only happens at nrows=ncols=1) —
+        # .flatten() is always safe and correct, regardless of len(chunk).
+        # Confirmed bug (2026-10-02): an old `if len(sampled) > 1` branch
+        # wrapped the whole 4-element axes ARRAY in a single-element list
+        # for a 1-item chunk, so ax.imshow() below was called on a numpy
+        # array instead of an Axes.
+        axes = axes.flatten()
+
+        for ax, (confidence, dataset, image_name, box) in zip(axes, chunk):
+            img_path = images_root / dataset / image_name
+            if not img_path.exists():
+                ax.axis("off")
+                ax.set_title(f"[image not found]\n{dataset}/{image_name}", fontsize=7, color="crimson")
+                n_skipped_total += 1
+                continue
+            image = PILImage.open(img_path).convert("RGB")
+            crop = crop_box(image, box["bbox"], pad_frac=crop_pad_frac)
+            ax.imshow(crop)
             ax.axis("off")
-            ax.set_title(f"[image not found]\n{dataset}/{image_name}", fontsize=7, color="crimson")
-            n_skipped += 1
-            continue
-        image = PILImage.open(img_path).convert("RGB")
-        crop = crop_box(image, box["bbox"], pad_frac=crop_pad_frac)
-        ax.imshow(crop)
-        ax.axis("off")
 
-        criterion_scores = box.get("criterion_scores") or {}
-        crit_str = "  ".join(f"c{n}={s}" for n, s in sorted(criterion_scores.items(), key=lambda kv: int(kv[0])))
-        label = str(box.get("category_name") or "object")
-        ax.set_title(f"{label}\nconf={confidence:.2f}  ({crit_str})", fontsize=7.5)
+            criterion_scores = box.get("criterion_scores") or {}
+            crit_str = "  ".join(f"c{n}={s}" for n, s in sorted(criterion_scores.items(), key=lambda kv: int(kv[0])))
+            label = str(box.get("category_name") or "object")
+            ax.set_title(f"{label}\nconf={confidence:.2f}  ({crit_str})", fontsize=7.5)
 
-    for ax in axes[len(sampled):]:
-        ax.axis("off")
+        for ax in axes[len(chunk):]:
+            ax.axis("off")
 
-    subtitle = f": {title}" if title else ""
-    fig.suptitle(f"Box crop gallery, stratified by confidence{subtitle} "
-                 f"({len(sampled)}/{len(candidates)} boxes shown)", fontsize=11)
-    plt.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    if n_skipped:
-        print(f"  [warn] {n_skipped}/{len(sampled)} sampled crop(s) skipped — source image not found "
-              f"under {images_root}")
+        subtitle = f": {title}" if title else ""
+        page_str = f" (page {part}/{len(chunks)})" if len(chunks) > 1 else ""
+        fig.suptitle(f"Box crop gallery, stratified by confidence{subtitle}{page_str} "
+                     f"({len(sampled)}/{len(candidates)} boxes shown)", fontsize=11)
+        plt.tight_layout()
+        page_path = _numbered_path(out_path, part, len(chunks))
+        page_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(page_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        written.append(page_path)
+
+    if n_skipped_total:
+        print(f"  [warn] {n_skipped_total}/{len(sampled)} sampled crop(s) skipped — source image "
+              f"not found under {images_root}")
+    return written
 
 
 def write_grid_csv(grid: dict[tuple[float, float], dict[str, float]], out_path: Path) -> None:
@@ -476,9 +517,10 @@ def main(args: argparse.Namespace) -> None:
     # the aggregate statistics plots above.
     samples_dir = Path(args.samples_dir) if args.samples_dir else ckpt_path.parent / "refine_samples"
     gallery_path = samples_dir / "crop_gallery.png"
-    plot_crop_gallery(rows, Path(args.images_root), gallery_path, n_samples=args.n_crop_samples,
-                       crop_pad_frac=args.crop_pad_frac, title=args.title)
-    print(f"  Saved: {gallery_path}")
+    for p in plot_crop_gallery(rows, Path(args.images_root), gallery_path, n_samples=args.n_crop_samples,
+                                crop_pad_frac=args.crop_pad_frac, title=args.title,
+                                max_rows_per_figure=args.max_rows_per_figure):
+        print(f"  Saved: {p}")
 
     # One subfolder per dataset, one figure per correction TYPE within it
     # (split/tighten/reclassify, grouped by each box's FIRST correction —
@@ -493,11 +535,11 @@ def main(args: argparse.Namespace) -> None:
         ds_title = f"{args.title} / {dataset}" if args.title else dataset
         for action in ("split", "tighten", "reclassify"):
             timeline_path = ds_dir / f"{action}_timeline.png"
-            plot_refinement_timeline(ds_rows, Path(args.images_root), timeline_path,
-                                      n_samples=args.n_crop_samples, crop_pad_frac=args.crop_pad_frac,
-                                      title=ds_title, first_action=action)
-            if timeline_path.exists():
-                print(f"  Saved: {timeline_path}")
+            for p in plot_refinement_timeline(ds_rows, Path(args.images_root), timeline_path,
+                                               n_samples=args.n_crop_samples, crop_pad_frac=args.crop_pad_frac,
+                                               title=ds_title, first_action=action,
+                                               max_rows_per_figure=args.max_rows_per_figure):
+                print(f"  Saved: {p}")
 
     print(f"\n  Best: confidence_threshold={best_conf_thr}, iou_threshold={best_iou_thr} -> "
           f"precision={best_metrics['precision']:.3f} recall={best_metrics['recall']:.3f} "
@@ -515,6 +557,12 @@ if __name__ == "__main__":
     ap.add_argument("--n_crop_samples", type=int, default=20,
                      help="How many box crops to show in crop_gallery.png, stratified by confidence "
                           "(see plot_crop_gallery's docstring for why not random).")
+    ap.add_argument("--max_rows_per_figure", type=int, default=5,
+                     help="Caps how tall a single crop_gallery/*_timeline.png can get — once the "
+                          "sampled set needs more grid rows (crop_gallery) or boxes "
+                          "(*_timeline.png) than this, output is paginated into multiple numbered "
+                          "files (<name>.png, <name>_2.png, ...) instead of one arbitrarily tall "
+                          "image.")
     ap.add_argument("--crop_pad_frac", type=float, default=0.15,
                      help="Must match whatever --crop_pad_frac detection-box-verifier used to "
                           "generate --ckpt, or the gallery's crops won't match what the verifier "
