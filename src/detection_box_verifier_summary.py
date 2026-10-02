@@ -248,6 +248,92 @@ def plot_criterion_score_distribution(rows: list[dict], out_path: Path, title: s
     plt.close(fig)
 
 
+def plot_refinement_timeline(
+    rows: list[dict], images_root: Path, out_path: Path, n_samples: int = 8,
+    crop_pad_frac: float = 0.15, title: str = "",
+) -> None:
+    """One row per sampled box, one column per round in its own
+    `history` (detection_box_refine.py's own per-round snapshot list —
+    bbox/label/scores/confidence/action AT that round) — shows how a
+    single box's crop, label, and scores actually changed step by step,
+    not just its final state. A split box's two+ children share the same
+    early columns (the pre-split lineage) and diverge from the split
+    round onward — exactly the shared-then-diverging history
+    detection_box_refine.py's own history-inheritance produces.
+
+    Only boxes detection-box-refine actually ran through refinement have
+    a `history` key at all (detection-box-verifier's own checkpoints
+    never do — it only grades once, never corrects) — rows without it
+    are silently skipped, not an error. Boxes with history length 1
+    (passed on the very first grade, no correction ever applied) are
+    also skipped — there's no "change" to show for them; this plot is
+    specifically for the interesting cases. Sampled longest-history-first
+    (the most corrections applied = the most to show), not randomly."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    candidates = []  # (history, agml_dataset, image_name, box)
+    for r in rows:
+        for b in json.loads(r.get("pred_boxes_json") or "[]"):
+            history = b.get("history")
+            if history and len(history) > 1:
+                candidates.append((history, r["agml_dataset"], r["image_name"], b))
+
+    if not candidates:
+        print("  [warn] no boxes with a multi-round refinement history found — skipping timeline "
+              "(is this checkpoint from detection-box-refine, not detection-box-verifier?)")
+        return
+
+    candidates.sort(key=lambda c: -len(c[0]))
+    sampled = candidates[:n_samples]
+    max_cols = max(len(h) for h, *_ in sampled)
+
+    fig, axes = plt.subplots(len(sampled), max_cols, figsize=(3.6 * max_cols, 3.8 * len(sampled)),
+                              squeeze=False)
+
+    n_skipped = 0
+    for row_i, (history, dataset, image_name, box) in enumerate(sampled):
+        img_path = images_root / dataset / image_name
+        image = None
+        if img_path.exists():
+            image = PILImage.open(img_path).convert("RGB")
+        else:
+            n_skipped += 1
+
+        for col_i in range(max_cols):
+            ax = axes[row_i][col_i]
+            ax.axis("off")
+            if col_i >= len(history):
+                continue
+            step = history[col_i]
+            if image is None:
+                ax.set_title("[image not found]", fontsize=7, color="crimson")
+                continue
+            crop = crop_box(image, step["bbox"], pad_frac=crop_pad_frac)
+            ax.imshow(crop)
+            crit = step.get("criterion_scores") or {}
+            crit_str = "  ".join(f"c{n}={s}" for n, s in sorted(crit.items(), key=lambda kv: int(kv[0])))
+            action = step.get("action") or "?"
+            ax.set_title(
+                f"round {step['round']}: {step['category_name']}\n"
+                f"conf={step['confidence']:.2f}  ({crit_str})\n"
+                f"-> {action}",
+                fontsize=7.5,
+            )
+
+    subtitle = f": {title}" if title else ""
+    fig.suptitle(f"Box refinement timeline{subtitle} ({len(sampled)}/{len(candidates)} "
+                 f"multi-round boxes shown)", fontsize=11)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    if n_skipped:
+        print(f"  [warn] {n_skipped}/{len(sampled)} sampled timeline row(s) had no source image found "
+              f"under {images_root}")
+
+
 def plot_crop_gallery(
     rows: list[dict], images_root: Path, out_path: Path, n_samples: int = 20,
     crop_pad_frac: float = 0.15, title: str = "",
@@ -294,7 +380,14 @@ def plot_crop_gallery(
     n_cols = 4
     n_rows = (len(sampled) + n_cols - 1) // n_cols
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4.2 * n_rows))
-    axes = axes.flatten() if len(sampled) > 1 else [axes]
+    # n_cols is always 4 (fixed above), so plt.subplots() here NEVER
+    # returns a bare scalar Axes (that only happens at nrows=ncols=1) —
+    # .flatten() is always safe and correct, regardless of len(sampled).
+    # Confirmed bug (2026-10-02): the old `if len(sampled) > 1` branch
+    # wrapped the whole 4-element axes ARRAY in a single-element list for
+    # len(sampled)==1, so ax.imshow() below was called on a numpy array
+    # instead of an Axes.
+    axes = axes.flatten()
 
     n_skipped = 0
     for ax, (confidence, dataset, image_name, box) in zip(axes, sampled):
@@ -362,12 +455,16 @@ def main(args: argparse.Namespace) -> None:
     gallery_path = out_dir / "crop_gallery.png"
     plot_crop_gallery(rows, Path(args.images_root), gallery_path, n_samples=args.n_crop_samples,
                        crop_pad_frac=args.crop_pad_frac, title=args.title)
+    timeline_path = out_dir / "refinement_timeline.png"
+    plot_refinement_timeline(rows, Path(args.images_root), timeline_path, n_samples=args.n_crop_samples,
+                              crop_pad_frac=args.crop_pad_frac, title=args.title)
     write_grid_csv(grid, csv_path)
 
     print(f"  Saved: {plot_path}")
     print(f"  Saved: {dist_path}")
     print(f"  Saved: {criterion_path}")
     print(f"  Saved: {gallery_path}")
+    print(f"  Saved: {timeline_path}")
     print(f"\n  Best: confidence_threshold={best_conf_thr}, iou_threshold={best_iou_thr} -> "
           f"precision={best_metrics['precision']:.3f} recall={best_metrics['recall']:.3f} "
           f"f1={best_metrics['f1']:.3f} (n={len(rows)} rows)")

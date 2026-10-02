@@ -215,18 +215,32 @@ def refine_group(
         for (img, b), g in zip(flat, grades):
             b["criterion_scores"] = g["criterion_scores"]
             b["confidence"] = g["confidence"]
+            # One snapshot per round this box (or its lineage, across a
+            # split) was graded — bbox/label/scores AT that round, plus
+            # which correction (if any) was decided from them, filled in
+            # just below. detection_box_verifier_summary.py's
+            # plot_refinement_timeline reads this to show how a box
+            # actually changed step by step, not just its final state.
+            b.setdefault("history", []).append({
+                "round": round_i + 1, "bbox": list(b["bbox"]), "category_name": b["category_name"],
+                "criterion_scores": dict(b["criterion_scores"]), "confidence": b["confidence"], "action": None,
+            })
 
         needs_split, needs_tighten, needs_reclassify, passed = [], [], [], []
         for img, b in flat:
             c = {int(k): int(v) for k, v in b["criterion_scores"].items()}
             c1, c2, c3 = c.get(1, 3), c.get(2, 3), c.get(3, 3)
             if c3 <= 2:
+                b["history"][-1]["action"] = "split"
                 needs_split.append((img, b))
             elif c2 <= 2:
+                b["history"][-1]["action"] = "tighten"
                 needs_tighten.append((img, b))
             elif c1 <= 2:
+                b["history"][-1]["action"] = "reclassify"
                 needs_reclassify.append((img, b))
             else:
+                b["history"][-1]["action"] = "passed"
                 passed.append((img, b))
 
         for img, b in passed:
@@ -246,6 +260,11 @@ def refine_group(
                     stats["dropped"] += 1
                     continue
                 for nb in new_boxes:
+                    # Each new box starts from a COPY of the parent's
+                    # history up through the split decision — so a
+                    # genuine split (2+ results) shows the same shared
+                    # lineage up to that point, then diverges from there.
+                    nb["history"] = [dict(h) for h in b["history"]]
                     new_active[img].append(nb)
 
         if needs_tighten:
@@ -276,6 +295,30 @@ def refine_group(
                 new_active[img].append(b)
 
         active = new_active
+
+    # Final grading pass for anything still active after max_rounds — a
+    # box corrected during the LAST round's loop body above was never
+    # re-graded before this point, so without this its stored
+    # confidence/criterion_scores would reflect the PRE-correction box,
+    # not what it actually ended up as. Needed so
+    # detection-box-verifier-summary's threshold sweep (the only place
+    # filtering happens — this script applies none itself) has an
+    # accurate confidence to threshold on for every box in the output,
+    # not just ones that happened to pass outright before the round cap.
+    flat = [(img, b) for img, boxes in active.items() for b in boxes]
+    if flat:
+        crops = [crop_box(images_by_name[img], b["bbox"], crop_pad_frac) for img, b in flat]
+        labels = [b["category_name"] for img, b in flat]
+        grades = grade_boxes(llm, tokenizer, crops, labels, rubric, grading_template, system_prompt,
+                              grading_max_tokens=grading_max_tokens, seed=seed)
+        for (img, b), g in zip(flat, grades):
+            b["criterion_scores"] = g["criterion_scores"]
+            b["confidence"] = g["confidence"]
+            b.setdefault("history", []).append({
+                "round": max_rounds, "bbox": list(b["bbox"]), "category_name": b["category_name"],
+                "criterion_scores": dict(b["criterion_scores"]), "confidence": b["confidence"],
+                "action": "exhausted",
+            })
 
     for img, boxes in active.items():
         for b in boxes:
