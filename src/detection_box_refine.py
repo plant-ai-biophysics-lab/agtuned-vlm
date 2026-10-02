@@ -259,12 +259,19 @@ def refine_group(
                 if not new_boxes:
                     stats["dropped"] += 1
                     continue
+                # split_group_size: how many boxes THIS specific split
+                # call produced (1 = model disagreed a split was needed,
+                # 2+ = a real split) — recorded explicitly at the moment
+                # of splitting, not inferred later from history, so
+                # "did splitting actually grow the box count" can be
+                # checked directly per split event, not just assumed.
                 for nb in new_boxes:
                     # Each new box starts from a COPY of the parent's
                     # history up through the split decision — so a
                     # genuine split (2+ results) shows the same shared
                     # lineage up to that point, then diverges from there.
                     nb["history"] = [dict(h) for h in b["history"]]
+                    nb["history"][-1]["split_group_size"] = len(new_boxes)
                     new_active[img].append(nb)
 
         if needs_tighten:

@@ -16,6 +16,7 @@ STAGES = {
     "detection-box-verifier":      "src.detection_box_verifier",
     "detection-box-refine":        "src.detection_box_refine",
     "detection-final-metrics":     "src.detection_final_metrics",
+    "detection-split-report":      "src.detection_split_report",
     "detection-box-verifier-summary": "src.detection_box_verifier_summary",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
