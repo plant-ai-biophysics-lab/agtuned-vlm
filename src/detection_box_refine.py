@@ -74,6 +74,7 @@ from PIL import Image as PILImage
 from src.common.bbox_metrics import match_boxes, precision_recall_f1
 from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes_json
 from src.common.chat_prompt import build_multimodal_prompt
+from src.common.metrics import extract_channel_thought
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.progress import ProgressBar
@@ -118,23 +119,32 @@ def remap_crop_box_to_image(
     return clamp_box(image_bbox, image_w, image_h)
 
 
-def do_split(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed):
+def do_split(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed,
+             enable_thinking: bool = True, chat_template: str | None = None):
     """items: [(image, box, crop_region), ...]. Returns one list of new
     box dicts per item, same order — [] means the model found nothing
     real here (drop), a single-element list means it disagreed that a
     split was needed (treated as a corrected replacement, not a true
-    split), 2+ means a real split."""
+    split), 2+ means a real split. enable_thinking/chat_template: same
+    mechanism as detection_box_verifier.grade_boxes — a correction call
+    is a real generation decision (how many instances, where), so it gets
+    the same reasoning step detection-multiclass's own box generation
+    does."""
     template = vprompts["box_split_prompt"]
     prompts = []
     for image, box, crop_region in items:
         crop = image.crop(crop_region)
         text = template.format(category=box["category_name"])
-        prompts.append(build_multimodal_prompt(tokenizer, crop, text, system_prompt=system_prompt))
-    params = SamplingParams(temperature=0.0, max_tokens=gen_max_tokens, seed=seed)
+        prompts.append(build_multimodal_prompt(tokenizer, crop, text, system_prompt=system_prompt,
+                                                 enable_thinking=enable_thinking, chat_template=chat_template))
+    params = SamplingParams(temperature=0.0, max_tokens=gen_max_tokens, seed=seed,
+                             skip_special_tokens=not enable_thinking)
     outputs = llm.generate(prompts, sampling_params=params)
     results = []
     for (image, box, crop_region), out in zip(items, outputs):
-        parsed = extract_boxes_json(out.outputs[0].text)
+        raw = out.outputs[0].text
+        _, cleaned = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        parsed = extract_boxes_json(cleaned)
         new_boxes = []
         for p in parsed:
             img_bbox = remap_crop_box_to_image(p["bbox"], crop_region, image.width, image.height)
@@ -143,7 +153,8 @@ def do_split(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, see
     return results
 
 
-def do_tighten(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed):
+def do_tighten(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed,
+               enable_thinking: bool = True, chat_template: str | None = None):
     """items: [(image, box, crop_region), ...]. Returns one tightened
     [x1,y1,x2,y2] (or None, meaning drop) per item, same order."""
     template = vprompts["box_tighten_prompt"]
@@ -151,12 +162,16 @@ def do_tighten(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, s
     for image, box, crop_region in items:
         crop = image.crop(crop_region)
         text = template.format(category=box["category_name"])
-        prompts.append(build_multimodal_prompt(tokenizer, crop, text, system_prompt=system_prompt))
-    params = SamplingParams(temperature=0.0, max_tokens=gen_max_tokens, seed=seed)
+        prompts.append(build_multimodal_prompt(tokenizer, crop, text, system_prompt=system_prompt,
+                                                 enable_thinking=enable_thinking, chat_template=chat_template))
+    params = SamplingParams(temperature=0.0, max_tokens=gen_max_tokens, seed=seed,
+                             skip_special_tokens=not enable_thinking)
     outputs = llm.generate(prompts, sampling_params=params)
     results = []
     for (image, box, crop_region), out in zip(items, outputs):
-        parsed = extract_boxes_json(out.outputs[0].text)
+        raw = out.outputs[0].text
+        _, cleaned = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        parsed = extract_boxes_json(cleaned)
         if not parsed:
             results.append(None)
             continue
@@ -164,7 +179,8 @@ def do_tighten(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, s
     return results
 
 
-def do_reclassify(llm, tokenizer, items, system_prompt, vprompts, grading_max_tokens, seed):
+def do_reclassify(llm, tokenizer, items, system_prompt, vprompts, grading_max_tokens, seed,
+                   enable_thinking: bool = True, chat_template: str | None = None):
     """items: [(image, box, crop_region, candidate_labels), ...]. Returns
     the matched candidate label (or None, meaning drop — no match/"none")
     per item, same order. Only ever returns a label from that item's own
@@ -176,12 +192,16 @@ def do_reclassify(llm, tokenizer, items, system_prompt, vprompts, grading_max_to
         crop = image.crop(crop_region)
         candidate_text = "\n".join(f"- {c}" for c in candidates) if candidates else "(no other labels found elsewhere in this image)"
         text = template.format(candidate_labels=candidate_text)
-        prompts.append(build_multimodal_prompt(tokenizer, crop, text, system_prompt=system_prompt))
-    params = SamplingParams(temperature=0.0, max_tokens=grading_max_tokens, seed=seed)
+        prompts.append(build_multimodal_prompt(tokenizer, crop, text, system_prompt=system_prompt,
+                                                 enable_thinking=enable_thinking, chat_template=chat_template))
+    params = SamplingParams(temperature=0.0, max_tokens=grading_max_tokens, seed=seed,
+                             skip_special_tokens=not enable_thinking)
     outputs = llm.generate(prompts, sampling_params=params)
     results = []
     for (image, box, crop_region, candidates), out in zip(items, outputs):
-        text = out.outputs[0].text.strip()
+        raw = out.outputs[0].text
+        _, cleaned = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        text = cleaned.strip()
         match = next((c for c in candidates if c.strip().lower() == text.lower()), None)
         results.append(match)
     return results
@@ -192,6 +212,7 @@ def refine_group(
     rubric: str, grading_template: str, vprompts: dict, system_prompt: str,
     other_labels_by_image: dict[str, list[str]],
     crop_pad_frac: float, grading_max_tokens: int, gen_max_tokens: int, max_rounds: int, seed: int,
+    enable_thinking: bool = True, chat_template: str | None = None,
 ) -> tuple[dict[str, list[dict]], dict]:
     """One dataset group's worth of images, run through the full
     round-based grade -> correct -> reverify loop (see module docstring).
@@ -211,7 +232,8 @@ def refine_group(
         crops = [crop_box(images_by_name[img], b["bbox"], crop_pad_frac) for img, b in flat]
         labels = [b["category_name"] for img, b in flat]
         grades = grade_boxes(llm, tokenizer, crops, labels, rubric, grading_template, system_prompt,
-                              grading_max_tokens=grading_max_tokens, seed=seed)
+                              grading_max_tokens=grading_max_tokens, seed=seed,
+                              enable_thinking=enable_thinking, chat_template=chat_template)
         for (img, b), g in zip(flat, grades):
             b["criterion_scores"] = g["criterion_scores"]
             b["confidence"] = g["confidence"]
@@ -253,7 +275,8 @@ def refine_group(
         if needs_split:
             items = [(images_by_name[img], b, crop_box_region(images_by_name[img], b["bbox"], crop_pad_frac))
                       for img, b in needs_split]
-            results = do_split(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed)
+            results = do_split(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed,
+                               enable_thinking=enable_thinking, chat_template=chat_template)
             stats["split_calls"] += len(items)
             for (img, b), new_boxes in zip(needs_split, results):
                 if not new_boxes:
@@ -277,7 +300,8 @@ def refine_group(
         if needs_tighten:
             items = [(images_by_name[img], b, crop_box_region(images_by_name[img], b["bbox"], crop_pad_frac))
                       for img, b in needs_tighten]
-            results = do_tighten(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed)
+            results = do_tighten(llm, tokenizer, items, system_prompt, vprompts, gen_max_tokens, seed,
+                                 enable_thinking=enable_thinking, chat_template=chat_template)
             stats["tighten_calls"] += len(items)
             for (img, b), new_bbox in zip(needs_tighten, results):
                 if new_bbox is None:
@@ -292,7 +316,8 @@ def refine_group(
                  [l for l in other_labels_by_image.get(img, []) if l != b["category_name"]])
                 for img, b in needs_reclassify
             ]
-            results = do_reclassify(llm, tokenizer, items, system_prompt, vprompts, grading_max_tokens, seed)
+            results = do_reclassify(llm, tokenizer, items, system_prompt, vprompts, grading_max_tokens, seed,
+                                     enable_thinking=enable_thinking, chat_template=chat_template)
             stats["reclassify_calls"] += len(items)
             for (img, b), new_label in zip(needs_reclassify, results):
                 if new_label is None:
@@ -317,7 +342,8 @@ def refine_group(
         crops = [crop_box(images_by_name[img], b["bbox"], crop_pad_frac) for img, b in flat]
         labels = [b["category_name"] for img, b in flat]
         grades = grade_boxes(llm, tokenizer, crops, labels, rubric, grading_template, system_prompt,
-                              grading_max_tokens=grading_max_tokens, seed=seed)
+                              grading_max_tokens=grading_max_tokens, seed=seed,
+                              enable_thinking=enable_thinking, chat_template=chat_template)
         for (img, b), g in zip(flat, grades):
             b["criterion_scores"] = g["criterion_scores"]
             b["confidence"] = g["confidence"]
@@ -341,6 +367,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     rubric = vprompts["box_rubric"]
     grading_template = vprompts["box_grading_prompt"]
     system_prompt = vprompts.get("assessment_system", "")
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     ckpt_path = Path(args.ckpt)
     with open(ckpt_path, newline="", encoding="utf-8") as f:
@@ -425,6 +452,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             llm, tokenizer, images_by_name, has_images, rubric, grading_template, vprompts, system_prompt,
             other_labels_by_image, crop_pad_frac=args.crop_pad_frac, grading_max_tokens=args.grading_max_tokens,
             gen_max_tokens=args.gen_max_tokens, max_rounds=args.max_rounds, seed=args.seed,
+            enable_thinking=args.enable_thinking, chat_template=chat_template,
         )
 
         for r in ds_rows:
@@ -498,12 +526,24 @@ if __name__ == "__main__":
                          help="Grade -> correct -> reverify rounds per box before it's kept as-is "
                               "and flagged \"exhausted\" in refinement_stats rather than looped "
                               "forever.")
-    parser.add_argument("--grading_max_tokens", type=int, default=300,
-                         help="max_tokens for the grading call and the reclassify correction (both "
-                              "short, no thinking step).")
-    parser.add_argument("--gen_max_tokens", type=int, default=300,
-                         help="max_tokens for the split/tighten correction calls (a short JSON box "
-                              "array — no thinking step here either).")
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+                         help="Same mechanism/default as detection_multiclass.py's own "
+                              "--enable_thinking — on by default, for both the grading call and all "
+                              "three correction calls (split/tighten/reclassify). "
+                              "detection-multiclass's own boxes are generated WITH thinking, so "
+                              "grading/correcting them with no reasoning step was a weaker, "
+                              "not-apples-to-apples pass. Pass --no-enable_thinking to opt out.")
+    parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
+                         help="Same as detection_multiclass.py's own flag — pass \"\" to unset for a "
+                              "non-Gemma model.")
+    parser.add_argument("--grading_max_tokens", type=int, default=1024,
+                         help="max_tokens for the grading call and the reclassify correction — "
+                              "bumped from the original 300 to leave headroom for a thinking trace "
+                              "before the short criterion/label output, now that --enable_thinking "
+                              "defaults to on.")
+    parser.add_argument("--gen_max_tokens", type=int, default=1024,
+                         help="max_tokens for the split/tighten correction calls — bumped from the "
+                              "original 300 for the same reason as --grading_max_tokens.")
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")

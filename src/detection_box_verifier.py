@@ -52,6 +52,7 @@ from PIL import Image as PILImage
 
 from src.common.bbox_metrics import match_boxes, precision_recall_f1
 from src.common.chat_prompt import build_multimodal_prompt
+from src.common.metrics import extract_channel_thought
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.progress import ProgressBar
@@ -126,31 +127,44 @@ def crop_box(image: PILImage.Image, bbox: list[float], pad_frac: float = 0.15) -
 def grade_boxes(
     llm, tokenizer, crops: list[PILImage.Image], labels: list[str], rubric: str, grading_template: str,
     system_prompt: str, grading_max_tokens: int = 300, seed: int | None = None,
+    enable_thinking: bool = True, chat_template: str | None = None,
 ) -> list[dict]:
     """Grade every (crop, label) pair independently, batched into ONE
     llm.generate() call regardless of how many images/boxes they came
     from — same batching convention verifier_cot.py's run_group_top3 uses
     for its own per-candidate grading. Returns one {"confidence",
-    "criterion_scores", "feedback"} dict per input pair, same order."""
+    "criterion_scores", "feedback", "reasoning"} dict per input pair, same
+    order. enable_thinking/chat_template: same mechanism/default as
+    detection_baseline.py's own run_batch — a plain non-thinking grading
+    call was the original bug here (see docs/stage4_detection_verifier.md):
+    detection-multiclass's own boxes are generated WITH thinking, so a
+    verifier judging them with no reasoning step at all was a weaker,
+    not-apples-to-apples second opinion."""
     n_criteria = _count_rubric_criteria(rubric)
     prompts = [
         build_multimodal_prompt(
             tokenizer, crop, grading_template.format(rubric=rubric, label=label),
-            system_prompt=system_prompt,
+            system_prompt=system_prompt, enable_thinking=enable_thinking, chat_template=chat_template,
         )
         for crop, label in zip(crops, labels)
     ]
-    params = SamplingParams(temperature=0.0, max_tokens=grading_max_tokens, seed=seed)
+    params = SamplingParams(
+        temperature=0.0, max_tokens=grading_max_tokens, seed=seed,
+        skip_special_tokens=not enable_thinking,
+    )
     outputs = llm.generate(prompts, sampling_params=params)
     results = []
     for out in outputs:
-        text = out.outputs[0].text.strip()
+        raw = out.outputs[0].text
+        thinking, cleaned = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        text = cleaned.strip()
         criterion_scores = _parse_criterion_scores(text, n_criteria)
         confidence = _normalize_criterion_scores(criterion_scores, n_criteria)
         results.append({
             "confidence": round(confidence, 4),
             "criterion_scores": criterion_scores,
             "feedback": text,
+            "reasoning": thinking,
         })
     return results
 
@@ -160,6 +174,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     rubric = vprompts["box_rubric"]
     grading_template = vprompts["box_grading_prompt"]
     system_prompt = vprompts.get("assessment_system", "")
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     ckpt_path = Path(args.ckpt)
     with open(ckpt_path, newline="", encoding="utf-8") as f:
@@ -244,6 +259,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             grades = grade_boxes(
                 llm, tokenizer, crops, labels, rubric, grading_template, system_prompt,
                 grading_max_tokens=args.grading_max_tokens, seed=args.seed,
+                enable_thinking=args.enable_thinking, chat_template=chat_template,
             )
             for (ri, bi), grade in zip(flat, grades):
                 pred_boxes_per_row[ri][bi] = {
@@ -251,6 +267,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "confidence": grade["confidence"],
                     "criterion_scores": grade["criterion_scores"],
                     "verifier_feedback": grade["feedback"],
+                    "verifier_reasoning": grade["reasoning"],
                 }
 
         for ri, r in enumerate(ds_rows):
@@ -352,10 +369,20 @@ if __name__ == "__main__":
                               "before showing it to the verifier — too tight loses context the model "
                               "needs to judge plausibility, too loose re-includes neighboring "
                               "instances (box_rubric criterion 3).")
-    parser.add_argument("--grading_max_tokens", type=int, default=300,
-                         help="max_tokens for the per-box grading call (4 short criterion lines — "
-                              "this is deliberately NOT --gen_max_tokens-sized, there's no thinking "
-                              "step here).")
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+                         help="Same mechanism/default as detection_multiclass.py's own "
+                              "--enable_thinking — on by default. detection-multiclass's own boxes "
+                              "are generated WITH thinking, so a verifier that grades them with no "
+                              "reasoning step was a weaker, not-apples-to-apples second opinion. "
+                              "Pass --no-enable_thinking to opt out.")
+    parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
+                         help="Same as detection_multiclass.py's own flag — pass \"\" to unset for a "
+                              "non-Gemma model.")
+    parser.add_argument("--grading_max_tokens", type=int, default=1024,
+                         help="max_tokens for the per-box grading call — bumped from the original "
+                              "300 (4 short criterion lines, no thinking) to leave real headroom for "
+                              "a thinking trace before the criterion lines, now that "
+                              "--enable_thinking defaults to on.")
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")

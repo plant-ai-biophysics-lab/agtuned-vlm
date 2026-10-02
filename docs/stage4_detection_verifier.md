@@ -169,6 +169,19 @@ correction (wasn't dropped) ends up in the output `pred_boxes_json`,
 `"passed"` or `"exhausted"`, each with an accurate `confidence`.
 Filtering happens entirely in Step 2, below.
 
+**Thinking is on by default here too** (as of 2026-10-02) — grading and
+all three correction calls (split/tighten/reclassify) use the same
+`--enable_thinking`/`--chat_template_path` mechanism as
+`detection-multiclass`'s own box generation, defaulting to *on*.
+Originally these calls had no reasoning step at all, which made the
+verifier a weaker, not-apples-to-apples second opinion against boxes
+that were themselves generated *with* thinking — a likely real
+contributor to the smoketest's baseline-beats-verifier finding noted in
+Step 4 below. `--grading_max_tokens`/`--gen_max_tokens` were bumped from
+300 to 1024 to leave headroom for a thinking trace before the short
+criterion/box output. Same applies to `detection-box-verifier`'s own
+grading call. Pass `--no-enable_thinking` on either script to opt out.
+
 ```bash
 uv run python main.py detection-box-refine \
     --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
