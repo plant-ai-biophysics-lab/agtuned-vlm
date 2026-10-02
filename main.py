@@ -14,6 +14,7 @@ STAGES = {
     "detection-baseline":          "src.detection_baseline",
     "detection-multiclass":        "src.detection_multiclass",
     "detection-box-verifier":      "src.detection_box_verifier",
+    "detection-box-refine":        "src.detection_box_refine",
     "detection-box-verifier-summary": "src.detection_box_verifier_summary",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
@@ -150,7 +151,24 @@ Stages:
                                no new grading calls), to find which threshold combination actually
                                maximizes F1 instead of trusting whatever --confidence_threshold the
                                run happened to use. Writes f1_vs_confidence_threshold.png +
-                               threshold_sweep.csv, prints the best combination.
+                               confidence_distribution.png + criterion_score_distribution.png +
+                               crop_gallery.png (stratified by confidence) + threshold_sweep.csv,
+                               prints the best combination.
+    detection-box-refine  Paper 2 Stage 4, Step 2 (docs/stage4_detection_verifier.md) — iterative
+                               correct-and-reverify loop on top of detection-box-verifier's own
+                               crop/grade mechanism (box_rubric, now 3 criteria). Any criterion
+                               scoring <= 2 triggers a real corrective generation call (unlike
+                               detection-box-verifier, which only grades): criterion 3 (multiple
+                               instances merged) -> SPLIT the crop into separate boxes; criterion 2
+                               (box not tight) -> TIGHTEN it; criterion 1 (not a real instance) ->
+                               RECLASSIFY against this image's own other sub-class labels, or DROP
+                               if none match. Split-then-tighten-then-reclassify order (not the
+                               rubric's own 1/2/3), since splitting changes box count and would
+                               waste a correction applied before it. A box gets AT MOST ONE
+                               correction per round (whichever its current grade triggers), then is
+                               re-graded fresh next round — --max_rounds (default 2) caps how many
+                               rounds before a still-failing box is kept as-is and flagged
+                               "exhausted" rather than looped forever.
     detection-qc-plot        — plot predicted vs. ground-truth boxes for a sample of images, to
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the

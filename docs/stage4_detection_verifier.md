@@ -3,8 +3,10 @@
 [← Back to README](../README.md)
 
 Status: **generation step (Step 0) confirmed working on real hardware.
-Verifier/filtering step (Step 1) built, not yet run on real hardware.**
-This stage is the spatial-task analog of
+Verifier/filtering step (Step 1) run on real hardware, results so far
+show filtering isn't helping (see its own QC section). Correct-and-
+reverify step (Step 2) built, not yet run on real hardware.** This stage
+is the spatial-task analog of
 [Stage 3](stage3_classification_verifier.md)'s classification verifier,
 applied to object detection instead.
 
@@ -180,9 +182,78 @@ re-filtering, not new grading calls. Writes `f1_vs_confidence_threshold.png`
 (one F1 line per IoU threshold, peak marked) and `threshold_sweep.csv`
 (the full grid), and prints the single best combination to stdout.
 
-Open question not yet resolved: how many rubric criteria are worth the
-extra GPU call per box before diminishing returns — 4 was a starting
-point, not validated against alternatives.
+`box_rubric` is 3 criteria as of 2026-10-02 (criterion 4, "is the
+sub-type/condition plausible," was dropped — see Step 2 below, which
+reuses the remaining 3 as its own correct/reverify trigger and doesn't
+need a 4th).
+
+## Step 2 — box refine: correct-and-reverify, not just filter
+
+Step 1 only grades — a box that fails a criterion gets a low confidence
+and, at best, filtered out. This step takes actual corrective action
+instead, one real generation call per failing criterion, then re-grades:
+
+| Criterion fails | Correction | Mechanism |
+|---|---|---|
+| 3 (multiple instances merged) | **Split** | Shown the same padded crop, asked to localize each separate instance — may return 1 (disagrees), 2+ (real split), or 0 (drop) |
+| 2 (box not tight) | **Tighten** | Same crop, asked for a single tighter box for the same instance |
+| 1 (not a real instance) | **Reclassify or drop** | Same crop, shown this image's OTHER already-generated sub-class labels (detection-multiclass's own free-text vocabulary for this image, not a fixed taxonomy), asked which one (if any) this crop actually matches — no match drops the box |
+
+Applied in **split → tighten → reclassify** order, not the rubric's own
+1/2/3 numbering — splitting changes how many boxes exist, so tightening
+or reclassifying a box that's about to be replaced by a split would waste
+a correction. A box gets **at most one** correction per round (whichever
+its current grade triggers, in that priority order), then is re-graded
+fresh next round — a box's scores from a prior round are never trusted to
+still apply after any correction.
+
+```bash
+uv run python main.py detection-box-refine \
+    --ckpt outputs_final/detection_multiclass_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/detection_box_refine_smoketest/ \
+    --smoketest
+```
+
+Takes a `detection-multiclass` checkpoint directly (same input Step 1
+takes) — any pre-existing `confidence`/`criterion_scores` on its boxes
+are ignored, since every box is re-graded fresh in round 1 against the
+current 3-criterion rubric regardless of what graded it before.
+`--max_rounds` (default `2`) caps how many grade→correct→reverify rounds
+a box gets before it's kept as-is, flagged `"exhausted"` in
+`refinement_stats`, rather than looped forever.
+
+**Read the result**: each row's `refinement_stats` (JSON) reports how
+many split/tighten/reclassify calls and drops happened for that row —
+e.g. `{"rounds_run": 2, "split_calls": 1, "tighten_calls": 0,
+"reclassify_calls": 2, "dropped": 0}`. `pred_boxes_json` holds the FINAL
+refined box set only (no separate unfiltered/filtered pair like Step 1 —
+there's one pool here, the corrected one), each box carrying its own
+final `refinement_status` (`"passed"` or `"exhausted"`) and
+`refinement_rounds`. `metrics.json` reports mean precision/recall/F1 for
+this final refined set, directly comparable to Step 1's own `filtered`
+numbers (same `--iou_threshold`, same class-agnostic matching) to see
+whether active correction beats pure filtering.
+
+**QC**: same plotter, pointed at this checkpoint — `category_name` now
+reflects any reclassification, and boxes are whatever survived
+split/tighten/drop, so this is the most direct visual check of what the
+pipeline actually settled on:
+
+```bash
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --color_by_subclass
+```
+
+(No `confidence` is shown in these labels — Step 2's final checkpoint
+doesn't carry per-box confidence the way Step 1's does, since a box here
+either passed outright or was corrected until it did/ran out of rounds,
+not filtered by a threshold.)
+
+Not yet validated: whether correct-and-reverify actually beats Step 1's
+simpler grade-and-filter on real data — that's exactly what comparing
+this step's `metrics.json` against Step 1's `filtered` numbers (same
+`--ckpt` input, same `--iou_threshold`) is for.
 
 ## Full pipeline (after the smoke tests pass)
 
@@ -226,3 +297,18 @@ of re-filtering at the new threshold. This re-grades every box (the same
 GPU cost as step 2 again) — there is no cheaper "just re-filter, don't
 re-grade" path built yet, since grading and filtering happen in the same
 pass.
+
+**Step 2 (box refine) is an alternative to steps 2-4 above, not chained
+after them** — it takes the SAME input `detection-box-verifier` does
+(step 1's own `detection-multiclass` output), not `detection-box-verifier`'s
+checkpoint:
+
+```bash
+uv run python main.py detection-box-refine \
+    --ckpt outputs_final/detection_multiclass/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/detection_box_refine/
+```
+
+Compare this run's `metrics.json` against `detection-box-verifier`'s own
+`filtered` numbers (same `--iou_threshold`) to see whether active
+correction is worth its extra GPU cost over simple grade-and-filter.

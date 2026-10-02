@@ -125,7 +125,6 @@ box_rubric: |
   1. Does this crop show a real instance of the stated category (not background, foliage, or something else mistaken for it)?
   2. Is the box reasonably tight around this one instance (not badly cut off, not mostly excess background)?
   3. Does this crop show exactly ONE instance of the object, not multiple instances merged into a single box?
-  4. Is the stated sub-type or condition plausible given what's actually visible in this crop?
 
 # Params: {rubric} {label}
 box_grading_prompt: |
@@ -143,3 +142,39 @@ box_grading_prompt: |
   <criterion_N>SCORE</criterion_N>
 
   Grades:
+
+# detection-box-refine (Stage 4, docs/stage4_detection_verifier.md) —
+# three corrective generation prompts, one per box_rubric criterion that
+# can fail, applied in priority order criterion 3 (split) -> criterion 2
+# (tighten) -> criterion 1 (reclassify/drop). Each is shown the SAME
+# padded crop box_grading_prompt itself was shown (not the full image)
+# — see detection_box_refine.py's module docstring for the full
+# round-based orchestration (why this order, why 2 rounds, why crop not
+# full image).
+
+# Params: {category}
+box_split_prompt: |
+  This cropped region may contain MORE THAN ONE separate instance of "{category}" merged into a single box. Identify and localize EACH separate instance visible in this crop.
+
+  Respond with ONLY a JSON array, one object per instance found, each with exactly these two keys:
+  "box_2d": [y_min, x_min, y_max, x_max] — coordinates on a 0-1000 normalized scale RELATIVE TO THIS CROP (top-left corner of the crop is [0, 0]), in that exact order.
+  "label": a brief description of that specific instance.
+
+  If this crop actually shows only ONE instance after all, respond with a single-element array. If it shows NONE, respond with exactly: []
+
+# Params: {category}
+box_tighten_prompt: |
+  This cropped region's box is not tightly bound around its one instance of "{category}" — it may include excess background or cut off part of the instance.
+
+  Respond with ONLY a JSON array containing exactly ONE object (or an empty array if no real instance is visible in this crop at all), with exactly these two keys:
+  "box_2d": [y_min, x_min, y_max, x_max] — a TIGHTER box around just that one instance, coordinates on a 0-1000 normalized scale RELATIVE TO THIS CROP (top-left corner of the crop is [0, 0]), in that exact order.
+  "label": "{category}"
+
+# Params: {candidate_labels}
+box_reclassify_prompt: |
+  This cropped region may not actually show a real instance of what it was originally labeled. Look only at what's visible in this crop.
+
+  Which of the following labels (from other instances already found elsewhere in this same image) best matches what's shown in THIS crop, if any?
+  {candidate_labels}
+
+  Respond with ONLY the single best-matching label exactly as written above, or respond with exactly: none

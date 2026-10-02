@@ -70,7 +70,13 @@ def draw_boxes(ax, boxes: list[dict], color: str = "lime", linestyle: str = "-",
     argument — e.g. detection-multiclass's QC plots, where every box's
     category_name already carries its own sub-class ("flower: bud" vs
     "flower: open flower"), not just the dataset's one coarse class. A box
-    with no label (falsy label_key value) still falls back to `color`."""
+    with no label (falsy label_key value) still falls back to `color`.
+
+    A box's own "confidence" (detection-box-verifier's own per-box
+    score), when present, is appended to its label automatically — no
+    separate flag, since a box with no "confidence" key (a plain
+    detection-baseline/detection-multiclass checkpoint, never graded)
+    renders identically to before this existed."""
     import matplotlib.patches as mpatches
 
     for box in boxes:
@@ -82,6 +88,8 @@ def draw_boxes(ax, boxes: list[dict], color: str = "lime", linestyle: str = "-",
             linestyle=linestyle,
         )
         ax.add_patch(rect)
+        if label and box.get("confidence") is not None:
+            label = f"{label} ({box['confidence']:.2f})"
         if label:
             ax.text(x1, max(0, y1 - 3), str(label), color=box_color, fontsize=8,
                      bbox=dict(facecolor="black", alpha=0.5, pad=1, linewidth=0))

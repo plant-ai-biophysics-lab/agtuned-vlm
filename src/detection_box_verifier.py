@@ -92,17 +92,14 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def crop_box(image: PILImage.Image, bbox: list[float], pad_frac: float = 0.15) -> PILImage.Image:
-    """Crop `bbox` ([x1,y1,x2,y2] pixel) out of `image`, padded by
-    pad_frac * the box's own width/height on each side (NOT a fixed pixel
-    count — detection images vary wildly in resolution, so a fixed pad
-    would be way too generous on a small crop and negligible on a large
-    one), clamped to the image's own bounds. Padding gives the verifier
-    model context it needs to judge plausibility (criterion 1/4) without
-    being so loose it re-includes neighboring instances (criterion 3).
-    Degenerate (zero-area) input boxes are floored to a minimum 1px crop
-    rather than raising, so a single malformed box can't abort a whole
-    batch."""
+def crop_box_region(image: PILImage.Image, bbox: list[float], pad_frac: float = 0.15) -> tuple[int, int, int, int]:
+    """The clamped, padded crop REGION (cx1,cy1,cx2,cy2) in the source
+    image's own pixel coordinates — the same region crop_box() crops to,
+    exposed separately so a caller that needs to remap a box reported
+    relative to the crop back into the source image's coordinate frame
+    (detection_box_refine.py's split/tighten corrections) has the EXACT
+    offset crop_box() itself used, not a re-derived approximation that
+    could drift from it. pad_frac: see crop_box's own docstring."""
     x1, y1, x2, y2 = bbox
     w, h = max(x2 - x1, 1.0), max(y2 - y1, 1.0)
     pad_x, pad_y = w * pad_frac, h * pad_frac
@@ -110,7 +107,20 @@ def crop_box(image: PILImage.Image, bbox: list[float], pad_frac: float = 0.15) -
     cy1 = max(0, int(y1 - pad_y))
     cx2 = min(image.width, max(cx1 + 1, int(x2 + pad_x)))
     cy2 = min(image.height, max(cy1 + 1, int(y2 + pad_y)))
-    return image.crop((cx1, cy1, cx2, cy2))
+    return cx1, cy1, cx2, cy2
+
+
+def crop_box(image: PILImage.Image, bbox: list[float], pad_frac: float = 0.15) -> PILImage.Image:
+    """Crop `bbox` ([x1,y1,x2,y2] pixel) out of `image`, padded by
+    pad_frac * the box's own width/height on each side (NOT a fixed pixel
+    count — detection images vary wildly in resolution, so a fixed pad
+    would be way too generous on a small crop and negligible on a large
+    one), clamped to the image's own bounds. Padding gives the verifier
+    model context it needs to judge plausibility without being so loose
+    it re-includes neighboring instances (criterion 3). Degenerate
+    (zero-area) input boxes are floored to a minimum 1px crop rather than
+    raising, so a single malformed box can't abort a whole batch."""
+    return image.crop(crop_box_region(image, bbox, pad_frac))
 
 
 def grade_boxes(
