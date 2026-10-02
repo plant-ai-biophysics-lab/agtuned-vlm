@@ -197,7 +197,11 @@ Stages:
                                boxes with no confidence at all are always kept) — when set, the
                                title's P/R/matched numbers are recomputed on the filtered set at
                                --iou_threshold rather than trusting the checkpoint's own stored
-                               (unfiltered) columns.
+                               (unfiltered) columns. IMPORTANT: --out_dir defaults to <ckpt's own
+                               dir>/qc_plots/ regardless of --confidence_threshold — an unfiltered
+                               and a filtered run against the SAME checkpoint silently overwrite
+                               each other's images unless you pass --out_dir explicitly to give
+                               the filtered run its own folder.
     detection-rubric-summary Paper 2 Stage 2-report — bar charts comparing detection-baseline vs.
                                detection-baseline --rubric at an equal image budget (mean
                                precision/recall/F1/IoU with 95% CI, per-dataset breakdown, F1 vs.

@@ -308,13 +308,21 @@ it before plotting (boxes with no `confidence` at all, e.g. a plain
 `detection-baseline`/`detection-multiclass` checkpoint, are always kept,
 never dropped). When set, the title's P/R/matched numbers are recomputed
 on the filtered set at `--iou_threshold`, not the checkpoint's own stored
-(unfiltered) columns, so what's printed always matches what's drawn:
+(unfiltered) columns, so what's printed always matches what's drawn.
+
+**IMPORTANT — always pass `--out_dir` explicitly here.** Without it,
+`detection-qc-plot` defaults to `<ckpt's own dir>/qc_plots/` **every
+time**, regardless of `--confidence_threshold` — an unfiltered run and a
+filtered run against the same checkpoint will silently write into the
+exact same folder and overwrite each other's images, with no warning.
+Give the filtered run its own name:
 
 ```bash
 uv run python main.py detection-qc-plot \
     --ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
     --confidence_threshold 0.6 --iou_threshold 0.3 \
-    --color_by_subclass
+    --color_by_subclass \
+    --out_dir outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/qc_plots_refined
 ```
 
 ## Optional simpler alternative: detection-box-verifier (grade + filter, no correction)
