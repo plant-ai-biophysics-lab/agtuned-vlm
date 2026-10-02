@@ -250,7 +250,7 @@ def plot_criterion_score_distribution(rows: list[dict], out_path: Path, title: s
 
 def plot_refinement_timeline(
     rows: list[dict], images_root: Path, out_path: Path, n_samples: int = 8,
-    crop_pad_frac: float = 0.15, title: str = "",
+    crop_pad_frac: float = 0.15, title: str = "", first_action: str | None = None,
 ) -> None:
     """One row per sampled box, one column per round in its own
     `history` (detection_box_refine.py's own per-round snapshot list —
@@ -260,6 +260,14 @@ def plot_refinement_timeline(
     early columns (the pre-split lineage) and diverge from the split
     round onward — exactly the shared-then-diverging history
     detection_box_refine.py's own history-inheritance produces.
+
+    first_action (default None = no filter): restrict to boxes whose
+    FIRST correction (history[0]["action"]) was exactly this — "split",
+    "tighten", or "reclassify" — so a dataset's split/tighten/reclassify
+    cases can be plotted as separate figures instead of one mixed-type
+    gallery. A box included here always has a real first action in one
+    of those three (boxes that passed outright in round 1 never reach
+    this function at all — see the len(history) > 1 filter below).
 
     Only boxes detection-box-refine actually ran through refinement have
     a `history` key at all (detection-box-verifier's own checkpoints
@@ -277,12 +285,16 @@ def plot_refinement_timeline(
     for r in rows:
         for b in json.loads(r.get("pred_boxes_json") or "[]"):
             history = b.get("history")
-            if history and len(history) > 1:
-                candidates.append((history, r["agml_dataset"], r["image_name"], b))
+            if not history or len(history) <= 1:
+                continue
+            if first_action is not None and history[0].get("action") != first_action:
+                continue
+            candidates.append((history, r["agml_dataset"], r["image_name"], b))
 
     if not candidates:
-        print("  [warn] no boxes with a multi-round refinement history found — skipping timeline "
-              "(is this checkpoint from detection-box-refine, not detection-box-verifier?)")
+        label = f" with first action {first_action!r}" if first_action else ""
+        print(f"  [warn] no boxes{label} with a multi-round refinement history found — skipping "
+              f"timeline (is this checkpoint from detection-box-refine, not detection-box-verifier?)")
         return
 
     candidates.sort(key=lambda c: -len(c[0]))
@@ -452,19 +464,41 @@ def main(args: argparse.Namespace) -> None:
     best_conf_thr, best_iou_thr, best_metrics = plot_sweep(grid, plot_path, title=args.title)
     plot_confidence_distribution(rows, dist_path, title=args.title)
     plot_criterion_score_distribution(rows, criterion_path, title=args.title)
-    gallery_path = out_dir / "crop_gallery.png"
-    plot_crop_gallery(rows, Path(args.images_root), gallery_path, n_samples=args.n_crop_samples,
-                       crop_pad_frac=args.crop_pad_frac, title=args.title)
-    timeline_path = out_dir / "refinement_timeline.png"
-    plot_refinement_timeline(rows, Path(args.images_root), timeline_path, n_samples=args.n_crop_samples,
-                              crop_pad_frac=args.crop_pad_frac, title=args.title)
     write_grid_csv(grid, csv_path)
 
     print(f"  Saved: {plot_path}")
     print(f"  Saved: {dist_path}")
     print(f"  Saved: {criterion_path}")
+
+    # refine_samples/ — a SEPARATE folder from threshold_sweep/ (sibling,
+    # at the checkpoint's own directory level), for the per-box visual
+    # inspection plots (crop gallery + per-dataset timelines) rather than
+    # the aggregate statistics plots above.
+    samples_dir = Path(args.samples_dir) if args.samples_dir else ckpt_path.parent / "refine_samples"
+    gallery_path = samples_dir / "crop_gallery.png"
+    plot_crop_gallery(rows, Path(args.images_root), gallery_path, n_samples=args.n_crop_samples,
+                       crop_pad_frac=args.crop_pad_frac, title=args.title)
     print(f"  Saved: {gallery_path}")
-    print(f"  Saved: {timeline_path}")
+
+    # One subfolder per dataset, one figure per correction TYPE within it
+    # (split/tighten/reclassify, grouped by each box's FIRST correction —
+    # see plot_refinement_timeline's first_action param) — keeps each
+    # figure to a manageable, actually-readable height instead of one
+    # giant mixed-type gallery per dataset.
+    by_dataset: dict[str, list[dict]] = {}
+    for r in rows:
+        by_dataset.setdefault(r["agml_dataset"], []).append(r)
+    for dataset, ds_rows in sorted(by_dataset.items()):
+        ds_dir = samples_dir / dataset
+        ds_title = f"{args.title} / {dataset}" if args.title else dataset
+        for action in ("split", "tighten", "reclassify"):
+            timeline_path = ds_dir / f"{action}_timeline.png"
+            plot_refinement_timeline(ds_rows, Path(args.images_root), timeline_path,
+                                      n_samples=args.n_crop_samples, crop_pad_frac=args.crop_pad_frac,
+                                      title=ds_title, first_action=action)
+            if timeline_path.exists():
+                print(f"  Saved: {timeline_path}")
+
     print(f"\n  Best: confidence_threshold={best_conf_thr}, iou_threshold={best_iou_thr} -> "
           f"precision={best_metrics['precision']:.3f} recall={best_metrics['recall']:.3f} "
           f"f1={best_metrics['f1']:.3f} (n={len(rows)} rows)")
@@ -485,6 +519,11 @@ if __name__ == "__main__":
                      help="Must match whatever --crop_pad_frac detection-box-verifier used to "
                           "generate --ckpt, or the gallery's crops won't match what the verifier "
                           "actually saw.")
-    ap.add_argument("--out_dir", default=None, help="Default: <ckpt's own directory>/threshold_sweep/")
+    ap.add_argument("--out_dir", default=None,
+                     help="Aggregate statistics plots (sweep/distributions). Default: <ckpt's own "
+                          "directory>/threshold_sweep/")
+    ap.add_argument("--samples_dir", default=None,
+                     help="Per-box visual inspection plots (crop gallery + one refinement_timeline "
+                          "per dataset). Default: <ckpt's own directory>/refine_samples/")
     ap.add_argument("--title", default="", help="Optional subtitle (e.g. model name).")
     main(ap.parse_args())

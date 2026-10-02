@@ -216,7 +216,10 @@ uv run python main.py detection-box-verifier-summary \
 
 No GPU needed — every box's `confidence` was already graded once by Step
 1 and is stored on it; this is pure CPU re-filtering + re-matching.
-Writes four files to `<ckpt's own dir>/threshold_sweep/`:
+Writes to two separate folders:
+
+**`--out_dir` (default `<ckpt's own dir>/threshold_sweep/`)** — aggregate
+statistics:
 
 - `f1_vs_confidence_threshold.png` — F1 at every `confidence_threshold`
   (`0.0`-`0.9` in steps of `0.1`) × `iou_threshold` (`0.3`/`0.5`/`0.75`)
@@ -228,33 +231,91 @@ Writes four files to `<ckpt's own dir>/threshold_sweep/`:
   actually doing the discriminating work vs. which ones are nearly always
   satisfied (and therefore contributing little to the final confidence
   spread).
+- `threshold_sweep.csv` — the full grid.
+
+**`--samples_dir` (default `<ckpt's own dir>/refine_samples/`)** — per-box
+visual inspection:
+
 - `crop_gallery.png` — actual box crops (re-cropped the same way the
   verifier itself was shown them) paired with their confidence +
   per-criterion scores, **stratified by confidence rank** (not random) so
   the gallery always spans low-to-high even when the underlying
   distribution skews heavily toward one end.
-- `refinement_timeline.png` — **Step 1 checkpoints only** (Step 1's own
-  `detection-box-refine` records a `history` list per box — one snapshot
-  per round, with that round's bbox/label/scores/confidence and which
-  correction was decided; Step 1's alternative, `detection-box-verifier`,
-  never corrects anything so it has no history to show). One row per
-  sampled box that went through at least one correction, one column per
-  round — shows the crop actually changing (tightened, relabeled) step by
-  step, not just the final state. A split box's children share the same
-  early columns (the pre-split lineage) and diverge from the split round
-  onward. Sampled longest-history-first (the most corrections applied),
-  skipped entirely (with a warning, not an error) if the checkpoint has
-  no `history` data at all.
+- `<dataset>/split_timeline.png`, `<dataset>/tighten_timeline.png`,
+  `<dataset>/reclassify_timeline.png` — **Step 1 checkpoints only** (Step
+  1's own `detection-box-refine` records a `history` list per box — one
+  snapshot per round, with that round's bbox/label/scores/confidence and
+  which correction was decided; Step 1's alternative,
+  `detection-box-verifier`, never corrects anything so it has no history
+  to show). One subfolder per dataset, one figure per correction TYPE —
+  grouped by each box's FIRST correction, not mixed together — one row
+  per sampled box, one column per round, showing the crop actually
+  changing (tightened, relabeled, split) step by step, not just the final
+  state. A split box's children share the same early columns (the
+  pre-split lineage) and diverge from the split round onward. Sampled
+  longest-history-first per figure, skipped entirely (with a warning, not
+  an error) if that dataset has no boxes of that correction type.
 
-Also writes `threshold_sweep.csv` (the full grid) and prints the single
-best `(confidence_threshold, iou_threshold)` combination to stdout.
+Prints the single best `(confidence_threshold, iou_threshold)` combination
+to stdout.
 
-**This is read-only analysis — it does not write a filtered checkpoint.**
-The threshold it reports is the number to filter by downstream; there's
-no script yet that takes that chosen threshold and automatically
-materializes a final filtered `pred_boxes_json`. If you need that,
-filtering `pred_boxes_json` by `box["confidence"] >= <chosen threshold>`
-is a one-line pass over Step 1's checkpoint.
+**This part is read-only analysis — it does not write a filtered
+checkpoint.** For the actual deliverable metrics at your chosen threshold,
+see the next step.
+
+## Step 3 — final metrics at your chosen threshold
+
+```bash
+uv run python main.py detection-final-metrics \
+    --ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --confidence_threshold 0.6 --iou_threshold 0.3
+```
+
+Two variants, both computed at the exact `(confidence_threshold,
+iou_threshold)` you pass:
+
+- **Variant A — class-agnostic**: every box that passes the confidence
+  threshold is pooled together and matched against ground truth, no
+  sub-class distinction at all — exactly the matching this whole pipeline
+  has used throughout. This is the real, deployable number.
+- **Variant B — per-image oracle sub-class selection**: for EACH image
+  independently, every distinct sub-class label present in its own
+  filtered predictions is tried ALONE against that image's own ground
+  truth, and whichever gives the highest F1 is kept (the rest of that
+  image's boxes are dropped). **This is an oracle/upper-bound metric, not
+  deployable** — the selection itself looks at ground truth to decide
+  which boxes to keep, which nothing real could do. It answers "what's
+  the best possible result if sub-class selection were perfect," useful
+  for seeing the ceiling, not as a number to report as achieved
+  performance. Deliberately **per-image**, not a per-dataset argmax over
+  exact sub-class strings — an earlier version tried grouping by exact
+  text across a whole dataset and it badly underperformed Variant A,
+  because free-text labels vary in wording across images for the same
+  real stage (e.g. `"flower: open"` vs `"flower: open yellow"`), which
+  fragmented one real signal into many small, individually weak buckets.
+  Per-image selection needs no cross-image text matching at all, since
+  each image only ever compares among its own locally-present labels.
+
+Writes `final_metrics_conf<X>_iou<Y>.json` (to `--out_dir`, default
+`<ckpt's own dir>/final_metrics/`) with the full per-dataset breakdown for
+both variants, plus (Variant B) which sub-class won each image, pooled
+into a per-dataset `chosen_subclass_counts`.
+
+## QC with the chosen filter applied
+
+`detection-qc-plot` now takes `--confidence_threshold` — drops boxes below
+it before plotting (boxes with no `confidence` at all, e.g. a plain
+`detection-baseline`/`detection-multiclass` checkpoint, are always kept,
+never dropped). When set, the title's P/R/matched numbers are recomputed
+on the filtered set at `--iou_threshold`, not the checkpoint's own stored
+(unfiltered) columns, so what's printed always matches what's drawn:
+
+```bash
+uv run python main.py detection-qc-plot \
+    --ckpt outputs_final/detection_box_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --confidence_threshold 0.6 --iou_threshold 0.3 \
+    --color_by_subclass
+```
 
 ## Optional simpler alternative: detection-box-verifier (grade + filter, no correction)
 

@@ -41,7 +41,18 @@ from collections import defaultdict
 
 from PIL import Image as PILImage
 
+from src.common.bbox_metrics import match_boxes, precision_recall_f1
 from src.common.bbox_viz import plot_predictions, plot_predictions_comparison
+
+
+def _filter_by_confidence(boxes: list[dict], threshold: float | None) -> list[dict]:
+    """Boxes with no "confidence" key at all (a plain detection-baseline/
+    detection-multiclass checkpoint, never graded) are always KEPT, not
+    dropped — missing confidence means "never filtered," not "score 0."
+    threshold=None (default) is a no-op, same list back unchanged."""
+    if threshold is None:
+        return boxes
+    return [b for b in boxes if b.get("confidence") is None or b["confidence"] >= threshold]
 
 
 def main() -> None:
@@ -56,6 +67,19 @@ def main() -> None:
     ap.add_argument("--out_dir", default=None,
                      help="Default: <ckpt's own directory>/qc_plots/")
     ap.add_argument("--n_per_dataset", type=int, default=3, help="Sample images per dataset.")
+    ap.add_argument("--confidence_threshold", type=float, default=None,
+                     help="Drop predicted boxes with confidence below this before plotting — for a "
+                          "detection-box-refine/detection-box-verifier checkpoint's own per-box "
+                          "confidence. Boxes with no confidence at all (a plain detection-baseline/"
+                          "detection-multiclass checkpoint, never graded) are always kept, not "
+                          "dropped. Off by default (plots every box, same as before this flag "
+                          "existed). When set, the title's P/R/matched numbers are RECOMPUTED on "
+                          "the filtered set (at --iou_threshold), not the checkpoint's own stored "
+                          "(unfiltered) columns — so what's printed always matches what's drawn.")
+    ap.add_argument("--iou_threshold", type=float, default=0.5,
+                     help="Only used to recompute P/R/matched for the title when "
+                          "--confidence_threshold filters the box set — the drawn boxes themselves "
+                          "don't depend on this.")
     ap.add_argument("--color_by_subclass", action="store_true",
                      help="Color each predicted box by its own category_name value instead of a "
                           "flat lime — for detection-multiclass checkpoints, where category_name "
@@ -109,25 +133,41 @@ def main() -> None:
                 n_missing_image += 1
                 continue
             image = PILImage.open(img_path).convert("RGB")
-            pred_boxes = json.loads(r.get("pred_boxes_json") or "[]")
+            pred_boxes = _filter_by_confidence(json.loads(r.get("pred_boxes_json") or "[]"),
+                                                args.confidence_threshold)
             gt_boxes = json.loads(r.get("gt_boxes_json") or "[]")
             out_path = ds_out / f"{Path(r['image_name']).stem}.png"
 
             if compare_rows_by_key is not None:
                 r_b = compare_rows_by_key[(dataset, r["image_name"])]
-                pred_boxes_b = json.loads(r_b.get("pred_boxes_json") or "[]")
-                title = (f"{dataset} / {r['image_name']}\n"
-                         f"{label_a}: P={r.get('precision_at_iou50', '?')} R={r.get('recall_at_iou50', '?')} "
-                         f"| {label_b}: P={r_b.get('precision_at_iou50', '?')} R={r_b.get('recall_at_iou50', '?')}")
+                pred_boxes_b = _filter_by_confidence(json.loads(r_b.get("pred_boxes_json") or "[]"),
+                                                      args.confidence_threshold)
+                if args.confidence_threshold is not None:
+                    m_a = precision_recall_f1(*match_boxes(pred_boxes, gt_boxes, args.iou_threshold))
+                    m_b = precision_recall_f1(*match_boxes(pred_boxes_b, gt_boxes, args.iou_threshold))
+                    title = (f"{dataset} / {r['image_name']} (conf>={args.confidence_threshold})\n"
+                             f"{label_a}: P={m_a['precision']} R={m_a['recall']} "
+                             f"| {label_b}: P={m_b['precision']} R={m_b['recall']}")
+                else:
+                    title = (f"{dataset} / {r['image_name']}\n"
+                             f"{label_a}: P={r.get('precision_at_iou50', '?')} R={r.get('recall_at_iou50', '?')} "
+                             f"| {label_b}: P={r_b.get('precision_at_iou50', '?')} R={r_b.get('recall_at_iou50', '?')}")
                 plot_predictions_comparison(image, pred_boxes, pred_boxes_b, gt_boxes,
                                              label_a, label_b, out_path=out_path, title=title,
                                              color_by_subclass=args.color_by_subclass)
             else:
-                title = (f"{dataset} / {r['image_name']}\n"
-                         f"pred={r.get('n_pred', len(pred_boxes))} gt={r.get('n_gt', len(gt_boxes))} "
-                         f"matched={r.get('n_matched', '?')} "
-                         f"P={r.get('precision_at_iou50', '?')} R={r.get('recall_at_iou50', '?')} "
-                         f"IoU={r.get('mean_iou_matched', '?')}")
+                if args.confidence_threshold is not None:
+                    m = precision_recall_f1(*match_boxes(pred_boxes, gt_boxes, args.iou_threshold))
+                    title = (f"{dataset} / {r['image_name']} (conf>={args.confidence_threshold}, "
+                             f"IoU>={args.iou_threshold})\n"
+                             f"pred={m['n_pred']} gt={m['n_gt']} matched={m['n_matched']} "
+                             f"P={m['precision']} R={m['recall']} IoU={m['mean_iou_matched']}")
+                else:
+                    title = (f"{dataset} / {r['image_name']}\n"
+                             f"pred={r.get('n_pred', len(pred_boxes))} gt={r.get('n_gt', len(gt_boxes))} "
+                             f"matched={r.get('n_matched', '?')} "
+                             f"P={r.get('precision_at_iou50', '?')} R={r.get('recall_at_iou50', '?')} "
+                             f"IoU={r.get('mean_iou_matched', '?')}")
                 plot_predictions(image, pred_boxes, gt_boxes, out_path=out_path, title=title,
                                   color_by_subclass=args.color_by_subclass)
             n_plotted += 1

@@ -15,6 +15,7 @@ STAGES = {
     "detection-multiclass":        "src.detection_multiclass",
     "detection-box-verifier":      "src.detection_box_verifier",
     "detection-box-refine":        "src.detection_box_refine",
+    "detection-final-metrics":     "src.detection_final_metrics",
     "detection-box-verifier-summary": "src.detection_box_verifier_summary",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
@@ -150,10 +151,26 @@ Stages:
                                already-stored per-box confidence (pure CPU re-filtering/re-matching,
                                no new grading calls), to find which threshold combination actually
                                maximizes F1 instead of trusting whatever --confidence_threshold the
-                               run happened to use. Writes f1_vs_confidence_threshold.png +
+                               run happened to use. Writes (to --out_dir, default
+                               <ckpt_dir>/threshold_sweep/) f1_vs_confidence_threshold.png +
                                confidence_distribution.png + criterion_score_distribution.png +
-                               crop_gallery.png (stratified by confidence) + threshold_sweep.csv,
-                               prints the best combination.
+                               threshold_sweep.csv, prints the best combination. Also writes (to
+                               --samples_dir, default <ckpt_dir>/refine_samples/) crop_gallery.png
+                               (stratified by confidence) and, per dataset subfolder,
+                               split/tighten/reclassify_timeline.png (one box's crop+scores per
+                               round it went through, grouped by its first correction type —
+                               detection-box-refine checkpoints only, needs per-box "history").
+    detection-final-metrics  Paper 2 Stage 4-report (docs/stage4_detection_verifier.md, no GPU
+                               needed) — the actual deliverable metrics at a CHOSEN
+                               (--confidence_threshold, --iou_threshold) pair (e.g. whatever
+                               detection-box-verifier-summary's sweep found best), in two variants:
+                               Variant A (class-agnostic, every box pooled regardless of sub-class
+                               — the real, deployable number) and Variant B (per-image ORACLE
+                               sub-class selection — for each image, tries each locally-present
+                               sub-class alone against that image's own ground truth and keeps
+                               whichever wins; an upper bound, since the selection itself looks at
+                               ground truth, not something a real filter could do). Writes
+                               final_metrics_conf<X>_iou<Y>.json.
     detection-box-refine  Paper 2 Stage 4, Step 2 (docs/stage4_detection_verifier.md) — iterative
                                correct-and-reverify loop on top of detection-box-verifier's own
                                crop/grade mechanism (box_rubric, now 3 criteria). Any criterion
@@ -173,6 +190,12 @@ Stages:
                                visually catch a coordinate-alignment bug. --compare_ckpt plots a
                                second checkpoint (e.g. the --rubric run) side by side against the
                                same ground truth for the same images (Paper 2 Stage 2).
+                               --confidence_threshold drops boxes below it before plotting (a
+                               detection-box-refine/-verifier checkpoint's own per-box confidence;
+                               boxes with no confidence at all are always kept) — when set, the
+                               title's P/R/matched numbers are recomputed on the filtered set at
+                               --iou_threshold rather than trusting the checkpoint's own stored
+                               (unfiltered) columns.
     detection-rubric-summary Paper 2 Stage 2-report — bar charts comparing detection-baseline vs.
                                detection-baseline --rubric at an equal image budget (mean
                                precision/recall/F1/IoU with 95% CI, per-dataset breakdown, F1 vs.
