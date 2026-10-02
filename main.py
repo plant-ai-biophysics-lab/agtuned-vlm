@@ -44,6 +44,7 @@ STAGES = {
     "verifier-score-analysis": "src.verifier_score_analysis",
     "filter-checkpoints": "src.filter_checkpoints",
     "ablation":      "src.ablation",
+    "judge-checkpoint": "src.judge_checkpoint",
     "judge-leniency": "src.judge_leniency",
     "judge-consistency": "src.judge_consistency",
     "judge-template-sensitivity": "src.judge_template_sensitivity",
@@ -245,6 +246,16 @@ Stages:
                                all}; "generate" and "judge-recheck" need a GPU/model, the
                                rest reconstruct from existing outputs_final/ runs. Output
                                under ablation/.
+    judge-checkpoint  Paper 2 Stage 0 (docs/stage0_judge_improvements.md, needs judge model/GPU)
+                               — judge an existing baseline checkpoint with the pipeline-wide
+                               default hybrid template, ONE pass (run_judge_phase, the exact
+                               mechanism vision-baseline's own inline judge phase uses) — no
+                               leniency/consistency/template-sensitivity comparison. --ckpt is
+                               never modified in place — copied into --output_dir first. Hand-edit
+                               prompts.yaml's judge_classification_hybrid_template between runs and
+                               point --output_dir at a fresh folder each time (with --rejudge, to
+                               force every row re-graded) to compare wording variants without one
+                               overwriting another's results.
     judge-leniency            — judge leniency baseline (needs judge model/GPU): at each of a
                                swept set of temperatures, freshly re-judges every taggable row
                                twice (full model response vs. just the raw <answer> tag text,
