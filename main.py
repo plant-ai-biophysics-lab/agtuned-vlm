@@ -340,15 +340,16 @@ Stages:
                                each variant's own leniency_gap*.png / disagreement_matrix*.png /
                                flip_rate_by_temperature_{full,answer_only}.png /
                                leniency_vs_flip_rate_{full,answer_only}.png underneath.
-    judge-qa-export            — no GPU needed: samples a review-ready CSV for human QA of judge
-                               verdicts, comparing the "current" and "hybrid" templates' own
-                               rechecked_T<temp>.csv files. Three pools per task_type
-                               (--n_per_task, default 50): targeted_hybrid (hybrid disagrees with
-                               a cheap extracted-answer-vs-ground-truth text check), disagreement
-                               (current vs. hybrid differ), random_control (unbiased baseline).
-                               --current_csv/--hybrid_csv, --seed (default 42), --output_csv
+    judge-qa-export            — no GPU needed: samples a review-ready CSV of DISAGREEMENTS between
+                               two judge-checkpoint runs over the same classification checkpoint —
+                               --baseline_ckpt (e.g. vision-baseline's own inline-judged checkpoint)
+                               vs. --variant_ckpt (e.g. a judge-checkpoint --rejudge run after
+                               hand-editing the hybrid template's wording). A row qualifies if
+                               judged_correct differs between the two, stratified by task_type
+                               (--n_per_task, default 50). --seed (default 42), --output_csv
                                (default dataset/judge_qa_review/judge_qa_review.csv — dataset/, not
-                               outputs_final/, so it's git-tracked for reproducibility).
+                               outputs_final/, so it's git-tracked for reproducibility — name it
+                               judge_qa_review_v<N>.csv per the --variant_ckpt you're reviewing).
     collate         Stage 5 — collate all stage metrics into results_table.csv / .tex
     react-build-tasks  Stage 5 (Paper 2/5) — builds a PERSISTED --tasks_jsonl file for
                                react-baseline (below) from REAL AgML images: same
