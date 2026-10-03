@@ -1527,6 +1527,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
                     chat_template=chat_template, n_candidates=args.top3_n_candidates,
                     top3_mode=args.top3_mode, rubric_key=rubric_key,
+                    grading_max_tokens=args.grading_max_tokens,
                 )
             else:
                 results = run_group_simple(
@@ -1536,6 +1537,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     log_path=log_path, call_stats=call_stats,
                     seed=args.seed, enable_thinking=args.enable_thinking, gen_max_tokens=args.gen_max_tokens,
                     chat_template=chat_template, existing_trajectories=existing_trajectories,
+                    grading_max_tokens=args.grading_max_tokens,
                 )
 
             for name, result in zip(names, results):
@@ -1866,6 +1868,16 @@ if __name__ == "__main__":
                               "own config default — a real thinking trace routinely truncates before "
                               "<answer> at 180 (same failure mode documented in "
                               "docs/stage1_baseline_classification.md).")
+    parser.add_argument("--grading_max_tokens", type=int, default=300,
+                         help="max_tokens for the grading call(s) — --verifier_type simple's one "
+                              "grading call, or --verifier_type top3's per-candidate scoring calls "
+                              "(for --top3_mode verifier_rubric, this ALSO covers the evidence-fill "
+                              "call). Not used by --verifier_type ppt (its own pairwise-duel budget "
+                              "is separate, not configurable here). Bare default (300) is fine for "
+                              "explicit/resample's always-thinking-off grading calls; raise this to "
+                              "~2048+ for --top3_mode verifier_rubric, whose grading-side calls have "
+                              "--enable_thinking on by default and will truncate before the scoring "
+                              "tags at 300.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)

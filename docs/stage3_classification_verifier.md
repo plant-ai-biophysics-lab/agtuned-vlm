@@ -346,13 +346,15 @@ that logic to whatever detail is actually in the response.
 
 ## Splitting the work across multiple GPUs
 
-`--num_shards N --shard_index i` partitions the (dataset, class) groups into N independent single-GPU processes, each generating **and** judging its own shard. Run one process per GPU with its own `--shard_index` — pass the SAME `--verifier_type` to every shard and to the merge call below, or the merge will look for the wrong filenames and find nothing:
+`--num_shards N --shard_index i` partitions the (dataset, class) groups into N independent single-GPU processes, each generating **and** judging its own shard. Run one process per GPU with its own `--shard_index` — pass the SAME `--verifier_type`/`--top3_mode` to every shard and to the merge call below, or the merge will look for the wrong filenames and find nothing (checkpoint filenames depend on `--verifier_type` only, not `--top3_mode` — see the `verifier_rubric` full-run note above — so this doesn't change what to pass here, just know `--top3_mode` itself isn't part of the filename):
 
 ```bash
 # 4 GPUs, one process each ($SHARD_INDEX = 0, 1, 2, 3):
 uv run python main.py verifier-cot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --verifier_type top3 \
+    --top3_mode verifier_rubric \
+    --grading_max_tokens 2048 \
     --num_shards 4 --shard_index $SHARD_INDEX
 ```
 
@@ -365,6 +367,11 @@ uv run python main.py verifier-cot \
     --output_dir outputs_final/verifier_cot/ \
     --merge_shards
 ```
+
+`--merge_shards` only needs `--verifier_type` (it just looks for
+`ckpt_<model>_top3_shard*of*.csv` files, regardless of which
+`--top3_mode` produced them) — `--top3_mode` itself is not required on
+this call.
 
 ## Legacy: `--verifier_type ppt`
 
@@ -380,7 +387,7 @@ only for Paper 1 reproducibility.
 |---|---|---|
 | `--model` | *(required)* | Model to run |
 | `--verifier_type` | `simple` | `simple` (Step 1), `top3` (Step 2), or `ppt` (legacy, Paper 1 Stage 4) |
-| `--top3_mode` | `explicit` | `--verifier_type top3` only — `explicit` (one call, model states N possibilities itself) or `resample` (N independent temperature-sampled draws) |
+| `--top3_mode` | `explicit` | `--verifier_type top3` only, must be passed explicitly — `explicit` (default, one call, model states N possibilities itself, set aside for full runs — see Step 2 above), `resample` (N independent temperature-sampled draws, also set aside), or `verifier_rubric` (**the mode this stage builds from**: N bare candidates, verifier independently fills the rubric once, scores each candidate against that shared evidence — raise `--grading_max_tokens` to ~2048+ with this mode) |
 | `--top3_n_candidates` | `3` | `--verifier_type top3` only — pool size (candidates read back, or drawn, depending on `--top3_mode`) |
 | `--enable_thinking` / `--no-enable_thinking` | **on** | Extended thinking for the generation step (not the grading/pairwise calls) |
 | `--chat_template_path` | vendored Gemma-4 template | Custom chat template — pass `""` to unset for a non-Gemma model |
