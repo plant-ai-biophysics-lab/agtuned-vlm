@@ -207,13 +207,19 @@ verifier's own evidence-derived criterion scores, and
 tell you whether `point_biserial_r` and the score spread actually look
 different from `explicit`/`resample`.
 
-**Full run:**
+**Full run — `explicit` mode (the default):**
 
 ```bash
 uv run python main.py verifier-cot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --verifier_type top3
 ```
+
+`--top3_mode` is **not passed here, so it defaults to `explicit`** — this
+command does NOT use `verifier_rubric`. If you ran the `verifier_rubric`
+smoke test above and want that same mode at full scale, you need its own
+command, below — `--verifier_type top3` alone is never enough on its
+own to know which `--top3_mode` is actually running.
 
 Same `--output_dir` as Step 1 is fine — `top3` writes its own
 `ckpt_<model>_top3.csv` (Step 1's own `ckpt_<model>.csv` stays untouched),
@@ -222,6 +228,26 @@ Thinking/`--gen_max_tokens`/`--chat_template_path` default the same way
 Step 1's do (on, `4096`, vendored Gemma-4 template) — raising
 `--gen_max_tokens` matters even more here, since a truncated thinking
 trace costs you the whole 3-candidate response, not just one.
+
+**Full run — `verifier_rubric` mode** (must be requested explicitly,
+every time — there is no default that produces this mode):
+
+```bash
+uv run python main.py verifier-cot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type top3 \
+    --top3_mode verifier_rubric \
+    --grading_max_tokens 2048
+```
+
+`--grading_max_tokens 2048` covers BOTH of this mode's own verifier
+calls (the evidence-fill call and the per-candidate scoring call) —
+both have thinking on by default in this mode, so the bare 300 default
+will truncate them. Same `--output_dir`/checkpoint-coexistence note as
+above applies — nothing about `--top3_mode` changes the output filename
+(`ckpt_<model>_top3.csv` either way), so don't run `explicit` and
+`verifier_rubric` into the same `--output_dir` expecting two separate
+files; point them at different `--output_dir`s if you want to keep both.
 
 **Known risk with `explicit`**: a near-identical approach ("ask for
 several different hypotheses in one response") was tried and reverted for
