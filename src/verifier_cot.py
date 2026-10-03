@@ -1187,9 +1187,26 @@ def run_group(
 def _result_row(
     result: dict, ds, clean_label: str, crop_val, task_type: str, name: str, gt_hint: str, verifier_type: str,
 ) -> dict:
-    resolved = resolve_class(result["prediction"], ds.clean_classes)
+    # extract_answer_tag FIRST, then resolve_class on just that tag's
+    # content — same convention every other caller uses (vision_baseline.py,
+    # self_cot.py, cot_yaml.py all do this; see extract_answer_tag's own
+    # docstring). Calling resolve_class on the RAW result["prediction"]
+    # directly (as this line used to) is a real bug for --verifier_type
+    # top3: "prediction" is the winner's trajectory PLUS the appended
+    # "--- Other candidates considered ---" block listing the OTHER
+    # (non-winning) candidates' answers as plain text — resolve_class's
+    # substring fallback would then happily match a class name mentioned
+    # in a LOSING candidate's line, silently overriding the winner's own
+    # <answer> tag (confirmed: a row whose winner was "Nutrient deficiency"
+    # resolved to "Leaf rust" purely because the rejected rank-2 candidate
+    # said "Coffee leaf rust"). The same latent risk existed for
+    # simple/ppt too, since their own "prediction" also carries the
+    # observational preamble text around the <answer> tag, not just the
+    # tag itself.
+    answer_text, _ = extract_answer_tag(result["prediction"])
+    resolved = resolve_class(answer_text, ds.clean_classes)
     correct = resolved is not None and resolved.lower() == clean_label.lower()
-    c_match = contains_match(resolved or result["prediction"], clean_label)
+    c_match = contains_match(resolved or answer_text, clean_label)
     scores = rouge_scores_per_sample(result["prediction"], clean_label, include_rouge=False)
 
     # --verifier_type top3 only (blank "" for simple/ppt rows, result has no
@@ -1226,6 +1243,7 @@ def _result_row(
         "prompt_tokens": result["prompt_tokens"], "completion_tokens": result["completion_tokens"],
         "elapsed_s": result["elapsed_s"], "avg_time_per_sample_s": result["avg_time_per_sample_s"],
         "prediction": result["prediction"], "resolved_class": resolved or "",
+        "extracted_answer": answer_text,
         "ground_truth": clean_label, "correct": int(correct), "contains_match": int(c_match),
         "resolvable": int(resolved is not None), "reasoning": result["reasoning"],
         "judge_gt_hint": gt_hint, **scores,

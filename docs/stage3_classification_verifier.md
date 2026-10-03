@@ -116,6 +116,18 @@ Writes to `<ckpt's own dir>/qc_plots/`:
 
 ## Step 2 — three trajectories (`--verifier_type top3`)
 
+**Building forward from `verifier_rubric` only** (as of 2026-10-03) —
+`explicit`/`resample` share Step 1 (`simple`)'s own grading mechanism: a
+trajectory graded against a rubric using that SAME trajectory's own
+self-stated observations, which is the mechanism already shown (Step 1's
+`verifier-cot-qc-plot`) to produce near-ceiling score=3 results. Running
+either to full scale would just apply that same problem 3x per image
+instead of once, so **neither gets a full run** here. The smoke test
+below is still worth running, though — it answers a different, narrower
+question (does the model actually produce 3 genuinely different
+candidates at all) that stays relevant regardless of which mode grades
+them.
+
 Three ways to generate/grade the 3-candidate pool (`--top3_mode`):
 
 - **`explicit`** (the default): **ONE** generation call per image. The
@@ -155,8 +167,11 @@ Three ways to generate/grade the 3-candidate pool (`--top3_mode`):
   try 2048+).
 
 **Smoke test first** — confirm the model actually produces 3 distinct
-possibilities (not the same one restated 3 times) before committing to a
-full run:
+possibilities (not the same one restated 3 times). Run with the default
+`explicit` mode (cheapest, no `verifier_rubric` flags needed) purely to
+check candidate diversity — this smoke test is a generation-side check,
+independent of which `--top3_mode` ends up grading the pool, so there's
+no need to re-run it under `verifier_rubric` separately:
 
 ```bash
 uv run python main.py verifier-cot \
@@ -207,30 +222,10 @@ verifier's own evidence-derived criterion scores, and
 tell you whether `point_biserial_r` and the score spread actually look
 different from `explicit`/`resample`.
 
-**Full run — `explicit` mode (the default):**
-
-```bash
-uv run python main.py verifier-cot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --verifier_type top3
-```
-
-`--top3_mode` is **not passed here, so it defaults to `explicit`** — this
-command does NOT use `verifier_rubric`. If you ran the `verifier_rubric`
-smoke test above and want that same mode at full scale, you need its own
-command, below — `--verifier_type top3` alone is never enough on its
-own to know which `--top3_mode` is actually running.
-
-Same `--output_dir` as Step 1 is fine — `top3` writes its own
-`ckpt_<model>_top3.csv` (Step 1's own `ckpt_<model>.csv` stays untouched),
-so both modes' checkpoints coexist in one directory without colliding.
-Thinking/`--gen_max_tokens`/`--chat_template_path` default the same way
-Step 1's do (on, `4096`, vendored Gemma-4 template) — raising
-`--gen_max_tokens` matters even more here, since a truncated thinking
-trace costs you the whole 3-candidate response, not just one.
-
-**Full run — `verifier_rubric` mode** (must be requested explicitly,
-every time — there is no default that produces this mode):
+**Full run — `verifier_rubric` mode** (the only mode that gets a full
+run here — `--top3_mode` must be passed explicitly, every time; there is
+no default that produces this mode, and bare `--verifier_type top3`
+alone silently falls back to `explicit`):
 
 ```bash
 uv run python main.py verifier-cot \
@@ -240,26 +235,25 @@ uv run python main.py verifier-cot \
     --grading_max_tokens 2048
 ```
 
-`--grading_max_tokens 2048` covers BOTH of this mode's own verifier
-calls (the evidence-fill call and the per-candidate scoring call) —
-both have thinking on by default in this mode, so the bare 300 default
-will truncate them. Same `--output_dir`/checkpoint-coexistence note as
-above applies — nothing about `--top3_mode` changes the output filename
-(`ckpt_<model>_top3.csv` either way), so don't run `explicit` and
-`verifier_rubric` into the same `--output_dir` expecting two separate
-files; point them at different `--output_dir`s if you want to keep both.
+Same `--output_dir` as Step 1 is fine — `top3` writes its own
+`ckpt_<model>_top3.csv` (Step 1's own `ckpt_<model>.csv` stays
+untouched). `--grading_max_tokens 2048` covers BOTH of this mode's own
+verifier calls (the evidence-fill call and the per-candidate scoring
+call) — both have thinking on by default in this mode, so the bare 300
+default will truncate them. Thinking/`--gen_max_tokens`/
+`--chat_template_path` for the candidate-generation call default the
+same way Step 1's do (on, `4096`, vendored Gemma-4 template).
 
-**Known risk with `explicit`**: a near-identical approach ("ask for
-several different hypotheses in one response") was tried and reverted for
-the legacy `ppt` mode's K-candidate design — forcing deliberate diversity
-competed against the model's own best-calibrated guess rather than
-sharpening it (only 15.6% of wrong predictions had the correct answer
-among 6 forced-diverse hypotheses there). `explicit` is being retried here
-because the downstream mechanism differs — each candidate is graded
-independently and argmax-selected, not tournament-ranked — but this is
-*not yet validated*. The smoke test above and `top3_pool_analysis` below
-are exactly how to check whether it's actually working better than
-`resample` before trusting it at scale.
+**Known risk, for context** (why `explicit`/`resample` were set aside
+rather than ever getting their own full run): a near-identical approach
+to `explicit` ("ask for several different hypotheses in one response")
+was tried and reverted for the legacy `ppt` mode's K-candidate design —
+forcing deliberate diversity competed against the model's own
+best-calibrated guess rather than sharpening it (only 15.6% of wrong
+predictions had the correct answer among 6 forced-diverse hypotheses
+there). Combined with the same self-citation ceiling effect `simple`
+already showed, there wasn't a strong enough case to validate `explicit`
+at scale before moving straight to `verifier_rubric`.
 
 The candidate with the highest `verifier_score` (argmax) is reported as
 the row's final answer; the other two candidates' extracted answers,
