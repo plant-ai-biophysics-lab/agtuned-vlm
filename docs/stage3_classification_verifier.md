@@ -53,7 +53,7 @@ else to set. `--from_ckpt` only applies to `--verifier_type simple` (there's
 no single existing trajectory to replay for `top3`'s 3-candidate pool).
 
 **Read the result**: look at the end of the run's own printed output, or
-open `outputs_final/verifier_cot/<safe_model_name>/metrics.json` and check
+open `outputs_final/verifier_cot/RedHatAI_gemma-4-31B-it-FP8-dynamic/metrics.json` and check
 `verifier_score_correlation`:
 
 ```json
@@ -76,7 +76,7 @@ diagnostic.
 
 ```bash
 uv run python main.py verifier-score-correlation-plot \
-    --ckpt outputs_final/verifier_cot/<safe_model_name>/ckpt_<safe_model_name>.csv
+    --ckpt outputs_final/verifier_cot/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
 ```
 
 No GPU needed — reads the checkpoint's own `verifier_score`/
@@ -95,7 +95,7 @@ re-downloaded):
 
 ```bash
 uv run python main.py verifier-cot-qc-plot \
-    --ckpt outputs_final/verifier_cot/<safe_model_name>/ckpt_<safe_model_name>.csv
+    --ckpt outputs_final/verifier_cot/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
 ```
 
 Writes to `<ckpt's own dir>/qc_plots/`:
@@ -213,7 +213,7 @@ Then QC the result:
 
 ```bash
 uv run python main.py verifier-cot-qc-plot-top3 \
-    --ckpt outputs_final/verifier_cot_top3_verifier_rubric_smoketest/<safe_model_name>/ckpt_<safe_model_name>_top3.csv
+    --ckpt outputs_final/verifier_cot_top3_verifier_rubric_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic_top3.csv
 ```
 
 — the candidate gallery shows each image's 3 bare candidates plus the
@@ -293,7 +293,7 @@ command exactly as shown:
 
 ```bash
 uv run python main.py verifier-cot-qc-plot-top3 \
-    --ckpt outputs_final/verifier_cot/<safe_model_name>/ckpt_<safe_model_name>_top3.csv
+    --ckpt outputs_final/verifier_cot/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic_top3.csv
 ```
 
 Writes to `<ckpt's own dir>/qc_plots_top3/`:
