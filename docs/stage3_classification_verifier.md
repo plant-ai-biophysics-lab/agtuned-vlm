@@ -284,8 +284,12 @@ the two questions a single trajectory structurally can't:
   the verifier's own selection error, separate from the model's
   generation error `pool_coverage` measures.
 
-**As charts** — a top3-specific QC tool, same no-GPU/no-network
-conventions as `verifier-cot-qc-plot`, works against any `--top3_mode`:
+**As charts** — QC the `verifier_rubric` full run above (same command
+works against the `explicit`/`resample` smoke test too, if you ever want
+to check those — just point `--ckpt` at whichever checkpoint). This is
+the full run's own default `--output_dir` (`outputs_final/verifier_cot/`,
+not overridden above), so no path changes needed if you ran the full-run
+command exactly as shown:
 
 ```bash
 uv run python main.py verifier-cot-qc-plot-top3 \
