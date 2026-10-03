@@ -72,19 +72,87 @@ isn't — a legitimate negative finding, same as
 `docs/legacy/stage2_verifier_corrections_paused.md`'s earlier verifier
 diagnostic.
 
+**As a chart** instead of reading the raw numbers:
+
+```bash
+uv run python main.py verifier-score-correlation-plot \
+    --ckpt outputs_final/verifier_cot/<safe_model_name>/ckpt_<safe_model_name>.csv
+```
+
+No GPU needed — reads the checkpoint's own `verifier_score`/
+`judged_correct` columns directly, recomputes point-biserial r itself
+(not trusted from a possibly-stale `metrics.json`), and writes ONE PNG
+(`<ckpt's own dir>/correlation/verifier_score_correlation.png`): a
+box+jittered-strip plot and an overlaid histogram of `verifier_score`,
+split by correct/incorrect, annotated with r and both group means. Works
+against both `--verifier_type simple` (`ckpt_<model>.csv`) and `top3`
+(`ckpt_<model>_top3.csv`) checkpoints.
+
+**QC the rubric grading itself** — a random image-level gallery plus a
+per-criterion score distribution, no GPU, no network (images resolved by
+globbing whatever's already cached under `--images_root`, never
+re-downloaded):
+
+```bash
+uv run python main.py verifier-cot-qc-plot \
+    --ckpt outputs_final/verifier_cot/<safe_model_name>/ckpt_<safe_model_name>.csv
+```
+
+Writes to `<ckpt's own dir>/qc_plots/`:
+- `rubric_gallery.png` (paginated via `--max_rows_per_figure`,
+  `_2`/`_3`/... if needed) — `--n_datasets` (default 10) random datasets
+  x `--n_per_dataset` (default 3) random images each, the actual image
+  next to its `ground_truth`/`verifier_score`/`criterion_scores` (raw
+  JSON plus each criterion's own rubric question text, so you don't have
+  to cross-reference `verifier_prompts.yaml` by hand).
+- `criterion_score_distribution.png`/`.json` — a stacked bar (counts of
+  score 1/2/3) per criterion, faceted by `task_type` — different
+  task_types use different rubrics (`verifier_prompts.yaml`'s
+  `task_type_to_rubric`), so "criterion 1" means a different question
+  depending on task_type and pooling across them would be misleading.
+  If every bar is nearly all score=3, that's the same ceiling effect a
+  near-zero `point_biserial_r` from the correlation plot above would
+  predict — little variance left for the score to discriminate on.
+
 ## Step 2 — three trajectories (`--verifier_type top3`)
 
-Two ways to generate the 3-candidate pool (`--top3_mode`), both graded the
-same way afterward (3 independent grading calls against the same rubric
-Step 1 uses — no tournament, no pairwise comparison):
+Three ways to generate/grade the 3-candidate pool (`--top3_mode`):
 
 - **`explicit`** (the default): **ONE** generation call per image. The
   model states its observations once, then is explicitly asked to give 3
   genuinely different ranked possibilities itself
-  (`<answer_1>`/`<answer_2>`/`<answer_3>` tags) — not three separate calls.
+  (`<answer_1>`/`<answer_2>`/`<answer_3>` tags) — not three separate
+  calls. Each candidate is then graded against the rubric using its OWN
+  stated observations (3 independent grading calls, same rubric Step 1
+  uses — no tournament, no pairwise comparison).
 - **`resample`**: draws 3 independent trajectories via temperature
   sampling (`SamplingParams(n=3)`) instead — no explicit-diversity
-  instruction, just independent re-draws of the same single-answer prompt.
+  instruction, just independent re-draws of the same single-answer
+  prompt. Graded the same way as `explicit`.
+- **`verifier_rubric`** (2026-10-03): a different division of labor,
+  built to test a specific hypothesis for why most criterion scores sit
+  at a near-ceiling 3 (see `verifier-cot-qc-plot`'s
+  `criterion_score_distribution.png` above) — `explicit`/`resample`'s
+  generation step restates exactly the fields the rubric then checks for
+  (e.g. "Crop or plant species affected:" pre-fills what criterion 1
+  asks about), so a trajectory can trivially "cite" something for every
+  criterion whether or not that citation is actually correct. Here:
+  1. ONE generation call — candidates are just 3 bare answers, **no**
+     observational preamble at all.
+  2. ONE verifier evidence-gathering call — the verifier looks at the
+     image independently (no candidate text shown) and fills in the
+     rubric itself, criterion by criterion. This is the one shared
+     evidence base every candidate is scored against.
+  3. 3 separate scoring calls — each candidate's bare answer is graded
+     against **that evidence** (not its own text, which doesn't exist
+     here), on the same 1-3 per-criterion scale.
+
+  `--enable_thinking` applies to **all three** calls in this mode
+  (generation, evidence-fill, scoring) — unlike `explicit`/`resample`,
+  whose grading call is always thinking-off. Raise `--grading_max_tokens`
+  well above its 300 default when combining this with `--enable_thinking`
+  (a thinking trace routinely truncates before the scoring tags at 300 —
+  try 2048+).
 
 **Smoke test first** — confirm the model actually produces 3 distinct
 possibilities (not the same one restated 3 times) before committing to a
@@ -104,6 +172,40 @@ genuinely different strings per row, not the same label 3 times. If the
 model is just restating the same guess, `--top3_mode explicit`'s own
 diversity instruction isn't working on this model, and `--top3_mode
 resample` (or a smaller/larger `--temperature`) is worth trying instead.
+
+**Testing `verifier_rubric` mode** — 3 images each from 3 random
+datasets (`--random_datasets`, deterministic via `--seed`), thinking on
+for all three calls, `--grading_max_tokens` raised:
+
+```bash
+uv run python main.py verifier-cot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --verifier_type top3 \
+    --top3_mode verifier_rubric \
+    --grading_max_tokens 2048 \
+    --random_datasets 3 \
+    --n_samples 3 \
+    --output_dir outputs_final/verifier_cot_top3_verifier_rubric_smoketest/
+```
+
+Thinking/`--chat_template_path`/`--gen_max_tokens` default on/vendored
+Gemma-4 template/`4096` the same way the rest of this stage does — no
+extra flags needed for those. `--n_samples` is images PER CLASS, so a
+dataset with multiple classes will contribute more than 3 images total —
+fine for a smoketest, just not an exact "9 images" guarantee.
+
+Then QC the result:
+
+```bash
+uv run python main.py verifier-cot-qc-plot-top3 \
+    --ckpt outputs_final/verifier_cot_top3_verifier_rubric_smoketest/<safe_model_name>/ckpt_<safe_model_name>_top3.csv
+```
+
+— the candidate gallery shows each image's 3 bare candidates plus the
+verifier's own evidence-derived criterion scores, and
+`per_candidate_score_distribution.png`/`winner_score_correlation.png`
+tell you whether `point_biserial_r` and the score spread actually look
+different from `explicit`/`resample`.
 
 **Full run:**
 
@@ -161,6 +263,32 @@ the two questions a single trajectory structurally can't:
   grading actually pick it as the winner? The gap between this and 1.0 is
   the verifier's own selection error, separate from the model's
   generation error `pool_coverage` measures.
+
+**As charts** — a top3-specific QC tool, same no-GPU/no-network
+conventions as `verifier-cot-qc-plot`, works against any `--top3_mode`:
+
+```bash
+uv run python main.py verifier-cot-qc-plot-top3 \
+    --ckpt outputs_final/verifier_cot/<safe_model_name>/ckpt_<safe_model_name>_top3.csv
+```
+
+Writes to `<ckpt's own dir>/qc_plots_top3/`:
+- `candidate_gallery.png` (paginated) — each sampled image next to ALL 3
+  candidate predictions (verifier_score each, the winner marked
+  `[CHOSEN]`), the winner's own `criterion_scores` (bare numbers, in
+  order), and the judge's verdict.
+- `winner_score_correlation.png`/`.json` — the same chart
+  `verifier-score-correlation-plot` produces, against this checkpoint's
+  winning-candidate score vs. `judged_correct`.
+- `per_candidate_score_distribution.png`/`.json` — **all 3 candidates
+  per row**, not just winners, split by a cheap ground-truth text-match
+  proxy (clearly labeled as NOT the real judge — only the winner is ever
+  actually judged). A broader signal check: does `verifier_score`
+  discriminate a right answer from a wrong one across the whole pool, or
+  only among winners?
+- `pool_summary.png`/`.json` — `pool_coverage` /
+  `verifier_pick_accuracy_given_in_pool` as a bar chart, same numbers as
+  `top3_pool_analysis` above.
 
 Compare Step 1's `correct`/`judged_correct` rate against Step 2's to see
 whether 3 trajectories + grading beats 1 trajectory + grading outright;

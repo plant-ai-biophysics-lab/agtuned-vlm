@@ -43,6 +43,9 @@ STAGES = {
     "verifier-summary": "src.verifier_summary",
     "verifier-scaling-summary": "src.verifier_scaling_summary",
     "verifier-score-analysis": "src.verifier_score_analysis",
+    "verifier-score-correlation-plot": "src.verifier_score_correlation_plot",
+    "verifier-cot-qc-plot": "src.verifier_cot_qc_plot",
+    "verifier-cot-qc-plot-top3": "src.verifier_cot_qc_plot_top3",
     "filter-checkpoints": "src.filter_checkpoints",
     "ablation":      "src.ablation",
     "judge-checkpoint": "src.judge_checkpoint",
@@ -234,6 +237,17 @@ Stages:
                                metrics.json: pool_coverage (does the right answer appear in ANY
                                candidate) and verifier_pick_accuracy_given_in_pool (when it does,
                                does the verifier's own grading actually pick it).
+                               --top3_mode verifier_rubric (2026-10-03): a different division of
+                               labor, aimed at the near-ceiling score=3 pattern seen in practice —
+                               candidates are just N bare answers (no rubric-aligned observational
+                               preamble to trivially "cite"), and the VERIFIER independently fills
+                               in the rubric from the image ONCE (shared evidence, no candidate text
+                               shown), then scores each candidate's bare answer against THAT
+                               evidence in its own call. --enable_thinking applies to all three
+                               calls in this mode (generation, evidence-fill, scoring) — unlike
+                               "explicit"/"resample", whose grading call is always thinking-off.
+                               Raise --grading_max_tokens well above its 300 default when combining
+                               with --enable_thinking.
                                --verifier_type ppt (Paper 1 Stage 4, docs/stage4_verifier.md) — LEGACY
                                as of 2026-10-01, no longer actively tested/extended for Paper 2 (kept
                                for Paper 1 reproducibility only): the original single-round
@@ -251,6 +265,42 @@ Stages:
                                run's own ckpt CSV + verifier_log.jsonl, to see whether the
                                fine-grained-reward score is discriminating (or inverted/collapsed)
                                BEFORE picking a fix. --model/--output_dir or --verifier_dir.
+    verifier-score-correlation-plot — Paper 2 Stage 3 (docs/stage3_classification_verifier.md,
+                               no GPU needed): turns metrics.json's verifier_score_correlation (a
+                               handful of numbers) into ONE PNG — verifier_score split by judged
+                               correctness, box+jittered-strip and an overlaid histogram side by
+                               side, annotated with point-biserial r and both group means
+                               (recomputed from --ckpt directly, not trusted from metrics.json).
+                               Works for both --verifier_type simple and top3 checkpoints.
+    verifier-cot-qc-plot       — Paper 2 Stage 3 (docs/stage3_classification_verifier.md, no GPU
+                               needed): (1) a rubric gallery — --n_datasets (default 10) random
+                               datasets x --n_per_dataset (default 3) random images, each shown
+                               next to its ground_truth/verifier_score/criterion_scores (raw JSON
+                               plus each criterion's own rubric question text), paginated via
+                               --max_rows_per_figure; (2) a criterion score distribution — one
+                               stacked bar chart (counts of score 1/2/3) per criterion, faceted
+                               by task_type since different task_types use different rubrics
+                               (criterion 1 means something different per task_type — see
+                               verifier_prompts.yaml's task_type_to_rubric). Images resolved by
+                               globbing whatever's already cached under --images_root (never
+                               downloads/re-caches — read-only QC, not a generation script).
+    verifier-cot-qc-plot-top3 — Paper 2 Stage 3 (docs/stage3_classification_verifier.md, no GPU
+                               needed): same idea as verifier-cot-qc-plot but for a
+                               --verifier_type top3 checkpoint (any --top3_mode). (1) a candidate
+                               gallery — each sampled image next to ALL 3 candidate predictions
+                               (verifier_score each, winner marked [CHOSEN]), the winner's own
+                               criterion_scores (bare numbers, in order), and the judge's verdict;
+                               (2) winner_score_correlation.png (reuses
+                               verifier-score-correlation-plot's own plot_correlation against the
+                               winning candidate's score vs. judged_correct); (3)
+                               per_candidate_score_distribution.png — ALL 3 candidates per row
+                               (not just winners), split by a cheap ground_truth TEXT-MATCH proxy
+                               (not the real judge, which only ever grades the winner) — a broader
+                               signal check than (2) alone; (4) pool_summary.png/.json —
+                               pool_coverage / verifier_pick_accuracy_given_in_pool as a chart
+                               (same numbers as metrics.json's top3_pool_analysis).
+                               --n_datasets/--n_per_dataset/--max_rows_per_figure/--images_root
+                               same meaning as verifier-cot-qc-plot.
     ablation                 — reviewer-question ablation: isolates rubric vs. K-sampling
                                vs. verifier-selection (Q2/Q3), verifier confidence
                                calibration/ranking accuracy (Q4), oracle-description

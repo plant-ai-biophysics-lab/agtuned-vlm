@@ -265,6 +265,81 @@ grading_prompt: |
 
   Grades:
 
+# --top3_mode verifier_rubric (verifier_cot.py's run_group_top3_verifier_rubric,
+# 2026-10-03) — candidate-generation template with NO observational
+# preamble, unlike structured_templates_top3_explicit above. In this mode
+# the verifier does its own independent rubric-based observation
+# separately (verifier_rubric_fill_prompt below) and each candidate is
+# graded against THAT shared evidence, not its own stated reasoning — so
+# there's no reason to ask the generation call to restate rubric-aligned
+# observations itself (the thing suspected of driving the near-ceiling
+# score=3 ceiling effect: a trajectory that pre-fills exactly the fields
+# the rubric asks about trivially "cites" something for every criterion
+# regardless of whether the citation is actually correct). ONE shared
+# template, not indexed by rubric_key, since it never shows the rubric at
+# all.
+# Params: {question}
+structured_templates_top3_plain: |
+  {question}
+
+  Give your 3 most likely answers, ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same answer restated or trivial variations of it — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence, one per tag:
+
+  <answer_1></answer_1>
+  <answer_2></answer_2>
+  <answer_3></answer_3>
+
+# --top3_mode verifier_rubric's own evidence-gathering call — the
+# verifier examines the image ONCE, independently of any candidate
+# answer (no candidate text shown at all here), and states what it
+# directly observes for EACH rubric criterion. This becomes the one
+# shared evidence base every candidate is scored against in
+# verifier_score_against_evidence_prompt below — a genuine second look
+# at the image, not a repeat of whatever the candidate-generation call
+# already claimed about itself.
+# Params: {rubric} {question}
+verifier_rubric_fill_prompt: |
+  You are an expert agricultural scientist examining an image for the following task:
+
+  Task: {question}
+
+  For EACH numbered item below, state what you directly observe in the image — be specific and concrete (colors, shapes, textures, patterns, counts), not a vague generality. If something isn't visible or determinable from the image, say so explicitly rather than guessing.
+
+  {rubric}
+
+  Output exactly one line per numbered item above, in this format (N is that item's own number):
+  <evidence_N>your observation</evidence_N>
+
+# --top3_mode verifier_rubric's own per-candidate scoring call — grades
+# ONE candidate answer against the verifier's OWN evidence
+# (verifier_rubric_fill_prompt's output), not against anything the
+# candidate itself claimed (there is no candidate trajectory here, only
+# a short final answer). The evidence is the same, fixed text for every
+# candidate scored against it for this image, so a difference in score
+# between candidates reflects how well each one's answer actually fits
+# that one shared evidence base, not a difference in how much each
+# candidate happened to write.
+# Params: {rubric} {question} {evidence} {answer}
+verifier_score_against_evidence_prompt: |
+  You are an expert agricultural scientist reviewer. You previously examined an image and recorded the following observations:
+
+  Task: {question}
+
+  Observations:
+  {evidence}
+
+  A candidate answer is proposed: "{answer}"
+
+  Evaluation Criteria:
+  {rubric}
+
+  Grade how well the OBSERVATIONS ABOVE support this candidate answer, criterion by criterion, independently, on this 3-point scale:
+    1 = not supported — the observations give no evidence for this criterion under this candidate answer
+    2 = partially supported — some supporting evidence, but incomplete or unclear
+    3 = fully supported — the observations clearly and specifically support this criterion under this candidate answer
+
+  Output exactly one line per numbered criterion above, in this format (N is that criterion's own number, SCORE is 1, 2, or 3):
+  <criterion_N>SCORE</criterion_N>
+
 # The single-round verifier's PPT tournament duels AND src/verifier_lmv.py's PPT
 # baseline. This is the free-generation (pass 1) prompt only — it
 # deliberately does NOT show the <score_A>/<score_B> tags (see the header

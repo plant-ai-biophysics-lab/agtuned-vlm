@@ -367,6 +367,22 @@ def _build_groups(
     return groups
 
 
+def _sample_random_datasets(groups: list, n_datasets: int, seed: int) -> list:
+    """--random_datasets's implementation: keep only groups belonging to
+    n_datasets randomly chosen agml_dataset names (deterministic given
+    --seed) — for a smoketest that wants a random SPREAD ACROSS DATASETS
+    (e.g. "3 random datasets") rather than --subsample's explicit
+    name list or --random_classes_per_task's per-task_type class sampling
+    (which can still pick multiple classes from the SAME dataset). A
+    dataset with multiple classes contributes all of them, so the final
+    image count is --n_samples times (number of classes across the
+    chosen datasets), not --n_samples * n_datasets exactly."""
+    rng = random.Random(seed)
+    dataset_names = sorted({g[0].agml_name for g in groups})
+    chosen = set(rng.sample(dataset_names, min(n_datasets, len(dataset_names))))
+    return [g for g in groups if g[0].agml_name in chosen]
+
+
 def _sample_random_classes_per_task(groups: list, n_per_task: int, seed: int) -> list:
     """--random_classes_per_task's implementation: group `groups` (one per
     (dataset, class_label), from _build_groups) by task_type and randomly
@@ -574,6 +590,215 @@ def _extract_top3_explicit_answers(text: str, n: int = 3) -> list[str]:
     return [found[i] for i in sorted(found)]
 
 
+def run_group_top3_verifier_rubric(
+    llm, tokenizer, images: list, cls_q: str, rubric: str, prompts: dict, vprompts: dict,
+    gen_temperature: float,
+    agml_dataset: str, class_label: str, image_names: list[str],
+    log_path: Path | None = None, call_stats: dict | None = None,
+    seed: int | None = None, enable_thinking: bool = False, gen_max_tokens: int = 180,
+    chat_template: str | None = None, grading_max_tokens: int = 300, n_candidates: int = 3,
+) -> list[dict]:
+    """--top3_mode verifier_rubric (2026-10-03): the VERIFIER fills in the
+    rubric instead of the candidate-generation call restating it — a
+    different division of labor from run_group_top3's "explicit"/
+    "resample" modes, designed to test whether the near-ceiling score=3
+    pattern seen in practice is driven by the trajectory trivially
+    "citing" whatever it just pre-filled into the rubric's own observation
+    fields (structured_templates_top3_explicit asks for exactly the things
+    the rubric then checks for).
+
+    Three call types per image, in order:
+    1. ONE generation call — structured_templates_top3_plain, NO
+       observational preamble, just N candidate final answers
+       (<answer_1>/<answer_2>/<answer_3>, reusing
+       _extract_top3_explicit_answers).
+    2. ONE verifier evidence-gathering call — verifier_rubric_fill_prompt,
+       image only (no candidate answers shown at all), independently
+       states what it observes for each numbered rubric criterion. This
+       is the one shared evidence base every candidate below is scored
+       against.
+    3. n_candidates SEPARATE scoring calls (batched into one
+       llm.generate(), same batching convention run_group_top3 uses) —
+       verifier_score_against_evidence_prompt, each candidate's bare
+       answer graded against step 2's evidence (not the candidate's own
+       text, which doesn't exist here) on the same 1-3 per-criterion
+       scale.
+
+    enable_thinking applies to ALL THREE calls here (unlike
+    run_group_top3's grading call, which is hardcoded thinking-off) — the
+    whole point of this mode is giving the verifier a real reasoning step
+    before it commits to a score, not just the model being tested.
+
+    Returns the same shape as run_group_top3 (prediction/reasoning/
+    pool_size/.../candidates/...) so _result_row works unchanged."""
+    t_start = time.perf_counter()
+    n = len(images)
+    active = list(range(n))
+
+    # Step 1: N plain candidate answers, no rubric shown.
+    plain_template = vprompts["structured_templates_top3_plain"]
+    gen_q = plain_template.format(question=cls_q)
+    gen_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": gen_q},
+    ]}] for _ in range(n)]
+    gen_params = SamplingParams(
+        temperature=gen_temperature, max_tokens=gen_max_tokens,
+        repetition_penalty=1.1, n=1, seed=seed,
+        skip_special_tokens=not enable_thinking,
+    )
+    gen_out_raw = run_batch_n(llm, tokenizer, images, gen_hist, gen_params, call_stats,
+                               enable_thinking=enable_thinking, chat_template=chat_template)
+    candidate_answers: dict[int, list[str]] = {}
+    for i in active:
+        raw_text = gen_out_raw[i][0]["text"]
+        answers = _extract_top3_explicit_answers(raw_text, n=n_candidates)
+        if not answers:
+            fallback, _ = extract_answer_tag(raw_text)
+            answers = [fallback]
+        candidate_answers[i] = answers
+        for cand_idx, ans in enumerate(answers):
+            _log_verifier_call(
+                log_path, agml_dataset=agml_dataset, class_label=class_label,
+                image_name=image_names[i], call_type="candidate_plain",
+                candidate_index=cand_idx, raw_text=raw_text if cand_idx == 0 else "", extracted_answer=ans,
+                prompt_tokens=gen_out_raw[i][0]["prompt_tokens"] if cand_idx == 0 else 0,
+                completion_tokens=gen_out_raw[i][0]["completion_tokens"] if cand_idx == 0 else 0,
+            )
+    gen_prompt_tokens = {i: gen_out_raw[i][0]["prompt_tokens"] for i in active}
+    gen_completion_tokens = {i: gen_out_raw[i][0]["completion_tokens"] for i in active}
+
+    # Step 2: ONE verifier evidence-gathering call per image, independent
+    # of any candidate answer.
+    n_criteria = _count_rubric_criteria(rubric)
+    evidence_template = vprompts["verifier_rubric_fill_prompt"]
+    evidence_texts = [evidence_template.format(rubric=rubric, question=cls_q) for _ in active]
+    evidence_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": t},
+    ]}] for t in evidence_texts]
+    evidence_params = SamplingParams(
+        temperature=0.0, max_tokens=grading_max_tokens, seed=seed,
+        skip_special_tokens=not enable_thinking,
+    )
+    evidence_prompts = [
+        {"prompt": render_chat_template(tokenizer, h, enable_thinking=enable_thinking, chat_template=chat_template),
+         "multi_modal_data": {"image": images[i]}}
+        for i, h in zip(active, evidence_hist)
+    ]
+    evidence_outs = llm.generate(evidence_prompts, sampling_params=evidence_params)
+    if call_stats is not None:
+        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
+        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(evidence_prompts)
+
+    evidence_by_image: dict[int, str] = {}
+    evidence_prompt_tokens: dict[int, int] = {}
+    evidence_completion_tokens: dict[int, int] = {}
+    for i, sent_text, out in zip(active, evidence_texts, evidence_outs):
+        raw = out.outputs[0].text
+        _, evidence_text = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        evidence_text = evidence_text.strip()
+        evidence_by_image[i] = evidence_text
+        evidence_prompt_tokens[i] = len(getattr(out, "prompt_token_ids", None) or [])
+        evidence_completion_tokens[i] = len(getattr(out.outputs[0], "token_ids", None) or [])
+        _log_verifier_call(
+            log_path, agml_dataset=agml_dataset, class_label=class_label,
+            image_name=image_names[i], call_type="rubric_evidence",
+            user_prompt=sent_text, analysis=evidence_text,
+            prompt_tokens=evidence_prompt_tokens[i], completion_tokens=evidence_completion_tokens[i],
+        )
+
+    # Step 3: score every candidate against ITS image's shared evidence,
+    # batched into one llm.generate() call (n_images * n_candidates
+    # prompts) — same batching convention run_group_top3's grading step
+    # uses.
+    scoring_template = vprompts["verifier_score_against_evidence_prompt"]
+    flat = [(i, cand_idx) for i in active for cand_idx in range(len(candidate_answers[i]))]
+    scoring_texts = [
+        scoring_template.format(rubric=rubric, question=cls_q, evidence=evidence_by_image[i],
+                                 answer=candidate_answers[i][cand_idx])
+        for i, cand_idx in flat
+    ]
+    scoring_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": t},
+    ]}] for t in scoring_texts]
+    scoring_params = SamplingParams(
+        temperature=0.0, max_tokens=grading_max_tokens, seed=seed,
+        skip_special_tokens=not enable_thinking,
+    )
+    scoring_prompts = [
+        {"prompt": render_chat_template(tokenizer, h, enable_thinking=enable_thinking, chat_template=chat_template),
+         "multi_modal_data": {"image": images[i]}}
+        for (i, _), h in zip(flat, scoring_hist)
+    ]
+    scoring_outs = llm.generate(scoring_prompts, sampling_params=scoring_params)
+    if call_stats is not None:
+        call_stats["n_calls"] = call_stats.get("n_calls", 0) + 1
+        call_stats["n_prompts"] = call_stats.get("n_prompts", 0) + len(scoring_prompts)
+
+    per_image_candidates: dict[int, list[dict]] = {i: [] for i in active}
+    scoring_prompt_tokens: dict[int, int] = {i: 0 for i in active}
+    scoring_completion_tokens: dict[int, int] = {i: 0 for i in active}
+    for (i, cand_idx), scoring_text_sent, out in zip(flat, scoring_texts, scoring_outs):
+        raw = out.outputs[0].text
+        _, scoring_text = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        scoring_text = scoring_text.strip()
+        s_prompt_tokens = len(getattr(out, "prompt_token_ids", None) or [])
+        s_completion_tokens = len(getattr(out.outputs[0], "token_ids", None) or [])
+        criterion_scores = _parse_criterion_scores(scoring_text, n_criteria)
+        verifier_score = _normalize_criterion_scores(criterion_scores, n_criteria)
+        _log_verifier_call(
+            log_path, agml_dataset=agml_dataset, class_label=class_label,
+            image_name=image_names[i], call_type="scoring_against_evidence", candidate_index=cand_idx,
+            user_prompt=scoring_text_sent, analysis=scoring_text,
+            criterion_scores=criterion_scores, n_criteria=n_criteria, verifier_score=verifier_score,
+            prompt_tokens=s_prompt_tokens, completion_tokens=s_completion_tokens,
+        )
+        answer = candidate_answers[i][cand_idx]
+        per_image_candidates[i].append({
+            "candidate_index": cand_idx,
+            "trajectory": f"<answer>{answer}</answer>",
+            "extracted_answer": answer,
+            "verifier_score": round(verifier_score, 4),
+            "criterion_scores": criterion_scores,
+            "verifier_feedback": f"[evidence]\n{evidence_by_image[i]}\n\n[scoring]\n{scoring_text}",
+        })
+        scoring_prompt_tokens[i] += s_prompt_tokens
+        scoring_completion_tokens[i] += s_completion_tokens
+
+    elapsed = time.perf_counter() - t_start
+    avg_time_per_sample_s = elapsed / n if n else 0.0
+
+    results = []
+    for i in active:
+        cands = sorted(per_image_candidates[i], key=lambda c: c["candidate_index"])
+        winner = max(cands, key=lambda c: (c["verifier_score"], -c["candidate_index"]))
+        others_ranked = sorted((c for c in cands if c is not winner), key=lambda c: -c["verifier_score"])
+
+        final_response = winner["trajectory"]
+        if others_ranked:
+            other_lines = "\n".join(
+                f"  Rank {rank}: {c['extracted_answer']} (verifier_score={c['verifier_score']:.3f})"
+                for rank, c in enumerate(others_ranked, start=2)
+            )
+            final_response += f"\n\n--- Other candidates considered (not the final answer) ---\n{other_lines}"
+
+        results.append({
+            "prediction": final_response,
+            "reasoning": (f"verifier_score={winner['verifier_score']:.3f} (winner of {len(cands)} "
+                          f"candidates, verifier_rubric mode); " +
+                          ", ".join(f"cand{c['candidate_index']}={c['verifier_score']:.3f}" for c in cands)),
+            "pool_size": len(cands), "n_comparisons": 0, "top1_win_rate": "",
+            "verifier_feedback": winner["verifier_feedback"],
+            "verifier_score": winner["verifier_score"],
+            "criterion_scores": json.dumps(winner["criterion_scores"]),
+            "candidates": cands,
+            "prompt_tokens": gen_prompt_tokens[i] + evidence_prompt_tokens[i] + scoring_prompt_tokens[i],
+            "completion_tokens": gen_completion_tokens[i] + evidence_completion_tokens[i] + scoring_completion_tokens[i],
+            "elapsed_s": round(elapsed, 3),
+            "avg_time_per_sample_s": round(avg_time_per_sample_s, 3),
+        })
+    return results
+
+
 def run_group_top3(
     llm, tokenizer, images: list, cls_q: str, gen_template: str, rubric: str, prompts: dict, vprompts: dict,
     gen_temperature: float, rng: random.Random,
@@ -583,6 +808,13 @@ def run_group_top3(
     chat_template: str | None = None, grading_max_tokens: int = 300, n_candidates: int = 3,
     top3_mode: str = "explicit", rubric_key: str = "",
 ) -> list[dict]:
+    if top3_mode == "verifier_rubric":
+        return run_group_top3_verifier_rubric(
+            llm, tokenizer, images, cls_q, rubric, prompts, vprompts, gen_temperature,
+            agml_dataset, class_label, image_names, log_path=log_path, call_stats=call_stats,
+            seed=seed, enable_thinking=enable_thinking, gen_max_tokens=gen_max_tokens,
+            chat_template=chat_template, grading_max_tokens=grading_max_tokens, n_candidates=n_candidates,
+        )
     """--verifier_type top3 (Paper 2 Stage 3, docs/stage3_classification_verifier.md):
     generates an N-candidate pool per image, then grades EACH candidate
     independently via the exact same per-criterion rubric grading call
@@ -1156,6 +1388,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         print(f"  [match_images_from] {sum(len(v) for v in reference_images.values())} image name(s) "
               f"loaded across {len(reference_images)} (dataset, class) group(s) from {match_images_from}")
     all_groups = list(_build_groups(args, manifest, dataset_filter=dataset_filter, reference_images=reference_images))
+    if args.random_datasets:
+        all_groups = _sample_random_datasets(all_groups, args.random_datasets, args.seed)
+        chosen_names = sorted({g[0].agml_name for g in all_groups})
+        print(f"  [random_datasets={args.random_datasets}, seed={args.seed}] {chosen_names}")
     if args.random_classes_per_task:
         all_groups = _sample_random_classes_per_task(all_groups, args.random_classes_per_task, args.seed)
         by_task_counts = Counter(g[3] for g in all_groups)
@@ -1493,6 +1729,15 @@ if __name__ == "__main__":
                               "cot_yaml_swap_datasets.txt). Pass the SAME list to cot-compare's "
                               "--filter_datasets so the lower/upper-bound and self-cot/cot-yaml "
                               "comparisons are scoped to the same datasets, not the full config.")
+    parser.add_argument("--random_datasets", type=int, default=None,
+                         help="Randomly keep this many agml_dataset(s) (every class within each one "
+                              "kept) instead of --subsample's explicit name list — applied BEFORE "
+                              "--random_classes_per_task if both are given. Seeded by --seed. For a "
+                              "smoketest that wants a random SPREAD ACROSS DATASETS (e.g. "
+                              "\"3 random datasets\") rather than --random_classes_per_task's "
+                              "per-task_type class sampling, which can pick multiple classes from the "
+                              "SAME dataset. Combine with --n_samples for \"N images per dataset\" "
+                              "(per-class, so a multi-class dataset yields more than N images total).")
     parser.add_argument("--random_classes_per_task", type=int, default=None,
                          help="Instead of (or combined with, if --subsample also given — it "
                               "pre-filters, this samples from what's left) hand-picking datasets, "
@@ -1540,12 +1785,13 @@ if __name__ == "__main__":
                               "many independent trajectories are drawn per image in one generation "
                               "call — needs --temperature > 0 to actually differ (greedy decoding "
                               "repeats itself).")
-    parser.add_argument("--top3_mode", choices=["explicit", "resample"], default="explicit",
-                         help="--verifier_type top3 only, how the N-candidate pool is generated. "
-                              "\"explicit\" (default): ONE generation call, asking the model to "
+    parser.add_argument("--top3_mode", choices=["explicit", "resample", "verifier_rubric"], default="explicit",
+                         help="--verifier_type top3 only, how the N-candidate pool is generated AND "
+                              "graded. \"explicit\" (default): ONE generation call, asking the model to "
                               "state its observations once then give N EXPLICITLY DIFFERENT ranked "
                               "possibilities itself (<answer_1>/<answer_2>/<answer_3> tags, "
-                              "verifier_prompts.yaml's structured_templates_top3_explicit). A "
+                              "verifier_prompts.yaml's structured_templates_top3_explicit), each then "
+                              "graded against the rubric using its OWN stated observations. A "
                               "near-identical approach was tried and reverted for the legacy ppt "
                               "mode's K-candidate design (forcing diversity competed against the "
                               "model's own best guess there) — being retried here because each "
@@ -1554,7 +1800,20 @@ if __name__ == "__main__":
                               "trusting this at scale. \"resample\": draws --top3_n_candidates "
                               "independent trajectories via temperature sampling instead (no "
                               "explicit-diversity instruction) — see run_group_top3's docstring for "
-                              "the full comparison.")
+                              "the full comparison. \"verifier_rubric\" (2026-10-03): a different "
+                              "division of labor — candidates are just N bare answers (no "
+                              "observational preamble at all), and the VERIFIER independently fills "
+                              "in the rubric from the image ONCE (shared evidence, no candidate text "
+                              "shown), then scores each candidate's bare answer against THAT evidence "
+                              "in a separate call per candidate. --enable_thinking applies to ALL "
+                              "THREE calls in this mode (generation, evidence-fill, scoring) — unlike "
+                              "the other two modes, whose grading call is always thinking-off. Tests "
+                              "whether the near-ceiling score=3 pattern seen in practice is driven by "
+                              "a trajectory trivially \"citing\" whatever it just pre-filled into the "
+                              "rubric's own observation fields — see run_group_top3_verifier_rubric's "
+                              "docstring. Raise --grading_max_tokens well above its 300 default when "
+                              "combining this with --enable_thinking (a thinking trace routinely "
+                              "truncates before the scoring tags at 300).")
     parser.add_argument("--temperature", type=float, default=1.0,
                          help="Sampling temperature for the K candidates. Needs to be > 0 "
                               "for --k_candidates > 1 to actually produce differing candidates — "
