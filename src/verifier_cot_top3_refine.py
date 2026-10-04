@@ -181,6 +181,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             "criterion_scores": criterion_scores,
             "verifier_score": float(r["verifier_score"]) if r.get("verifier_score") not in (None, "") else 0.0,
             "evidence": extract_round1_evidence(r.get("verifier_feedback", "")),
+            "verifier_feedback": r.get("verifier_feedback", ""),
             "round1_answer": extract_answer_tag(r["prediction"])[0],
             "round1_verifier_score": r.get("verifier_score", ""),
             "round1_criterion_scores": criterion_scores,
@@ -290,6 +291,16 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 s["answer"] = answer
                 s["criterion_scores"] = criterion_scores
                 s["verifier_score"] = round(verifier_score, 4)
+                # Keep verifier_feedback in sync with the LATEST scoring —
+                # without this it would keep showing round 1's stale
+                # evidence+scoring text (the state BEFORE correction) even
+                # though criterion_scores/verifier_score already reflect
+                # the corrected answer, which is actively misleading for
+                # QC (confirmed: a row whose round-1 answer was scored all
+                # 1s showed up with criterion_scores all 3s post-refinement
+                # but verifier_feedback still displaying the OLD all-1s
+                # scoring text for the OLD answer).
+                s["verifier_feedback"] = f"[evidence]\n{s['evidence']}\n\n[scoring]\n{text}"
                 s["final_round"] = round_i
                 if all(v >= 3 for v in criterion_scores.values()):
                     s["status"] = "passed"
@@ -317,6 +328,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         row["extracted_answer"] = s["answer"]
         row["verifier_score"] = s["verifier_score"]
         row["criterion_scores"] = json.dumps(s["criterion_scores"])
+        row["verifier_feedback"] = s["verifier_feedback"]
         if s["refined"]:
             classes = dataset_classes.get(r["agml_dataset"], [])
             resolved = resolve_class(s["answer"], classes)
