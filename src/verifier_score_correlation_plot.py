@@ -1,6 +1,6 @@
 """
-Paper 2, Stage 3 — Verifier score correlation plot. See
-docs/stage3_classification_verifier.md's "Read the result" sections —
+Paper 2, Stage 4 — Verifier score correlation plot. See
+docs/stage4_classification_verifier.md's "Read the result" sections —
 until now, `verifier_score_correlation`/`top3_pool_analysis` were only a
 handful of numbers in metrics.json, read by eye, no chart. No GPU, no
 model calls — reads an already-judged `verifier-cot` checkpoint CSV

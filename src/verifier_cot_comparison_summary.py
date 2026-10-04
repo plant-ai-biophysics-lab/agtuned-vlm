@@ -1,5 +1,5 @@
 """
-Paper 2, Stage 3 — comparison bar chart: vision-baseline vs.
+Paper 2, Stage 4 — comparison bar chart: vision-baseline vs.
 --verifier_type top3 --top3_mode verifier_rubric (round 1 only) vs. that
 same checkpoint after verifier-cot-top3-refine. No GPU, no model calls —
 pure post-hoc comparison of three already-judged checkpoint CSVs.

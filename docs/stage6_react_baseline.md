@@ -1,4 +1,4 @@
-# Paper 2, Stage 5 — ReAct Baseline
+# Paper 2, Stage 6 — ReAct Baseline
 
 [← Back to README](../README.md)
 
@@ -19,7 +19,7 @@ classification question the exact same way `vision_baseline.py` does
 — a `react-baseline` run is scoring the same task on the same images, not a
 different one. Pass `--rubric` to instead use the same fill-in-the-blank
 criteria chain `vision-baseline --rubric` and `verifier-cot`'s own
-candidate generation (Stage 3, `--verifier_type simple` by default, or
+candidate generation (Stage 4, `--verifier_type simple` by default, or
 Paper 1 Stage 4's `--verifier_type ppt`) always use, if that's the
 comparison you want instead.
 

@@ -1,5 +1,5 @@
 """
-Paper 2 Stage 4 — Split-behavior report: for each image in a
+Paper 2 Stage 5 — Split-behavior report: for each image in a
 detection-box-refine checkpoint, does a SPLIT correction actually grow
 the box count, or does it mostly resolve to 1-in-1-out no-ops (the model
 disagreeing a split was needed)? No GPU needed — reads straight from the

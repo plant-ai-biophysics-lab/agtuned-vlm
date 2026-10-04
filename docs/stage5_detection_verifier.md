@@ -1,4 +1,4 @@
-# Paper 2, Stage 4 — Detection Verifier
+# Paper 2, Stage 5 — Detection Verifier
 
 [← Back to README](../README.md)
 
@@ -6,7 +6,7 @@ Status: **generation (Step 0) and correct-and-reverify (Step 1) both
 built and syntax/logic-verified (synthetic dry runs + a real local
 smoketest for Step 0); neither has had a full real-hardware run yet with
 the current (2026-10-02) 3-criterion rubric.** This stage is the
-spatial-task analog of [Stage 3](stage3_classification_verifier.md)'s
+spatial-task analog of [Stage 4](stage4_classification_verifier.md)'s
 classification verifier, applied to object detection instead.
 
 ## Why this stage exists
@@ -139,7 +139,7 @@ same generation call grading its own output. Grade the crop against
 `src/config/verifier_prompts_detection.yaml`'s `box_rubric` (**3**
 criteria as of 2026-10-02 — a 4th, "is the sub-type/condition plausible,"
 was dropped) independently on a 1-3 scale, summed to a confidence in
-`[0, 1]` — same summed-rubric mechanic Stage 3 uses
+`[0, 1]` — same summed-rubric mechanic Stage 4 uses
 (`src/verifier_cot.py`'s own `_parse_criterion_scores`/
 `_normalize_criterion_scores`, reused directly), just applied per-box
 instead of per-trajectory.

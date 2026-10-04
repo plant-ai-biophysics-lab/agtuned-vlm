@@ -1,5 +1,5 @@
 """
-Paper 2, Stage 3 — top3 QC plot. See docs/stage3_classification_verifier.md.
+Paper 2, Stage 4 — top3 QC plot. See docs/stage4_classification_verifier.md.
 No GPU, no model calls, no network — reads an already-graded
 `--verifier_type top3` checkpoint CSV (any `--top3_mode`: explicit,
 resample, verifier_rubric) plus whatever real dataset images are already
