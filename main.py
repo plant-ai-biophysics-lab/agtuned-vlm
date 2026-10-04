@@ -7,6 +7,7 @@ STAGES = {
     "catalog-datasets":   "scripts.agml_hf.catalog_datasets",
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
+    "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
     "catalog-detection-datasets":  "scripts.agml_hf.catalog_detection_datasets",
     "report-detection-catalog":    "scripts.agml_hf.report_detection_catalog",
     "migrate-detection-datasets":  "scripts.agml_hf.migrate_detection_datasets_yaml",
@@ -70,6 +71,16 @@ Stages:
     catalog-datasets   Stage 0a — catalog all Project-AgML datasets on HuggingFace
     migrate-datasets   Stage 0a — regenerate src/config/datasets.yaml from the HF catalog
     download-datasets  Stage 0a — download + class-balanced sample datasets, write selection manifest
+    download-heldout-digitalgreen  Paper 2 Stage 3 (docs/stage3_context_memory.md) — download +
+                               cache DigiGreen/Crop_Disease_Images (989 real images, expert labels,
+                               NOT under Project-AgML, not wired through DatasetConfig/datasets.yaml
+                               — its own standalone manifest/image dir) as a HELD-OUT lesson-building
+                               source, never sampled into the normal eval pipeline. Writes
+                               dataset/images_heldout/ + dataset/heldout_selected_images.json, with a
+                               per-row "split": "lessons"|"eval" assignment (--eval_frac, default 0.2,
+                               stratified by crop, seeded by --seed) — the eval split must never be
+                               used to write the skill-memory file this stage builds toward.
+                               Resumable (an already-cached image/row is skipped).
     catalog-detection-datasets  Stage 5 (prep) — resolve class_names + bbox convention for
                                detection-type datasets already found by catalog-datasets
     migrate-detection-datasets  Stage 5 (prep) — regenerate src/config/detection_datasets.yaml
