@@ -72,6 +72,8 @@ def assign_splits(row_ids_by_crop: dict[str, list[int]], eval_frac: float, seed:
 
 def main(args: argparse.Namespace) -> None:
     from datasets import load_dataset
+    from huggingface_hub import snapshot_download
+    from PIL import Image as PILImage
 
     images_root = Path(args.images_root)
     images_root.mkdir(parents=True, exist_ok=True)
@@ -86,8 +88,22 @@ def main(args: argparse.Namespace) -> None:
     ds = load_dataset(_REPO_ID, split="train")
     print(f"  {len(ds)} row(s) in the dataset.")
 
+    # `image_file` is a plain relative-path STRING into the dataset repo's
+    # own file tree (confirmed empirically — NOT an auto-decoding
+    # datasets.Image() column, unlike every AgML dataset load_hf_samples
+    # handles elsewhere in this repo, which decode straight to a PIL
+    # object). Pull the repo's actual image files in one bulk
+    # snapshot_download (restricted to image extensions so the already
+    # separately-cached parquet isn't re-fetched) rather than guessing at
+    # per-row decode behavior again.
+    print(f"  Fetching image files from {_REPO_ID}...")
+    snapshot_dir = Path(snapshot_download(
+        repo_id=_REPO_ID, repo_type="dataset",
+        allow_patterns=["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"],
+    ))
+
     row_ids_by_crop: dict[str, list[int]] = defaultdict(list)
-    pending_images: dict[int, object] = {}
+    pending_images: dict[int, Path] = {}
     for idx, row in enumerate(ds):
         key = str(idx)
         crop = row.get("crop") or "unknown"
@@ -96,7 +112,11 @@ def main(args: argparse.Namespace) -> None:
         if key in rows and img_path.exists():
             continue
         if not img_path.exists():
-            pending_images[idx] = row["image_file"]
+            src_path = snapshot_dir / row["image_file"]
+            if not src_path.exists():
+                print(f"  [warn] row {idx}: {src_path} not found in snapshot — skipping image.")
+            else:
+                pending_images[idx] = src_path
         diagnosis_raw = row.get("diagnosis") or ""
         diagnosis = [d.strip() for d in diagnosis_raw.split(";") if d.strip()]
         rows[key] = {
@@ -107,8 +127,8 @@ def main(args: argparse.Namespace) -> None:
 
     if pending_images:
         print(f"  Caching {len(pending_images)} new image(s) to {images_root}/...")
-        for idx, img in pending_images.items():
-            img.convert("RGB").save(images_root / f"{idx}.jpg", format="JPEG")
+        for idx, src_path in pending_images.items():
+            PILImage.open(src_path).convert("RGB").save(images_root / f"{idx}.jpg", format="JPEG")
 
     # Re-derive splits every run (cheap, deterministic given --seed) so a
     # resumed/extended run's split assignment stays consistent rather than
