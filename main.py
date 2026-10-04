@@ -8,6 +8,7 @@ STAGES = {
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
     "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
+    "heldout-zeroshot": "src.heldout_zeroshot",
     "catalog-detection-datasets":  "scripts.agml_hf.catalog_detection_datasets",
     "report-detection-catalog":    "scripts.agml_hf.report_detection_catalog",
     "migrate-detection-datasets":  "scripts.agml_hf.migrate_detection_datasets_yaml",

@@ -382,9 +382,17 @@ def _destroy_judge_llm(llm) -> None:
 
 def run_judge_phase(
     rows: list[dict], ckpt_path: Path, args, prompts: dict, fields: list[str] = CKPT_FIELDS,
-    judge_filter=None,
+    judge_filter=None, extra_keys: dict | None = None,
 ) -> list[dict]:
     """Shared judge phase — see module-level note above.
+
+    extra_keys (default None): forwarded straight to apply_judge, taking
+    PRECEDENCE over the args.config-derived AgML class_list_extra_keys
+    below — for a caller whose rows aren't AgML datasets at all (no
+    `row["agml_dataset"]` to key a per-dataset class list off), e.g. a
+    held-out dataset building its own {"class_list": "class_list_text"}
+    with every row pointing at the same precomputed column. Every
+    existing caller passes nothing here, so this is purely additive.
 
     judge_filter: passed straight through to rows_needing_judge — an
     additional predicate restricting which rows get judged this call
@@ -484,11 +492,11 @@ def run_judge_phase(
     # available; a template without that placeholder just ignores the
     # unused format() kwarg, so this is safe regardless of which template
     # ends up active.
-    extra_keys = None
-    config_path = getattr(args, "config", None)
-    if config_path:
-        from src.common.dataset_config import class_list_extra_keys
-        extra_keys = class_list_extra_keys(todo, Path(config_path))
+    if extra_keys is None:
+        config_path = getattr(args, "config", None)
+        if config_path:
+            from src.common.dataset_config import class_list_extra_keys
+            extra_keys = class_list_extra_keys(todo, Path(config_path))
 
     judge_llm, judge_tok = _load_judge_llm(
         args.judge_model, quantization=args.judge_quantize,

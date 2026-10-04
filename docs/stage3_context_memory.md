@@ -2,8 +2,8 @@
 
 [← Back to README](../README.md)
 
-Status: **dataset download tooling built (Step 0 below); the actual
-lesson-building/ablation pipeline (Steps 1-4) not started yet.** See
+Status: **Step 0 (download) and Step 1 (zero-shot prediction) built; Steps
+2-4 (reveal-and-explain, summarize, ablate) not started yet.** See
 [Stage 4](stage4_classification_verifier.md) for the verifier work this
 builds on (the leniency/evidence-contamination findings there are what
 motivated this stage).
@@ -73,11 +73,40 @@ eval slice that happens to miss whole crops entirely, seeded by `--seed`
 write the skill-memory `.md` file — only to measure whether it
 generalizes, once built.
 
-## Planned pipeline (Steps 1-4, not built yet)
+## Step 1 — zero-shot prediction (built)
 
-1. **Zero-shot prediction** — plain single-shot classification on the
-   lesson-building slice (no rubric, no verifier — same shape as
-   `vision-baseline`).
+```bash
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic
+```
+
+Plain single-shot classification on the lesson-building slice only
+(`--split lessons`, the default — `--split eval` exists for Step 4 later,
+never use it before then). No rubric, no verifier — same shape as
+`vision-baseline`'s own lower bound, reusing its exact
+`assessment_classification_tagged`/`assessment_system` prompts.
+
+Judged against the real expert `diagnosis` label via the same
+pipeline-wide hybrid judge template every other stage uses. That
+template has its own `{class_list}` placeholder (it checks whether a
+prediction is SPECIFIC enough to distinguish the reference diagnosis
+from every other one, not just broadly consistent with it) — this
+dataset isn't an AgML dataset (no `datasets.yaml`, no per-row
+`agml_dataset` to key a class list off), so `{class_list}` is filled
+from this dataset's OWN unique `diagnosis` values instead, via a new
+`extra_keys` override added to `run_judge_phase` (`src/common/vision_eval.py`)
+specifically so a future non-AgML caller doesn't need its own
+reimplementation of the judge phase.
+
+Writes `outputs_final/heldout_zeroshot/<safe_model_name>/ckpt_<safe_model_name>.csv`
+— `class_label` is the real `diagnosis` (joined), `image_name` is the
+actual cached filename, `prediction`/`judged_correct`/`judge_reasoning`
+as usual. (`agml_dataset`/`class_label`/`image_name` column names are
+reused deliberately, not a stylistic choice — `load_ckpt`'s resume logic
+hardcodes exactly those 3 names to build its seen-keys set.)
+
+## Planned pipeline, Steps 2-4 (not built yet)
+
 2. **Reveal ground truth on misses** — for each incorrect prediction,
    show the model its own wrong answer AND the real ground truth label
    (`diagnosis`/`details` columns), ask it to explain concretely what it
