@@ -222,6 +222,65 @@ verifier's own evidence-derived criterion scores, and
 tell you whether `point_biserial_r` and the score spread actually look
 different from `explicit`/`resample`.
 
+### Correct-and-reverify (`verifier-cot-top3-refine`)
+
+Classification analog of [Stage 4's](stage4_detection_verifier.md)
+`detection-box-refine` — acts on the `verifier_rubric` checkpoint you
+already graded above, rather than re-grading from scratch. For each row
+whose **winning** candidate scored `<= 2` on any rubric criterion: one
+correction call shown to the MODEL being tested (not the verifier) —
+the SAME evidence block the verifier used in round 1 (parsed back out of
+the checkpoint, never re-derived), exactly which criteria it failed
+(with their own rubric question text), and the round-1 candidates that
+*lost* — followed by one re-scoring call against that same evidence.
+`--max_rounds` (default `2`) — round 1 is the input checkpoint's own
+already-done grading (no calls made for it), so the default allows
+**exactly one** corrective round before a still-failing row is kept
+as-is, flagged `"exhausted"`. A row that already passed needs no extra
+calls at all, and keeps its original `judged_correct` untouched — only
+rows that actually get corrected are re-judged.
+
+```bash
+uv run python main.py verifier-cot-top3-refine \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --ckpt outputs_final/verifier_cot_top3_verifier_rubric_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic_top3.csv \
+    --output_dir outputs_final/verifier_cot_top3_verifier_rubric_refine_smoketest/
+```
+
+Output checkpoint is the SAME schema as its input
+(`VERIFIER_CKPT_FIELDS`) plus one extra `refinement_info` JSON column
+(`refined`, `status`, `round1_answer`/`round1_verifier_score`/
+`round1_criterion_scores`, `final_answer`/`final_verifier_score`/
+`final_criterion_scores`) — so every existing tool keeps working against
+it unmodified. In particular, `candidate_predictions`/
+`candidate_verifier_scores`/`answer_in_pool`/`verifier_picked_correct`
+are passed through **unchanged** from round 1 (correction doesn't
+regenerate the 3-candidate pool), which is exactly why the same QC
+command below still reports `pool_summary.png` for round 1 only, with no
+script changes needed:
+
+```bash
+uv run python main.py verifier-cot-qc-plot-top3 \
+    --ckpt outputs_final/verifier_cot_top3_verifier_rubric_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic_top3.csv
+```
+
+**Compare all three** — baseline, `verifier_rubric` round 1, and
+`verifier_rubric` + refine — on the smoketest's own datasets (baseline
+is filtered down to just those datasets automatically, so a 3-dataset
+smoketest is never compared against the baseline's full coverage):
+
+```bash
+uv run python main.py verifier-cot-comparison-summary \
+    --baseline_ckpt outputs_final/vision_baseline_thinking/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --verifier_rubric_ckpt outputs_final/verifier_cot_top3_verifier_rubric_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic_top3.csv \
+    --refined_ckpt outputs_final/verifier_cot_top3_verifier_rubric_refine_smoketest/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic_top3.csv
+```
+
+Writes `comparison.png`/`.json` to `<refined checkpoint's own dir>/comparison/`
+— a 2-bar chart (`verifier_rubric` round 1, `verifier_rubric` + refine)
+against `judge_accuracy`, baseline drawn as a dashed red reference line
+(`accuracy` also reported in the JSON for reference).
+
 **Full run — `verifier_rubric` mode** (the only mode that gets a full
 run here — `--top3_mode` must be passed explicitly, every time; there is
 no default that produces this mode, and bare `--verifier_type top3`

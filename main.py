@@ -46,6 +46,8 @@ STAGES = {
     "verifier-score-correlation-plot": "src.verifier_score_correlation_plot",
     "verifier-cot-qc-plot": "src.verifier_cot_qc_plot",
     "verifier-cot-qc-plot-top3": "src.verifier_cot_qc_plot_top3",
+    "verifier-cot-top3-refine": "src.verifier_cot_top3_refine",
+    "verifier-cot-comparison-summary": "src.verifier_cot_comparison_summary",
     "filter-checkpoints": "src.filter_checkpoints",
     "ablation":      "src.ablation",
     "judge-checkpoint": "src.judge_checkpoint",
@@ -301,6 +303,31 @@ Stages:
                                (same numbers as metrics.json's top3_pool_analysis).
                                --n_datasets/--n_per_dataset/--max_rows_per_figure/--images_root
                                same meaning as verifier-cot-qc-plot.
+    verifier-cot-top3-refine  — Paper 2 Stage 3 (docs/stage3_classification_verifier.md, needs
+                               GPU/model): classification analog of detection-box-refine, applied to
+                               an already-graded --verifier_type top3 --top3_mode verifier_rubric
+                               checkpoint. For each row whose winning candidate scored <= 2 on any
+                               rubric criterion: one correction call (shown to the MODEL, not the
+                               verifier — the SAME round-1 evidence, which criteria failed with
+                               their own rubric text, and the losing round-1 candidates) followed by
+                               one re-scoring call against that same evidence. --max_rounds (default
+                               2) — round 1 is the input checkpoint's own ALREADY-DONE grading (no
+                               calls), so the default allows exactly one corrective round. A row
+                               that passes needs no extra calls at all and keeps its original
+                               judged_correct; only actually-corrected rows get re-judged. Writes a
+                               checkpoint in the SAME schema as its input (VERIFIER_CKPT_FIELDS) plus
+                               one extra refinement_info JSON column — round-1-only columns
+                               (candidate_predictions/candidate_verifier_scores/answer_in_pool/
+                               verifier_picked_correct) pass through UNCHANGED, so
+                               verifier-cot-qc-plot-top3's pool_summary chart still reflects round 1
+                               only when run against this output.
+    verifier-cot-comparison-summary — Paper 2 Stage 3 (docs/stage3_classification_verifier.md, no
+                               GPU needed): bar chart — vision-baseline (--baseline_ckpt, filtered to
+                               just the datasets --verifier_rubric_ckpt actually covers, drawn as a
+                               dashed red reference line) vs. --verifier_rubric_ckpt (top3
+                               verifier_rubric, round 1) vs. --refined_ckpt (that same checkpoint
+                               after verifier-cot-top3-refine). Metric: judge_accuracy (accuracy also
+                               reported in the JSON for reference).
     ablation                 — reviewer-question ablation: isolates rubric vs. K-sampling
                                vs. verifier-selection (Q2/Q3), verifier confidence
                                calibration/ranking accuracy (Q4), oracle-description

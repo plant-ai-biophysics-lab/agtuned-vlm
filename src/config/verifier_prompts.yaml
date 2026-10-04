@@ -340,6 +340,38 @@ verifier_score_against_evidence_prompt: |
   Output exactly one line per numbered criterion above, in this format (N is that criterion's own number, SCORE is 1, 2, or 3):
   <criterion_N>SCORE</criterion_N>
 
+# src/verifier_cot_top3_refine.py's own correction call (classification
+# analog of detection_box_refine.py's correct-and-reverify mechanism) —
+# shown to the MODEL being tested (not the verifier), when the winning
+# candidate from --top3_mode verifier_rubric scored <= 2 on any
+# criterion. Shows the SAME evidence the verifier used to grade it
+# (verifier_rubric_fill_prompt's own output, carried over unchanged —
+# never re-derived), exactly which criteria it failed (with their own
+# rubric question text, not just a bare number), and the other
+# round-1 candidates that lost — the model can keep its original
+# answer, switch to one of the losing candidates, or give something
+# else entirely. ONE corrective answer back, same <answer></answer>
+# convention as every other stage.
+# Params: {question} {evidence} {current_answer} {failing_criteria} {other_candidates}
+top3_refine_prompt: |
+  An answer you gave was flagged as weakly supported on some evaluation criteria. Reconsider it using the observations below — the SAME observations an independent review of the image already recorded (not a new look at the image, your own prior answer, or anything else).
+
+  Task: {question}
+
+  Observations:
+  {evidence}
+
+  Your current answer: "{current_answer}"
+
+  This answer was NOT well supported on:
+  {failing_criteria}
+
+  Other answers you considered earlier but did not choose:
+  {other_candidates}
+
+  Based on the observations above, give your best final answer — this can be your original answer again if you still believe it's correct, one of the other answers you considered, or something different entirely. Respond with ONLY:
+  <answer></answer>
+
 # The single-round verifier's PPT tournament duels AND src/verifier_lmv.py's PPT
 # baseline. This is the free-generation (pass 1) prompt only — it
 # deliberately does NOT show the <score_A>/<score_B> tags (see the header
