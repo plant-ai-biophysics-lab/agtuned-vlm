@@ -2,8 +2,8 @@
 
 [← Back to README](../README.md)
 
-Status: **Step 0 (download) and Step 1 (zero-shot prediction) built; Steps
-2-4 (reveal-and-explain, summarize, ablate) not started yet.** See
+Status: **Steps 0-2 (download, zero-shot prediction, reveal-and-explain
+on misses) built; Steps 3-4 (summarize, ablate) not started yet.** See
 [Stage 4](stage4_classification_verifier.md) for the verifier work this
 builds on (the leniency/evidence-contamination findings there are what
 motivated this stage).
@@ -100,25 +100,87 @@ reimplementation of the judge phase.
 
 Writes `outputs_final/heldout_zeroshot/<safe_model_name>/ckpt_<safe_model_name>.csv`
 — `class_label` is the real `diagnosis` (joined), `image_name` is the
-actual cached filename, `prediction`/`judged_correct`/`judge_reasoning`
-as usual. (`agml_dataset`/`class_label`/`image_name` column names are
-reused deliberately, not a stylistic choice — `load_ckpt`'s resume logic
-hardcodes exactly those 3 names to build its seen-keys set.)
+actual cached filename, `judged_correct`/`judge_reasoning` as usual.
+`prediction` is the FULL cleaned response (narrative + answer line +
+`<answer>` tag, same convention `vision-baseline`'s own `prediction`
+column uses) — fixed from an earlier bug where this stored just the bare
+extracted answer, silently dropping the model's own stated reasoning
+(and therefore also judging the bare answer, not the full
+reasoning-bearing text every other judge call in this repo sees).
+`extracted_answer` is the bare tag content alone. (`agml_dataset`/
+`class_label`/`image_name` column names are reused deliberately, not a
+stylistic choice — `load_ckpt`'s resume logic hardcodes exactly those 3
+names to build its seen-keys set.)
 
-## Planned pipeline, Steps 2-4 (not built yet)
+**Real result** (n=827, `RedHatAI/gemma-4-31B-it-FP8-dynamic`, **from a
+run predating the `prediction`-field fix above — re-run with `--rerun`
+before trusting these numbers or building Step 2 traces from them**):
+**`judge_accuracy = 0.3881`**. General trends found in this run (used to
+shape Step 2's own system prompt below, not hard-coded into it
+per-example — expected to still roughly hold after the re-run, since the
+fix changes what the judge SEES, not the underlying diagnoses, but worth
+re-checking):
+- **149/827 rows were a false "Healthy"** — the single largest error
+  bucket, bigger than any specific category confusion. The model
+  over-predicts "Healthy" as a safe default when actually unsure.
+- **Pest/insect damage is the hardest category to recognize at all**
+  (32.7% bucket accuracy vs. 60.4% disease, 71.0% healthy, heuristic
+  keyword bucketing) — the model defaults to a disease explanation
+  rather than seriously considering insect damage as a hypothesis.
+- **Nutrient deficiency is also weak** (19.4% bucket accuracy, n=36 —
+  suggestive, not solid) — frequently confused with disease or missed
+  entirely, consistent with the Lentil-Rust/phosphorus-deficiency
+  confusion already found in Stage 4's own transcripts.
+- **Strong crop-dependent variance**, not a uniform knowledge gap: Wheat
+  (0.81) and Mustard (0.78) are strong; Brinjal (0.13), Banana (0.24),
+  Mango (0.25), Groundnut (0.27), Tobacco (0.28) are weak.
 
-2. **Reveal ground truth on misses** — for each incorrect prediction,
-   show the model its own wrong answer AND the real ground truth label
-   (`diagnosis`/`details` columns), ask it to explain concretely what it
-   should have looked for and why it got it wrong. (Deliberately not
-   reusing `verifier_rubric`'s own evidence-gathering call for this —
-   Stage 4 found that mechanism can pre-commit to a wrong diagnosis
-   during "neutral" observation; this step needs the real label revealed
-   to produce a trustworthy explanation, not another guess.)
-3. **Summarize traces into one `.md` file** — aggregate the gathered
-   explanations (plus a smaller sample of *correct* predictions, for
-   "what worked") into a single skill-memory file: common diseases,
-   what to look for, confusions to watch for.
+## Step 2 — reveal ground truth on EVERY row, miss or not (built)
+
+```bash
+uv run python main.py heldout-explain-traces \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --ckpt outputs_final/heldout_zeroshot/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+Reads Step 1's own checkpoint and processes **every judged row, not just
+misses** — the skill file needs both "what worked" and "what didn't
+work" sides, so a correct prediction gets a trace too, not just a
+sampled subset of them. For each row, shows the model its OWN full
+prediction (the fixed, narrative-bearing `prediction` column — the
+model's own stated reasoning, not just its bare final answer), the REAL
+ground truth label, AND the dataset's expert-written `details`
+observations — then asks for a short (2-4 sentence), visually-grounded
+explanation, via one of two templates picked by `judged_correct`:
+
+- **`heldout_explain_miss_prompt`** ("what didn't work") — explain what
+  evidence should have led to the correct answer, pointing out
+  specifically where the model's own stated reasoning went wrong.
+- **`heldout_explain_correct_prompt`** ("what worked") — confirm and
+  articulate the evidence that correctly supports the answer.
+  Explicitly instructed to call out a right-answer-for-the-wrong-reasons
+  case (a lucky guess) rather than crediting unsound reasoning just
+  because the final label happened to match.
+
+Both grounded in the real expert `details` text rather than the model
+inventing plausible-sounding reasoning from nothing. Shared system
+prompt (`src/config/heldout_prompts.yaml`'s `heldout_lesson_system`)
+bakes in the three general trends found in Step 1's real results above
+as reminders for what's worth emphasizing — never restated as facts
+about any specific image, and never hard-coded per-crop/per-diagnosis.
+
+Writes `outputs_final/heldout_explain_traces/<safe_model_name>/ckpt_<safe_model_name>.csv`
+— every Step 1 column passed through unchanged, plus `trace_type`
+(`"worked"`/`"didnt_work"`) and `explanation`.
+
+## Planned pipeline, Steps 3-4 (not built yet)
+
+3. **Summarize traces into one `.md` file** — aggregate ALL of Step 2's
+   `"worked"`/`"didnt_work"` explanations (likely too much raw text for
+   one summarization call — ~800 explanations — so probably a map-reduce:
+   summarize in chunks, then merge chunk-summaries into the final file)
+   into a single skill-memory file: common diseases, what to look for,
+   confusions to watch for.
 4. **Ablate before trusting it** — zero-shot `judge_accuracy` on the
    **held-out eval slice**, with vs. without the skill file injected as
    extra context. Only a result that holds on held-out images counts as
@@ -126,12 +188,20 @@ hardcodes exactly those 3 names to build its seen-keys set.)
 5. **If it helps**: inject into `vision-baseline` first (isolates the
    skill file's own effect cleanly), then `verifier-cot`'s generation
    step and/or `verifier_rubric_fill_prompt` if it still helps there.
+6. **If the classification gains hold up, repeat for object detection**
+   ([Stage 5](stage5_detection_verifier.md)) — same mechanism (zero-shot
+   predict → reveal ground truth on misses → explain → summarize into a
+   skill file → ablate on a held-out detection slice before trusting it),
+   applied to `detection-multiclass`/`detection-box-verifier` instead of
+   `vision-baseline`/`verifier-cot`. Deliberately sequenced AFTER
+   classification proves out, not in parallel — no reason to pay for a
+   second, detection-specific held-out dataset/pipeline build if the core
+   idea doesn't even work for the simpler classification case first.
 
 ## Open questions / not yet decided
 
-- Whether "what worked" traces need the same reveal-and-explain
-  treatment as "what didn't work," or whether the model's own
-  (already-correct) reasoning can be trusted as-is.
 - Final `.md` file format/length and how it gets truncated/summarized if
   it grows too large for a single context injection.
-- Script/command names for Steps 1-4 — not yet built.
+- Map-reduce chunking strategy for Step 3 (fixed-size batches vs. grouped
+  by heuristic category/crop) — not yet decided.
+- Script/command names for Steps 3-4 — not yet built.

@@ -1,0 +1,89 @@
+# Paper 2, Stage 3 (docs/stage3_context_memory.md) — prompts for building
+# the held-out Digital Green skill-memory .md file. Kept separate from
+# prompts.yaml/verifier_prompts.yaml since these are specific to this
+# one held-out dataset's own lesson-writing pipeline, not reused anywhere
+# else.
+
+# System prompt for every lesson-writing call (both "what didn't work"
+# misses and "what worked" corrects — ALL of Step 1's rows get a trace,
+# not just misses) — operationalizes the general
+# trends found in heldout-zeroshot's real Step 1 results (n=827,
+# judge_accuracy=0.3881), NOT hard-coded per-crop/per-diagnosis facts:
+#   - 149/827 rows were a false "Healthy" (the single largest error
+#     bucket, bigger than any specific category confusion) — the model
+#     over-predicts "Healthy" as a safe default when actually unsure.
+#   - Pest/insect damage is the hardest category to recognize at all
+#     (32.7% bucket accuracy vs. 60.4% disease, 71.0% healthy) — the
+#     model defaults to a disease explanation rather than considering
+#     insect damage as a hypothesis.
+#   - Nutrient deficiency is frequently confused with disease or missed
+#     entirely (19.4% bucket accuracy, n=36 — suggestive, not solid).
+# These are deliberately stated as GENERAL reminders here, not facts
+# about any specific image — the lesson-writing calls below ground their
+# OWN explanations in each image's own visible evidence + the expert's
+# own observations, not in these trend stats directly.
+heldout_lesson_system: |
+  You are an expert agricultural scientist writing short training notes
+  for another vision-language model that frequently makes these general
+  mistakes when diagnosing crop photos — keep them in mind to decide
+  which details are worth emphasizing, but never restate them as facts
+  about the specific image in front of you:
+  - It over-predicts "Healthy" as a safe default when it's actually
+    unsure, missing real problems more than any other single error.
+  - It is much worse at recognizing PEST/insect damage than disease — it
+    tends to default to a disease explanation (fungal/bacterial/viral
+    symptom pattern) rather than seriously considering insect damage as
+    a hypothesis.
+  - It frequently confuses nutrient deficiency with disease, or misses
+    deficiency symptoms entirely.
+  Write concrete, visually-grounded notes — actual colors, shapes,
+  patterns, insect signs visible in THIS image — never vague
+  generalities like "look more carefully."
+
+# "what didn't work" — Params: {crop} {model_reasoning} {wrong_prediction} {ground_truth} {expert_details}
+heldout_explain_miss_prompt: |
+  A vision-language model was shown this image of a {crop} plant and
+  asked to diagnose any disease, pest, or nutrient deficiency affecting
+  it (or state that it's healthy). It answered INCORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer (WRONG): "{wrong_prediction}"
+  The ACTUAL correct answer: "{ground_truth}"
+  An expert agronomist's own observations of this image: "{expert_details}"
+
+  In 2-4 sentences, explain what specific visual evidence (visible in
+  THIS image) should have led to the correct answer instead — point out
+  specifically where the model's own stated reasoning went wrong
+  (misread evidence, missed a sign entirely, jumped to a conclusion,
+  etc.), grounded in the expert's own observations above wherever
+  possible, not speculation. If the mistake was confusing two
+  similar-looking categories (e.g. a pest sign mistaken for a disease
+  symptom, or vice versa, or a deficiency mistaken for a disease), say
+  specifically what distinguishes them in this case.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# "what worked" — Params: {crop} {model_reasoning} {correct_prediction} {ground_truth} {expert_details}
+heldout_explain_correct_prompt: |
+  A vision-language model was shown this image of a {crop} plant and
+  asked to diagnose any disease, pest, or nutrient deficiency affecting
+  it (or state that it's healthy). It answered CORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer: "{correct_prediction}" (matches the correct answer:
+  "{ground_truth}")
+  An expert agronomist's own observations of this image: "{expert_details}"
+
+  In 2-4 sentences, confirm and articulate the specific visual evidence
+  (visible in THIS image) that correctly supports this diagnosis —
+  ground your explanation in the expert's own observations above
+  wherever possible. IMPORTANT: if the model's own stated reasoning
+  actually cited the WRONG evidence or reasoned unsoundly despite
+  landing on the correct final answer (a lucky guess, not real
+  diagnostic skill), say so explicitly instead of crediting reasoning
+  that wasn't actually sound — do not manufacture a justification for
+  reasoning that doesn't deserve it.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.

@@ -155,7 +155,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "crop": r["crop"], "image_name": f"{k}.jpg",
                     "details": r["details"], "country": r["country"], "state": r["state"],
                     "split": r["split"],
-                    "prediction": answer, "raw_response": raw, "extracted_answer": answer,
+                    "prediction": cleaned, "raw_response": raw, "extracted_answer": answer,
                     "reasoning": thinking,
                     "judge_gt_hint": diagnosis_text, "class_list_text": class_list_text,
                     "judged_correct": "", "judge_reasoning": "",
