@@ -188,110 +188,116 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             "status": "passed",
         }
 
-    pbar = ProgressBar(total=args.max_rounds - 1, desc="Refine rounds")
+    def _rubric_text(task_type: str) -> str:
+        return "\n".join(f"{n}. {t}" for n, t in sorted(_rubric_lines(task_type).items()))
+
     for round_i in range(2, args.max_rounds + 1):
         needs_refine = [
             i for i, r in enumerate(pending)
             if any(s <= 2 for s in state[i]["criterion_scores"].values())
             and (pending[i]["agml_dataset"], pending[i]["image_name"]) in image_paths
-            and state[i]["status"] != "done_this_row"
         ]
         if not needs_refine:
-            pbar.update()
             continue
 
-        images = [PILImage.open(image_paths[(pending[i]["agml_dataset"], pending[i]["image_name"])]).convert("RGB")
-                  for i in needs_refine]
+        # Chunked (same --chunk_size convention run_judge_phase's own
+        # --judge_chunk_size uses) so a run over hundreds/thousands of
+        # rows gives real progress ticks — one llm.generate() pair per
+        # chunk, not one single giant batch for the whole round (which
+        # would otherwise sit at "0/1" for the entire run, then jump
+        # straight to 100%, with zero intermediate visibility).
+        chunks = [needs_refine[i:i + args.chunk_size] for i in range(0, len(needs_refine), args.chunk_size)]
+        pbar = ProgressBar(total=len(chunks), desc=f"Refine round {round_i}")
+        for chunk in chunks:
+            images = [PILImage.open(image_paths[(pending[i]["agml_dataset"], pending[i]["image_name"])]).convert("RGB")
+                      for i in chunk]
 
-        correction_texts = []
-        for i in needs_refine:
-            r = pending[i]
-            s = state[i]
-            rubric_lines = _rubric_lines(r["task_type"])
-            failing = _failing_criteria_text(s["criterion_scores"], rubric_lines)
-            failing_text = "\n".join(f"  {n}. {rubric_lines.get(n, '')}" for n in failing) or "  (none)"
-            try:
-                other_answers = [a for a in json.loads(r.get("candidate_predictions") or "[]")
-                                  if a.strip().lower() != s["answer"].strip().lower()]
-            except json.JSONDecodeError:
-                other_answers = []
-            other_text = "\n".join(f"  - {a}" for a in other_answers) or "  (none)"
-            question = _cls_question(r["task_type"], r.get("crop", ""), prompts)
-            correction_texts.append(refine_template.format(
-                question=question, evidence=s["evidence"], current_answer=s["answer"],
-                failing_criteria=failing_text, other_candidates=other_text,
-            ))
+            correction_texts = []
+            for i in chunk:
+                r, s = pending[i], state[i]
+                rubric_lines = _rubric_lines(r["task_type"])
+                failing = _failing_criteria_text(s["criterion_scores"], rubric_lines)
+                failing_text = "\n".join(f"  {n}. {rubric_lines.get(n, '')}" for n in failing) or "  (none)"
+                try:
+                    other_answers = [a for a in json.loads(r.get("candidate_predictions") or "[]")
+                                      if a.strip().lower() != s["answer"].strip().lower()]
+                except json.JSONDecodeError:
+                    other_answers = []
+                other_text = "\n".join(f"  - {a}" for a in other_answers) or "  (none)"
+                question = _cls_question(r["task_type"], r.get("crop", ""), prompts)
+                correction_texts.append(refine_template.format(
+                    question=question, evidence=s["evidence"], current_answer=s["answer"],
+                    failing_criteria=failing_text, other_candidates=other_text,
+                ))
 
-        correction_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": t},
-        ]}] for t in correction_texts]
-        correction_prompts = [
-            {"prompt": render_chat_template(tokenizer, h, enable_thinking=args.enable_thinking,
-                                             chat_template=chat_template),
-             "multi_modal_data": {"image": img}}
-            for h, img in zip(correction_hist, images)
-        ]
-        gen_params = SamplingParams(
-            temperature=0.0, max_tokens=args.gen_max_tokens, seed=args.seed,
-            skip_special_tokens=not args.enable_thinking,
-        )
-        correction_outs = llm.generate(correction_prompts, sampling_params=gen_params)
-
-        new_answers = []
-        for i, out in zip(needs_refine, correction_outs):
-            raw = out.outputs[0].text
-            _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
-            answer, _ = extract_answer_tag(_clean(cleaned))
-            new_answers.append(answer)
-
-        # Re-score every corrected answer against its own round-1 evidence
-        # — identical mechanism/template round 1's own scoring step used.
-        scoring_texts = [
-            scoring_template.format(
-                rubric="\n".join(f"{n}. {t}" for n, t in sorted(_rubric_lines(pending[i]["task_type"]).items())),
-                question=_cls_question(pending[i]["task_type"], pending[i].get("crop", ""), prompts),
-                evidence=state[i]["evidence"], answer=answer,
+            correction_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+                {"type": "image"}, {"type": "text", "text": t},
+            ]}] for t in correction_texts]
+            correction_prompts = [
+                {"prompt": render_chat_template(tokenizer, h, enable_thinking=args.enable_thinking,
+                                                 chat_template=chat_template),
+                 "multi_modal_data": {"image": img}}
+                for h, img in zip(correction_hist, images)
+            ]
+            gen_params = SamplingParams(
+                temperature=0.0, max_tokens=args.gen_max_tokens, seed=args.seed,
+                skip_special_tokens=not args.enable_thinking,
             )
-            for i, answer in zip(needs_refine, new_answers)
-        ]
-        scoring_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
-            {"type": "image"}, {"type": "text", "text": t},
-        ]}] for t in scoring_texts]
-        scoring_prompts = [
-            {"prompt": render_chat_template(tokenizer, h, enable_thinking=args.enable_thinking,
-                                             chat_template=chat_template),
-             "multi_modal_data": {"image": img}}
-            for h, img in zip(scoring_hist, images)
-        ]
-        scoring_params = SamplingParams(
-            temperature=0.0, max_tokens=args.grading_max_tokens, seed=args.seed,
-            skip_special_tokens=not args.enable_thinking,
-        )
-        scoring_outs = llm.generate(scoring_prompts, sampling_params=scoring_params)
+            correction_outs = llm.generate(correction_prompts, sampling_params=gen_params)
 
-        n_criteria_by_i = {i: _count_rubric_criteria(
-            "\n".join(f"{n}. {t}" for n, t in sorted(_rubric_lines(pending[i]["task_type"]).items()))
-        ) for i in needs_refine}
-        for i, answer, out in zip(needs_refine, new_answers, scoring_outs):
-            raw = out.outputs[0].text
-            _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
-            text = cleaned.strip()
-            n_criteria = n_criteria_by_i[i]
-            criterion_scores = _parse_criterion_scores(text, n_criteria)
-            verifier_score = _normalize_criterion_scores(criterion_scores, n_criteria)
-            s = state[i]
-            s["refined"] = s["refined"] or (answer.strip().lower() != s["answer"].strip().lower())
-            s["answer"] = answer
-            s["criterion_scores"] = criterion_scores
-            s["verifier_score"] = round(verifier_score, 4)
-            s["final_round"] = round_i
-            if all(v >= 3 for v in criterion_scores.values()):
-                s["status"] = "passed"
-            else:
-                s["status"] = "exhausted" if round_i == args.max_rounds else "pending"
+            new_answers = []
+            for out in correction_outs:
+                raw = out.outputs[0].text
+                _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+                answer, _ = extract_answer_tag(_clean(cleaned))
+                new_answers.append(answer)
 
-        pbar.update()
-    pbar.finish()
+            # Re-score every corrected answer against its own round-1
+            # evidence — identical mechanism/template round 1's own
+            # scoring step used.
+            scoring_texts = [
+                scoring_template.format(
+                    rubric=_rubric_text(pending[i]["task_type"]),
+                    question=_cls_question(pending[i]["task_type"], pending[i].get("crop", ""), prompts),
+                    evidence=state[i]["evidence"], answer=answer,
+                )
+                for i, answer in zip(chunk, new_answers)
+            ]
+            scoring_hist = [_sys_msg(prompts) + [{"role": "user", "content": [
+                {"type": "image"}, {"type": "text", "text": t},
+            ]}] for t in scoring_texts]
+            scoring_prompts = [
+                {"prompt": render_chat_template(tokenizer, h, enable_thinking=args.enable_thinking,
+                                                 chat_template=chat_template),
+                 "multi_modal_data": {"image": img}}
+                for h, img in zip(scoring_hist, images)
+            ]
+            scoring_params = SamplingParams(
+                temperature=0.0, max_tokens=args.grading_max_tokens, seed=args.seed,
+                skip_special_tokens=not args.enable_thinking,
+            )
+            scoring_outs = llm.generate(scoring_prompts, sampling_params=scoring_params)
+
+            for i, answer, out in zip(chunk, new_answers, scoring_outs):
+                raw = out.outputs[0].text
+                _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+                text = cleaned.strip()
+                n_criteria = _count_rubric_criteria(_rubric_text(pending[i]["task_type"]))
+                criterion_scores = _parse_criterion_scores(text, n_criteria)
+                verifier_score = _normalize_criterion_scores(criterion_scores, n_criteria)
+                s = state[i]
+                s["refined"] = s["refined"] or (answer.strip().lower() != s["answer"].strip().lower())
+                s["answer"] = answer
+                s["criterion_scores"] = criterion_scores
+                s["verifier_score"] = round(verifier_score, 4)
+                s["final_round"] = round_i
+                if all(v >= 3 for v in criterion_scores.values()):
+                    s["status"] = "passed"
+                else:
+                    s["status"] = "exhausted" if round_i == args.max_rounds else "pending"
+
+            pbar.update()
+        pbar.finish()
     destroy_llm(llm)
     del tokenizer
 
@@ -374,6 +380,11 @@ if __name__ == "__main__":
                          help="Round 1 is the ALREADY-GRADED input checkpoint (no calls made for it) — "
                               "the default of 2 allows exactly ONE corrective round before a "
                               "still-failing row is kept as-is and flagged \"exhausted\".")
+    parser.add_argument("--chunk_size", type=int, default=200,
+                         help="Rows needing correction are processed in chunks of this size (one "
+                              "correction + one re-scoring llm.generate() pair per chunk), same "
+                              "convention as --judge_chunk_size below — gives real progress-bar "
+                              "ticks on a large run instead of one single giant batch per round.")
     parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
                          help="Applies to BOTH the correction call and the re-scoring call, same as "
                               "--top3_mode verifier_rubric's own generation/evidence-fill/scoring "

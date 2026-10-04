@@ -247,6 +247,15 @@ uv run python main.py verifier-cot-top3-refine \
     --output_dir outputs_final/verifier_cot_top3_verifier_rubric_refine_smoketest/
 ```
 
+Rows needing correction are processed in chunks (`--chunk_size`, default
+`200`, same convention as `--judge_chunk_size`) — one correction +
+re-scoring `llm.generate()` pair per chunk, giving a real progress-bar
+tick per chunk instead of one giant batch for the whole round. On a
+small smoketest where fewer than 200 rows need correction, that's still
+just one chunk (one tick, `0/1 → 1/1`) — pass a smaller `--chunk_size`
+(e.g. `20`) if you want finer-grained progress visibility on a run that
+size.
+
 Output checkpoint is the SAME schema as its input
 (`VERIFIER_CKPT_FIELDS`) plus one extra `refinement_info` JSON column
 (`refined`, `status`, `round1_answer`/`round1_verifier_score`/
