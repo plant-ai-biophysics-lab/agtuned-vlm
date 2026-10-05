@@ -338,8 +338,16 @@ own effect cleanly first, same reasoning as the original plan):
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --skill_memory_path outputs_final/heldout_summarize/skill_memory_no_common_section.md \
-    ...  # your usual vision-baseline flags
+    --output_dir outputs_final/vision_baseline_thinking_with_skill/
 ```
+
+(`--output_dir` deliberately points somewhere NEW, not the existing
+`outputs_final/vision_baseline_thinking/` — that's the real baseline
+checkpoint every other comparison in this repo references; overwriting
+it would destroy the thing this is supposed to be compared against.
+Everything else defaults the same way a normal `vision-baseline` run
+does — see [Stage 1](stage1_baseline_classification.md) — thinking on,
+`gen_max_tokens 4096`, vendored Gemma-4 chat template.)
 
 `--skill_memory_path` injects the file into the system prompt, built via
 the exact same `build_skill_system_prompt` wrapper the ablation
