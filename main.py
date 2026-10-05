@@ -24,6 +24,7 @@ STAGES = {
     "detection-split-report":      "src.detection_split_report",
     "detection-comparison-summary": "src.detection_comparison_summary",
     "detection-box-verifier-summary": "src.detection_box_verifier_summary",
+    "detection-confidence-correlation": "src.detection_box_confidence_correlation",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
     "detection-summary":           "src.detection_summary",
@@ -183,6 +184,21 @@ Stages:
                                split/tighten/reclassify_timeline.png (one box's crop+scores per
                                round it went through, grouped by its first correction type —
                                detection-box-refine checkpoints only, needs per-box "history").
+    detection-confidence-correlation  Paper 2 Stage 5-report (docs/stage5_detection_verifier.md, no
+                               GPU needed) — answers "does the verifier's per-box confidence track
+                               real correctness at all," separately from whether
+                               detection-box-verifier-summary's own sweep found a single global
+                               --confidence_threshold worth using (a sweep landing on threshold=0.0
+                               only says no SINGLE cutoff helps on this dataset — it doesn't mean the
+                               score itself is noise). Matches every predicted box against ground
+                               truth (confidence-agnostic, same IoU matching as Variant A) to label
+                               each box matched/unmatched, then computes the point-biserial
+                               correlation between that label and the box's own stored "confidence",
+                               pooled across the whole checkpoint — same mechanic
+                               verifier-score-correlation-plot uses for the classification verifier's
+                               row-level score, applied per-box here instead. Writes (to --out_dir,
+                               default <ckpt_dir>/confidence_correlation/)
+                               box_confidence_correlation.png/.json, prints r and both group means.
     detection-final-metrics  Paper 2 Stage 5-report (docs/stage5_detection_verifier.md, no GPU
                                needed) — the actual deliverable metrics at a CHOSEN
                                (--confidence_threshold, --iou_threshold) pair (e.g. whatever
