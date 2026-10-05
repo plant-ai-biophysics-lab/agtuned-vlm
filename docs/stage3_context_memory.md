@@ -366,6 +366,40 @@ Not yet run for real (no GPU locally) — the real next step is running
 this against a full AgML disease/pest-damage sweep and checking whether
 the held-out-eval gain actually transfers to real datasets.
 
+**Splitting the work across multiple GPUs** — same `--num_shards N
+--shard_index i` mechanism as every other `vision-baseline` run (see
+[Stage 1](stage1_baseline_classification.md)'s own sharding section) —
+`--skill_memory_path` is just another flag, independent of sharding, so
+nothing extra to configure:
+
+```bash
+# 4 GPUs, one process each ($SLURM_ARRAY_TASK_ID = 0, 1, 2, 3):
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --skill_memory_path outputs_final/heldout_summarize/skill_memory_no_common_section.md \
+    --output_dir outputs_final/vision_baseline_thinking_with_skill/ \
+    --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID
+```
+
+Each shard writes its own `ckpt_<model>_shard<i>of4.csv` (never the
+canonical filename) plus its own `judge_log_shard<i>of4.jsonl`, so all 4
+can run concurrently with zero write contention. Once every shard
+finishes, merge them into the canonical checkpoint (single job, after
+all array tasks complete):
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/vision_baseline_thinking_with_skill/ \
+    --merge_shards
+```
+
+`--merge_shards` doesn't need `--skill_memory_path` — it only merges
+whatever shard files are already on disk, it doesn't regenerate
+anything. Same caveat as Stage 1: don't leave shard files sitting
+alongside the merged canonical file when pointing other tooling at this
+directory afterward.
+
 ## Planned pipeline, Step 6 (not built yet)
 
 6. **If the classification gains hold up, repeat for object detection**
