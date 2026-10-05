@@ -245,11 +245,13 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
-    parser.add_argument("--max_model_len", type=int, default=32768,
-                         help="Bumped above this pipeline's usual 16-24K default — the largest real "
-                              "bucket (pest/didnt_work) needs ~19K input tokens alone; this leaves "
-                              "headroom for the system/instruction text plus a thinking trace plus "
-                              "output on top of that.")
+    parser.add_argument("--max_model_len", type=int, default=24576,
+                         help="Same default every other stage in this pipeline uses. The largest real "
+                              "bucket (pest/didnt_work) needs ~19-20K input tokens alone, plus up to "
+                              "--map_max_tokens (2048) generated on top — still comfortably under "
+                              "this, so raise it only if your own run's bucket sizes differ a lot or "
+                              "KV-cache memory errors regardless (lower --gpu_memory_utilization or "
+                              "raise this together, per vLLM's own suggestion in that error).")
     parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET)
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
