@@ -2,9 +2,9 @@
 
 [← Back to README](../README.md)
 
-Status: **Steps 0-3 (download, zero-shot prediction, reveal-and-explain,
-map-reduce summarize into the skill `.md`) built; Step 4 (ablate) not
-started yet.** See
+Status: **Steps 0-4 (download, zero-shot prediction, reveal-and-explain,
+map-reduce summarize into the skill `.md`, ablation) all built — real
+run pending.** See
 [Stage 4](stage4_classification_verifier.md) for the verifier work this
 builds on (the leniency/evidence-contamination findings there are what
 motivated this stage).
@@ -234,15 +234,66 @@ Writes the final file to `--output_md` (default
 artifact Step 4 ablates and, if it helps, gets injected into
 `vision-baseline`/`verifier-cot`.
 
-## Planned pipeline, Step 4 (not built yet)
+**Real result**: the real `skill_memory.md` has four sections —
+Disease, Pest, Nutrient Deficiency, Healthy — each under both "What
+Worked" and "What Didn't Work", plus a final "Common Diseases, Pests,
+and Deficiencies to Know" reference list. **Zero content for quality
+grading or species/weed identification** — DigiGreen's dataset doesn't
+cover those domains at all, so there's nothing in the traces for the
+model to summarize there. This directly scopes Step 5 below: injection
+must be gated to `task_type in {disease, pest_damage}` — the only two
+`task_type_to_rubric` buckets this skill file actually has real content
+for — never applied blindly to `quality_identification`/
+`species_identification`/`weed_identification` runs, where it would be
+irrelevant context at best.
 
-4. **Ablate before trusting it** — zero-shot `judge_accuracy` on the
-   **held-out eval slice**, with vs. without the skill file injected as
-   extra context. Only a result that holds on held-out images counts as
-   a real finding, not memorization of the lesson-building slice.
+## Step 4 — ablation (built)
+
+Two `heldout-zeroshot` runs against `--split eval` (the slice no other
+step has ever touched), then one comparison:
+
+```bash
+# Without the skill file — the real baseline:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --output_dir outputs_final/heldout_zeroshot_eval_baseline/
+
+# With the skill file injected into the system prompt:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --skill_memory_path outputs_final/heldout_summarize/skill_memory.md \
+    --output_dir outputs_final/heldout_zeroshot_eval_with_skill/
+
+# Compare:
+uv run python main.py heldout-ablation-summary \
+    --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --skill_ckpt outputs_final/heldout_zeroshot_eval_with_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+`--skill_memory_path` (new flag on `heldout-zeroshot`) injects the file
+into the SYSTEM prompt only — nothing else about the generation call
+changes between the two runs, so any accuracy delta is attributable to
+the skill file itself. `--output_dir` must differ between the two runs
+(same `--model` otherwise collides on the same checkpoint path).
+
+`heldout-ablation-summary` is pure post-hoc comparison (no GPU) —
+`judge_accuracy` bar chart + JSON, with an explicit printed warning if
+the two checkpoints don't cover the identical image set (they should,
+since both come from the same seeded `--split eval`), and a blunt
+`[finding]` line if the delta is `<= 0`: **do not inject into
+vision-baseline/verifier-cot based on a non-improving or negative
+result** — the whole point of this step is to not trust the skill file
+just because it looks reasonable on paper.
+
+## Planned pipeline, Step 5 (not built yet)
+
 5. **If it helps**: inject into `vision-baseline` first (isolates the
    skill file's own effect cleanly), then `verifier-cot`'s generation
-   step and/or `verifier_rubric_fill_prompt` if it still helps there.
+   step and/or `verifier_rubric_fill_prompt` if it still helps there —
+   gated to `task_type in {disease, pest_damage}` only (see the real
+   result above), never applied to quality/species/weed runs.
 6. **If the classification gains hold up, repeat for object detection**
    ([Stage 5](stage5_detection_verifier.md)) — same mechanism (zero-shot
    predict → reveal ground truth on misses → explain → summarize into a
@@ -251,7 +302,10 @@ artifact Step 4 ablates and, if it helps, gets injected into
    `vision-baseline`/`verifier-cot`. Deliberately sequenced AFTER
    classification proves out, not in parallel — no reason to pay for a
    second, detection-specific held-out dataset/pipeline build if the core
-   idea doesn't even work for the simpler classification case first.
+   idea doesn't even work for the simpler classification case first. **Run
+   this whole stage (through Step 5's injection, if it helps) to
+   completion before starting real Stage 5 detection work** — not in
+   parallel with it.
 
 ## Open questions / not yet decided
 

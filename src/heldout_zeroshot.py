@@ -107,6 +107,19 @@ def _cls_question(crop: str) -> str:
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    if args.skill_memory_path:
+        # Step 4's ablation condition — injected into the SYSTEM prompt
+        # (not a per-row prompt edit, not touching prompts.yaml's shared
+        # assessment_system) so it's one clean toggle: run this script
+        # twice against --split eval, once with this flag and once
+        # without, and the only thing that differs between the two
+        # checkpoints is this block.
+        skill_memory = Path(args.skill_memory_path).read_text(encoding="utf-8").strip()
+        system_prompt = (
+            f"{system_prompt}\n\nReference material — lessons learned from reviewing past crop "
+            f"diagnosis attempts on similar images (use this to inform your answer, but still base "
+            f"your diagnosis on what's actually visible in THIS image):\n\n{skill_memory}"
+        )
     gen_template = prompts["assessment_classification_tagged"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
@@ -215,6 +228,12 @@ if __name__ == "__main__":
     parser.add_argument("--split", choices=["lessons", "eval"], default="lessons",
                          help="Restrict to this split — \"eval\" must never be used before Step 4's "
                               "ablation.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Step 4's ablation condition — path to heldout-summarize's own "
+                              "skill_memory.md, injected into the SYSTEM prompt. Run this script "
+                              "twice against --split eval (once with this flag, once without,  "
+                              "pointing --output_dir at two DIFFERENT folders) to measure whether it "
+                              "actually helps on held-out images.")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
     parser.add_argument("--output_dir", default="outputs_final/heldout_zeroshot/")
     parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
