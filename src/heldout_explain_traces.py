@@ -189,8 +189,14 @@ if __name__ == "__main__":
                          help="Same mechanism/default as every other generation stage — on by "
                               "default. Pass --no-enable_thinking to opt out.")
     parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja")
-    parser.add_argument("--gen_max_tokens", type=int, default=2048,
-                         help="Short explanation output, but real headroom for a thinking trace first.")
+    parser.add_argument("--gen_max_tokens", type=int, default=4096,
+                         help="Short explanation output, but real headroom for a thinking trace first "
+                              "— bumped from an original 2048 after a real run found ~5% of rows "
+                              "(40/827) truncating mid-thinking-trace, which leaves the closing "
+                              "<channel|> marker missing so extract_channel_thought's regex can't "
+                              "match and falls back to the RAW unstripped <|channel>thought...text "
+                              "leaking straight into the explanation column (confirmed: those rows' "
+                              "explanation length was 15-20x the median).")
     parser.add_argument("--chunk_size", type=int, default=64,
                          help="Rows per llm.generate() batch (checkpointed after each chunk).")
     parser.add_argument("--rerun", action="store_true")
