@@ -114,27 +114,44 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         # twice against --split eval, once with this flag and once
         # without, and the only thing that differs between the two
         # checkpoints is this block.
-        # The specificity-vs-genericity instruction below is NOT
-        # decoration — a real ablation run found the skill file causes a
-        # genuine regression without it: the model borrows the file's own
-        # CATEGORY-level phrasing ("Chewing Insects:", "Sucking Pests:")
-        # instead of committing to the specific diagnosis name (e.g.
-        # "Fall armyworm" -> "Chewing pests"), and the hybrid judge
-        # template explicitly penalizes exactly that (a generic label
-        # doesn't count as a match for a specific reference class). That
-        # regression almost exactly canceled out the file's genuine fixes
-        # in the first real run (13 wrong->correct, 11 correct->wrong,
-        # net delta +0.0101 — not a real signal at n=199). This
-        # instruction is the fix being tested, not the original design.
+        # Both instructions below are NOT decoration — real ablation runs
+        # found two distinct regressions without them (docs/stage3_context_memory.md's
+        # own Step 4 real-result log has the full flip analysis):
+        #   v1 (no instruction at all): the model borrowed the file's own
+        #     CATEGORY-level phrasing ("Chewing Insects:", "Sucking
+        #     Pests:") instead of the specific diagnosis name (e.g.
+        #     "Fall armyworm" -> "Chewing pests"), which the hybrid judge
+        #     template explicitly penalizes as not matching a specific
+        #     reference class. Net delta +0.0101 (not a real signal,
+        #     n=199) — genuine fixes almost exactly canceled out by this
+        #     regression.
+        #   v2 (specificity instruction added): delta improved to +0.0503
+        #     (18 wrong->correct, 8 correct->wrong, both better than v1),
+        #     but two failure modes persisted even with that instruction
+        #     in place: (a) "Pest"/"Disease"-type bare category words
+        #     STILL leaked through sometimes (e.g. "Diamondback moth" ->
+        #     "Pest") despite being told not to, and (b) a NEW regression
+        #     appeared — over-diagnosing genuinely healthy plants (e.g.
+        #     "Healthy" -> "Nitrogen Deficiency"), the opposite bias from
+        #     the one this whole stage started from.
+        # v3 (this version) directly names the forbidden bare words (not
+        # just "be specific" in the abstract) and adds an explicit
+        # counter-instruction against over-diagnosing healthy plants.
         skill_memory = Path(args.skill_memory_path).read_text(encoding="utf-8").strip()
         system_prompt = (
             f"{system_prompt}\n\nReference material — lessons learned from reviewing past crop "
             f"diagnosis attempts on similar images. Use it to inform your answer, but still base "
-            f"your diagnosis on what's actually visible in THIS image, and always give the MOST "
-            f"SPECIFIC diagnosis name you can (e.g. \"Fall armyworm\", not \"Chewing pests\" or "
-            f"\"Pest\"; \"Chili Leaf Curl Virus\", not \"Viral Infection\") — never answer with one "
-            f"of this reference material's own general category labels or section headers, even if "
-            f"that's the language it uses to organize the lessons below:\n\n{skill_memory}"
+            f"your diagnosis on what's actually visible in THIS image, under two firm rules:\n"
+            f"1. Always give the MOST SPECIFIC diagnosis name you can (e.g. \"Fall armyworm\", "
+            f"\"Diamondback moth\", \"Chili Leaf Curl Virus\") — NEVER answer with a bare category "
+            f"word like \"Pest\", \"Disease\", \"Deficiency\", \"Chewing pests\", \"Sucking pests\", "
+            f"or \"Viral infection\" on its own, and never answer with one of this reference "
+            f"material's own section headers, even if that's the language it uses to organize the "
+            f"lessons below.\n"
+            f"2. Do not over-diagnose a plant that actually looks healthy just because you're "
+            f"actively looking for problems — \"Healthy\" is a valid, common answer, and reading a "
+            f"problem into a healthy-looking plant is just as wrong as missing a real one.\n\n"
+            f"{skill_memory}"
         )
     gen_template = prompts["assessment_classification_tagged"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
