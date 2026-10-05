@@ -269,6 +269,16 @@ uv run python main.py heldout-zeroshot \
     --skill_memory_path outputs_final/heldout_summarize/skill_memory.md \
     --output_dir outputs_final/heldout_zeroshot_eval_with_skill/
 
+# Wrapper-only — the two firm rules (specificity, don't-over-diagnose-
+# healthy) with NO skill_memory content at all. Isolates how much of
+# v2/v3/v4's gain comes from the instructions themselves vs. the
+# skill file's actual lesson content:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --wrapper_only \
+    --output_dir outputs_final/heldout_zeroshot_eval_wrapper_only/
+
 # Compare:
 uv run python main.py heldout-ablation-summary \
     --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
@@ -302,8 +312,21 @@ was actually validated):
 | v2 | + "be specific" instruction | 0.4121 | +0.0503 | 18 / 8 |
 | v3 | + forbidden bare-words named explicitly + "don't over-diagnose healthy" | 0.4121 | +0.0503 (same net, but 12/2 — fewer of BOTH) | 12 / 2 |
 | v4 | + removed skill_memory.md's own "Common Diseases..." reference section (it repeated generic category labels like "Chewing Pests:" as standalone entries) | **0.4221** | **+0.0603** | 14 / 2 |
+| wrapper-only | `--wrapper_only` — the two firm rules alone, NO skill_memory content at all (`build_wrapper_only_system_prompt`) | TODO (run pending) | TODO | TODO |
 
 (Baseline without any skill file: 0.3618.)
+
+**Why the wrapper-only condition matters**: v2/v3/v4 always carry BOTH
+the skill file's actual lesson content AND the two firm rules together
+— so it's never been possible to tell how much of the +0.0503/+0.0603
+delta is the lessons themselves vs. just the instructions alone (the
+instructions are, after all, a form of in-context learning too — they
+tell the model what NOT to answer, independent of any example-based
+lesson content). If wrapper-only lands close to v4's 0.4221, the skill
+file's actual content isn't pulling much weight beyond what the two
+rules already buy; if it lands closer to baseline's 0.3618, that
+confirms the lesson content itself is the real driver and the rules are
+just removing a couple of specific failure modes on top of it.
 
 **Per-task breakdown** (same checkpoints, `judge_accuracy` split by
 `bucket_category(class_label)` — disease n=69, pest n=62, deficiency

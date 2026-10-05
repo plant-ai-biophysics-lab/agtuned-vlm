@@ -35,10 +35,39 @@ Real ablation history (held-out eval split, n=199, RedHatAI/gemma-4-31B-it-FP8-d
     labels, e.g. "Chewing Pests:", "Sucking Pests:", as standalone
     entries): delta +0.0603 (14 wrong->correct, 2 correct->wrong) — a
     further real improvement. THIS is the current config.
+  wrapper-only (the two firm rules below, injected with NO skill_memory
+    content at all — "baseline + wrapper instructions"): a Step 4
+    ablation added specifically to isolate how much of v2/v3/v4's gain
+    comes from the two instructions themselves (specificity,
+    don't-over-diagnose-healthy) versus the skill file's actual lesson
+    content. See build_wrapper_only_system_prompt below and
+    docs/stage3_context_memory.md's Step 4 section for the result.
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+
+def build_wrapper_only_system_prompt(base_system_prompt: str) -> str:
+    """The SAME two firm rules build_skill_system_prompt injects, with NO
+    skill_memory content appended and no "Reference material... below"
+    framing (which would dangle, pointing at lessons that don't exist
+    here) — "baseline + wrapper instructions," the ablation condition
+    that isolates whether the two instructions alone (independent of any
+    actual lesson content) account for some of v2/v3/v4's gain. Always
+    applied (unlike build_skill_system_prompt, this one has no falsy-path
+    passthrough — a caller wiring this in has already decided to use
+    it)."""
+    return (
+        f"{base_system_prompt}\n\nTwo firm rules for your diagnosis answer:\n"
+        f"1. Always give the MOST SPECIFIC diagnosis name you can (e.g. \"Fall armyworm\", "
+        f"\"Diamondback moth\", \"Chili Leaf Curl Virus\") — NEVER answer with a bare category "
+        f"word like \"Pest\", \"Disease\", \"Deficiency\", \"Chewing pests\", \"Sucking pests\", "
+        f"or \"Viral infection\" on its own.\n"
+        f"2. Do not over-diagnose a plant that actually looks healthy just because you're "
+        f"actively looking for problems — \"Healthy\" is a valid, common answer, and reading a "
+        f"problem into a healthy-looking plant is just as wrong as missing a real one."
+    )
 
 
 def build_skill_system_prompt(base_system_prompt: str, skill_memory_path: str) -> str:

@@ -32,7 +32,7 @@ import json
 from PIL import Image as PILImage
 
 from src.common.chat_prompt import render_chat_template
-from src.common.heldout_skill import build_skill_system_prompt
+from src.common.heldout_skill import build_skill_system_prompt, build_wrapper_only_system_prompt
 from src.common.io import load_prompts
 from src.common.metrics import extract_answer_tag, extract_channel_thought
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, run_judge_phase, safe_model_name
@@ -107,13 +107,18 @@ def _cls_question(crop: str) -> str:
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
+    if args.skill_memory_path and args.wrapper_only:
+        raise SystemExit("ERROR: --skill_memory_path and --wrapper_only are mutually exclusive.")
     # Wrapper text/rules lived inline here through 3 empirically-tuned
     # iterations (see the real ablation history now recorded in
     # src/common/heldout_skill.py's own module docstring) — factored out
     # to that ONE shared place so vision-baseline/verifier-cot's real
     # Step 5 injection can never drift from the exact wording this
     # ablation actually validated.
-    system_prompt = build_skill_system_prompt(prompts.get("assessment_system", ""), args.skill_memory_path)
+    if args.wrapper_only:
+        system_prompt = build_wrapper_only_system_prompt(prompts.get("assessment_system", ""))
+    else:
+        system_prompt = build_skill_system_prompt(prompts.get("assessment_system", ""), args.skill_memory_path)
     gen_template = prompts["assessment_classification_tagged"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
@@ -227,7 +232,16 @@ if __name__ == "__main__":
                               "skill_memory.md, injected into the SYSTEM prompt. Run this script "
                               "twice against --split eval (once with this flag, once without,  "
                               "pointing --output_dir at two DIFFERENT folders) to measure whether it "
-                              "actually helps on held-out images.")
+                              "actually helps on held-out images. Mutually exclusive with "
+                              "--wrapper_only.")
+    parser.add_argument("--wrapper_only", action="store_true",
+                         help="Step 4's \"baseline + wrapper instructions\" ablation condition — "
+                              "injects the SAME two firm rules --skill_memory_path's wrapper uses "
+                              "(specificity, don't-over-diagnose-healthy), but with NO skill_memory "
+                              "content at all (see build_wrapper_only_system_prompt). Isolates how "
+                              "much of the skill file's measured gain comes from the two "
+                              "instructions themselves vs. the actual lesson content. Mutually "
+                              "exclusive with --skill_memory_path.")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
     parser.add_argument("--output_dir", default="outputs_final/heldout_zeroshot/")
     parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
