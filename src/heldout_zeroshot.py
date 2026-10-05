@@ -59,6 +59,29 @@ HELDOUT_CKPT_FIELDS = [
     "judge_gt_hint", "class_list_text", "judged_correct", "judge_reasoning",
 ]
 
+# Heuristic category bucketing — used for the Step 1 trend analysis
+# (disease=60.4%/pest=32.7%/deficiency=19.4%/healthy=71.0% bucket
+# accuracy, docs/stage3_context_memory.md) and reused by
+# heldout_summarize.py (Step 3) to group explanations before
+# map-reduce summarization. Keyword-based, not exhaustive — good enough
+# for grouping, not a claim of taxonomic correctness.
+_PEST_WORDS = [
+    "aphid", "thrip", "whitefl", "mite", "borer", "caterpillar", "cutworm", "mealybug", "armyworm",
+    "psyllid", "leafminer", "jassid", "hopper", "weevil", "beetle", "worm", "fly", "bug", "slug",
+    "snail", "insect", "pest",
+]
+
+
+def bucket_category(label: str) -> str:
+    l = label.lower()
+    if l.strip() == "healthy":
+        return "healthy"
+    if "deficiency" in l:
+        return "deficiency"
+    if any(w in l for w in _PEST_WORDS):
+        return "pest"
+    return "disease"
+
 
 def load_heldout_manifest(path: Path) -> dict:
     return json.loads(path.read_text())["rows"]

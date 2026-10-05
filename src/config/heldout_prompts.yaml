@@ -87,3 +87,64 @@ heldout_explain_correct_prompt: |
 
   Respond with ONLY the explanation text — no headers, no restating the
   question.
+
+# Step 3 (heldout_summarize.py) — map phase. Summarizes ONE chunk of
+# Step 2 explanations (all from the same heuristic category + trace_type
+# bucket — see bucket_category() in heldout_zeroshot.py — split further
+# into word-count-bounded chunks when a bucket is too large for one
+# context window) into a short bullet list of RECURRING, GENERALIZABLE
+# patterns, text-only (no image — these are already-written explanations
+# about images, not the images themselves).
+# Params: {category} {trace_type_label} {n} {explanations_block}
+heldout_map_summarize_prompt: |
+  Below are {n} short explanations written about {trace_type_label} when
+  a vision-language model diagnosed crop images in the "{category}"
+  category. Each explanation describes ONE specific image's visual
+  evidence.
+
+  {explanations_block}
+
+  Summarize the RECURRING, GENERALIZABLE patterns across these
+  explanations — not a list restating each one individually, and not
+  facts about any single image. Write 4-8 bullet points covering: common
+  visual cues that correctly identify this category, common mistakes or
+  confusions to watch for, and anything distinctive about this category
+  worth remembering. Be concrete (colors, shapes, patterns, insect
+  signs) — never vague advice like "look more carefully."
+
+  Respond with ONLY the bullet list (plain "- " bullets, no headers, no
+  preamble).
+
+# Step 3 — reduce phase. Merges every chunk-level bullet summary from
+# the map phase into ONE final skill-memory .md file — the artifact
+# Step 4 ablates and, if it helps, injects into vision-baseline/
+# verifier-cot.
+# Params: {chunk_summaries_block}
+heldout_reduce_summarize_prompt: |
+  Below are bullet-point summaries gathered from reviewing a vision-
+  language model's crop diagnosis attempts, grouped by category and by
+  whether the model got it right ("what worked") or wrong ("what didn't
+  work"):
+
+  {chunk_summaries_block}
+
+  Write a single, well-organized reference document (Markdown) for
+  another instance of this same model to read BEFORE attempting crop
+  diagnosis — its job is to help that model avoid the same mistakes and
+  reuse what already works. Structure:
+
+  # Crop Diagnosis — Lessons Learned
+
+  ## What Worked
+  (organized by category — disease, pest, nutrient deficiency, healthy —
+  only include categories with real content above)
+
+  ## What Didn't Work
+  (same categories — concrete, actionable guidance, not vague warnings)
+
+  ## Common Diseases, Pests, and Deficiencies to Know
+  (a short reference list of the categories/conditions that came up,
+  with their key distinguishing visual signs)
+
+  Keep it concrete and skimmable — short bullets, not paragraphs. Do not
+  invent facts not supported by the summaries above.

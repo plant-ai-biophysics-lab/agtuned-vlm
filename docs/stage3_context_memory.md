@@ -2,8 +2,9 @@
 
 [← Back to README](../README.md)
 
-Status: **Steps 0-2 (download, zero-shot prediction, reveal-and-explain
-on misses) built; Steps 3-4 (summarize, ablate) not started yet.** See
+Status: **Steps 0-3 (download, zero-shot prediction, reveal-and-explain,
+map-reduce summarize into the skill `.md`) built; Step 4 (ablate) not
+started yet.** See
 [Stage 4](stage4_classification_verifier.md) for the verifier work this
 builds on (the leniency/evidence-contamination findings there are what
 motivated this stage).
@@ -173,14 +174,68 @@ Writes `outputs_final/heldout_explain_traces/<safe_model_name>/ckpt_<safe_model_
 — every Step 1 column passed through unchanged, plus `trace_type`
 (`"worked"`/`"didnt_work"`) and `explanation`.
 
-## Planned pipeline, Steps 3-4 (not built yet)
+**Real result** (n=827): **323 `"worked"` / 504 `"didnt_work"`**, zero
+blank explanations, ~101K words total across all explanations (confirms
+Step 3 genuinely needs map-reduce — nowhere close to fitting in one
+context window). **Found and fixed a real bug on the real run**: ~5%
+of rows (40/827) had their thinking trace truncate before the closing
+`<channel|>` marker at the original `--gen_max_tokens 2048`, so
+`extract_channel_thought`'s regex couldn't match and fell back to
+returning the RAW unstripped `<|channel>thought...` text straight into
+`explanation` (confirmed: those rows' word count was 15-20x the median).
+Fixed by bumping the default to `4096`; the 40 affected rows were
+removed from the local checkpoint so a plain resumed re-run (no
+`--rerun` needed) regenerates only those, not all 827.
 
-3. **Summarize traces into one `.md` file** — aggregate ALL of Step 2's
-   `"worked"`/`"didnt_work"` explanations (likely too much raw text for
-   one summarization call — ~800 explanations — so probably a map-reduce:
-   summarize in chunks, then merge chunk-summaries into the final file)
-   into a single skill-memory file: common diseases, what to look for,
-   confusions to watch for.
+## Step 3 — summarize into the skill `.md` (built)
+
+```bash
+uv run python main.py heldout-summarize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --ckpt outputs_final/heldout_explain_traces/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+Text-only map-reduce (no images — these are already-written explanations
+about images, not the images themselves):
+
+- **Map**: group all explanations by `(bucket_category(), trace_type)` —
+  disease/pest/deficiency/healthy x worked/didnt_work, 8 buckets. A
+  bucket whose raw explanation text would exceed `--max_words_per_chunk`
+  (default `8000`) is split further into word-bounded chunks (not
+  fixed-row-count — explanation length varies a lot). ONE
+  `heldout_map_summarize_prompt` call per chunk, producing 4-8 bullet
+  points of RECURRING, GENERALIZABLE patterns — never restating
+  individual explanations, never per-image facts.
+- **Reduce**: ONE final `heldout_reduce_summarize_prompt` call merges
+  every chunk-level bullet summary into a single Markdown document
+  (`# Crop Diagnosis — Lessons Learned`, with `## What Worked` /
+  `## What Didn't Work` / `## Common Diseases, Pests, and Deficiencies
+  to Know` sections).
+
+Chunk-building grouped by heuristic category (per your own choice over
+crop-grouping or fixed-size batches) — keeps related explanations
+together so each chunk's summary is naturally about one kind of problem,
+and maps directly onto the final `.md`'s own section structure.
+
+Map-step summaries are cached to
+`outputs_final/heldout_summarize/<safe_model_name>/chunk_summaries.json`
+after the map phase — the (cheap, 1-call) reduce phase can be re-run
+independently without re-paying for the (more expensive, ~11-call) map
+phase; `--rerun` discards the cache and redoes everything.
+
+**Real chunk sizes** (n=787, post-leak-fix-removal — will shift slightly
+once the 40 regenerated rows are back in): `pest/didnt_work` (214 rows)
+and `disease/didnt_work` (174 rows) each needed 2 chunks; the other 6
+buckets fit in 1 chunk each — **11 map calls + 1 reduce call = 12 total
+LLM calls**, not 827.
+
+Writes the final file to `--output_md` (default
+`outputs_final/heldout_summarize/skill_memory.md`) — this is the
+artifact Step 4 ablates and, if it helps, gets injected into
+`vision-baseline`/`verifier-cot`.
+
+## Planned pipeline, Step 4 (not built yet)
+
 4. **Ablate before trusting it** — zero-shot `judge_accuracy` on the
    **held-out eval slice**, with vs. without the skill file injected as
    extra context. Only a result that holds on held-out images counts as
@@ -200,8 +255,7 @@ Writes `outputs_final/heldout_explain_traces/<safe_model_name>/ckpt_<safe_model_
 
 ## Open questions / not yet decided
 
-- Final `.md` file format/length and how it gets truncated/summarized if
-  it grows too large for a single context injection.
-- Map-reduce chunking strategy for Step 3 (fixed-size batches vs. grouped
-  by heuristic category/crop) — not yet decided.
-- Script/command names for Steps 3-4 — not yet built.
+- Final `.md` file's real length/quality once a real run completes — if
+  it's still too large for a comfortable context injection even after
+  map-reduce, may need a second summarization pass over the file itself.
+- Script/command names for Step 4 — not yet built.
