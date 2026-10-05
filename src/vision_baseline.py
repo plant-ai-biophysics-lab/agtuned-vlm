@@ -47,6 +47,7 @@ from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
     load_manifest, parse_class_label,
 )
+from src.common.heldout_skill import build_skill_system_prompt
 from src.common.io import load_prompts
 from src.common.metrics import (
     contains_match, extract_answer_tag, extract_channel_thought, resolve_class, sample_class_images,
@@ -206,6 +207,20 @@ def run_batch(
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    # Paper 2 Stage 3's skill-memory file (docs/stage3_context_memory.md,
+    # heldout-summarize's own output) — a real held-out ablation (n=199)
+    # found +0.0603 judge_accuracy when this is injected, but ONLY has
+    # real content for disease/pest diagnosis (DigiGreen's dataset has no
+    # quality/species/weed content at all) — so it's gated to
+    # DISEASE_TASK_TYPES ({"disease", "pest_damage"}) per-row below, never
+    # applied to quality_identification/species_identification/
+    # weed_identification rows, where it would be irrelevant context.
+    # Built via the SAME wrapper src/common/heldout_skill.py's own
+    # ablation validated — see that module's docstring for the exact
+    # wording/why, never re-derive this wrapper text independently.
+    skill_system_prompt = (
+        build_skill_system_prompt(system_prompt, args.skill_memory_path) if args.skill_memory_path else None
+    )
     manifest = load_manifest(Path(args.manifest))
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     if args.rubric:
@@ -318,7 +333,10 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             if args.rubric:
                 question = apply_rubric(question, task_type, structured_templates, task_type_to_rubric)
 
-            preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt,
+            row_system_prompt = (
+                skill_system_prompt if skill_system_prompt and task_type in DISEASE_TASK_TYPES else system_prompt
+            )
+            preds = run_batch(llm, tokenizer, images, question, system_prompt=row_system_prompt,
                                enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens,
                                chat_template=chat_template)
 
@@ -641,6 +659,16 @@ if __name__ == "__main__":
                               "the model can reason before answering). Raise --gen_max_tokens (e.g. 512+) "
                               "when using this — the rubric prompt asks for several fields before the "
                               "final answer, on top of any thinking trace.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Paper 2 Stage 3's skill-memory file (docs/stage3_context_memory.md, "
+                              "heldout-summarize's own output) — injected into the system prompt, gated "
+                              "per-row to task_type in DISEASE_TASK_TYPES ({\"disease\", \"pest_damage\"}) "
+                              "only (the skill file has zero real content for quality/species/weed "
+                              "identification, so it's never applied to those rows). A real held-out "
+                              "ablation (n=199) found +0.0603 judge_accuracy with this injected — see "
+                              "src/common/heldout_skill.py's own docstring for the full validation "
+                              "history and exact wrapper wording used (not reconfigurable here, by "
+                              "design — the wording itself was what was validated).")
     parser.add_argument("--chat_template_path", default=None,
                          help="Override the tokenizer's own bundled chat template with a Jinja file at "
                               "this path — needed for --enable_thinking to actually do anything on some "

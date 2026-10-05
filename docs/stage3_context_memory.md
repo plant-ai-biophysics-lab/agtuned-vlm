@@ -2,9 +2,12 @@
 
 [← Back to README](../README.md)
 
-Status: **Steps 0-4 (download, zero-shot prediction, reveal-and-explain,
-map-reduce summarize into the skill `.md`, ablation) all built — real
-run pending.** See
+Status: **Steps 0-4 all built AND run for real** (ablation found a real
++0.0603 judge_accuracy gain, n=199, after 4 iterations — see Step 4's
+own real-result table below). **Step 5 built** (`vision-baseline`
+injection, gated to `task_type in {disease, pest_damage}`) but not yet
+run for real. `verifier-cot` injection and Step 6 (repeat for detection)
+still TODO. See
 [Stage 4](stage4_classification_verifier.md) for the verifier work this
 builds on (the leniency/evidence-contamination findings there are what
 motivated this stage).
@@ -287,34 +290,76 @@ vision-baseline/verifier-cot based on a non-improving or negative
 result** — the whole point of this step is to not trust the skill file
 just because it looks reasonable on paper.
 
-**Real result** (n=199): **0.3618 → 0.3719, delta = +0.0101** — not a
-real signal (95% CI on a delta this size at n=199 is roughly ±6-7pp;
-this is noise). Per-image flip analysis found WHY: 13 rows flipped
-wrong→correct, 11 flipped correct→wrong — nearly canceling out, and not
-randomly. The correct→wrong flips showed a specific, mechanistic
-regression: the model started answering with the skill file's own
-CATEGORY-level phrasing ("Chewing Insects:", "Sucking Pests:") instead
-of the specific diagnosis name (e.g. "Fall armyworm" → "Chewing pests",
-"Chili Leaf Curl Virus" → "Viral Infection") — and the hybrid judge
-template explicitly penalizes a generic label as not matching a
-specific reference class. Meanwhile the wrong→correct flips looked like
-genuine fixes (e.g. a false "Healthy" correctly caught as "Chilli Leaf
-Curl Virus" — exactly the problem this stage started from). **Fix
-applied**: `heldout-zeroshot`'s `--skill_memory_path` injection wrapper
-now explicitly instructs the model to always give the MOST SPECIFIC
-diagnosis name, never one of the reference material's own category
-labels/section headers — testing whether this recovers the regression
-while keeping the genuine fixes. Re-running the ablation with this fix
-is the next real result to look at before deciding whether to move on
-to Step 5.
+**Real result, 4 iterations, all on the SAME n=199 held-out eval split**
+(full history/exact wrapper wording now lives in
+`src/common/heldout_skill.py`'s own module docstring — the single
+source of truth so Step 5's real injection can never drift from what
+was actually validated):
 
-## Planned pipeline, Step 5 (not built yet)
+| Version | Change | judge_accuracy | Delta | wrong→correct / correct→wrong |
+|---|---|---|---|---|
+| v1 | skill file, no wrapper instructions | 0.3719 | +0.0101 (noise) | 13 / 11 |
+| v2 | + "be specific" instruction | 0.4121 | +0.0503 | 18 / 8 |
+| v3 | + forbidden bare-words named explicitly + "don't over-diagnose healthy" | 0.4121 | +0.0503 (same net, but 12/2 — fewer of BOTH) | 12 / 2 |
+| v4 | + removed skill_memory.md's own "Common Diseases..." reference section (it repeated generic category labels like "Chewing Pests:" as standalone entries) | **0.4221** | **+0.0603** | 14 / 2 |
 
-5. **If it helps**: inject into `vision-baseline` first (isolates the
-   skill file's own effect cleanly), then `verifier-cot`'s generation
-   step and/or `verifier_rubric_fill_prompt` if it still helps there —
-   gated to `task_type in {disease, pest_damage}` only (see the real
-   result above), never applied to quality/species/weed runs.
+(Baseline without any skill file: 0.3618.)
+
+v1's near-zero delta was a real, mechanistic regression, not just noise:
+the model borrowed the skill file's own CATEGORY-level phrasing
+("Chewing Insects:", "Sucking Pests:") instead of the specific diagnosis
+name (e.g. "Fall armyworm" → "Chewing pests"), which the hybrid judge
+template explicitly penalizes as not matching a specific reference
+class — canceling out genuine fixes elsewhere (e.g. a false "Healthy"
+correctly caught as "Chilli Leaf Curl Virus", exactly the problem this
+stage started from). v2 fixed most of it; v3 drove bare-category answers
+to zero and eliminated a second regression v2 introduced (over-diagnosing
+genuinely healthy plants); v4's remaining 2 regressions are
+specific-vs-specific confusions between genuinely similar conditions
+(e.g. "Tobacco Mosaic Virus" → "Tobacco Leaf Curl Virus") — a sign of
+real diagnostic difficulty, not a fixable instruction-following failure.
+
+**Methodological caveat, stated plainly**: all 4 versions were checked
+against the SAME eval split, which means this history amounts to
+informally validating against held-out data — the reported delta is
+likely somewhat optimistic relative to a true single-shot held-out test.
+**v4 is the locked-in final config** (no further iteration against this
+eval split) — a genuinely clean confirmatory number would need a fresh
+eval sample (different `--seed` on `download-heldout-digitalgreen`),
+not something this stage blocks on before Step 5.
+
+## Step 5 — inject into vision-baseline (built)
+
+`vision-baseline` only, for now (`verifier-cot`'s generation step and/or
+`verifier_rubric_fill_prompt` still TODO — isolating `vision-baseline`'s
+own effect cleanly first, same reasoning as the original plan):
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --skill_memory_path outputs_final/heldout_summarize/skill_memory_no_common_section.md \
+    ...  # your usual vision-baseline flags
+```
+
+`--skill_memory_path` injects the file into the system prompt, built via
+the exact same `build_skill_system_prompt` wrapper the ablation
+validated (now factored into `src/common/heldout_skill.py`, imported by
+both `heldout_zeroshot.py` and `vision_baseline.py` — never re-derived
+independently, so production can't silently drift from what was actually
+tested). Gated **per-row** to `task_type in DISEASE_TASK_TYPES`
+(`{"disease", "pest_damage"}`, `src/common/dataset_config.py`) — every
+other `task_type` (quality/species/weed identification) uses the plain
+system prompt unchanged, since the skill file has zero real content for
+those domains. Verified the gating logic directly: `disease`/
+`pest_damage` rows get the skill-augmented prompt, every other task_type
+and the no-flag case both correctly fall through to plain.
+
+Not yet run for real (no GPU locally) — the real next step is running
+this against a full AgML disease/pest-damage sweep and checking whether
+the held-out-eval gain actually transfers to real datasets.
+
+## Planned pipeline, Step 6 (not built yet)
+
 6. **If the classification gains hold up, repeat for object detection**
    ([Stage 5](stage5_detection_verifier.md)) — same mechanism (zero-shot
    predict → reveal ground truth on misses → explain → summarize into a

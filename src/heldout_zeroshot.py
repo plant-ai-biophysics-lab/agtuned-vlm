@@ -32,6 +32,7 @@ import json
 from PIL import Image as PILImage
 
 from src.common.chat_prompt import render_chat_template
+from src.common.heldout_skill import build_skill_system_prompt
 from src.common.io import load_prompts
 from src.common.metrics import extract_answer_tag, extract_channel_thought
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, run_judge_phase, safe_model_name
@@ -106,53 +107,13 @@ def _cls_question(crop: str) -> str:
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
-    system_prompt = prompts.get("assessment_system", "")
-    if args.skill_memory_path:
-        # Step 4's ablation condition — injected into the SYSTEM prompt
-        # (not a per-row prompt edit, not touching prompts.yaml's shared
-        # assessment_system) so it's one clean toggle: run this script
-        # twice against --split eval, once with this flag and once
-        # without, and the only thing that differs between the two
-        # checkpoints is this block.
-        # Both instructions below are NOT decoration — real ablation runs
-        # found two distinct regressions without them (docs/stage3_context_memory.md's
-        # own Step 4 real-result log has the full flip analysis):
-        #   v1 (no instruction at all): the model borrowed the file's own
-        #     CATEGORY-level phrasing ("Chewing Insects:", "Sucking
-        #     Pests:") instead of the specific diagnosis name (e.g.
-        #     "Fall armyworm" -> "Chewing pests"), which the hybrid judge
-        #     template explicitly penalizes as not matching a specific
-        #     reference class. Net delta +0.0101 (not a real signal,
-        #     n=199) — genuine fixes almost exactly canceled out by this
-        #     regression.
-        #   v2 (specificity instruction added): delta improved to +0.0503
-        #     (18 wrong->correct, 8 correct->wrong, both better than v1),
-        #     but two failure modes persisted even with that instruction
-        #     in place: (a) "Pest"/"Disease"-type bare category words
-        #     STILL leaked through sometimes (e.g. "Diamondback moth" ->
-        #     "Pest") despite being told not to, and (b) a NEW regression
-        #     appeared — over-diagnosing genuinely healthy plants (e.g.
-        #     "Healthy" -> "Nitrogen Deficiency"), the opposite bias from
-        #     the one this whole stage started from.
-        # v3 (this version) directly names the forbidden bare words (not
-        # just "be specific" in the abstract) and adds an explicit
-        # counter-instruction against over-diagnosing healthy plants.
-        skill_memory = Path(args.skill_memory_path).read_text(encoding="utf-8").strip()
-        system_prompt = (
-            f"{system_prompt}\n\nReference material — lessons learned from reviewing past crop "
-            f"diagnosis attempts on similar images. Use it to inform your answer, but still base "
-            f"your diagnosis on what's actually visible in THIS image, under two firm rules:\n"
-            f"1. Always give the MOST SPECIFIC diagnosis name you can (e.g. \"Fall armyworm\", "
-            f"\"Diamondback moth\", \"Chili Leaf Curl Virus\") — NEVER answer with a bare category "
-            f"word like \"Pest\", \"Disease\", \"Deficiency\", \"Chewing pests\", \"Sucking pests\", "
-            f"or \"Viral infection\" on its own, and never answer with one of this reference "
-            f"material's own section headers, even if that's the language it uses to organize the "
-            f"lessons below.\n"
-            f"2. Do not over-diagnose a plant that actually looks healthy just because you're "
-            f"actively looking for problems — \"Healthy\" is a valid, common answer, and reading a "
-            f"problem into a healthy-looking plant is just as wrong as missing a real one.\n\n"
-            f"{skill_memory}"
-        )
+    # Wrapper text/rules lived inline here through 3 empirically-tuned
+    # iterations (see the real ablation history now recorded in
+    # src/common/heldout_skill.py's own module docstring) — factored out
+    # to that ONE shared place so vision-baseline/verifier-cot's real
+    # Step 5 injection can never drift from the exact wording this
+    # ablation actually validated.
+    system_prompt = build_skill_system_prompt(prompts.get("assessment_system", ""), args.skill_memory_path)
     gen_template = prompts["assessment_classification_tagged"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 

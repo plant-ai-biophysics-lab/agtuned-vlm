@@ -1,0 +1,68 @@
+"""
+Paper 2, Stage 3 (docs/stage3_context_memory.md) — the ONE place that
+builds the skill-memory system-prompt wrapper, shared by every caller
+that injects it (heldout_zeroshot.py's own Step 4 ablation,
+vision_baseline.py's/verifier_cot.py's Step 5 real injection). Factored
+out specifically so the wrapper's exact wording can never drift between
+what the ablation validated and what production actually uses — the
+wording itself was empirically tuned twice against real regressions
+(see build_skill_system_prompt's own docstring), so a caller rolling its
+own slightly-different wrapper text would be injecting something never
+actually tested.
+
+Real ablation history (held-out eval split, n=199, RedHatAI/gemma-4-31B-it-FP8-dynamic):
+  v1 (no instruction at all): delta +0.0101 — not a real signal. The
+    model borrowed the skill file's own CATEGORY-level phrasing
+    ("Chewing Insects:", "Sucking Pests:") instead of the specific
+    diagnosis name (e.g. "Fall armyworm" -> "Chewing pests"), which the
+    hybrid judge template explicitly penalizes as not matching a
+    specific reference class — genuine fixes almost exactly canceled
+    out by this regression.
+  v2 (specificity instruction added): delta +0.0503 (18 wrong->correct,
+    8 correct->wrong). Two failure modes persisted: (a) bare category
+    words still leaked through sometimes despite being told not to, and
+    (b) a NEW regression appeared — over-diagnosing genuinely healthy
+    plants (e.g. "Healthy" -> "Nitrogen Deficiency"), the opposite bias
+    from the one this whole stage started from.
+  v3 (forbidden words named explicitly + healthy counter-instruction):
+    delta +0.0503 again (same net, but 12 wrong->correct / 2
+    correct->wrong this time — fewer of BOTH), zero bare-category
+    answers, healthy over-diagnosis eliminated. Remaining 2 regressions
+    were specific-vs-specific confusions (e.g. "Mosaic virus" ->
+    "Watermelon Leaf Curl Virus"), not instruction-following failures.
+  v4 (skill_memory.md's own "Common Diseases..." reference section
+    removed — that section repeated some of the same generic category
+    labels, e.g. "Chewing Pests:", "Sucking Pests:", as standalone
+    entries): delta +0.0603 (14 wrong->correct, 2 correct->wrong) — a
+    further real improvement. THIS is the current config.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def build_skill_system_prompt(base_system_prompt: str, skill_memory_path: str) -> str:
+    """base_system_prompt + skill_memory_path's own file content, wrapped
+    in the two rules the real ablation above found necessary. Returns
+    base_system_prompt UNCHANGED if skill_memory_path is falsy, so a
+    caller can always call this unconditionally
+    (build_skill_system_prompt(system_prompt, args.skill_memory_path))
+    rather than branching on the flag itself at every call site."""
+    if not skill_memory_path:
+        return base_system_prompt
+    skill_memory = Path(skill_memory_path).read_text(encoding="utf-8").strip()
+    return (
+        f"{base_system_prompt}\n\nReference material — lessons learned from reviewing past crop "
+        f"diagnosis attempts on similar images. Use it to inform your answer, but still base "
+        f"your diagnosis on what's actually visible in THIS image, under two firm rules:\n"
+        f"1. Always give the MOST SPECIFIC diagnosis name you can (e.g. \"Fall armyworm\", "
+        f"\"Diamondback moth\", \"Chili Leaf Curl Virus\") — NEVER answer with a bare category "
+        f"word like \"Pest\", \"Disease\", \"Deficiency\", \"Chewing pests\", \"Sucking pests\", "
+        f"or \"Viral infection\" on its own, and never answer with one of this reference "
+        f"material's own section headers, even if that's the language it uses to organize the "
+        f"lessons below.\n"
+        f"2. Do not over-diagnose a plant that actually looks healthy just because you're "
+        f"actively looking for problems — \"Healthy\" is a valid, common answer, and reading a "
+        f"problem into a healthy-looking plant is just as wrong as missing a real one.\n\n"
+        f"{skill_memory}"
+    )
