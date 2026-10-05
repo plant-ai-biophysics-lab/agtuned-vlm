@@ -287,6 +287,27 @@ vision-baseline/verifier-cot based on a non-improving or negative
 result** — the whole point of this step is to not trust the skill file
 just because it looks reasonable on paper.
 
+**Real result** (n=199): **0.3618 → 0.3719, delta = +0.0101** — not a
+real signal (95% CI on a delta this size at n=199 is roughly ±6-7pp;
+this is noise). Per-image flip analysis found WHY: 13 rows flipped
+wrong→correct, 11 flipped correct→wrong — nearly canceling out, and not
+randomly. The correct→wrong flips showed a specific, mechanistic
+regression: the model started answering with the skill file's own
+CATEGORY-level phrasing ("Chewing Insects:", "Sucking Pests:") instead
+of the specific diagnosis name (e.g. "Fall armyworm" → "Chewing pests",
+"Chili Leaf Curl Virus" → "Viral Infection") — and the hybrid judge
+template explicitly penalizes a generic label as not matching a
+specific reference class. Meanwhile the wrong→correct flips looked like
+genuine fixes (e.g. a false "Healthy" correctly caught as "Chilli Leaf
+Curl Virus" — exactly the problem this stage started from). **Fix
+applied**: `heldout-zeroshot`'s `--skill_memory_path` injection wrapper
+now explicitly instructs the model to always give the MOST SPECIFIC
+diagnosis name, never one of the reference material's own category
+labels/section headers — testing whether this recovers the regression
+while keeping the genuine fixes. Re-running the ablation with this fix
+is the next real result to look at before deciding whether to move on
+to Step 5.
+
 ## Planned pipeline, Step 5 (not built yet)
 
 5. **If it helps**: inject into `vision-baseline` first (isolates the
