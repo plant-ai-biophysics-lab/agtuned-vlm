@@ -212,8 +212,21 @@ about images, not the images themselves):
 - **Reduce**: ONE final `heldout_reduce_summarize_prompt` call merges
   every chunk-level bullet summary into a single Markdown document
   (`# Crop Diagnosis — Lessons Learned`, with `## What Worked` /
-  `## What Didn't Work` / `## Common Diseases, Pests, and Deficiencies
-  to Know` sections).
+  `## What Didn't Work` sections — the prompt used to also ask for a
+  `## Common Diseases, Pests, and Deficiencies to Know` reference
+  section; see the real-result note below for why that's gone).
+
+**Prompt fix (2026-10-05), applies to every future run**: both
+`heldout_map_summarize_prompt` and `heldout_reduce_summarize_prompt`
+now explicitly forbid bare-category-word bullets (e.g. a bullet whose
+entire content is just "Chewing Pests:") and the reduce prompt no
+longer asks for the "Common Diseases..." section at all. v4's real
+result (below) was produced by manually deleting that section from one
+generated file (`skill_memory_no_common_section.md`) — the GENERATOR
+itself was never fixed until now, so a fresh `heldout-summarize` run
+before this date would have reintroduced the problem. Going forward,
+`skill_memory.md` should be correct by construction, without a manual
+post-edit step.
 
 Chunk-building grouped by heuristic category (per your own choice over
 crop-grouping or fixed-size batches) — keeps related explanations
@@ -237,10 +250,13 @@ Writes the final file to `--output_md` (default
 artifact Step 4 ablates and, if it helps, gets injected into
 `vision-baseline`/`verifier-cot`.
 
-**Real result**: the real `skill_memory.md` has four sections —
-Disease, Pest, Nutrient Deficiency, Healthy — each under both "What
-Worked" and "What Didn't Work", plus a final "Common Diseases, Pests,
-and Deficiencies to Know" reference list. **Zero content for quality
+**Real result** (pre-prompt-fix run): the real `skill_memory.md` had
+four sections — Disease, Pest, Nutrient Deficiency, Healthy — each
+under both "What Worked" and "What Didn't Work", plus a "Common
+Diseases, Pests, and Deficiencies to Know" reference list that was
+later manually deleted (see the prompt-fix note above — a fresh run now
+should never produce that section in the first place). **Zero content
+for quality
 grading or species/weed identification** — DigiGreen's dataset doesn't
 cover those domains at all, so there's nothing in the traces for the
 model to summarize there. This directly scopes Step 5 below: injection

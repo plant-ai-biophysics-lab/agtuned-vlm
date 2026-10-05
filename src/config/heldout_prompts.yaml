@@ -112,6 +112,16 @@ heldout_map_summarize_prompt: |
   worth remembering. Be concrete (colors, shapes, patterns, insect
   signs) — never vague advice like "look more carefully."
 
+  IMPORTANT: this reader will eventually use these notes to NAME a
+  diagnosis. Every bullet must point toward a SPECIFIC diagnosis name
+  (e.g. "Fall armyworm", "Downy Mildew", "Nitrogen Deficiency"), never a
+  bare category label on its own ("Pest", "Disease", "Chewing pests",
+  "Sucking pests", "Viral infection"). It is fine to mention a category
+  word as part of a sentence describing what to look for, but never
+  write a bullet whose ENTIRE content IS just the category name — a
+  reader skimming for an answer must never be able to lift a bare
+  category word as if it were a valid diagnosis.
+
   Respond with ONLY the bullet list (plain "- " bullets, no headers, no
   preamble).
 
@@ -142,9 +152,15 @@ heldout_reduce_summarize_prompt: |
   ## What Didn't Work
   (same categories — concrete, actionable guidance, not vague warnings)
 
-  ## Common Diseases, Pests, and Deficiencies to Know
-  (a short reference list of the categories/conditions that came up,
-  with their key distinguishing visual signs)
+  Do NOT add a "Common Diseases/Pests/Conditions to Know" style
+  reference list, or any other section whose bullets are just bare
+  category/condition names restated as standalone entries (e.g. a
+  bullet that says only "Chewing Pests:" or "Sucking Pests:") — a reader
+  of this document will eventually need to output a SPECIFIC diagnosis
+  name, and a section like that reads as a menu of valid short answers,
+  which it is not. Every bullet anywhere in this document must point
+  toward a specific diagnosis name, never a bare category label on its
+  own.
 
   Keep it concrete and skimmable — short bullets, not paragraphs. Do not
   invent facts not supported by the summaries above.
