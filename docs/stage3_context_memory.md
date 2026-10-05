@@ -305,6 +305,33 @@ was actually validated):
 
 (Baseline without any skill file: 0.3618.)
 
+**Per-task breakdown** (same checkpoints, `judge_accuracy` split by
+`bucket_category(class_label)` — disease n=69, pest n=62, deficiency
+n=10, healthy n=58):
+
+| Version | disease | pest | deficiency | healthy |
+|---|---|---|---|---|
+| baseline | 0.2319 | 0.1452 | 0.1000 | 0.7931 |
+| v1 | 0.2319 (+0.0000) | 0.1452 (+0.0000) | 0.4000 (+0.3000) | 0.7759 (−0.0172) |
+| v2 | 0.3188 (+0.0869) | 0.2097 (+0.0645) | 0.2000 (+0.1000) | 0.7759 (−0.0172) |
+| v3 | 0.2899 (+0.0580) | 0.2097 (+0.0645) | 0.3000 (+0.2000) | 0.7931 (+0.0000) |
+| v4 | 0.2754 (+0.0435) | 0.2419 (+0.0967) | 0.3000 (+0.2000) | **0.8103 (+0.0172)** |
+
+v1's "noise" delta reads differently once split by task: it's exactly
+zero movement on disease AND pest (the two task types the skill file
+actually targets) — all of v1's +0.0101 came from deficiency, the
+smallest bucket (n=10, so +0.3000 there is 3 flipped rows), while
+healthy regressed. v2 is where disease/pest first move for real. v4's
+own biggest single-task gain is pest (+0.0967, the largest per-task
+delta of any version on any bucket except deficiency's small-n swings),
+consistent with the later finding that the full-scale AgML run's gain
+concentrated in pest_damage and was flat on disease — the eval-split
+ablation was already showing disease improving less than pest at every
+version except v2, this just wasn't called out at the time. deficiency's
+swings (+0.30, +0.10, +0.20, +0.20) are the least trustworthy numbers in
+this table — n=10 means each flipped row moves the bucket's accuracy by
+10 points.
+
 v1's near-zero delta was a real, mechanistic regression, not just noise:
 the model borrowed the skill file's own CATEGORY-level phrasing
 ("Chewing Insects:", "Sucking Pests:") instead of the specific diagnosis

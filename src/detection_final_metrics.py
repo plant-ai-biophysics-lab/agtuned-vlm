@@ -53,8 +53,13 @@ from src.detection_box_verifier_summary import compute_grid, load_rows  # noqa: 
 
 
 def compute_variant_b(rows: list[dict], confidence_threshold: float, iou_threshold: float) -> dict:
-    """{dataset: {"precision", "recall", "f1", "n_pred", "n_gt",
-    "n_matched", "chosen_subclass_counts": {subclass: n_images}}}
+    """{"overall": {...}, "per_dataset": {dataset: {...}}} — each {...} is
+    {"precision", "recall", "f1", "n_pred", "n_gt", "n_matched",
+    "chosen_subclass_counts": {subclass: n_images}}. "overall" is the SAME
+    per-image oracle selection, macro-averaged across every row in the
+    checkpoint pooled together (not a further average OF the per-dataset
+    numbers) — mirrors variant_a_all_subclasses's own overall/per_dataset
+    shape, so the two variants are directly comparable at a glance.
 
     PER-IMAGE oracle sub-class selection — not a per-dataset argmax (see
     module docstring for why that was replaced, 2026-10-02: free-text
@@ -78,49 +83,56 @@ def compute_variant_b(rows: list[dict], confidence_threshold: float, iou_thresho
     Compare against Variant A (ground-truth-agnostic, actually
     deployable) to see the gap between what's achievable today and what
     perfect sub-class selection could theoretically buy."""
-    by_dataset: dict[str, list[dict]] = {}
+    # Per-image oracle selection computed ONCE per row, tagged with its
+    # dataset — "overall" and "per_dataset" are both just different
+    # aggregations of this same flat list, so the two can never disagree
+    # about what each individual image's best sub-class was.
+    per_row: list[tuple[str, dict, str | None]] = []
     for r in rows:
-        by_dataset.setdefault(r["agml_dataset"], []).append(r)
+        pred_boxes = json.loads(r.get("pred_boxes_json") or "[]")
+        pred_boxes = [b for b in pred_boxes if b.get("confidence") is None or b["confidence"] >= confidence_threshold]
+        gt_boxes = json.loads(r.get("gt_boxes_json") or "[]")
+        subclasses = sorted({str(b.get("category_name")) for b in pred_boxes if b.get("category_name")})
 
-    out: dict[str, dict] = {}
-    for dataset, ds_rows in by_dataset.items():
-        precisions, recalls, f1s = [], [], []
-        n_pred_total = n_gt_total = n_matched_total = 0
+        best_sub, best_m = None, None
+        for sub in subclasses:
+            sub_boxes = [b for b in pred_boxes if str(b.get("category_name")) == sub]
+            cand_m = precision_recall_f1(*match_boxes(sub_boxes, gt_boxes, iou_threshold))
+            if best_m is None or (cand_m["f1"], cand_m["precision"]) > (best_m["f1"], best_m["precision"]):
+                best_sub, best_m = sub, cand_m
+        if best_m is None:
+            best_m = precision_recall_f1(*match_boxes([], gt_boxes, iou_threshold))
+
+        per_row.append((r["agml_dataset"], best_m, best_sub))
+
+    def _aggregate(entries: list[tuple[dict, str | None]]) -> dict:
+        n = len(entries)
+        precisions = [m["precision"] for m, _ in entries]
+        recalls = [m["recall"] for m, _ in entries]
+        f1s = [m["f1"] for m, _ in entries]
         chosen_counts: dict[str, int] = {}
-
-        for r in ds_rows:
-            pred_boxes = json.loads(r.get("pred_boxes_json") or "[]")
-            pred_boxes = [b for b in pred_boxes if b.get("confidence") is None or b["confidence"] >= confidence_threshold]
-            gt_boxes = json.loads(r.get("gt_boxes_json") or "[]")
-            subclasses = sorted({str(b.get("category_name")) for b in pred_boxes if b.get("category_name")})
-
-            best_sub, best_m = None, None
-            for sub in subclasses:
-                sub_boxes = [b for b in pred_boxes if str(b.get("category_name")) == sub]
-                cand_m = precision_recall_f1(*match_boxes(sub_boxes, gt_boxes, iou_threshold))
-                if best_m is None or (cand_m["f1"], cand_m["precision"]) > (best_m["f1"], best_m["precision"]):
-                    best_sub, best_m = sub, cand_m
-            if best_m is None:
-                best_m = precision_recall_f1(*match_boxes([], gt_boxes, iou_threshold))
-
-            if best_sub is not None:
-                chosen_counts[best_sub] = chosen_counts.get(best_sub, 0) + 1
-            precisions.append(best_m["precision"])
-            recalls.append(best_m["recall"])
-            f1s.append(best_m["f1"])
-            n_pred_total += best_m["n_pred"]
-            n_gt_total += best_m["n_gt"]
-            n_matched_total += best_m["n_matched"]
-
-        n = len(ds_rows)
-        out[dataset] = {
+        for _m, sub in entries:
+            if sub is not None:
+                chosen_counts[sub] = chosen_counts.get(sub, 0) + 1
+        return {
             "precision": round(sum(precisions) / n, 4) if n else 0.0,
             "recall": round(sum(recalls) / n, 4) if n else 0.0,
             "f1": round(sum(f1s) / n, 4) if n else 0.0,
-            "n_pred": n_pred_total, "n_gt": n_gt_total, "n_matched": n_matched_total,
+            "n_pred": sum(m["n_pred"] for m, _ in entries),
+            "n_gt": sum(m["n_gt"] for m, _ in entries),
+            "n_matched": sum(m["n_matched"] for m, _ in entries),
             "chosen_subclass_counts": dict(sorted(chosen_counts.items(), key=lambda kv: -kv[1])),
         }
-    return out
+
+    overall = _aggregate([(m, sub) for _ds, m, sub in per_row])
+    per_dataset: dict[str, dict] = {}
+    by_dataset: dict[str, list[tuple[dict, str | None]]] = {}
+    for ds, m, sub in per_row:
+        by_dataset.setdefault(ds, []).append((m, sub))
+    for dataset, entries in sorted(by_dataset.items()):
+        per_dataset[dataset] = _aggregate(entries)
+
+    return {"overall": overall, "per_dataset": per_dataset}
 
 
 def main(args: argparse.Namespace) -> None:
@@ -170,8 +182,10 @@ def main(args: argparse.Namespace) -> None:
     for dataset, m in sorted(variant_a_per_dataset.items()):
         print(f"    {dataset}: P={m['precision']:.3f} R={m['recall']:.3f} F1={m['f1']:.3f}")
     print()
-    print("  Variant B (per-image oracle sub-class selection — ORACLE/upper bound, not deployable):")
-    for dataset, m in sorted(variant_b.items()):
+    print(f"  Variant B (per-image oracle sub-class selection — ORACLE/upper bound, not deployable) — "
+          f"overall: P={variant_b['overall']['precision']:.3f} R={variant_b['overall']['recall']:.3f} "
+          f"F1={variant_b['overall']['f1']:.3f}")
+    for dataset, m in sorted(variant_b["per_dataset"].items()):
         top = next(iter(m["chosen_subclass_counts"]), None)
         top_str = f"{top!r} ({m['chosen_subclass_counts'][top]} image(s))" if top else "n/a"
         print(f"    {dataset}: P={m['precision']:.3f} R={m['recall']:.3f} F1={m['f1']:.3f}  "
