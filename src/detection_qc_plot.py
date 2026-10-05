@@ -35,6 +35,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import csv
+csv.field_size_limit(2**31 - 1)  # Python's 131072-byte default is too small for a full
+# (non-smoketest) run's pred_boxes_json/refinement_stats fields — many boxes x full
+# refinement history per row routinely exceeds it, raising _csv.Error: field larger
+# than field limit. 2**31-1 (not sys.maxsize) because csv's C extension passes this
+# straight to a C long, which overflows on some platforms at sys.maxsize.
 import json
 import random
 from collections import defaultdict
