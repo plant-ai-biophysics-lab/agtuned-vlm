@@ -1,5 +1,5 @@
 """
-Paper 2, Stage 4 — top3 verifier_rubric correct-and-reverify. Classification
+Paper 2, Stage 5 — top3 verifier_rubric correct-and-reverify. Classification
 analog of detection_box_refine.py's mechanism, applied to a
 --verifier_type top3 --top3_mode verifier_rubric checkpoint (already
 graded once — this script never re-does round 1's generation/evidence-

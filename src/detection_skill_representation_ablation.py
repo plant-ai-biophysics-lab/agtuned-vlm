@@ -1,5 +1,5 @@
 """
-Paper 2, Stage 4 DRAFT (docs/stage4_detection_context_memory_DRAFT.md),
+Paper 2, Stage 4 (docs/stage4_detection_context_memory.md),
 Step -1 — box-representation ablation, THREE conditions. Answers two
 questions BEFORE the detection skill-memory pipeline's own Step 2
 (explain traces) gets built for real:

@@ -2,7 +2,7 @@
 comparison (no GPU, no model).
 
 Same idea as vision_baseline.py's own "Baseline with rubric" (--rubric) and
-verifier_cot.py's rubric-shaped generation step (docs/stage4_classification_verifier.md),
+verifier_cot.py's rubric-shaped generation step (docs/stage5_classification_verifier.md),
 applied to the spatial task: does
 answering a fill-in-the-blank localization checklist (object/class,
 location, occlusion, size — src/config/verifier_prompts_detection.yaml's
@@ -12,7 +12,7 @@ precision/recall/F1, at an equal image budget and no tournament/verifier
 machinery at all — just two single-shot prompts.
 
 Thin wrapper over src/common/bbox_summary.py's condition-generic
-comparison core — see src/detection_summary.py (Stage 5-report, Baseline
+comparison core — see src/detection_summary.py (Stage 6-report, Baseline
 vs Verifier) for the other script sharing that same core.
 
 Every condition is filtered to the EXACT (agml_dataset, image_name) pairs

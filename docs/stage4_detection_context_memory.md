@@ -1,13 +1,9 @@
-# Paper 2, Stage 4 (DRAFT) — Detection Context/Skill Memory Construction
+# Paper 2, Stage 4 — Detection Context/Skill Memory Construction
 
-**Status: design sketch, not yet built. Filename is a placeholder** —
-this will become `docs/stage4_detection_context_memory.md` once the
-stage renumbering sweep happens (current Stage 4 onward shifts down by
-one: classification verifier 4→5, detection verifier 5→6, ReAct
-baseline 6→7; current `docs/stage3_context_memory.md` gets renamed to
-`stage3_classification_context_memory.md` to disambiguate from this
-one). Not doing that sweep yet, on purpose — want the design settled
-first so the renumbering happens once, not twice.
+[← Back to README](../README.md)
+
+**Status: design sketch — Step −1 built (`detection-skill-representation-ablation`),
+not yet run for real. Steps 0-5 still TODO.**
 
 ## Why this stage exists
 
@@ -45,7 +41,7 @@ discrepancies, per-sample generation) is shared:
 - **(b) Rendered overlay, full image**: both boxes drawn on the actual
   image (predicted solid lime, ground truth dashed red — the SAME
   convention `src/common/bbox_viz.py`'s `plot_predictions` already uses
-  throughout Stage 5's own QC tooling, not a new drawing convention to
+  throughout Stage 6's own QC tooling, not a new drawing convention to
   invent). Turns the task into "describe what's visually wrong with
   this overlay" — a vision task, not a numeric-reasoning task.
 - **(c) Rendered overlay, CROPPED**: same drawing as (b), but on a
@@ -104,7 +100,7 @@ extra clutter. Reading the 30 outputs is what decides, not intuition.
 **Decided**: hold out ENTIRE datasets, not a stratified slice of
 images within the existing pool. A handful of Project-AgML detection
 datasets (TBD which, once Step 0 is actually built) are carved out
-completely — never sampled into Stage 2/Stage 5's own eval runs at
+completely — never sampled into Stage 2/Stage 6's own eval runs at
 all — mirroring DigiGreen's complete independence from the
 classification eval pool. Cleaner separation than a stratified-image
 split: no risk of a dataset's own images being similar enough to each

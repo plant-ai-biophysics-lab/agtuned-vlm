@@ -1,5 +1,5 @@
 """
-Paper 2 Stage 5 — Final metrics at a CHOSEN (confidence_threshold,
+Paper 2 Stage 6 — Final metrics at a CHOSEN (confidence_threshold,
 iou_threshold) pair, over a detection-box-refine (or
 detection-box-verifier) checkpoint (no GPU, no model).
 
@@ -22,7 +22,7 @@ metrics at whichever combination you've settled on, in two variants:
   image's own ground truth and keep whichever gives the highest F1 —
   then score the image on only that sub-class's boxes, macro-averaged
   across the dataset. Deliberately PER-IMAGE, not a per-dataset argmax
-  (an earlier version was — see git history/docs/stage5_detection_verifier.md):
+  (an earlier version was — see git history/docs/stage6_detection_verifier.md):
   free-text labels vary in wording across images for the same real
   stage ("flower: open" vs "flower: open yellow"), which fragmented a
   per-dataset grouping into many small, individually weak buckets.

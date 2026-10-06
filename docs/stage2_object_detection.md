@@ -4,7 +4,7 @@
 
 A leftover from Paper 1: every prior stage in this repo classifies a whole image into a single label. Project-AgML also has genuine object-detection datasets (bounding boxes, not a single class per image). This stage is the spatial-task analog of [Stage 1](stage1_baseline_classification.md) — **Detection-Baseline**: direct box prediction, no reasoning, no rubric, no tournament/verifier machinery.
 
-Rubric and verifier conditions for detection are [Stage 5](stage5_detection_verifier.md) — design not started yet, deferred until these baseline runs are done. `detection-baseline --rubric` and `detection-rubric-summary` still exist in the code if you want to try them early, just not covered here.
+Rubric and verifier conditions for detection are [Stage 6](stage6_detection_verifier.md) — design not started yet, deferred until these baseline runs are done. `detection-baseline --rubric` and `detection-rubric-summary` still exist in the code if you want to try them early, just not covered here.
 
 ## Step 0 — build the detection dataset manifest
 

@@ -1,6 +1,6 @@
 """
-Paper 2, Stage 4 — Verifier QC plot. See
-docs/stage4_classification_verifier.md. No GPU, no model calls, no
+Paper 2, Stage 5 — Verifier QC plot. See
+docs/stage5_classification_verifier.md. No GPU, no model calls, no
 network — reads an already-graded `verifier-cot` checkpoint CSV plus
 whatever real dataset images are already cached locally under
 --images_root (globbed directly, never re-downloaded/re-cached — this is

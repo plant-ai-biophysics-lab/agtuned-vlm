@@ -8,13 +8,13 @@ own real-result table below). **Step 5 built** (`vision-baseline`
 injection, gated to `task_type in {disease, pest_damage}`) but not yet
 run for real. `verifier-cot` injection and Step 6 (repeat for detection)
 still TODO. See
-[Stage 4](stage4_classification_verifier.md) for the verifier work this
+[Stage 5](stage5_classification_verifier.md) for the verifier work this
 builds on (the leniency/evidence-contamination findings there are what
 motivated this stage).
 
 ## Why this stage exists
 
-Stage 4's `verifier_rubric` refinement work surfaced a specific, concrete
+Stage 5's `verifier_rubric` refinement work surfaced a specific, concrete
 failure mode in the classification model's own domain knowledge — not a
 vague "the model doesn't know enough," but reproducible confusions found
 directly in transcripts (e.g. Lentil Rust mistaken for phosphorus
@@ -134,7 +134,7 @@ re-checking):
 - **Nutrient deficiency is also weak** (19.4% bucket accuracy, n=36 —
   suggestive, not solid) — frequently confused with disease or missed
   entirely, consistent with the Lentil-Rust/phosphorus-deficiency
-  confusion already found in Stage 4's own transcripts.
+  confusion already found in Stage 5's own transcripts.
 - **Strong crop-dependent variance**, not a uniform knowledge gap: Wheat
   (0.81) and Mustard (0.78) are strong; Brinjal (0.13), Banana (0.24),
   Mango (0.25), Groundnut (0.27), Tobacco (0.28) are weak.
@@ -495,7 +495,7 @@ directory afterward.
 ## Planned pipeline, Step 6 (not built yet)
 
 6. **If the classification gains hold up, repeat for object detection**
-   ([Stage 5](stage5_detection_verifier.md)) — same mechanism (zero-shot
+   ([Stage 6](stage6_detection_verifier.md)) — same mechanism (zero-shot
    predict → reveal ground truth on misses → explain → summarize into a
    skill file → ablate on a held-out detection slice before trusting it),
    applied to `detection-multiclass`/`detection-box-verifier` instead of
@@ -504,7 +504,7 @@ directory afterward.
    second, detection-specific held-out dataset/pipeline build if the core
    idea doesn't even work for the simpler classification case first. **Run
    this whole stage (through Step 5's injection, if it helps) to
-   completion before starting real Stage 5 detection work** — not in
+   completion before starting real Stage 6 detection work** — not in
    parallel with it.
 
 ## Open questions / not yet decided

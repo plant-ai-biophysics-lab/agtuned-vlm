@@ -1,4 +1,4 @@
-# Paper 2, Stage 4 — Classification Verifier (Rubric Grading)
+# Paper 2, Stage 5 — Classification Verifier (Rubric Grading)
 
 [← Back to README](../README.md)
 
@@ -224,7 +224,7 @@ different from `explicit`/`resample`.
 
 ### Correct-and-reverify (`verifier-cot-top3-refine`)
 
-Classification analog of [Stage 5's](stage5_detection_verifier.md)
+Classification analog of [Stage 6's](stage6_detection_verifier.md)
 `detection-box-refine` — acts on the `verifier_rubric` checkpoint you
 already graded above, rather than re-grading from scratch. For each row
 whose **winning** candidate scored `<= 2` on any rubric criterion: one

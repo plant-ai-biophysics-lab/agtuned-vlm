@@ -3,15 +3,15 @@ Verifier-CoT — interchangeable verifier mechanisms over the same
 structured, criteria-based candidate generation (vprompts["structured_templates"],
 filled with the task's rubric), selected via --verifier_type:
 
-- **simple** (default, Paper 2 Stage 4, see docs/stage4_classification_verifier.md) —
+- **simple** (default, Paper 2 Stage 5, see docs/stage5_classification_verifier.md) —
   generate exactly ONE trajectory (no K-candidate pool), then grade it
   against EACH numbered rubric criterion independently on a 1-3 scale
   (vprompts["grading_prompt"], run_group_simple), summed and normalized to
   [0, 1] as verifier_score. No tournament, no pairwise duel — a
   deliberately cheaper, coarser signal, testing whether it still
   correlates with correctness enough to be useful as a stopping/feedback
-  gate (e.g. in the ReAct setup, docs/stage6_react_baseline.md).
-- **top3** (Paper 2 Stage 4, see docs/stage4_classification_verifier.md) —
+  gate (e.g. in the ReAct setup, docs/stage7_react_baseline.md).
+- **top3** (Paper 2 Stage 5, see docs/stage5_classification_verifier.md) —
   same idea as simple, but draws N (default 3) independent trajectories
   per image in ONE generation call (vLLM's own SamplingParams(n=...),
   same mechanism ppt's K-candidate pool below uses), then grades EACH
@@ -450,7 +450,7 @@ def run_group_simple(
     chat_template: str | None = None, grading_max_tokens: int = 300,
     existing_trajectories: dict[str, str] | None = None,
 ) -> list[dict]:
-    """--verifier_type simple (Paper 2 Stage 4, docs/stage4_classification_verifier.md):
+    """--verifier_type simple (Paper 2 Stage 5, docs/stage5_classification_verifier.md):
     ONE trajectory per image (no K-candidate pool, no PPT tournament) via
     the same structured fill-in-the-blank template run_group's ppt mode
     uses, then a single text-only grading call that scores the trajectory
@@ -815,7 +815,7 @@ def run_group_top3(
             seed=seed, enable_thinking=enable_thinking, gen_max_tokens=gen_max_tokens,
             chat_template=chat_template, grading_max_tokens=grading_max_tokens, n_candidates=n_candidates,
         )
-    """--verifier_type top3 (Paper 2 Stage 4, docs/stage4_classification_verifier.md):
+    """--verifier_type top3 (Paper 2 Stage 5, docs/stage5_classification_verifier.md):
     generates an N-candidate pool per image, then grades EACH candidate
     independently via the exact same per-criterion rubric grading call
     run_group_simple uses (vprompts["grading_prompt"]), batched into one
@@ -1578,7 +1578,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         # mode's top1_win_rate. For top3, verifier_score is the WINNING
         # candidate's score (see run_group_top3/_result_row). Not a
         # separate stage/script since it's a handful of numbers, not a
-        # chart — see docs/stage4_classification_verifier.md.
+        # chart — see docs/stage5_classification_verifier.md.
         vs_rows = [r for r in rows if r.get("verifier_score") not in (None, "")]
         judge_key = "judged_correct" if any(r.get("judged_correct") not in (None, "") for r in vs_rows) else "correct"
         vs_scored = [r for r in vs_rows if r.get(judge_key) not in (None, "")]
@@ -1775,11 +1775,11 @@ if __name__ == "__main__":
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
     parser.add_argument("--verifier_type", choices=["simple", "top3", "ppt"], default="simple",
-                         help="\"simple\" (default, Paper 2 Stage 4, docs/stage4_classification_verifier.md): "
+                         help="\"simple\" (default, Paper 2 Stage 5, docs/stage5_classification_verifier.md): "
                               "ONE trajectory per image, graded against each rubric criterion "
                               "independently on a 1-3 scale, summed/normalized to verifier_score — "
                               "no K-candidate pool, no tournament. "
-                              "\"top3\" (Paper 2 Stage 4, docs/stage4_classification_verifier.md): same "
+                              "\"top3\" (Paper 2 Stage 5, docs/stage5_classification_verifier.md): same "
                               "per-criterion grading as simple, but draws --top3_n_candidates (default "
                               "3) independent trajectories per image in one generation call and grades "
                               "each independently — the highest-verifier_score candidate wins "

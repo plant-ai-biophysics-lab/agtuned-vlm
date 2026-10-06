@@ -1,7 +1,7 @@
 """
-Stage 5, Step 2 — Detection Box Refine: iterative correct-and-reverify
+Stage 6, Step 2 — Detection Box Refine: iterative correct-and-reverify
 loop on top of detection-box-verifier's own crop/grade mechanism. See
-docs/stage5_detection_verifier.md for the full design rationale —
+docs/stage6_detection_verifier.md for the full design rationale —
 summarized here.
 
 detection-box-verifier only GRADES (confidence in, nothing out but a

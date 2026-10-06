@@ -170,8 +170,23 @@ Stages:
                                structured generation uses, no tournament machinery — use a
                                different --output_dir than the plain run) also exists but isn't
                                part of Stage 2's current scope; rubric/verifier conditions for
-                               detection are deferred to Stage 5 (docs/stage5_detection_verifier.md).
-    detection-multiclass  Paper 2 Stage 5 (docs/stage5_detection_verifier.md) — same single-shot
+                               detection are deferred to Stage 6 (docs/stage6_detection_verifier.md).
+    detection-skill-representation-ablation  Paper 2 Stage 4, Step -1
+                               (docs/stage4_detection_context_memory.md) — QUALITATIVE (no score, no
+                               metric), answers how a model should be shown its own box prediction
+                               vs. ground truth when later asked to explain a mistake: (a) raw
+                               [x1,y1,x2,y2] coordinates as text, full image, (b) both boxes drawn on
+                               the full image (predicted solid lime, ground truth dashed red), or (c)
+                               the same drawing on a tight, padded crop around just the box(es)
+                               involved (padded UNION when two boxes are present, so neither gets cut
+                               off). Source: a detection-multiclass checkpoint (real local metrics
+                               showed it beating plain detection-baseline on F1/recall). Samples up to
+                               30 box-level DISCREPANCIES (false_positive/missed/loose_match, not
+                               every box), one at a time, 3 generation calls each, and writes ONE
+                               comparison PNG per sample (question, full + cropped annotated images,
+                               all three responses) for a human to read before Step 2 (explain traces)
+                               gets built for real.
+    detection-multiclass  Paper 2 Stage 6 (docs/stage6_detection_verifier.md) — same single-shot
                                box prediction as detection-baseline, but the prompt asks the model
                                to report EVERY visible instance at ANY growth stage/condition
                                (e.g. bud/open/dead flower), labeling each box with its own
@@ -183,7 +198,7 @@ Stages:
                                (bbox_metrics.match_boxes), unchanged from detection-baseline — only
                                the prompt and each box's stage label differ. --smoketest restricts
                                to GEMINI_cowpea_flower_detection + GEMINI_cowpea_pod_detection.
-    detection-box-verifier  Paper 2 Stage 5, Step 1 (docs/stage5_detection_verifier.md) — per-box
+    detection-box-verifier  Paper 2 Stage 6, Step 1 (docs/stage6_detection_verifier.md) — per-box
                                confidence grading over a detection-multiclass checkpoint: crops
                                each predicted box (padded, --crop_pad_frac) and shows ONLY that
                                crop to a verifier model, independent of the other boxes/full
@@ -196,7 +211,7 @@ Stages:
                                alongside, so metrics.json reports unfiltered vs. filtered
                                precision/recall/F1 side by side for direct comparison. Scoring
                                stays class-agnostic IoU matching, unchanged from detection-baseline.
-    detection-box-verifier-summary  Paper 2 Stage 5, Step 1-report (docs/stage5_detection_verifier.md,
+    detection-box-verifier-summary  Paper 2 Stage 6, Step 1-report (docs/stage6_detection_verifier.md,
                                no GPU needed) — sweeps confidence_threshold (0.0-0.9) x iou_threshold
                                (0.3/0.5/0.75) directly from a detection-box-verifier checkpoint's
                                already-stored per-box confidence (pure CPU re-filtering/re-matching,
@@ -211,7 +226,7 @@ Stages:
                                split/tighten/reclassify_timeline.png (one box's crop+scores per
                                round it went through, grouped by its first correction type —
                                detection-box-refine checkpoints only, needs per-box "history").
-    detection-confidence-correlation  Paper 2 Stage 5-report (docs/stage5_detection_verifier.md, no
+    detection-confidence-correlation  Paper 2 Stage 6-report (docs/stage6_detection_verifier.md, no
                                GPU needed) — answers "does the verifier's per-box confidence track
                                real correctness at all," separately from whether
                                detection-box-verifier-summary's own sweep found a single global
@@ -226,7 +241,7 @@ Stages:
                                row-level score, applied per-box here instead. Writes (to --out_dir,
                                default <ckpt_dir>/confidence_correlation/)
                                box_confidence_correlation.png/.json, prints r and both group means.
-    detection-final-metrics  Paper 2 Stage 5-report (docs/stage5_detection_verifier.md, no GPU
+    detection-final-metrics  Paper 2 Stage 6-report (docs/stage6_detection_verifier.md, no GPU
                                needed) — the actual deliverable metrics at a CHOSEN
                                (--confidence_threshold, --iou_threshold) pair (e.g. whatever
                                detection-box-verifier-summary's sweep found best), in two variants:
@@ -237,7 +252,7 @@ Stages:
                                whichever wins; an upper bound, since the selection itself looks at
                                ground truth, not something a real filter could do). Writes
                                final_metrics_conf<X>_iou<Y>.json.
-    detection-comparison-summary  Paper 2 Stage 5, Step 4-report (docs/stage5_detection_verifier.md,
+    detection-comparison-summary  Paper 2 Stage 6, Step 4-report (docs/stage6_detection_verifier.md,
                                no GPU needed) — grouped bar chart comparing 4 conditions at the SAME
                                --iou_threshold: Baseline (--baseline_ckpt, plain detection-multiclass/
                                -baseline, no confidence field — drawn as a dashed red REFERENCE LINE,
@@ -247,7 +262,7 @@ Stages:
                                detection-box-refine, unfiltered), Verifier+refine+filter
                                (--refine_ckpt again, filtered). Precision/Recall/F1 on the x-axis.
                                Writes comparison_conf<X>_iou<Y>.png/.json.
-    detection-box-refine  Paper 2 Stage 5, Step 2 (docs/stage5_detection_verifier.md) — iterative
+    detection-box-refine  Paper 2 Stage 6, Step 2 (docs/stage6_detection_verifier.md) — iterative
                                correct-and-reverify loop on top of detection-box-verifier's own
                                crop/grade mechanism (box_rubric, now 3 criteria). Any criterion
                                scoring <= 2 triggers a real corrective generation call (unlike
@@ -280,14 +295,14 @@ Stages:
                                detection-baseline --rubric at an equal image budget (mean
                                precision/recall/F1/IoU with 95% CI, per-dataset breakdown, F1 vs.
                                IoU-threshold sweep) — no GPU needed.
-    verifier-cot    --verifier_type simple (default, Paper 2 Stage 4, docs/stage4_classification_verifier.md):
+    verifier-cot    --verifier_type simple (default, Paper 2 Stage 5, docs/stage5_classification_verifier.md):
                                ONE trajectory per image, graded against each rubric criterion
                                independently on a 1-3 scale, summed/normalized to verifier_score in
                                [0, 1] — no K-candidate pool, no tournament. Reports a point-biserial
                                correlation between verifier_score and judged correctness in
                                metrics.json, to see whether this cheaper signal is usable as a
                                filter/gate before adopting it elsewhere (e.g. react-baseline).
-                               --verifier_type top3 (Paper 2 Stage 4, docs/stage4_classification_verifier.md):
+                               --verifier_type top3 (Paper 2 Stage 5, docs/stage5_classification_verifier.md):
                                same per-criterion grading, but draws --top3_n_candidates (default 3)
                                independent trajectories per image in ONE generation call and grades
                                each independently — no tournament, just N absolute scores. The
@@ -325,14 +340,14 @@ Stages:
                                run's own ckpt CSV + verifier_log.jsonl, to see whether the
                                fine-grained-reward score is discriminating (or inverted/collapsed)
                                BEFORE picking a fix. --model/--output_dir or --verifier_dir.
-    verifier-score-correlation-plot — Paper 2 Stage 4 (docs/stage4_classification_verifier.md,
+    verifier-score-correlation-plot — Paper 2 Stage 5 (docs/stage5_classification_verifier.md,
                                no GPU needed): turns metrics.json's verifier_score_correlation (a
                                handful of numbers) into ONE PNG — verifier_score split by judged
                                correctness, box+jittered-strip and an overlaid histogram side by
                                side, annotated with point-biserial r and both group means
                                (recomputed from --ckpt directly, not trusted from metrics.json).
                                Works for both --verifier_type simple and top3 checkpoints.
-    verifier-cot-qc-plot       — Paper 2 Stage 4 (docs/stage4_classification_verifier.md, no GPU
+    verifier-cot-qc-plot       — Paper 2 Stage 5 (docs/stage5_classification_verifier.md, no GPU
                                needed): (1) a rubric gallery — --n_datasets (default 10) random
                                datasets x --n_per_dataset (default 3) random images, each shown
                                next to its ground_truth/verifier_score/criterion_scores (raw JSON
@@ -344,7 +359,7 @@ Stages:
                                verifier_prompts.yaml's task_type_to_rubric). Images resolved by
                                globbing whatever's already cached under --images_root (never
                                downloads/re-caches — read-only QC, not a generation script).
-    verifier-cot-qc-plot-top3 — Paper 2 Stage 4 (docs/stage4_classification_verifier.md, no GPU
+    verifier-cot-qc-plot-top3 — Paper 2 Stage 5 (docs/stage5_classification_verifier.md, no GPU
                                needed): same idea as verifier-cot-qc-plot but for a
                                --verifier_type top3 checkpoint (any --top3_mode). (1) a candidate
                                gallery — each sampled image next to ALL 3 candidate predictions
@@ -361,7 +376,7 @@ Stages:
                                (same numbers as metrics.json's top3_pool_analysis).
                                --n_datasets/--n_per_dataset/--max_rows_per_figure/--images_root
                                same meaning as verifier-cot-qc-plot.
-    verifier-cot-top3-refine  — Paper 2 Stage 4 (docs/stage4_classification_verifier.md, needs
+    verifier-cot-top3-refine  — Paper 2 Stage 5 (docs/stage5_classification_verifier.md, needs
                                GPU/model): classification analog of detection-box-refine, applied to
                                an already-graded --verifier_type top3 --top3_mode verifier_rubric
                                checkpoint. For each row whose winning candidate scored <= 2 on any
@@ -379,7 +394,7 @@ Stages:
                                verifier_picked_correct) pass through UNCHANGED, so
                                verifier-cot-qc-plot-top3's pool_summary chart still reflects round 1
                                only when run against this output.
-    verifier-cot-comparison-summary — Paper 2 Stage 4 (docs/stage4_classification_verifier.md, no
+    verifier-cot-comparison-summary — Paper 2 Stage 5 (docs/stage5_classification_verifier.md, no
                                GPU needed): bar chart — vision-baseline (--baseline_ckpt, filtered to
                                just the datasets --verifier_rubric_ckpt actually covers, drawn as a
                                dashed red reference line) vs. --verifier_rubric_ckpt (top3
@@ -486,7 +501,7 @@ Stages:
                                outputs_final/, so it's git-tracked for reproducibility — name it
                                judge_qa_review_v<N>.csv per the --variant_ckpt you're reviewing).
     collate         Stage 6 — collate all stage metrics into results_table.csv / .tex
-    react-build-tasks  Stage 6 (Paper 2/6) — builds a PERSISTED --tasks_jsonl file for
+    react-build-tasks  Stage 7 (Paper 2/7) — builds a PERSISTED --tasks_jsonl file for
                                react-baseline (below) from REAL AgML images: same
                                active_datasets/load_hf_samples/sample_class_images sampling AND the
                                same cls_question() prompt text vision_baseline.py itself uses (pass
@@ -499,7 +514,7 @@ Stages:
                                react-baseline's own --sample_images does the same sampling
                                IN-MEMORY (no file) for a one-off run — use this script instead when
                                you want the task list reviewable/reusable across multiple runs. See
-                               docs/stage6_react_baseline.md.
+                               docs/stage7_react_baseline.md.
     react-baseline  Stage 6 (Paper 2/6) — a tool-using ReAct agent (src/baselines/) over a
                                locally-served vLLM model's own native tool calling (same
                                load_llm/render_chat_template machinery as every other script here,
@@ -520,7 +535,7 @@ Stages:
                                elapsed_seconds; browse with `streamlit run
                                app/react_baseline_viewer.py`. Defaults in
                                src/config/react_baseline_config.yaml — see
-                               docs/stage6_react_baseline.md.
+                               docs/stage7_react_baseline.md.
 
 Examples:
     python main.py probe \\

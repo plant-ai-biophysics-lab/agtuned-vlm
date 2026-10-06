@@ -1,11 +1,11 @@
 """
-Stage 5 — Detection Multi-Class Generation: same single-shot,
+Stage 6 — Detection Multi-Class Generation: same single-shot,
 no-intermediate-reasoning box prediction as detection_baseline.py (Stage
 2), except the prompt asks the model to report EVERY visible instance of
 the target object at ANY growth stage/condition, labeling each box with
 its own specific stage (e.g. "bud", "open flower", "dead flower") instead
 of just the dataset's coarse class name. See
-docs/stage5_detection_verifier.md and
+docs/stage6_detection_verifier.md and
 src/config/prompts_detection.yaml's detection_multiclass header comment
 for the full motivation (a real QC finding: ground truth on
 GEMINI_cowpea_flower_detection only labels open/senesced blooms as
@@ -13,9 +13,9 @@ GEMINI_cowpea_flower_detection only labels open/senesced blooms as
 deflating precision under single-class scoring, not a real localization
 bug).
 
-This is the FIRST piece of Stage 5 (generation only) — this script does
+This is the FIRST piece of Stage 6 (generation only) — this script does
 NOT do the planned per-box confidence-grading verifier pass yet, see
-docs/stage5_detection_verifier.md's "Planned: per-box verifier" section
+docs/stage6_detection_verifier.md's "Planned: per-box verifier" section
 for that design. Scoring here is already class-agnostic
 (bbox_metrics.match_boxes never reads category_name), so precision/
 recall/F1 against ground truth work exactly like detection_baseline.py's

@@ -1,5 +1,5 @@
 """
-Paper 2 Stage 5, Step 1-report — confidence/IoU threshold sweep over an
+Paper 2 Stage 6, Step 1-report — confidence/IoU threshold sweep over an
 existing detection-box-verifier checkpoint (no GPU, no model).
 
 detection-box-verifier already grades every predicted box's confidence

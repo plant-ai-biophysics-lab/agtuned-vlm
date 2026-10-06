@@ -1,6 +1,6 @@
 """
-Paper 2 Stage 5 — Does the box verifier's per-box confidence score
-actually track real correctness? See docs/stage5_detection_verifier.md.
+Paper 2 Stage 6 — Does the box verifier's per-box confidence score
+actually track real correctness? See docs/stage6_detection_verifier.md.
 
 detection-box-verifier-summary's threshold sweep answers "what single
 global confidence cutoff maximizes F1" — at confidence_threshold=0.0,

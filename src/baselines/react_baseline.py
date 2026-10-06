@@ -1,4 +1,4 @@
-"""ReAct baseline (Paper 2 Stage 6) — a tool-using agent
+"""ReAct baseline (Paper 2 Stage 7) — a tool-using agent
 (src/baselines/react_agent.py) evaluated as an alternative to the
 single-shot vision_baseline.py / verifier_cot.py pipelines. Same vLLM
 model-serving path as every other script in this repo (src/common/
@@ -44,7 +44,7 @@ append_ckpt_row/load_ckpt/archive_ckpt_if_rerun, reused here unchanged):
 Each checkpoint row also carries `elapsed_seconds` — that episode's own
 run_episode() wall-clock time (excludes the one-time model load/destroy
 around the whole batch) — so a slow outlier is visible straight from the
-checkpoint. See docs/stage6_react_baseline.md and app/react_baseline_viewer.py
+checkpoint. See docs/stage7_react_baseline.md and app/react_baseline_viewer.py
 (a Streamlit viewer over this exact checkpoint + trajectory log shape).
 
 After generation, a judge phase scores `finish()`'s reported answer
@@ -98,7 +98,7 @@ Usage:
     uv run python main.py react-baseline \\
         --task "What crops is early blight commonly found on?"
 
-    # 3-task text-only smoke test (infra check, no images) — see docs/stage6_react_baseline.md
+    # 3-task text-only smoke test (infra check, no images) — see docs/stage7_react_baseline.md
     uv run python main.py react-baseline --tasks_jsonl dataset/react_smoke_test_tasks.jsonl
 
     # real classification episodes, images included, sampled on the fly:

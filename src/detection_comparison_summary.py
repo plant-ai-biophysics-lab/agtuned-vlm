@@ -1,5 +1,5 @@
 """
-Paper 2 Stage 5-report — comparison bar chart: baseline detection vs.
+Paper 2 Stage 6-report — comparison bar chart: baseline detection vs.
 verifier (no refine) vs. verifier+refine (unfiltered) vs.
 verifier+refine+filter, precision/recall/F1 side by side (no GPU, no
 model). Up to four conditions (--verifier_ckpt is optional — omit it to

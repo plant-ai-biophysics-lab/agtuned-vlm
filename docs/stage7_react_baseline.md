@@ -1,4 +1,4 @@
-# Paper 2, Stage 6 — ReAct Baseline
+# Paper 2, Stage 7 — ReAct Baseline
 
 [← Back to README](../README.md)
 

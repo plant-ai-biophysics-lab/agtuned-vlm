@@ -1,7 +1,7 @@
 """
-Stage 5 — Detection Box Verifier: per-box confidence grading over an
+Stage 6 — Detection Box Verifier: per-box confidence grading over an
 existing detection-multiclass checkpoint. See
-docs/stage5_detection_verifier.md's "Planned: per-box verifier" section
+docs/stage6_detection_verifier.md's "Planned: per-box verifier" section
 for the full design rationale — summarized here:
 
 detection-multiclass (this stage's own generation step) deliberately
@@ -141,7 +141,7 @@ def grade_boxes(
     "criterion_scores", "feedback", "reasoning"} dict per input pair, same
     order. enable_thinking/chat_template: same mechanism/default as
     detection_baseline.py's own run_batch — a plain non-thinking grading
-    call was the original bug here (see docs/stage5_detection_verifier.md):
+    call was the original bug here (see docs/stage6_detection_verifier.md):
     detection-multiclass's own boxes are generated WITH thinking, so a
     verifier judging them with no reasoning step at all was a weaker,
     not-apples-to-apples second opinion."""
