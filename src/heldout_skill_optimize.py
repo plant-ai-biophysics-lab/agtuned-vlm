@@ -1,23 +1,36 @@
 """
 Paper 2, Stage 3 (docs/stage3_context_memory.md), Step 3b — automated
 self-optimization loop: starting from one skill-memory.md, repeatedly
-(1) score it on the held-out eval split, (2) EDIT it directly against
-that round's own per-task scores + a sample of its own mistakes
-(NOT a re-summarize from Step 2's original traces), (3) repeat for
---max_rounds — then report the single best-scoring round's file.
+(1) score it on the TRAIN (lessons) split, (2) EDIT it directly against
+that round's own TRAIN per-task scores + a sample of its own TRAIN
+mistakes (NOT a re-summarize from Step 2's original traces), (3) ALSO
+score the revised file on the VAL (eval) split — used ONLY to pick
+which round's file to keep, never to steer an edit, (4) repeat for
+--max_rounds — then report the single best-VAL-scoring round's file.
+
+**This is the train/val split a self-optimization loop needs to not be
+pure train-on-test** — an earlier version of this loop scored AND
+edited against the same fixed eval split every round, which is
+optimizing directly against your only measurement of generalization.
+Now: TRAIN scores/mistakes drive what gets edited; VAL score ONLY
+decides which round's resulting file is kept. VAL is never shown to the
+edit call, directly or indirectly.
 
 One invocation runs the WHOLE loop (no more manually alternating
 `heldout-zeroshot`/`heldout-skill-optimize` calls round by round):
 
-  round 0: score --init_skill_path as-is (no edit yet) — the starting
-    point every later round is judged against.
+  round 0: score --init_skill_path as-is on BOTH splits (no edit yet)
+    — the starting point every later round is judged against.
   round i (1..max_rounds): edit round (i-1)'s skill file against round
-    (i-1)'s own scores/mistakes -> round i's skill file; score it.
+    (i-1)'s own TRAIN scores/mistakes -> round i's skill file; score
+    round i on BOTH splits.
 
-Each round writes its own checkpoint + skill.md under
---output_dir/round<i>/, and appends ONE entry to --round_log (a single
-JSON file, list of round records) with:
-  - overall + per-task-bucket judge_accuracy
+Each round writes its own checkpoints + skill.md under
+--output_dir/round<i>/{train,val}/, and appends ONE entry to
+--round_log (a single JSON file, list of round records) with:
+  - TRAIN and VAL overall + per-task-bucket judge_accuracy, kept
+    separate (never averaged/combined) so it's always visible whether
+    a round's improvement shows up on both or just one
   - a MECHANICAL diff (added/removed lines, via difflib — not trusted
     to the editing model's own self-report) between round (i-1)'s and
     round i's skill text
@@ -30,19 +43,18 @@ files still exist) is skipped on a re-run, so a --max_rounds run split
 across multiple SLURM jobs just continues from the last completed
 round.
 
-After the last round, the round with the HIGHEST overall judge_accuracy
-across ALL rounds (round 0 included — a loop that only makes things
-worse should report round 0, not a forced "optimized" file) is copied
-to --output_dir/skill_memory_best.md.
+After the last round, the round with the HIGHEST VAL overall
+judge_accuracy across ALL rounds (round 0 included — a loop that only
+makes things worse should report round 0, not a forced "optimized"
+file) is copied to --output_dir/skill_memory_best.md. TRAIN score is
+NEVER used for this selection — a round could overfit TRAIN and still
+correctly lose to an earlier round on VAL.
 
-**Explicit, stated caveat (do not lose track of this)**: every round's
-edit is steered DIRECTLY by this fixed eval split's own scores — this
-is intentionally optimizing against the same n=199 split repeatedly,
-not the lessons split. That is a real overfitting risk (acknowledged,
-chosen anyway per docs/stage3_context_memory.md's Step 3b section) —
-read the full --round_log trajectory, not just which round "won", and
-treat the selected file as provisional until confirmed on a split this
-loop never touched.
+**Real cost tradeoff, worth knowing going in**: TRAIN (lessons, n=827)
+is ~4x VAL (eval, n=199) — scoring BOTH every round roughly doubles
+this loop's GPU time per round versus the old eval-only design (and
+TRAIN's own scoring pass dominates that increase). This is the
+necessary cost of the fix, not a bug.
 
 Usage:
     uv run python main.py heldout-skill-optimize \\
@@ -123,7 +135,9 @@ def build_task_scores_block(scores: dict[str, dict]) -> str:
 def sample_miss_examples(rows: list[dict], n_per_bucket: int, seed: int) -> dict[str, list[dict]]:
     """{bucket: [row, ...]} — up to n_per_bucket WRONG rows per bucket,
     sampled (not just the first N) so repeated rounds against the same
-    eval split don't always see the identical miss subset."""
+    TRAIN split don't always see the identical miss subset. Callers pass
+    TRAIN rows only — this function has no opinion on which split it's
+    given, but the loop's own design never calls it on VAL rows."""
     rng = random.Random(seed)
     misses: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
@@ -225,16 +239,19 @@ def check_rule_violations(skill_md: str) -> list[str]:
     return violations
 
 
-def score_round(model_id: str, skill_memory_path: Path, round_dir: Path, base_args: argparse.Namespace) -> tuple[list[dict], float | None, dict]:
-    """Runs heldout-zeroshot's own --split eval generation+judge logic
-    (via heldout_zeroshot.run_model, reused directly — not
+def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: str,
+                 base_args: argparse.Namespace) -> tuple[list[dict], float | None, dict]:
+    """Runs heldout-zeroshot's own --split {lessons,eval} generation+judge
+    logic (via heldout_zeroshot.run_model, reused directly — not
     reimplemented) against skill_memory_path, writing its checkpoint
-    under round_dir. Returns (rows, overall_accuracy, task_scores)."""
+    under split_dir. Returns (rows, overall_accuracy, task_scores). split
+    is "lessons" (TRAIN — drives the next edit) or "eval" (VAL — selects
+    the best round only, caller must never feed this into an edit)."""
     round_args = argparse.Namespace(**vars(base_args))
     round_args.skill_memory_path = str(skill_memory_path)
     round_args.wrapper_only = False
-    round_args.split = "eval"
-    round_args.output_dir = str(round_dir)
+    round_args.split = split
+    round_args.output_dir = str(split_dir)
     round_args.rerun = False
     rows, _ckpt_path = run_zeroshot(model_id, round_args)
     return rows, compute_overall_accuracy(rows), compute_task_scores(rows)
@@ -299,23 +316,27 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
     for round_i in range(args.max_rounds + 1):  # round 0 = score the initial file as-is, no edit
         round_dir = out_dir / f"round{round_i}"
         round_skill_path = round_dir / "skill_memory.md"
+        train_dir = round_dir / "train"
+        val_dir = round_dir / "val"
 
         if round_i in completed_rounds and round_skill_path.exists():
             print(f"  [round {round_i}] already completed — skipping scoring/edit (resume)")
             current_skill_text = round_skill_path.read_text(encoding="utf-8").strip()
             current_skill_path = round_skill_path
             prior = next(h for h in history if h["round"] == round_i)
-            # Reload this round's checkpoint rows so the NEXT round's edit
-            # step still has what it needs (miss examples, task scores) —
-            # without this, resuming mid-loop silently edits with an empty
-            # miss-examples block on the first post-resume round.
-            ckpt_path = round_dir / safe_model_name(model_id) / f"ckpt_{safe_model_name(model_id)}.csv"
+            # Reload this round's TRAIN checkpoint rows so the NEXT round's
+            # edit step still has what it needs (miss examples, task
+            # scores) — without this, resuming mid-loop silently edits
+            # with an empty miss-examples block on the first post-resume
+            # round. VAL rows aren't needed downstream (only logged), so
+            # not reloaded here.
+            ckpt_path = train_dir / safe_model_name(model_id) / f"ckpt_{safe_model_name(model_id)}.csv"
             if ckpt_path.exists():
                 with open(ckpt_path, newline="", encoding="utf-8") as f:
-                    prev_rows = list(csv.DictReader(f))
+                    prev_train_rows = list(csv.DictReader(f))
             else:
-                prev_rows = []
-            prev_task_scores = prior["task_scores"]
+                prev_train_rows = []
+            prev_train_task_scores = prior["train_task_scores"]
             continue
 
         round_dir.mkdir(parents=True, exist_ok=True)
@@ -332,11 +353,14 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             print(f"  Scoring initial file as-is: {round_skill_path}")
 
         if round_i > 0:
-            prev_scores_block = build_task_scores_block(prev_task_scores)
-            prev_misses = sample_miss_examples(prev_rows, args.n_examples_per_bucket, args.seed + round_i)
+            # Steered ONLY by TRAIN (lessons) — prev_train_rows/
+            # prev_train_task_scores come from round (i-1)'s TRAIN pass
+            # below, never its VAL pass. VAL never reaches this call.
+            prev_scores_block = build_task_scores_block(prev_train_task_scores)
+            prev_misses = sample_miss_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i)
             miss_examples_block = build_miss_examples_block(prev_misses)
             n_examples = sum(len(v) for v in prev_misses.values())
-            print(f"  [edit] {n_examples} miss example(s) from round {round_i - 1} shown to the editor")
+            print(f"  [edit] {n_examples} TRAIN miss example(s) from round {round_i - 1} shown to the editor")
 
             llm, tokenizer = load_llm(
                 model_id, quantization=args.quantize,
@@ -378,27 +402,42 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             for v in rule_violations:
                 print(f"    - {v}")
 
-        rows, overall_acc, task_scores = score_round(model_id, round_skill_path, round_dir, base_args)
-        n_judged_total = sum(1 for r in rows if r.get("judged_correct") not in (None, ""))
-        acc_str = f"{overall_acc:.4f}" if overall_acc is not None else "n/a"
-        print(f"  [round {round_i}] overall judge_accuracy={acc_str} (n_judged={n_judged_total}/{len(rows)})")
-        if n_judged_total < len(rows):
-            print(f"  [QC] WARNING: only {n_judged_total}/{len(rows)} rows judged this round — "
-                  f"this round's accuracy is NOT computed over the same row count as other rounds, "
-                  f"comparisons against it may be misleading.")
-        for b in _BUCKETS:
-            s = task_scores[b]
-            if s["n"]:
-                print(f"    {b}: {s['accuracy']:.4f} (n={s['n']})")
+        train_rows, train_acc, train_task_scores = score_round(
+            model_id, round_skill_path, train_dir, "lessons", base_args)
+        train_judged = sum(1 for r in train_rows if r.get("judged_correct") not in (None, ""))
+        train_acc_str = f"{train_acc:.4f}" if train_acc is not None else "n/a"
+        print(f"  [round {round_i}] TRAIN judge_accuracy={train_acc_str} "
+              f"(n_judged={train_judged}/{len(train_rows)})")
+
+        val_rows, val_acc, val_task_scores = score_round(
+            model_id, round_skill_path, val_dir, "eval", base_args)
+        val_judged = sum(1 for r in val_rows if r.get("judged_correct") not in (None, ""))
+        val_acc_str = f"{val_acc:.4f}" if val_acc is not None else "n/a"
+        print(f"  [round {round_i}] VAL   judge_accuracy={val_acc_str} "
+              f"(n_judged={val_judged}/{len(val_rows)}) <- used for round selection")
+
+        for label, rows, judged, task_scores in (("TRAIN", train_rows, train_judged, train_task_scores),
+                                                   ("VAL", val_rows, val_judged, val_task_scores)):
+            if judged < len(rows):
+                print(f"  [QC] WARNING: only {judged}/{len(rows)} {label} rows judged this round — "
+                      f"not directly comparable to a round with full coverage.")
+            for b in _BUCKETS:
+                s = task_scores[b]
+                if s["n"]:
+                    print(f"    {label} {b}: {s['accuracy']:.4f} (n={s['n']})")
 
         history = [h for h in history if h["round"] != round_i]
         history.append({
             "round": round_i,
             "skill_path": str(round_skill_path),
-            "overall_judge_accuracy": overall_acc,
-            "n_rows_total": len(rows),
-            "n_judged_total": n_judged_total,
-            "task_scores": task_scores,
+            "train_overall_judge_accuracy": train_acc,
+            "train_n_rows_total": len(train_rows),
+            "train_n_judged_total": train_judged,
+            "train_task_scores": train_task_scores,
+            "val_overall_judge_accuracy": val_acc,
+            "val_n_rows_total": len(val_rows),
+            "val_n_judged_total": val_judged,
+            "val_task_scores": val_task_scores,
             "diff_vs_previous_round": diff_summary,
             "changelog": changelog,
             "changelog_parsed": changelog_parsed,
@@ -408,17 +447,21 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
         round_log_path.write_text(json.dumps(history, indent=2))
         completed_rounds.add(round_i)
 
-        prev_rows, prev_task_scores = rows, task_scores
+        prev_train_rows, prev_train_task_scores = train_rows, train_task_scores
         current_skill_path = round_skill_path
 
-    scored = [h for h in history if h["overall_judge_accuracy"] is not None]
+    # Selection is ALWAYS by VAL — TRAIN score never decides the winner,
+    # even though it's logged every round for trajectory-reading.
+    scored = [h for h in history if h["val_overall_judge_accuracy"] is not None]
     if not scored:
-        print("\n  No round produced a judged score — nothing to select.")
+        print("\n  No round produced a judged VAL score — nothing to select.")
         return
-    best = max(scored, key=lambda h: h["overall_judge_accuracy"])
+    best = max(scored, key=lambda h: h["val_overall_judge_accuracy"])
     best_out_path = out_dir / "skill_memory_best.md"
     shutil.copy(best["skill_path"], best_out_path)
-    print(f"\n  Best round: {best['round']} (overall judge_accuracy={best['overall_judge_accuracy']:.4f})")
+    print(f"\n  Best round: {best['round']} "
+          f"(VAL judge_accuracy={best['val_overall_judge_accuracy']:.4f}, "
+          f"TRAIN judge_accuracy={best['train_overall_judge_accuracy']})")
     print(f"  Copied to: {best_out_path}")
     print(f"  Full trajectory: {round_log_path}")
     if best["round"] == 0:
@@ -452,15 +495,27 @@ if __name__ == "__main__":
                               "scoring passes: round 0 plus rounds 1-10).")
     parser.add_argument("--output_dir", default="outputs_final/heldout_skill_optimize/",
                          help="Each round writes to <output_dir>/round<i>/ (its own skill_memory.md + "
-                              "heldout-zeroshot checkpoint). The best round's file is copied to "
+                              "a train/ and val/ heldout-zeroshot checkpoint, one per split). The "
+                              "round with the best VAL score is copied to "
                               "<output_dir>/skill_memory_best.md at the end.")
     parser.add_argument("--round_log", default=None,
                          help="Default: <output_dir>/round_log.json. A list of per-round records "
-                              "(scores, mechanical diff, editor's own changelog) — read this to see "
-                              "the FULL trajectory, not just which round won.")
-    parser.add_argument("--n_examples_per_bucket", type=int, default=5,
-                         help="Wrong-row examples sampled per task bucket and shown to each round's "
-                              "edit call.")
+                              "(TRAIN and VAL scores kept separate, mechanical diff, editor's own "
+                              "changelog) — read this to see the FULL trajectory, not just which "
+                              "round won.")
+    parser.add_argument("--n_examples_per_bucket", type=int, default=10,
+                         help="Wrong-row examples sampled per task bucket (so default 10 = 40 total, "
+                              "4 buckets) and shown to each round's edit call. Bumped from an original "
+                              "default of 5 after a real 10-round run never beat round 0 — the "
+                              "diagnosis was that 20 examples/round is too narrow a sample to extract "
+                              "genuinely generalizable guidance from, compared to round 0's own origin "
+                              "(Step 3's map-reduce synthesis over ~827 full TRAIN traces); each "
+                              "round's edit was a noisier, narrower signal than what it was trying to "
+                              "improve on. Mind the context budget raising this further: each example "
+                              "can carry up to ~500 chars of reasoning + ~500 of expert details, so 40 "
+                              "examples is already ~10-15K tokens of input alongside the (growing) "
+                              "skill_md itself — pushing much past this risks crowding out "
+                              "--edit_max_tokens within --max_model_len.")
     parser.add_argument("--heldout_prompts", default="src/config/heldout_prompts.yaml")
     parser.add_argument("--manifest", default="dataset/heldout_selected_images.json")
     parser.add_argument("--images_root", default="dataset/images_heldout")
@@ -495,9 +550,9 @@ if __name__ == "__main__":
                               "trace — 4096 should comfortably cover a skill.md of this size with "
                               "headroom for growth across rounds.")
     parser.add_argument("--seed", type=int, default=42,
-                         help="Base seed for miss-example sampling — offset by round number so "
+                         help="Base seed for TRAIN miss-example sampling — offset by round number so "
                               "different rounds see different miss subsets even against the same "
-                              "eval split.")
+                              "train split.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)

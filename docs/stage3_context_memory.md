@@ -285,29 +285,46 @@ uv run python main.py heldout-skill-optimize \
     --output_dir outputs_final/heldout_skill_optimize/
 ```
 
+**TRAIN/VAL separation (fixed from an earlier pure-train-on-test
+design)**: every round scores the skill file on BOTH splits —
+`--split lessons` (TRAIN, n=827) and `--split eval` (VAL, n=199, the
+same slice Step 4's ablation used) — but they play different roles.
+TRAIN's own scores and sampled mistakes are the ONLY thing that steers
+the next round's edit; VAL is scored purely to decide which round's
+resulting file gets kept at the end, and is never shown to the edit
+call in any form, directly or indirectly. An earlier version of this
+loop scored and edited against the SAME eval split every round — i.e.
+optimized directly against its only measurement of generalization —
+which this design replaces.
+
 What happens internally, per round:
-- **Round 0**: scores `--init_skill_path` as-is (no edit yet) — reuses
-  `heldout-zeroshot`'s own `--split eval` generation+judge logic
+- **Round 0**: scores `--init_skill_path` as-is on BOTH splits (no
+  edit yet) — reuses `heldout-zeroshot`'s own generation+judge logic
   directly (`heldout_zeroshot.run_model`, called as a function, not
   reimplemented) so the scoring is byte-for-byte the same mechanism
   Step 4's ablation used.
 - **Round i (1..`--max_rounds`)**: EDITS round (i-1)'s file against
-  round (i-1)'s own per-task scores + a sample of its own mistakes
-  (`--n_examples_per_bucket` per bucket) — never re-summarizing from
-  Step 2's original explanation traces, only the skill file's current
-  wording and this round's own failures — then scores the result the
-  same way round 0 did.
+  round (i-1)'s own TRAIN per-task scores + a sample of its own TRAIN
+  mistakes (`--n_examples_per_bucket` per bucket) — never re-summarizing
+  from Step 2's original explanation traces, only the skill file's
+  current wording and this round's own TRAIN failures — then scores the
+  result on BOTH splits the same way round 0 did.
 
-Every round writes `<output_dir>/round<i>/` (its own `skill_memory.md` +
-`heldout-zeroshot` checkpoint) and appends ONE entry to `--round_log`
-(default `<output_dir>/round_log.json`) carrying:
-- overall + per-task-bucket `judge_accuracy`
+Every round writes `<output_dir>/round<i>/` (its own `skill_memory.md`
++ a `train/` and `val/` `heldout-zeroshot` checkpoint, one per split)
+and appends ONE entry to `--round_log` (default
+`<output_dir>/round_log.json`) carrying:
+- TRAIN and VAL overall + per-task-bucket `judge_accuracy`, kept
+  SEPARATE (never averaged/combined) — so a round that overfits TRAIN
+  while VAL stays flat or drops is directly visible in the log, not
+  hidden behind one blended number
 - a MECHANICAL line-level diff vs. the previous round (`difflib`, not
   trusted to the editing model's own self-report) — the objective "what
   changed"
 - the editing model's own stated changelog, parsed from the
   `---CHANGELOG---` section `heldout_skill_edit_prompt` requires — its
-  own "why", referencing the scores/mistakes that motivated each change
+  own "why", referencing the TRAIN scores/mistakes that motivated each
+  change
 
 Each round **replaces** the document rather than merging onto it (the
 edit call always has the full current document in front of it, so
@@ -318,23 +335,46 @@ in `--round_log` with its files intact is skipped on re-run, so a
 `--max_rounds 10` job split across multiple SLURM submissions just
 continues from the last completed round.
 
-After the last round, the round with the **highest overall
-`judge_accuracy` across every round scored, round 0 included**, is
-copied to `<output_dir>/skill_memory_best.md` — a loop that never
-actually improves on the starting file reports round 0 as the winner,
-not a forced "optimized" result.
+After the last round, the round with the **highest VAL `judge_accuracy`
+across every round scored, round 0 included** — TRAIN score is NEVER
+used for this selection — is copied to `<output_dir>/skill_memory_best.md`.
+A round could score better on TRAIN than any other round and still
+correctly lose the selection if its VAL score doesn't follow; a loop
+that never actually improves VAL reports round 0 as the winner, not a
+forced "optimized" result.
 
-**Explicit, stated caveat**: every round's edit is steered DIRECTLY by
-this fixed eval split's (n=199) own scores — this is intentionally
-optimizing against the same split repeatedly, a real overfitting risk,
-chosen on purpose despite it (the clean version of this would use a
-3-way lessons/dev/final-eval split; this version does not, by explicit
-choice). Read the full `--round_log` trajectory, not just which round
-"won" — a noisy, non-monotonic trajectory across rounds is itself a
-meaningful signal (it would suggest the loop is chasing eval-split
-noise rather than finding real improvements), and the selected file
-should be treated as provisional until confirmed on a split this loop
-never touched.
+**Real cost tradeoff, worth knowing going in**: TRAIN (n=827) is ~4x
+VAL (n=199) — scoring BOTH every round roughly doubles this loop's GPU
+time per round versus the old eval-only design. This is the necessary
+cost of fixing the train-on-test problem, not a bug.
+
+**What this does and doesn't fix**: VAL is no longer touched by any
+edit, so a round's VAL score is a genuine (if noisy, n=199) read on
+generalization beyond what that round's edit was steered by. It does
+NOT make this a fully clean experiment — `--max_rounds` rounds are
+still all evaluated against the SAME fixed VAL split, so the ROUND-
+SELECTION step itself still implicitly searches over `max_rounds + 1`
+VAL measurements and keeps the best one, which is its own (much
+smaller) multiple-comparisons risk. A genuinely clean confirmatory
+number still needs one final score on a split neither TRAIN nor VAL
+ever touched.
+
+**Real result, 10 rounds, old eval-steered design (predates the
+TRAIN/VAL fix above)**: round 0 won — none of rounds 1-10 beat it
+(trajectory: 0.4271, 0.392, 0.3869, 0.402, 0.3869, 0.3769, 0.402,
+0.4121, 0.392, 0.407, 0.3819 — noisy, non-monotonic, never recovering).
+The file also bloated steadily (647 → 1308 words, roughly doubling)
+despite each round technically replacing rather than merging the
+document — most rounds net ADDED more than they removed. Diagnosis:
+`--n_examples_per_bucket`'s original default (5, so 20 examples/round)
+was too narrow a sample to extract genuinely generalizable guidance
+from — a much noisier, narrower signal than round 0's own origin
+(Step 3's map-reduce synthesis over ~827 full TRAIN traces). Individual
+edits often looked locally reasonable (e.g. renaming a generic "Viral
+Infections" bullet to the more specific "Leaf Curl Viruses") without
+the net result improving. **Default bumped to 10** (40 examples/round)
+in response — not yet re-run for real with the TRAIN/VAL fix + this
+larger sample together.
 
 ## Step 4 — ablation (built)
 
