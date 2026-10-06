@@ -114,13 +114,13 @@ datasets:
     - '14'
     hf_config: default
     location: []
-    skip: false
+    skip: true
     bbox_convention:
       format: xywh
       n_probed: 130
       scale: pixel
       xyxy_consistent_frac: 0.192
-    notes: ''
+    notes: 'HELD OUT for Paper 2 Stage 4 skill-memory lessons/eval (docs/stage4_detection_context_memory.md) -- do not flip skip back to false, do not include in Stage 2/6 sampling. See scripts/download_heldout_detection.py.'
 
   - agml_name: Medjool_date_ripeness_detection
     crop: date
@@ -329,13 +329,13 @@ datasets:
     - spoiled
     hf_config: default
     location: []
-    skip: false
+    skip: true
     bbox_convention:
       format: xywh
       n_probed: 629
       scale: pixel
       xyxy_consistent_frac: 0.032
-    notes: ''
+    notes: 'HELD OUT for Paper 2 Stage 4 skill-memory lessons/eval (docs/stage4_detection_context_memory.md) -- do not flip skip back to false, do not include in Stage 2/6 sampling. See scripts/download_heldout_detection.py.'
 
   - agml_name: coffee_detection
     crop: coffee
@@ -632,13 +632,13 @@ datasets:
     - Unripe fruit
     hf_config: default
     location: []
-    skip: false
+    skip: true
     bbox_convention:
       format: xywh
       n_probed: 133
       scale: pixel
       xyxy_consistent_frac: 0.571
-    notes: ''
+    notes: 'HELD OUT for Paper 2 Stage 4 skill-memory lessons/eval (docs/stage4_detection_context_memory.md) -- do not flip skip back to false, do not include in Stage 2/6 sampling. See scripts/download_heldout_detection.py.'
 
   - agml_name: grape_detection_californiaday
     crop: grape
@@ -733,13 +733,13 @@ datasets:
     - Ripe
     hf_config: default
     location: []
-    skip: false
+    skip: true
     bbox_convention:
       format: xywh
       n_probed: 34
       scale: pixel
       xyxy_consistent_frac: 0.206
-    notes: ''
+    notes: 'HELD OUT for Paper 2 Stage 4 skill-memory lessons/eval (docs/stage4_detection_context_memory.md) -- do not flip skip back to false, do not include in Stage 2/6 sampling. See scripts/download_heldout_detection.py.'
 
   - agml_name: onionfoliageset_detection
     crop: onion
@@ -979,13 +979,13 @@ datasets:
     - Waterhemp
     hf_config: default
     location: []
-    skip: false
+    skip: true
     bbox_convention:
       format: xywh
       n_probed: 152
       scale: pixel
       xyxy_consistent_frac: 0.132
-    notes: ''
+    notes: 'HELD OUT for Paper 2 Stage 4 skill-memory lessons/eval (docs/stage4_detection_context_memory.md) -- do not flip skip back to false, do not include in Stage 2/6 sampling. See scripts/download_heldout_detection.py.'
 
   - agml_name: wheat_head_counting
     crop: wheat

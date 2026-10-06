@@ -122,19 +122,59 @@ correctness and cost, not a tradeoff. (b)/(c) stay built and available
 in `detection_skill_representation_ablation.py` if a future category of
 error turns out to need them, but Step 2 below builds on (a) alone.
 
-## Step 0 — held-out detection dataset(s)
+## Step 0 — held-out detection dataset(s) (built)
 
 **Decided**: hold out ENTIRE datasets, not a stratified slice of
-images within the existing pool. A handful of Project-AgML detection
-datasets (TBD which, once Step 0 is actually built) are carved out
-completely — never sampled into Stage 2/Stage 6's own eval runs at
-all — mirroring DigiGreen's complete independence from the
-classification eval pool. Cleaner separation than a stratified-image
-split: no risk of a dataset's own images being similar enough to each
-other that within-dataset lessons/eval leakage softens the held-out
-claim. Tradeoff accepted: fewer, less diverse datasets in the lesson
-pool, and a one-time choice of which datasets to remove from the main
-eval set — worth it for the cleaner generalization claim.
+images within the existing pool — mirroring DigiGreen's complete
+independence from the classification eval pool. Cleaner separation
+than a stratified-image split: no risk of a dataset's own images being
+similar enough to each other that within-dataset lessons/eval leakage
+softens the held-out claim. Tradeoff accepted: fewer, less diverse
+datasets in the lesson pool, and a one-time choice of which datasets to
+remove from the main eval set — worth it for the cleaner generalization
+claim.
+
+**The 5 datasets, chosen for domain diversity** (not picked blind —
+each stresses a different failure mode):
+
+| Dataset | Why |
+|---|---|
+| `mango_growth_detection` | growth-stage distinctions (4 classes) |
+| `MH_Weed16_weed_detection` | extreme multiclass (15 species) — stress-tests wrong-class-label |
+| `ghai_strawberry_fruit_detection` | organ-level distinctions (10 classes: bud/calyx/flower/leaf/stem/fruit) |
+| `cashew_detection` | multi-scale (whole tree + individual nuts) — stress-tests merged-vs-missed |
+| `weed_crop_detection` | crop-vs-weed across many species (13 classes) |
+
+Marked `skip: true` in `src/config/detection_datasets.yaml` (each with
+a `notes` marker explaining why) — this is the REAL, functional
+exclusion mechanism, since `download_and_sample_detection.py` (Stage
+2/6's own sampler) only ever selects from `active_datasets()`. Active
+pool: 54 → 49.
+
+```bash
+uv run python main.py download-heldout-detection
+```
+
+Reuses `download_and_sample_detection.py`'s own `process_dataset()`
+(class-balanced selection) and `dataset_config.py`'s own
+`load_hf_detection_samples()` (HF download + local image/annotation
+caching) directly — not reimplemented. Writes
+`dataset/images_detection_heldout/` (a separate cache dir from
+`dataset/images_detection/`, so a held-out image can never collide
+with Stage 2/6's own eval cache) and
+`dataset/detection_heldout_selected_images.json` — one record per row
+(`agml_dataset`, `image_path`, `boxes`, `split`), `--eval_frac` (default
+0.2) assigned PER DATASET (not pooled first) so a small dataset's rows
+can't get entirely absorbed into the other split by chance. Resumable.
+
+**Known caveat, inherited not introduced here**: `migrate-detection-
+datasets` regenerates `detection_datasets.yaml` from scratch on every
+run and does not currently merge forward prior manual edits — this was
+already true of the `crop` field (hand-filled after generation) before
+this step's own `skip: true` + `notes` markers added a second thing a
+naive re-run would silently undo. Re-apply both by hand if
+`migrate-detection-datasets` is ever re-run; not fixed here since it's
+a pre-existing gap, not something this step introduced.
 
 ## Step 1 — zero-shot detection prediction (lessons split)
 

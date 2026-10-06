@@ -8,6 +8,7 @@ STAGES = {
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
     "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
+    "download-heldout-detection": "scripts.download_heldout_detection",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -88,6 +89,24 @@ Stages:
                                stratified by crop, seeded by --seed) — the eval split must never be
                                used to write the skill-memory file this stage builds toward.
                                Resumable (an already-cached image/row is skipped).
+    download-heldout-detection  Paper 2 Stage 4, Step 0 (docs/stage4_detection_context_memory.md)
+                               — download + cache 5 ENTIRE Project-AgML detection datasets
+                               (mango_growth_detection, MH_Weed16_weed_detection,
+                               ghai_strawberry_fruit_detection, cashew_detection,
+                               weed_crop_detection — chosen for domain diversity: growth-stage,
+                               extreme multiclass weed-ID, organ-level part distinctions,
+                               multi-scale/dense clustering, crop-vs-weed) as a HELD-OUT pool,
+                               never sampled into Stage 2/Stage 6's own eval pool at all (these 5
+                               are also marked skip: true in src/config/detection_datasets.yaml).
+                               Reuses download_and_sample_detection.py's own process_dataset() and
+                               dataset_config.py's own load_hf_detection_samples() directly, not
+                               reimplemented. Writes dataset/images_detection_heldout/ (separate
+                               cache dir from dataset/images_detection/) +
+                               dataset/detection_heldout_selected_images.json, with a per-row
+                               "split": "lessons"|"eval" assignment (--eval_frac, default 0.2,
+                               stratified by DATASET not crop — each of the 5 already represents
+                               its own domain). Resumable (an already-cached image/sidecar pair is
+                               a pure local-disk read).
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and
