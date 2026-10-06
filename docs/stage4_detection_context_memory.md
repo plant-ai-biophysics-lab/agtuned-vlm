@@ -18,11 +18,11 @@ improves future box predictions?
 The detection analog is NOT a straightforward copy, for one specific
 reason: classification's "ground truth" is a short text label a model
 can directly compare against its own text answer. Detection's "ground
-truth" is a set of `[x1, y1, x2, y2]` coordinates — there is no
+truth" is a set of `[x1, y1, x2, y2]` coordinates — there was no
 established reason to assume a model can usefully reason about two
-sets of raw numbers the way it can reason about two words. **This is
-the one part of the design that needs to be tested empirically before
-building the rest of the pipeline at scale, not assumed.**
+sets of raw numbers the way it can reason about two words, so this got
+tested empirically (Step −1) rather than assumed. **Resolved**: it
+handles the raw coordinates fine — see Step −1's own result below.
 
 ## Step −1 (NEW) — box-representation ablation (raw-coords / overlay / cropped)
 
@@ -109,11 +109,18 @@ padding if the crop looks too tight or too loose on a first read.
   rendered, for the human reader — not implying either model saw both),
   and all three conditions' raw text responses below, labeled (a)/(b)/(c).
 
-**Do not commit to (b) or (c) just because either sounds more natural**
-— if (a) turns out to work fine for coarse errors ("way too big",
-"completely missed"), it's simpler and cheaper; if (c) turns out to
-lose too much context, (b) might be the better default despite the
-extra clutter. Reading the 30 outputs is what decides, not intuition.
+**Decided, from reading the real 30-sample output**: (a) — raw
+coordinates as text, plain original image, no overlay rendering at
+all. The model handled the raw `[x1,y1,x2,y2]` coordinates well across
+the sampled error types, which settles the "VLMs aren't reliable at
+numeric spatial reasoning" concern this ablation existed to check —
+at least for this model, on this task, it wasn't the problem the
+design worried it might be. This is also the cheapest condition (no
+`plot_predictions`/crop rendering step, one image per call instead of
+choosing between two), so the decision is a clean win on both
+correctness and cost, not a tradeoff. (b)/(c) stay built and available
+in `detection_skill_representation_ablation.py` if a future category of
+error turns out to need them, but Step 2 below builds on (a) alone.
 
 ## Step 0 — held-out detection dataset(s)
 
@@ -182,11 +189,11 @@ free-text explanation ambiguous about which sentence refers to which
 error — the same conflated-feedback problem a whole-image rubric call
 would have.
 
-Each explanation call shows: the representation Step −1's real result
-settled on (raw-coords / overlay / cropped-overlay — all three already
-built there, reused directly), and asks for 2-4 sentences of concrete,
-generalizable guidance — same "explain what should have been seen
-instead" framing as `heldout_explain_miss_prompt`/
+Each explanation call shows: the plain original image + the raw
+`[x1,y1,x2,y2]` coordinates as text (Step −1's settled representation,
+condition (a) — no overlay rendering needed), and asks for 2-4
+sentences of concrete, generalizable guidance — same "explain what
+should have been seen instead" framing as `heldout_explain_miss_prompt`/
 `heldout_explain_correct_prompt`, adapted to spatial language instead
 of diagnostic language.
 
