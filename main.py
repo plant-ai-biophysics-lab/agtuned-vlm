@@ -26,6 +26,7 @@ STAGES = {
     "detection-comparison-summary": "src.detection_comparison_summary",
     "detection-box-verifier-summary": "src.detection_box_verifier_summary",
     "detection-confidence-correlation": "src.detection_box_confidence_correlation",
+    "detection-skill-representation-ablation": "src.detection_skill_representation_ablation",
     "detection-qc-plot":           "src.detection_qc_plot",
     "detection-verifier":          "src.detection_verifier",
     "detection-summary":           "src.detection_summary",

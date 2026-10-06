@@ -1,0 +1,45 @@
+# Paper 2, Stage 4 DRAFT (docs/stage4_detection_context_memory_DRAFT.md)
+# — prompts for the detection skill-memory pipeline's own Step -1
+# (raw-coordinates vs. rendered-overlay representation ablation) and,
+# later, Step 2 (explain traces). Kept separate from prompts.yaml/
+# heldout_prompts.yaml since these are detection-specific and reference
+# box-level concepts (predicted box, ground-truth box, IoU) that don't
+# apply to classification.
+
+detection_skill_system: "You are an expert agricultural computer vision analyst reviewing a detection model's box predictions against the real objects in the image."
+
+# Per-box error type question templates — ONE box pair (one predicted
+# box, one ground-truth box, never the whole image's full box set) per
+# call, same per-box-not-per-image convention detection_box_verifier.py
+# already established for a different reason (grading) — here for
+# explanation instead, so a single call's answer is never ambiguous
+# about which of an image's several errors it's talking about.
+# Params: {category}
+detection_skill_question_false_positive: "A detection model predicted a box for a '{category}' at the location shown, but there is no real instance of it there. Explain what visual feature likely caused the model to mistakenly predict a box here."
+# Params: {category}
+detection_skill_question_missed: "A detection model did NOT predict any box for the real '{category}' instance shown. Explain what visual cues indicate a real instance is present here that the model likely missed."
+# Params: {category} {iou}
+detection_skill_question_loose_match: "A detection model predicted a box for a '{category}' here, but it does not tightly match the real instance (IoU={iou:.2f} with the real one). Explain what's wrong with the predicted box's size or position relative to the real instance."
+
+# Condition (a) — raw coordinates, appended to whichever question
+# template above applies. Shown with the ORIGINAL (unannotated) image.
+# Params: {width} {height} {pred_bbox_text} {gt_bbox_text}
+detection_skill_raw_coords_suffix: |
+
+
+  Image size: {width}x{height} pixels. Coordinates are [x1, y1, x2, y2] in pixels, origin at the top-left corner.
+  Predicted box: {pred_bbox_text}
+  Ground truth box: {gt_bbox_text}
+
+  Respond in 2-4 sentences.
+
+# Condition (b) — rendered overlay. Shown with the ANNOTATED image
+# (predicted box solid lime, ground truth dashed red — same convention
+# src/common/bbox_viz.py uses everywhere else in this pipeline). No
+# coordinate numbers given — the model sees the boxes directly instead.
+detection_skill_overlay_suffix: |
+
+
+  The predicted box is drawn in solid lime, the real (ground truth) instance in dashed red, where present.
+
+  Respond in 2-4 sentences.
