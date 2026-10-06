@@ -9,6 +9,7 @@ STAGES = {
     "download-datasets":  "scripts.agml_hf.download_and_sample",
     "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
     "download-heldout-detection": "scripts.download_heldout_detection",
+    "heldout-detection-zeroshot": "src.heldout_detection_zeroshot",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -113,6 +114,20 @@ Stages:
                                "split": "lessons"|"eval" assignment DETERMINED BY WHICH GROUP ITS
                                DATASET IS IN, not randomized. Resumable (an already-cached
                                image/sidecar pair is a pure local-disk read).
+    heldout-detection-zeroshot  Paper 2 Stage 4, Step 1 (docs/stage4_detection_context_memory.md)
+                               — zero-shot detection prediction on Step 0's TRAIN/VAL pool.
+                               Reuses detection-multiclass's own generation+scoring mechanism
+                               directly (detection_baseline.py's run_batch/score_row/
+                               DET_CKPT_FIELDS + detection_multiclass.py's own prompt key, not
+                               reimplemented) — NOT plain detection-baseline, consistent with
+                               Step −1's choice (real local metrics: multiclass beats baseline on
+                               F1/recall). Reads
+                               dataset/detection_heldout_selected_images.json directly (NOT
+                               active_datasets()/DatasetConfig, since these 15 datasets are
+                               deliberately skip: true) — per-dataset class list/crop for the
+                               prompt come straight from detection_datasets.yaml's own entries.
+                               --split lessons (default, TRAIN) or --split eval (VAL, for Step
+                               3b/4 later) — never use eval to write the skill-memory file.
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and

@@ -227,26 +227,50 @@ anywhere) — filled in manually (`['flower']`/`['pods']`, matching the
 sibling `GEMINI_cowpea_flower_detection`/`GEMINI_cowpea_pod_detection`
 naming convention already in the catalog).
 
-## Step 1 — zero-shot detection prediction (lessons split)
+## Step 1 — zero-shot detection prediction (built)
 
-Reuses **`detection-multiclass`**'s own generation mechanism directly
-(not reimplemented) — consistent with Step −1's own choice. Real local
+**Built** (`src/heldout_detection_zeroshot.py`, CLI
+`heldout-detection-zeroshot`) — detection analog of
+`heldout_zeroshot.py` (Stage 3's own Step 1). Reuses
+**`detection-multiclass`**'s own generation+scoring mechanism directly
+(`detection_baseline.py`'s `run_batch`/`score_row`/`DET_CKPT_FIELDS` +
+`detection_multiclass.py`'s own prompt key, imported not
+reimplemented) — consistent with Step −1's own choice. Real local
 metrics decided this (see Step −1): multiclass beats plain
 `detection-baseline` on F1 and recall, so the skill-memory pipeline
 builds on the stronger generation mechanism rather than the simpler
-one. (An earlier version of this doc reasoned the other way — start
-from baseline so multiclass's value could emerge from the skill file's
-own content as a finding, rather than being assumed — but that
-reasoning doesn't hold once baseline is already the WEAKER condition by
-a real, measured margin; there's no reason to deliberately start from
-the worse generation mechanism once that's known.)
+one.
+
+Reads `dataset/detection_heldout_selected_images.json` directly (Step
+0's own output) — NOT `active_datasets()`/`DatasetConfig`, since these
+15 TRAIN+VAL datasets are deliberately marked `skip: true` to stay out
+of that normal pipeline entirely. Per-dataset class list/crop for the
+prompt's `{class_names}`/`{crop}` slots come straight from
+`detection_datasets.yaml`'s own `classes`/`crop` fields — no
+`DatasetConfig` object needed (no configured aliases for these
+datasets).
+
+```bash
+uv run python main.py heldout-detection-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split lessons \
+    --output_dir outputs_final/heldout_detection_zeroshot_lessons/
+```
+
+`--split lessons` (default) = TRAIN, the primary use here, feeds Step
+2's explain-traces. `--split eval` = VAL, for Step 3b's
+self-optimization loop and Step 4's ablation later — never use `eval`
+to write the skill-memory file itself.
 
 Scored class-agnostically via `bbox_metrics.match_boxes`/
 `precision_recall_f1`, same IoU convention every other detection stage
-in this repo uses. Output: a checkpoint with `pred_boxes_json`/
-`gt_boxes_json` per image, same shape
+in this repo uses. Output: a `DET_CKPT_FIELDS`-shaped checkpoint with
+`pred_boxes_json`/`gt_boxes_json` per image, same shape
 `detection_box_verifier_summary.py`/`detection_final_metrics.py`
-already know how to read.
+already know how to read. `DET_CKPT_FIELDS` already carries
+`agml_dataset`/`class_label`/`image_name` natively, so (unlike
+classification's `HELDOUT_CKPT_FIELDS`) nothing needed repurposing to
+satisfy `load_ckpt`'s hardcoded resume-key contract.
 
 ## Step 2 — explain traces (lessons split, ALL rows not just misses)
 
