@@ -210,6 +210,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         acc = sum(int(r["judged_correct"]) for r in judged) / len(judged)
         print(f"\n  judge_accuracy={acc:.4f} (n={len(judged)}/{len(rows)} judged)")
         print(f"  Checkpoint: {ckpt_path}")
+    return rows, ckpt_path
 
 
 def main(args: argparse.Namespace) -> None:
@@ -219,7 +220,13 @@ def main(args: argparse.Namespace) -> None:
     run_model(args.model, args)
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Factored out (not just inlined under __main__) so
+    heldout_skill_optimize.py's automated round loop can obtain the
+    EXACT same defaults this CLI uses (gen_max_tokens, judge settings,
+    chat template, etc.) via `build_arg_parser().parse_args([])` plus a
+    handful of per-round overrides, instead of hand-duplicating this
+    argument list and risking the two drifting apart."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
     parser.add_argument("--manifest", default="dataset/heldout_selected_images.json")
@@ -270,5 +277,8 @@ if __name__ == "__main__":
     parser.add_argument("--judge_enable_thinking", action="store_true")
     parser.add_argument("--judge_max_tokens", type=int, default=1024)
     parser.add_argument("--judge_chat_template_path", default=None)
+    return parser
 
-    main(parser.parse_args())
+
+if __name__ == "__main__":
+    main(build_arg_parser().parse_args())

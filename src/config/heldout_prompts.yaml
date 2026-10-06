@@ -206,6 +206,13 @@ heldout_skill_edit_prompt: |
      not invent facts not supported by the mistakes shown or the
      current document's own existing content.
 
-  Respond with ONLY the full revised document (Markdown), starting with
-  the `# Crop Diagnosis — Lessons Learned` heading — no preamble, no
-  commentary about what you changed.
+  Respond with the full revised document (Markdown), starting with the
+  `# Crop Diagnosis — Lessons Learned` heading, no preamble — then, on a
+  new line by itself, write exactly:
+  ---CHANGELOG---
+  followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
+  you made and WHY, each bullet naming the category/bucket it addresses
+  and referencing the score or mistake that motivated it (e.g. "Added a
+  note distinguishing X from Y under Pest/What Didn't Work — pest
+  accuracy was the weakest bucket at N%, and 2 of the shown mistakes
+  confused X for Y specifically"). Do not skip this section.

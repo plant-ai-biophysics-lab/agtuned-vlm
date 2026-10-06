@@ -268,55 +268,73 @@ irrelevant context at best.
 
 ## Step 3b — self-optimization loop (built)
 
-`heldout-skill-optimize` (`src/heldout_skill_optimize.py`) — EDITS an
-existing skill-memory.md directly against this round's own eval-split
-per-task scores, instead of re-summarizing from Step 2's traces. The
+`heldout-skill-optimize` (`src/heldout_skill_optimize.py`) — AUTOMATED,
+one invocation runs the whole loop (no more manually alternating
+`heldout-zeroshot`/`heldout-skill-optimize` calls round by round). The
 v4 skill file (the one that earned +0.0603, hand-patched to remove the
 "Common Diseases..." section) is checked into the repo at
-`src/config/skill_memory_disease-pest.md` — the fixed starting point ("round 0")
-for this loop, so it survives independent of whatever's sitting in
-`outputs_final/` on any given machine.
-
-One round:
+`src/config/skill_memory_disease-pest.md` — the fixed starting point
+("round 0") for this loop, so it survives independent of whatever's
+sitting in `outputs_final/` on any given machine.
 
 ```bash
-# 1. Score the CURRENT skill file on eval:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --split eval \
-    --skill_memory_path src/config/skill_memory_disease-pest.md \
-    --output_dir outputs_final/heldout_zeroshot_eval_optimize_round0/
-
-# 2. Edit the skill file against those scores + a sample of its own misses:
 uv run python main.py heldout-skill-optimize \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --eval_ckpt outputs_final/heldout_zeroshot_eval_optimize_round0/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --skill_memory_path src/config/skill_memory_disease-pest.md \
-    --output_md outputs_final/heldout_skill_optimize/skill_memory_round1.md \
-    --round_log outputs_final/heldout_skill_optimize/round_log.json
-
-# 3. Score round 1's output, feed it into round 2's edit call, repeat —
-#    --skill_memory_path/--eval_ckpt point at round N's own files each time.
+    --init_skill_path src/config/skill_memory_disease-pest.md \
+    --max_rounds 10 \
+    --output_dir outputs_final/heldout_skill_optimize/
 ```
 
-Each round's `--output_md` is a NEW path (`skill_memory_round<N>.md`) —
-never overwrites the input, so every round's version stays on disk.
-Each round **replaces** the document rather than merging onto it (see
-the earlier discussion on why: the edit call always has the full
-current document in front of it, so nothing is lost by writing a fresh
-revision — the alternative, accreting edits onto edits, risks unbounded
-growth and a telephone-game drift in wording across rounds).
+What happens internally, per round:
+- **Round 0**: scores `--init_skill_path` as-is (no edit yet) — reuses
+  `heldout-zeroshot`'s own `--split eval` generation+judge logic
+  directly (`heldout_zeroshot.run_model`, called as a function, not
+  reimplemented) so the scoring is byte-for-byte the same mechanism
+  Step 4's ablation used.
+- **Round i (1..`--max_rounds`)**: EDITS round (i-1)'s file against
+  round (i-1)'s own per-task scores + a sample of its own mistakes
+  (`--n_examples_per_bucket` per bucket) — never re-summarizing from
+  Step 2's original explanation traces, only the skill file's current
+  wording and this round's own failures — then scores the result the
+  same way round 0 did.
+
+Every round writes `<output_dir>/round<i>/` (its own `skill_memory.md` +
+`heldout-zeroshot` checkpoint) and appends ONE entry to `--round_log`
+(default `<output_dir>/round_log.json`) carrying:
+- overall + per-task-bucket `judge_accuracy`
+- a MECHANICAL line-level diff vs. the previous round (`difflib`, not
+  trusted to the editing model's own self-report) — the objective "what
+  changed"
+- the editing model's own stated changelog, parsed from the
+  `---CHANGELOG---` section `heldout_skill_edit_prompt` requires — its
+  own "why", referencing the scores/mistakes that motivated each change
+
+Each round **replaces** the document rather than merging onto it (the
+edit call always has the full current document in front of it, so
+nothing is lost by writing a fresh revision — the alternative,
+accreting edits onto edits, risks unbounded growth and a telephone-game
+drift in wording across rounds). Resumable — a round already recorded
+in `--round_log` with its files intact is skipped on re-run, so a
+`--max_rounds 10` job split across multiple SLURM submissions just
+continues from the last completed round.
+
+After the last round, the round with the **highest overall
+`judge_accuracy` across every round scored, round 0 included**, is
+copied to `<output_dir>/skill_memory_best.md` — a loop that never
+actually improves on the starting file reports round 0 as the winner,
+not a forced "optimized" result.
 
 **Explicit, stated caveat**: every round's edit is steered DIRECTLY by
 this fixed eval split's (n=199) own scores — this is intentionally
 optimizing against the same split repeatedly, a real overfitting risk,
-chosen on purpose despite it (see the loop-design discussion above —
-the clean version of this would use a 3-way lessons/dev/final-eval
-split; this version does not, by explicit choice, so treat any single
-round's number as provisional). `--round_log` tracks every round's
-per-task scores in one JSON file specifically so a noisy, non-monotonic
-trajectory is visible rather than only ever looking at the latest
-round's number in isolation.
+chosen on purpose despite it (the clean version of this would use a
+3-way lessons/dev/final-eval split; this version does not, by explicit
+choice). Read the full `--round_log` trajectory, not just which round
+"won" — a noisy, non-monotonic trajectory across rounds is itself a
+meaningful signal (it would suggest the loop is chasing eval-split
+noise rather than finding real improvements), and the selected file
+should be treated as provisional until confirmed on a split this loop
+never touched.
 
 ## Step 4 — ablation (built)
 

@@ -87,20 +87,31 @@ Stages:
                                stratified by crop, seeded by --seed) — the eval split must never be
                                used to write the skill-memory file this stage builds toward.
                                Resumable (an already-cached image/row is skipped).
-    heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — self-
-                               optimization loop: EDITS an existing skill-memory.md directly against
-                               this round's own eval-split per-task scores + a sample of the mistakes
-                               made WHILE using it, instead of re-summarizing from Step 2's traces.
-                               ONE round per invocation — feed --eval_ckpt (a heldout-zeroshot --split
-                               eval run made WITH --skill_memory_path pointed at the CURRENT skill
-                               file), get a revised skill.md at --output_md (a NEW path, never
-                               overwriting the input), then run heldout-zeroshot again with THAT file
-                               to produce the next round's --eval_ckpt. --round_log appends each
-                               round's task-bucket scores to one JSON file so the trajectory across
-                               rounds is visible, not just the latest number. EXPLICITLY steers
-                               directly off the eval split every round — a real overfitting risk,
-                               taken on purpose; any single round's number is provisional until
-                               confirmed on a split this loop never touched.
+    heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
+                               self-optimization loop, one invocation runs the whole thing. Feed
+                               --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and
+                               --max_rounds; round 0 scores the file as-is (reusing
+                               heldout-zeroshot's own --split eval generation+judge logic directly,
+                               not reimplemented), then each round 1..N EDITS the previous round's
+                               file against ITS OWN per-task scores + a sample of its own mistakes
+                               (never re-summarizing from Step 2's original traces) and re-scores.
+                               Every round writes <output_dir>/round<i>/ (its own skill_memory.md +
+                               checkpoint) and appends ONE entry to --round_log (default
+                               <output_dir>/round_log.json) carrying: overall + per-task
+                               judge_accuracy, a MECHANICAL line-diff vs. the previous round (via
+                               difflib — not trusted to the model's own self-report), and the
+                               editing model's own stated changelog (parsed from the
+                               ---CHANGELOG--- section its prompt requires) — the diff is the
+                               objective "what changed", the changelog is the model's own "why".
+                               Resumable — a round already in --round_log with its files intact is
+                               skipped on re-run. After the last round, the HIGHEST-scoring round
+                               (round 0 included — a loop that never improves reports round 0, not
+                               a forced "optimized" file) is copied to
+                               <output_dir>/skill_memory_best.md. EXPLICITLY steers every round
+                               directly off the same eval split — a real overfitting risk, taken on
+                               purpose; read the full --round_log trajectory, not just which round
+                               won, and treat the selected file as provisional until confirmed on a
+                               split this loop never touched.
     catalog-detection-datasets  Stage 5 (prep) — resolve class_names + bbox convention for
                                detection-type datasets already found by catalog-datasets
     migrate-detection-datasets  Stage 5 (prep) — regenerate src/config/detection_datasets.yaml
