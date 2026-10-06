@@ -101,6 +101,41 @@ def with_retry(fn, *args, **kwargs):
             time.sleep(wait)
 
 
+def fallback_parquet_data_files(repo_id: str) -> list[str] | None:
+    """hf:// URIs for every real *.parquet file in repo_id, or None if
+    there aren't any. Shared by every caller below that needs to bypass a
+    repo's own broken README-declared config — confirmed on
+    Project-AgML/synthetic_cowpea_{flower,pod}_detection: the repo's
+    README declares a config (e.g. "synthetic") whose data_files glob
+    pattern matches ZERO real files, so get_dataset_config_names()/
+    load_dataset(repo_id, ANY_cfg_name, ...) raises EmptyDatasetError for
+    every config name tried, not just the broken one — only loading via
+    the GENERIC "parquet" builder pointed at explicit hf:// URIs (which
+    never consults the repo's own README/configs metadata at all) works.
+    General — not hardcoded to these two repo names, in case another
+    AgML repo has the same README bug."""
+    from huggingface_hub import list_repo_files
+    parquet_files = [f for f in list_repo_files(repo_id, repo_type="dataset") if f.endswith(".parquet")]
+    if not parquet_files:
+        return None
+    return [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
+
+
+def load_dataset_safe(repo_id: str, cfg_name: str | None, split: str):
+    """load_dataset(repo_id, cfg_name, split=split), falling back to
+    fallback_parquet_data_files()'s generic-parquet-builder bypass on
+    EmptyDatasetError — see that function's own docstring for why."""
+    from datasets import load_dataset
+    from datasets.data_files import EmptyDatasetError
+    try:
+        return load_dataset(repo_id, cfg_name, split=split)
+    except EmptyDatasetError:
+        data_files = fallback_parquet_data_files(repo_id)
+        if data_files is None:
+            raise
+        return load_dataset("parquet", data_files=data_files, split=split)
+
+
 def find_label_column(features) -> str:
     for key in ("label", "labels", "class", "class_label"):
         if key in features:
@@ -116,11 +151,9 @@ def resolve_class_names(ds, label_col: str) -> list[str] | None:
 def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
                      n_per_class: int, seed: int,
                      fixed_indices: dict[str, list[int]] | None):
-    from datasets import load_dataset
-
     config = hf_config or catalog.get(agml_name, {}).get("preferred_config")
     repo_id = f"Project-AgML/{agml_name}"
-    ds = load_dataset(repo_id, config, split="train")
+    ds = load_dataset_safe(repo_id, config, split="train")
     label_col = find_label_column(ds.features)
     class_names = resolve_class_names(ds, label_col)
 

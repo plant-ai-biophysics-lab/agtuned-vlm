@@ -10,6 +10,34 @@ DISEASE_TASK_TYPES = {"disease", "pest_damage"}
 IDENTIFICATION_TASK_TYPES = {"species_identification", "quality_identification"}
 
 
+def _load_dataset_safe(repo_id: str, cfg_name: str | None, split: str):
+    """load_dataset(repo_id, cfg_name, split=split), with a fallback for a
+    confirmed real repo-side data bug: some AgML repos (confirmed on
+    Project-AgML/synthetic_cowpea_{flower,pod}_detection) declare a config
+    in their own README whose data_files glob pattern matches ZERO real
+    files — load_dataset raises EmptyDatasetError for ANY config name
+    passed, not just the broken one. On that specific error, bypass the
+    repo's own module/config resolution entirely and load via the generic
+    "parquet" builder pointed at explicit hf:// URIs for the real files
+    (found via huggingface_hub.list_repo_files) — never consults the
+    repo's own README/configs metadata at all. General, not hardcoded to
+    these two repo names, in case another AgML repo has the same bug.
+    Same fix pattern as scripts/agml_hf/download_and_sample.py's own
+    load_dataset_safe — duplicated here rather than imported, since
+    src/common shouldn't depend on scripts/ (wrong layering direction)."""
+    from datasets import load_dataset
+    from datasets.data_files import EmptyDatasetError
+    try:
+        return load_dataset(repo_id, cfg_name, split=split)
+    except EmptyDatasetError:
+        from huggingface_hub import list_repo_files
+        parquet_files = [f for f in list_repo_files(repo_id, repo_type="dataset") if f.endswith(".parquet")]
+        if not parquet_files:
+            raise
+        data_files = [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
+        return load_dataset("parquet", data_files=data_files, split=split)
+
+
 @dataclass
 class DatasetConfig:
     agml_name: str
@@ -388,8 +416,7 @@ def load_hf_samples(
             path = label_dir / f"{idx}.jpg"
             if not path.exists():
                 if ds is None:
-                    from datasets import load_dataset
-                    ds = load_dataset(repo_id, config, split="train")
+                    ds = _load_dataset_safe(repo_id, config, split="train")
                     image_col = find_image_column(ds.features)
                 label_dir.mkdir(parents=True, exist_ok=True)
                 ds[idx][image_col].convert("RGB").save(path, format="JPEG")
@@ -486,8 +513,7 @@ def load_hf_detection_samples(
                 boxes = _json.loads(ann_path.read_text())
             else:
                 if ds is None:
-                    from datasets import load_dataset
-                    ds = load_dataset(repo_id, config, split="train")
+                    ds = _load_dataset_safe(repo_id, config, split="train")
                     image_col = find_image_column(ds.features)
                 out_dir.mkdir(parents=True, exist_ok=True)
                 row = ds[idx]

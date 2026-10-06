@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.agml_hf.download_and_sample import with_retry  # noqa: E402
+from scripts.agml_hf.download_and_sample import load_dataset_safe, with_retry  # noqa: E402
 from src.common.dataset_config import active_datasets, DatasetConfig, subsample_class_balanced  # noqa: E402
 from src.common.progress import Progress  # noqa: E402
 
@@ -44,12 +44,10 @@ from src.common.progress import Progress  # noqa: E402
 def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
                      n_per_class: int, seed: int,
                      fixed_indices: dict[str, list[int]] | None):
-    from datasets import load_dataset
-
     meta = catalog.get(agml_name, {})
     config = hf_config or meta.get("preferred_config", "default")
     repo_id = f"Project-AgML/{agml_name}"
-    ds = load_dataset(repo_id, config, split="train")
+    ds = load_dataset_safe(repo_id, config, split="train")
     class_names = meta.get("class_names")
 
     if fixed_indices is not None:
