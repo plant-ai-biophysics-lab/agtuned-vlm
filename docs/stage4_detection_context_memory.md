@@ -59,6 +59,26 @@ discrepancies, per-sample generation) is shared:
 not an automated metric — a human reads the output, nothing in this
 step computes a score:
 
+```bash
+# Needs an existing detection-multiclass checkpoint first — reuse one
+# already on disk from Stage 6's own work, or generate one fresh:
+uv run python main.py detection-multiclass \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --output_dir outputs_final/detection_multiclass/
+
+# Then the ablation itself:
+uv run python main.py detection-skill-representation-ablation \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --ckpt outputs_final/detection_multiclass/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --n_samples 30
+```
+
+Writes 30 `comparison_sample<i>_<error_type>.png` files to
+`outputs_final/detection_skill_representation_ablation/` (default
+`--out_dir`) — read these by eye to decide which representation Step 2
+builds on. `--crop_pad_frac` (default `0.25`) controls condition (c)'s
+padding if the crop looks too tight or too loose on a first read.
+
 - Source: a **`detection-multiclass`** checkpoint. Real local metrics
   decided this (`outputs_final/detection_multiclass/.../metrics.json`
   vs. `outputs_final/detection_baseline/.../metrics.json`,
