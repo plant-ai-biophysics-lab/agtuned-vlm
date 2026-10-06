@@ -11,6 +11,7 @@ STAGES = {
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
+    "heldout-skill-optimize": "src.heldout_skill_optimize",
     "heldout-ablation-summary": "src.heldout_ablation_summary",
     "catalog-detection-datasets":  "scripts.agml_hf.catalog_detection_datasets",
     "report-detection-catalog":    "scripts.agml_hf.report_detection_catalog",
@@ -86,6 +87,20 @@ Stages:
                                stratified by crop, seeded by --seed) — the eval split must never be
                                used to write the skill-memory file this stage builds toward.
                                Resumable (an already-cached image/row is skipped).
+    heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — self-
+                               optimization loop: EDITS an existing skill-memory.md directly against
+                               this round's own eval-split per-task scores + a sample of the mistakes
+                               made WHILE using it, instead of re-summarizing from Step 2's traces.
+                               ONE round per invocation — feed --eval_ckpt (a heldout-zeroshot --split
+                               eval run made WITH --skill_memory_path pointed at the CURRENT skill
+                               file), get a revised skill.md at --output_md (a NEW path, never
+                               overwriting the input), then run heldout-zeroshot again with THAT file
+                               to produce the next round's --eval_ckpt. --round_log appends each
+                               round's task-bucket scores to one JSON file so the trajectory across
+                               rounds is visible, not just the latest number. EXPLICITLY steers
+                               directly off the eval split every round — a real overfitting risk,
+                               taken on purpose; any single round's number is provisional until
+                               confirmed on a split this loop never touched.
     catalog-detection-datasets  Stage 5 (prep) — resolve class_names + bbox convention for
                                detection-type datasets already found by catalog-datasets
     migrate-detection-datasets  Stage 5 (prep) — regenerate src/config/detection_datasets.yaml

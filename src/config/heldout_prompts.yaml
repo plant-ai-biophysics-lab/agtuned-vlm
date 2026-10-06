@@ -164,3 +164,48 @@ heldout_reduce_summarize_prompt: |
 
   Keep it concrete and skimmable — short bullets, not paragraphs. Do not
   invent facts not supported by the summaries above.
+
+# Step 3b (heldout_skill_optimize.py) — self-optimization loop. Takes
+# the CURRENT skill.md text directly and EDITS it (not a re-summarize
+# from traces — this call never sees the original explanation traces,
+# only the skill file's own current wording plus this round's own
+# eval-split failures), steered by per-task-bucket accuracy and a sample
+# of the mistakes the model made WHILE using this exact skill file.
+# Params: {current_skill_md} {task_scores_block} {miss_examples_block}
+heldout_skill_edit_prompt: |
+  Below is the CURRENT version of a reference document another
+  vision-language model reads before diagnosing crop disease/pest/
+  nutrient-deficiency images. It was just evaluated on a held-out set of
+  images WHILE using this exact document, broken down by category:
+
+  {task_scores_block}
+
+  Here are specific cases where the model, using this exact document,
+  still got the answer wrong:
+
+  {miss_examples_block}
+
+  CURRENT DOCUMENT:
+  {current_skill_md}
+
+  Revise this document to address the weaker categories above and the
+  specific mistakes shown — add, remove, or reword guidance as needed.
+  Rules that must still hold in your revision:
+  1. Every bullet must point toward a SPECIFIC diagnosis name (e.g.
+     "Fall armyworm", "Downy Mildew", "Nitrogen Deficiency") — never a
+     bare category word like "Pest", "Disease", "Deficiency", "Chewing
+     pests", "Sucking pests", or "Viral infection" standing alone as a
+     bullet's entire content.
+  2. Do NOT add a "Common Diseases/Pests/Conditions to Know" style
+     reference list, or any section whose bullets are just bare
+     category names restated as standalone entries.
+  3. Keep the same overall structure (`# Crop Diagnosis — Lessons
+     Learned`, `## What Worked` / `## What Didn't Work`, organized by
+     category) unless a category genuinely has nothing useful to say.
+  4. Keep it concrete and skimmable — short bullets, not paragraphs. Do
+     not invent facts not supported by the mistakes shown or the
+     current document's own existing content.
+
+  Respond with ONLY the full revised document (Markdown), starting with
+  the `# Crop Diagnosis — Lessons Learned` heading — no preamble, no
+  commentary about what you changed.

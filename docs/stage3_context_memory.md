@@ -266,6 +266,58 @@ for — never applied blindly to `quality_identification`/
 `species_identification`/`weed_identification` runs, where it would be
 irrelevant context at best.
 
+## Step 3b — self-optimization loop (built)
+
+`heldout-skill-optimize` (`src/heldout_skill_optimize.py`) — EDITS an
+existing skill-memory.md directly against this round's own eval-split
+per-task scores, instead of re-summarizing from Step 2's traces. The
+v4 skill file (the one that earned +0.0603, hand-patched to remove the
+"Common Diseases..." section) is checked into the repo at
+`src/config/skill_memory_disease-pest.md` — the fixed starting point ("round 0")
+for this loop, so it survives independent of whatever's sitting in
+`outputs_final/` on any given machine.
+
+One round:
+
+```bash
+# 1. Score the CURRENT skill file on eval:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --skill_memory_path src/config/skill_memory_disease-pest.md \
+    --output_dir outputs_final/heldout_zeroshot_eval_optimize_round0/
+
+# 2. Edit the skill file against those scores + a sample of its own misses:
+uv run python main.py heldout-skill-optimize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --eval_ckpt outputs_final/heldout_zeroshot_eval_optimize_round0/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --skill_memory_path src/config/skill_memory_disease-pest.md \
+    --output_md outputs_final/heldout_skill_optimize/skill_memory_round1.md \
+    --round_log outputs_final/heldout_skill_optimize/round_log.json
+
+# 3. Score round 1's output, feed it into round 2's edit call, repeat —
+#    --skill_memory_path/--eval_ckpt point at round N's own files each time.
+```
+
+Each round's `--output_md` is a NEW path (`skill_memory_round<N>.md`) —
+never overwrites the input, so every round's version stays on disk.
+Each round **replaces** the document rather than merging onto it (see
+the earlier discussion on why: the edit call always has the full
+current document in front of it, so nothing is lost by writing a fresh
+revision — the alternative, accreting edits onto edits, risks unbounded
+growth and a telephone-game drift in wording across rounds).
+
+**Explicit, stated caveat**: every round's edit is steered DIRECTLY by
+this fixed eval split's (n=199) own scores — this is intentionally
+optimizing against the same split repeatedly, a real overfitting risk,
+chosen on purpose despite it (see the loop-design discussion above —
+the clean version of this would use a 3-way lessons/dev/final-eval
+split; this version does not, by explicit choice, so treat any single
+round's number as provisional). `--round_log` tracks every round's
+per-task scores in one JSON file specifically so a noisy, non-monotonic
+trajectory is visible rather than only ever looking at the latest
+round's number in isolation.
+
 ## Step 4 — ablation (built)
 
 Two `heldout-zeroshot` runs against `--split eval` (the slice no other
@@ -282,23 +334,13 @@ uv run python main.py heldout-zeroshot \
 uv run python main.py heldout-zeroshot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --split eval \
-    --skill_memory_path outputs_final/heldout_summarize/skill_memory.md \
-    --output_dir outputs_final/heldout_zeroshot_eval_with_skill/
-
-# Wrapper-only — the two firm rules (specificity, don't-over-diagnose-
-# healthy) with NO skill_memory content at all. Isolates how much of
-# v2/v3/v4's gain comes from the instructions themselves vs. the
-# skill file's actual lesson content:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --split eval \
-    --wrapper_only \
-    --output_dir outputs_final/heldout_zeroshot_eval_wrapper_only/
+    --skill_memory_path src/config/skill_memory_disease-pest.md \
+    --output_dir outputs_final/heldout_zeroshot_eval_not_optimized_skill/
 
 # Compare:
 uv run python main.py heldout-ablation-summary \
     --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --skill_ckpt outputs_final/heldout_zeroshot_eval_with_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+    --skill_ckpt outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
 ```
 
 `--skill_memory_path` (new flag on `heldout-zeroshot`) injects the file
@@ -316,60 +358,26 @@ vision-baseline/verifier-cot based on a non-improving or negative
 result** — the whole point of this step is to not trust the skill file
 just because it looks reasonable on paper.
 
-**Real result, 4 iterations, all on the SAME n=199 held-out eval split**
-(full history/exact wrapper wording now lives in
-`src/common/heldout_skill.py`'s own module docstring — the single
-source of truth so Step 5's real injection can never drift from what
-was actually validated):
-
-| Version | Change | judge_accuracy | Delta | wrong→correct / correct→wrong |
-|---|---|---|---|---|
-| v1 | skill file, no wrapper instructions | 0.3719 | +0.0101 (noise) | 13 / 11 |
-| v2 | + "be specific" instruction | 0.4121 | +0.0503 | 18 / 8 |
-| v3 | + forbidden bare-words named explicitly + "don't over-diagnose healthy" | 0.4121 | +0.0503 (same net, but 12/2 — fewer of BOTH) | 12 / 2 |
-| v4 | + removed skill_memory.md's own "Common Diseases..." reference section (it repeated generic category labels like "Chewing Pests:" as standalone entries) | **0.4221** | **+0.0603** | 14 / 2 |
-| wrapper-only | `--wrapper_only` — the two firm rules alone, NO skill_memory content at all (`build_wrapper_only_system_prompt`) | TODO (run pending) | TODO | TODO |
-
-(Baseline without any skill file: 0.3618.)
-
-**Why the wrapper-only condition matters**: v2/v3/v4 always carry BOTH
-the skill file's actual lesson content AND the two firm rules together
-— so it's never been possible to tell how much of the +0.0503/+0.0603
-delta is the lessons themselves vs. just the instructions alone (the
-instructions are, after all, a form of in-context learning too — they
-tell the model what NOT to answer, independent of any example-based
-lesson content). If wrapper-only lands close to v4's 0.4221, the skill
-file's actual content isn't pulling much weight beyond what the two
-rules already buy; if it lands closer to baseline's 0.3618, that
-confirms the lesson content itself is the real driver and the rules are
-just removing a couple of specific failure modes on top of it.
-
-**Per-task breakdown** (same checkpoints, `judge_accuracy` split by
+**Real result** (n=199 held-out eval split, `judge_accuracy` split by
 `bucket_category(class_label)` — disease n=69, pest n=62, deficiency
-n=10, healthy n=58):
+n=10, healthy n=58; full version-by-version iteration history that
+arrived at this skill file — v1 through v4 — now lives in
+`src/common/heldout_skill.py`'s own module docstring, the single source
+of truth so Step 5's real injection can never drift from what was
+actually validated):
 
-| Version | disease | pest | deficiency | healthy |
-|---|---|---|---|---|
-| baseline | 0.2319 | 0.1452 | 0.1000 | 0.7931 |
-| v1 | 0.2319 (+0.0000) | 0.1452 (+0.0000) | 0.4000 (+0.3000) | 0.7759 (−0.0172) |
-| v2 | 0.3188 (+0.0869) | 0.2097 (+0.0645) | 0.2000 (+0.1000) | 0.7759 (−0.0172) |
-| v3 | 0.2899 (+0.0580) | 0.2097 (+0.0645) | 0.3000 (+0.2000) | 0.7931 (+0.0000) |
-| v4 | 0.2754 (+0.0435) | 0.2419 (+0.0967) | 0.3000 (+0.2000) | **0.8103 (+0.0172)** |
+| Version | overall | disease | pest | deficiency | healthy |
+|---|---|---|---|---|---|
+| baseline (no skill) | 0.3618 | 0.2319 | 0.1452 | 0.1000 | 0.7931 |
+| not optimized skill (`skill_memory_disease-pest.md`) | **0.4221** (+0.0603) | 0.2754 (+0.0435) | 0.2419 (+0.0967) | 0.3000 (+0.2000) | 0.8103 (+0.0172) |
 
-v1's "noise" delta reads differently once split by task: it's exactly
-zero movement on disease AND pest (the two task types the skill file
-actually targets) — all of v1's +0.0101 came from deficiency, the
-smallest bucket (n=10, so +0.3000 there is 3 flipped rows), while
-healthy regressed. v2 is where disease/pest first move for real. v4's
-own biggest single-task gain is pest (+0.0967, the largest per-task
-delta of any version on any bucket except deficiency's small-n swings),
-consistent with the later finding that the full-scale AgML run's gain
-concentrated in pest_damage and was flat on disease — the eval-split
-ablation was already showing disease improving less than pest at every
-version except v2, this just wasn't called out at the time. deficiency's
-swings (+0.30, +0.10, +0.20, +0.20) are the least trustworthy numbers in
-this table — n=10 means each flipped row moves the bucket's accuracy by
-10 points.
+Pest carries the single biggest per-task gain (+0.0967); deficiency's
+swing (+0.2000) is the least trustworthy given n=10 (each flipped row
+moves that bucket's accuracy by 10 points). This matches the later
+finding that the full-scale AgML run's gain concentrated in
+`pest_damage` and was flat on `disease` — already visible here, just
+not called out at the time. Step 3b's self-optimization loop (above) is
+the ongoing attempt to improve on this row specifically.
 
 v1's near-zero delta was a real, mechanistic regression, not just noise:
 the model borrowed the skill file's own CATEGORY-level phrasing
