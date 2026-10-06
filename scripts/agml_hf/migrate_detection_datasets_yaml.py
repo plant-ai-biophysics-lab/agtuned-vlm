@@ -145,7 +145,17 @@ def main() -> None:
         else:
             if old.get("crop") is not None:
                 n_crop_preserved += 1
-            if merged["skip"] and merged is not fresh and merged.get("notes") == old.get("notes") and old.get("skip"):
+            # Count against the EXACT same condition merge_forward() itself
+            # used to decide the override — not an after-the-fact comparison
+            # of merged-vs-fresh, which is unreliable (merge_forward always
+            # returns a NEW dict object when old is given, so "merged is not
+            # fresh" is trivially true for every existing dataset regardless
+            # of whether the holdout branch fired; an earlier version of this
+            # counter used that broken check and overcounted — e.g. reported
+            # 15 instead of 5 real holdouts, because it also matched any
+            # ordinary unresolved-class entry whose notes text happened to
+            # equal the fresh one, which is the common case).
+            if old.get("skip") and str(old.get("notes", "")).startswith(_HELD_OUT_MARKER):
                 n_holdout_preserved += 1
         entries.append(merged)
     entries.sort(key=lambda e: (e["skip"], e["agml_name"]))

@@ -60,6 +60,47 @@ _CLASS_LIST_HINT_RE = re.compile(
 )
 
 
+def _fallback_parquet_data_files(repo_id: str) -> list[str] | None:
+    """hf:// URIs for every real *.parquet file in repo_id, or None if there
+    aren't any — used by the two functions below when the repo's own module/
+    config resolution is broken. See catalog_datasets.py::introspect_repo's
+    own module docstring comment for the full story (confirmed on
+    Project-AgML/synthetic_cowpea_{flower,pod}_detection: README declares a
+    config whose data_files pattern matches zero real files, so EmptyDatasetError
+    fires for ANY cfg_name passed, not just the broken one — only a fully
+    repo-module-bypassing load via the generic "parquet" builder + explicit
+    hf:// URIs works)."""
+    from huggingface_hub import list_repo_files
+    parquet_files = [f for f in list_repo_files(repo_id, repo_type="dataset") if f.endswith(".parquet")]
+    if not parquet_files:
+        return None
+    return [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
+
+
+def _load_dataset_builder_safe(repo_id: str, cfg_name: str):
+    from datasets import load_dataset_builder
+    from datasets.data_files import EmptyDatasetError
+    try:
+        return load_dataset_builder(repo_id, cfg_name)
+    except EmptyDatasetError:
+        data_files = _fallback_parquet_data_files(repo_id)
+        if data_files is None:
+            raise
+        return load_dataset_builder("parquet", data_files=data_files)
+
+
+def _load_dataset_safe(repo_id: str, cfg_name: str, split: str):
+    from datasets import load_dataset
+    from datasets.data_files import EmptyDatasetError
+    try:
+        return load_dataset(repo_id, cfg_name, split=split)
+    except EmptyDatasetError:
+        data_files = _fallback_parquet_data_files(repo_id)
+        if data_files is None:
+            raise
+        return load_dataset("parquet", data_files=data_files, split=split)
+
+
 def _names_from_feature(feature) -> list[str] | None:
     """Descend through Sequence/List wrapping to find a ClassLabel's .names,
     one level deeper than catalog_datasets.py's find_label_feature() checks
@@ -91,9 +132,7 @@ def _find_category_feature(features):
 
 
 def resolve_class_names(repo_id: str, cfg_name: str) -> list[str] | None:
-    from datasets import load_dataset_builder
-
-    b = load_dataset_builder(repo_id, cfg_name)
+    b = _load_dataset_builder_safe(repo_id, cfg_name)
     features = b.info.features or {}
 
     # (a) category feature nested inside "objects" (or sitting top-level) —
@@ -131,8 +170,7 @@ def resolve_class_names(repo_id: str, cfg_name: str) -> list[str] | None:
     # (c) load one row, check for a stray field alongside "objects" that
     # isn't part of the standard bbox/category schema.
     try:
-        from datasets import load_dataset
-        row = load_dataset(repo_id, cfg_name, split="train[:1]")[0]
+        row = _load_dataset_safe(repo_id, cfg_name, split="train[:1]")[0]
         for key in ("categories", "classes", "labels", "class_names"):
             val = row.get(key)
             if isinstance(val, list) and val and isinstance(val[0], str):
@@ -153,8 +191,7 @@ def probe_bbox_convention(repo_id: str, cfg_name: str, n_rows: int) -> dict:
     with no such ordering guarantee against them."""
     result = {"scale": "unknown", "format": "unknown", "n_probed": 0}
     try:
-        from datasets import load_dataset
-        ds = load_dataset(repo_id, cfg_name, split=f"train[:{n_rows}]")
+        ds = _load_dataset_safe(repo_id, cfg_name, split=f"train[:{n_rows}]")
     except Exception as e:
         result["error"] = str(e)
         return result
