@@ -192,15 +192,31 @@ _BARE_CATEGORY_RE = re.compile(
 )
 _COMMON_SECTION_RE = re.compile(r"common (diseases|pests|conditions).{0,40}(to know|reference)", re.IGNORECASE)
 
+# Direct detector for a channel-thought leak (round 1/4/5's real bug) —
+# does NOT rely on parse_edit_output's own changelog_parsed flag, which
+# turned out to be an unreliable signal: a model whose thinking trace
+# never closed can still happen to mention the literal "---CHANGELOG---"
+# string INSIDE its own unclosed planning prose (e.g. restating its own
+# output-format instructions to itself), which parse_edit_output's naive
+# string-partition then treats as a real delimiter — changelog_parsed=True
+# even though the "document" it split off is still raw garbage thinking
+# text. This checks the actual channel markers directly instead.
+_CHANNEL_MARKER_RE = re.compile(r"<\|channel>|<channel\|>")
+
 
 def check_rule_violations(skill_md: str) -> list[str]:
-    """Automated QC against the exact two documented historical failure
-    modes (see heldout_prompts.yaml's heldout_skill_edit_prompt rules 1-2)
-    — returns a list of violation strings, empty if clean. Not a full
-    content-quality check, just a cheap regex tripwire for the specific,
-    already-known-bad patterns, run every round so a regression shows up
-    in --round_log immediately rather than requiring a manual re-read."""
+    """Automated QC against the documented historical failure modes (see
+    heldout_prompts.yaml's heldout_skill_edit_prompt rules 1-2, plus the
+    channel-thought-leak bug found in a real run) — returns a list of
+    violation strings, empty if clean. Not a full content-quality check,
+    just a cheap regex tripwire for the specific, already-known-bad
+    patterns, run every round so a regression shows up in --round_log
+    immediately rather than requiring a manual re-read."""
     violations = []
+    if _CHANNEL_MARKER_RE.search(skill_md):
+        violations.append("CHANNEL-THOUGHT LEAK: a raw <|channel>/<channel|> marker is present in the "
+                           "document — this round's skill.md is likely the model's own unclosed "
+                           "thinking trace, not a real revised document (see --edit_enable_thinking)")
     for i, line in enumerate(skill_md.splitlines(), start=1):
         if _BARE_CATEGORY_RE.match(line.strip()):
             violations.append(f"line {i}: bare-category-word bullet: {line.strip()!r}")
@@ -239,14 +255,14 @@ def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores
         miss_examples_block=miss_examples_block,
     )
     hist = [{"role": "user", "content": edit_text}]
-    prompt = render_chat_template(tokenizer, hist, enable_thinking=args.enable_thinking, chat_template=chat_template)
+    prompt = render_chat_template(tokenizer, hist, enable_thinking=args.edit_enable_thinking, chat_template=chat_template)
     gen_params = SamplingParams(
         temperature=0.0, max_tokens=args.edit_max_tokens, seed=args.seed,
-        skip_special_tokens=not args.enable_thinking,
+        skip_special_tokens=not args.edit_enable_thinking,
     )
     out = llm.generate([prompt], sampling_params=gen_params)[0]
     raw = out.outputs[0].text
-    thinking, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+    thinking, cleaned = extract_channel_thought(raw) if args.edit_enable_thinking else ("", raw)
     revised_md, changelog, changelog_parsed = parse_edit_output(cleaned)
     return revised_md, changelog, changelog_parsed, thinking, cleaned
 
@@ -449,13 +465,35 @@ if __name__ == "__main__":
     parser.add_argument("--manifest", default="dataset/heldout_selected_images.json")
     parser.add_argument("--images_root", default="dataset/images_heldout")
     parser.add_argument("--prompts", default="src/config/prompts.yaml")
-    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+                         help="Controls ONLY the scoring/generation pass (heldout-zeroshot's own "
+                              "default, unchanged) — NOT the edit call, which has its own separate "
+                              "--edit_enable_thinking (default OFF). Keeping these two decoupled is "
+                              "deliberate: the scoring step's thinking behavior is already validated "
+                              "by Step 1/4; the edit step's is not, and defaulting it on caused a "
+                              "real bug (see --edit_enable_thinking's own help).")
     parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja")
     parser.add_argument("--gen_max_tokens", type=int, default=4096,
                          help="Forwarded to each round's heldout-zeroshot scoring pass.")
     parser.add_argument("--chunk_size", type=int, default=64)
+    parser.add_argument("--edit_enable_thinking", action=argparse.BooleanOptionalAction, default=False,
+                         help="OFF by default, DELIBERATELY — editing a document given scores + "
+                              "examples is a text-rewrite task, not the visual diagnosis-under-"
+                              "uncertainty task thinking was actually validated for. Defaulting this "
+                              "on (copied from heldout-summarize's map/reduce calls without "
+                              "re-justifying it for this different task) caused a real failure: the "
+                              "model spent its whole --edit_max_tokens budget on an unfinished "
+                              "thinking trace, the closing channel marker never appeared, "
+                              "extract_channel_thought's regex failed to match, and the RAW "
+                              "truncated '<|channel>thought...' text got written to skill_memory.md "
+                              "as if it were the revised document. Pass --edit_enable_thinking to "
+                              "turn it back on if you have a specific reason to.")
     parser.add_argument("--edit_max_tokens", type=int, default=4096,
-                         help="The revised document is at least as long as the input skill file.")
+                         help="The revised document is at least as long as the input skill file. "
+                              "With --edit_enable_thinking off (the default), this budget goes "
+                              "entirely to the document itself, not partly consumed by a thinking "
+                              "trace — 4096 should comfortably cover a skill.md of this size with "
+                              "headroom for growth across rounds.")
     parser.add_argument("--seed", type=int, default=42,
                          help="Base seed for miss-example sampling — offset by round number so "
                               "different rounds see different miss subsets even against the same "
