@@ -196,13 +196,26 @@ heldout_skill_edit_prompt: |
      bare category word like "Pest", "Disease", "Deficiency", "Chewing
      pests", "Sucking pests", or "Viral infection" standing alone as a
      bullet's entire content.
-  2. Do NOT add a "Common Diseases/Pests/Conditions to Know" style
+  2. Write GENERALIZABLE, INSTRUCTIONAL guidance — a visual pattern,
+     symptom, or distinguishing cue that would help identify this
+     condition across DIFFERENT images of it, not a fact tied to one
+     specific example image. The mistakes shown above are EVIDENCE to
+     diagnose what kind of guidance is missing, not source text to copy
+     from: do NOT lift an "Expert's observations" sentence from a single
+     miss example verbatim into a bullet — extract the underlying visual
+     principle behind it instead. If a mistake is genuinely a one-off
+     with nothing generalizable about it, it is fine to leave it out
+     rather than force a bullet out of it. This document's whole purpose
+     is to teach a DIFFERENT model to reason about images it has NOT
+     seen — a bullet that only makes sense next to the one image that
+     prompted it has no value there.
+  3. Do NOT add a "Common Diseases/Pests/Conditions to Know" style
      reference list, or any section whose bullets are just bare
      category names restated as standalone entries.
-  3. Keep the same overall structure (`# Crop Diagnosis — Lessons
+  4. Keep the same overall structure (`# Crop Diagnosis — Lessons
      Learned`, `## What Worked` / `## What Didn't Work`, organized by
      category) unless a category genuinely has nothing useful to say.
-  4. Keep it concrete and skimmable — short bullets, not paragraphs. Do
+  5. Keep it concrete and skimmable — short bullets, not paragraphs. Do
      not invent facts not supported by the mistakes shown or the
      current document's own existing content.
 
