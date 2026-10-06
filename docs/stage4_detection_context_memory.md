@@ -129,27 +129,59 @@ images within the existing pool — mirroring DigiGreen's complete
 independence from the classification eval pool. Cleaner separation
 than a stratified-image split: no risk of a dataset's own images being
 similar enough to each other that within-dataset lessons/eval leakage
-softens the held-out claim. Tradeoff accepted: fewer, less diverse
-datasets in the lesson pool, and a one-time choice of which datasets to
-remove from the main eval set — worth it for the cleaner generalization
-claim.
+softens the held-out claim.
 
-**The 5 datasets, chosen for domain diversity** (not picked blind —
-each stresses a different failure mode):
+**Final design: a real 3-way split, by DATASET MEMBERSHIP, not a
+within-dataset random split.** Of the ~54-dataset catalog:
 
-| Dataset | Why |
-|---|---|
-| `mango_growth_detection` | growth-stage distinctions (4 classes) |
-| `MH_Weed16_weed_detection` | extreme multiclass (15 species) — stress-tests wrong-class-label |
-| `ghai_strawberry_fruit_detection` | organ-level distinctions (10 classes: bud/calyx/flower/leaf/stem/fruit) |
-| `cashew_detection` | multi-scale (whole tree + individual nuts) — stress-tests merged-vs-missed |
-| `weed_crop_detection` | crop-vs-weed across many species (13 classes) |
+- **TRAIN (10)** — generates the lessons/explanations the skill file is
+  built from:
 
-Marked `skip: true` in `src/config/detection_datasets.yaml` (each with
-a `notes` marker explaining why) — this is the REAL, functional
-exclusion mechanism, since `download_and_sample_detection.py` (Stage
-2/6's own sampler) only ever selects from `active_datasets()`. Active
-pool: 54 → 49.
+  | Dataset | Why |
+  |---|---|
+  | `synthetic_cowpea_flower_detection` | synthetic, cheap/scalable |
+  | `synthetic_cowpea_pod_detection` | synthetic, cheap/scalable |
+  | `grape_detection_syntheticday` | synthetic, cheap/scalable |
+  | `mango_growth_detection` | growth-stage distinctions (4 classes) |
+  | `MH_Weed16_weed_detection` | extreme multiclass (15 species) — stress-tests wrong-class-label |
+  | `ghai_strawberry_fruit_detection` | organ-level distinctions (10 classes) |
+  | `cashew_detection` | multi-scale (tree + nuts) — stress-tests merged-vs-missed |
+  | `weed_crop_detection` | crop-vs-weed across many species (13 classes) |
+  | `tomato_ripeness_detection` | ripeness-stage multiclass |
+  | `onionfoliageset_detection` | crop/no-crop/foliage distinction |
+
+- **VAL (5)** — scores every round of Step 3b's self-optimization loop,
+  NEVER shown to the edit call, selects which round's skill file to
+  keep only (same TRAIN-steers/VAL-selects separation Step 3b's own
+  classification design uses):
+
+  | Dataset | Why |
+  |---|---|
+  | `embrapa_wgisd_grape_detection` | real grape |
+  | `grape_detection_californianight` | real grape, different lighting |
+  | `wheat_head_counting` | grain/counting — very different structure from TRAIN's own picks |
+  | `CocoaMFDB_detection` | different crop family, simple single-class |
+  | `coffee_detection` | multi-scale tree+fruit, different crop than cashew |
+
+  (An earlier pick had VAL strictly domain-paired with TRAIN's 3
+  synthetic datasets — `GEMINI_cowpea_flower_detection`,
+  `GEMINI_cowpea_pod_detection`, `grape_detection_californiaday` — for a
+  sim-to-real transfer test. Moved to TEST instead: VAL's job here is a
+  representative general validation signal across rounds, not a strict
+  synthetic/real pairing.)
+
+- **TEST (~39, the remainder)** — read for a FINAL confirmatory score
+  only, after the self-optimization loop has already picked a winning
+  round via VAL. Never used to generate lessons, never scored mid-loop
+  — stays in Stage 2/6's own active pool, untouched, no marking needed
+  (the only thing that would compromise it is using it to GENERATE
+  content, which nothing in this stage does).
+
+Marked `skip: true` in `src/config/detection_datasets.yaml` for all 15
+TRAIN+VAL datasets (each with a `notes` marker explaining why) — this
+is the REAL, functional exclusion mechanism, since
+`download_and_sample_detection.py` (Stage 2/6's own sampler) only ever
+selects from `active_datasets()`. Active pool: 54 → 39.
 
 ```bash
 uv run python main.py download-heldout-detection
@@ -163,18 +195,37 @@ caching) directly — not reimplemented. Writes
 `dataset/images_detection/`, so a held-out image can never collide
 with Stage 2/6's own eval cache) and
 `dataset/detection_heldout_selected_images.json` — one record per row
-(`agml_dataset`, `image_path`, `boxes`, `split`), `--eval_frac` (default
-0.2) assigned PER DATASET (not pooled first) so a small dataset's rows
-can't get entirely absorbed into the other split by chance. Resumable.
+(`agml_dataset`, `image_path`, `boxes`, `split`), `"split"` DETERMINED
+BY WHICH GROUP THE ROW'S DATASET IS IN (`"lessons"` for TRAIN,
+`"eval"` for VAL), not a randomized within-dataset split. Resumable.
 
-**Known caveat, inherited not introduced here**: `migrate-detection-
-datasets` regenerates `detection_datasets.yaml` from scratch on every
-run and does not currently merge forward prior manual edits — this was
-already true of the `crop` field (hand-filled after generation) before
-this step's own `skip: true` + `notes` markers added a second thing a
-naive re-run would silently undo. Re-apply both by hand if
-`migrate-detection-datasets` is ever re-run; not fixed here since it's
-a pre-existing gap, not something this step introduced.
+**Merge-safety**: `migrate-detection-datasets` regenerates
+`detection_datasets.yaml` from scratch on every run but is now
+merge-safe (fixed directly — see that script's own module docstring,
+`scripts/agml_hf/migrate_detection_datasets_yaml.py`) — a deliberate
+`skip: true` holdout (notes starting with `"HELD OUT for Paper 2 Stage
+4"`) and any existing dataset's hand-filled `crop` field both survive a
+re-run automatically. This was fixed for real, not just documented as
+a caveat, the moment a real re-catalog run (to pick up 2 new synthetic
+datasets added to the Project-AgML org) needed it.
+
+**Real repo-side data bug found and worked around while building
+this**: `synthetic_cowpea_flower_detection`/`synthetic_cowpea_pod_detection`
+declare a config (`"synthetic"`) in their own README whose `data_files`
+glob pattern matches zero real files — `get_dataset_config_names()`
+raises `EmptyDatasetError` for ANY config name passed, not just the
+broken one. Fixed generally (not hardcoded to these two repo names) in
+both `scripts/agml_hf/catalog_datasets.py` and
+`scripts/agml_hf/catalog_detection_datasets.py`: on that specific
+error, bypass the repo's own module/config resolution entirely and
+load via the generic `"parquet"` builder pointed at explicit `hf://`
+URIs for the real files (found via `huggingface_hub.list_repo_files`,
+confirmed real layout: `augmented/train-*.parquet` for both). Their
+`class_names` still came back unresolved even after that fix (category
+is a bare int `0` in the real schema, no `ClassLabel`/`.names`
+anywhere) — filled in manually (`['flower']`/`['pods']`, matching the
+sibling `GEMINI_cowpea_flower_detection`/`GEMINI_cowpea_pod_detection`
+naming convention already in the catalog).
 
 ## Step 1 — zero-shot detection prediction (lessons split)
 

@@ -90,23 +90,29 @@ Stages:
                                used to write the skill-memory file this stage builds toward.
                                Resumable (an already-cached image/row is skipped).
     download-heldout-detection  Paper 2 Stage 4, Step 0 (docs/stage4_detection_context_memory.md)
-                               — download + cache 5 ENTIRE Project-AgML detection datasets
-                               (mango_growth_detection, MH_Weed16_weed_detection,
-                               ghai_strawberry_fruit_detection, cashew_detection,
-                               weed_crop_detection — chosen for domain diversity: growth-stage,
-                               extreme multiclass weed-ID, organ-level part distinctions,
-                               multi-scale/dense clustering, crop-vs-weed) as a HELD-OUT pool,
-                               never sampled into Stage 2/Stage 6's own eval pool at all (these 5
-                               are also marked skip: true in src/config/detection_datasets.yaml).
-                               Reuses download_and_sample_detection.py's own process_dataset() and
+                               — download + cache 15 ENTIRE Project-AgML detection datasets split
+                               by DATASET MEMBERSHIP (not a within-dataset random split): 10
+                               TRAIN (lessons) + 5 VAL (eval) — all 15 marked skip: true in
+                               src/config/detection_datasets.yaml, never sampled into Stage
+                               2/Stage 6's own active eval pool. The remaining ~39 catalog
+                               datasets are TEST — untouched, read for a final confirmatory score
+                               only, never used to generate lessons. TRAIN = 3 synthetic
+                               (synthetic_cowpea_flower_detection, synthetic_cowpea_pod_detection,
+                               grape_detection_syntheticday) + 7 domain-diverse real datasets
+                               (growth-stage, extreme multiclass weed-ID, organ-level, multi-scale
+                               clustering, crop-vs-weed, ripeness, crop/no-crop/foliage). VAL = 5
+                               more, for a general validation signal (not strict synthetic/real
+                               domain pairing) — scores every round of Step 3b's self-optimization
+                               loop but is NEVER shown to the edit call, selects which round's
+                               skill file to keep only. Reuses
+                               download_and_sample_detection.py's own process_dataset() and
                                dataset_config.py's own load_hf_detection_samples() directly, not
                                reimplemented. Writes dataset/images_detection_heldout/ (separate
                                cache dir from dataset/images_detection/) +
                                dataset/detection_heldout_selected_images.json, with a per-row
-                               "split": "lessons"|"eval" assignment (--eval_frac, default 0.2,
-                               stratified by DATASET not crop — each of the 5 already represents
-                               its own domain). Resumable (an already-cached image/sidecar pair is
-                               a pure local-disk read).
+                               "split": "lessons"|"eval" assignment DETERMINED BY WHICH GROUP ITS
+                               DATASET IS IN, not randomized. Resumable (an already-cached
+                               image/sidecar pair is a pure local-disk read).
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and
