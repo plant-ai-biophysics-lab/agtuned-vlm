@@ -132,38 +132,62 @@ def build_task_scores_block(scores: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
-def sample_miss_examples(rows: list[dict], n_per_bucket: int, seed: int) -> dict[str, list[dict]]:
-    """{bucket: [row, ...]} — up to n_per_bucket WRONG rows per bucket,
-    sampled (not just the first N) so repeated rounds against the same
-    TRAIN split don't always see the identical miss subset. Callers pass
-    TRAIN rows only — this function has no opinion on which split it's
-    given, but the loop's own design never calls it on VAL rows."""
+def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, want_correct: bool) -> dict[str, list[dict]]:
+    """{bucket: [row, ...]} — up to n_per_bucket rows per bucket matching
+    want_correct, sampled (not just the first N) so repeated rounds
+    against the same TRAIN split don't always see the identical subset.
+    Callers pass TRAIN rows only — this function has no opinion on which
+    split it's given, but the loop's own design never calls it on VAL
+    rows. Shared by sample_miss_examples/sample_worked_examples so the
+    two can never silently drift in sampling behavior."""
     rng = random.Random(seed)
-    misses: dict[str, list[dict]] = defaultdict(list)
+    matched: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         if r.get("judged_correct") in (None, ""):
             continue
-        if int(r["judged_correct"]) == 1:
+        if (int(r["judged_correct"]) == 1) != want_correct:
             continue
-        misses[bucket_category(r["class_label"])].append(r)
+        matched[bucket_category(r["class_label"])].append(r)
     out = {}
     for b in _BUCKETS:
-        pool = misses.get(b, [])
+        pool = matched.get(b, [])
         out[b] = rng.sample(pool, min(n_per_bucket, len(pool)))
     return out
 
 
-def build_miss_examples_block(examples_by_bucket: dict[str, list[dict]]) -> str:
+def sample_miss_examples(rows: list[dict], n_per_bucket: int, seed: int) -> dict[str, list[dict]]:
+    """Up to n_per_bucket WRONG rows per bucket — what to fix."""
+    return _sample_rows_by_judgement(rows, n_per_bucket, seed, want_correct=False)
+
+
+def sample_worked_examples(rows: list[dict], n_per_bucket: int, seed: int) -> dict[str, list[dict]]:
+    """Up to n_per_bucket RIGHT rows per bucket — what to protect. Same
+    seed as the paired sample_miss_examples call (caller's choice) is
+    fine — they draw from disjoint pools (judged_correct 0 vs 1), so
+    using the same seed doesn't correlate which specific rows get picked
+    from each."""
+    return _sample_rows_by_judgement(rows, n_per_bucket, seed, want_correct=True)
+
+
+def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_label: str) -> str:
     blocks = []
     for b in _BUCKETS:
         for r in examples_by_bucket.get(b, []):
             blocks.append(
-                f"[{b}] {r.get('crop', '?')} plant — model answered "
+                f"[{b}] {r.get('crop', '?')} plant — model {outcome_label} "
                 f"\"{(r.get('extracted_answer') or r.get('prediction') or '').strip()}\", actual answer: "
                 f"\"{r['class_label']}\". Model's own reasoning: \"{(r.get('reasoning') or '').strip()[:500]}\". "
                 f"Expert's observations: \"{(r.get('details') or '').strip()[:500]}\"."
             )
     return "\n\n".join(blocks)
+
+
+def build_miss_examples_block(examples_by_bucket: dict[str, list[dict]]) -> str:
+    return _build_examples_block(examples_by_bucket, "answered")
+
+
+def build_worked_examples_block(examples_by_bucket: dict[str, list[dict]]) -> str:
+    return _build_examples_block(examples_by_bucket, "correctly answered")
 
 
 def diff_skill_text(old_text: str, new_text: str) -> dict:
@@ -258,18 +282,23 @@ def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: 
 
 
 def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores_block: str,
-                miss_examples_block: str, edit_template: str, chat_template: str | None,
-                args: argparse.Namespace) -> tuple[str, str, bool, str, str]:
+                miss_examples_block: str, worked_examples_block: str, edit_template: str,
+                chat_template: str | None, args: argparse.Namespace) -> tuple[str, str, bool, str, str]:
     """ONE edit call. Returns (revised_md, changelog_text, changelog_parsed,
     thinking_trace, raw_cleaned_output) — the last two are for debugging a
     round that looks wrong (truncation, a channel-thought-leak, a model
     that ignored the format) without needing to re-run anything; callers
     should persist raw_cleaned_output to disk per round, not just the
     parsed halves, since parse_edit_output's own correctness is exactly
-    the kind of thing you'd want to audit from the untouched source."""
+    the kind of thing you'd want to audit from the untouched source.
+    worked_examples_block: CORRECT TRAIN rows, shown alongside the misses
+    so the edit call has a concrete reason not to disturb wording that's
+    already working (heldout_skill_edit_prompt's own rule 6) — without
+    this, every round only ever saw evidence to add/change, never
+    evidence to leave something alone."""
     edit_text = edit_template.format(
         current_skill_md=current_skill_md, task_scores_block=task_scores_block,
-        miss_examples_block=miss_examples_block,
+        miss_examples_block=miss_examples_block, worked_examples_block=worked_examples_block,
     )
     hist = [{"role": "user", "content": edit_text}]
     prompt = render_chat_template(tokenizer, hist, enable_thinking=args.edit_enable_thinking, chat_template=chat_template)
@@ -360,7 +389,11 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             prev_misses = sample_miss_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i)
             miss_examples_block = build_miss_examples_block(prev_misses)
             n_examples = sum(len(v) for v in prev_misses.values())
-            print(f"  [edit] {n_examples} TRAIN miss example(s) from round {round_i - 1} shown to the editor")
+            prev_worked = sample_worked_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i)
+            worked_examples_block = build_worked_examples_block(prev_worked)
+            n_worked = sum(len(v) for v in prev_worked.values())
+            print(f"  [edit] {n_examples} TRAIN miss example(s) + {n_worked} TRAIN worked example(s) "
+                  f"from round {round_i - 1} shown to the editor")
 
             llm, tokenizer = load_llm(
                 model_id, quantization=args.quantize,
@@ -374,7 +407,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             )
             revised_md, changelog, changelog_parsed, thinking_trace, raw_cleaned = edit_round(
                 model_id, llm, tokenizer, current_skill_text, prev_scores_block, miss_examples_block,
-                edit_template, chat_template, args,
+                worked_examples_block, edit_template, chat_template, args,
             )
             destroy_llm(llm)
             del tokenizer

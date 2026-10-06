@@ -305,10 +305,15 @@ What happens internally, per round:
   Step 4's ablation used.
 - **Round i (1..`--max_rounds`)**: EDITS round (i-1)'s file against
   round (i-1)'s own TRAIN per-task scores + a sample of its own TRAIN
-  mistakes (`--n_examples_per_bucket` per bucket) — never re-summarizing
+  mistakes to fix AND a sample of its own TRAIN correct cases to protect
+  (`--n_examples_per_bucket` per bucket, each) — never re-summarizing
   from Step 2's original explanation traces, only the skill file's
-  current wording and this round's own TRAIN failures — then scores the
-  result on BOTH splits the same way round 0 did.
+  current wording and this round's own TRAIN results — then scores the
+  result on BOTH splits the same way round 0 did. The worked-examples
+  half is a fix in its own right: an edit call that only ever sees
+  failures has no concrete reason not to disturb wording that's already
+  correctly handling other cases — `heldout_skill_edit_prompt`'s rule 6
+  now explicitly asks it to check that before rewriting a bullet.
 
 Every round writes `<output_dir>/round<i>/` (its own `skill_memory.md`
 + a `train/` and `val/` `heldout-zeroshot` checkpoint, one per split)

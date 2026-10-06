@@ -185,6 +185,12 @@ heldout_skill_edit_prompt: |
 
   {miss_examples_block}
 
+  Here are specific cases where the model, using this exact document,
+  got the answer RIGHT — the document is already doing its job for
+  these, do not disturb whatever's working for them:
+
+  {worked_examples_block}
+
   CURRENT DOCUMENT:
   {current_skill_md}
 
@@ -218,6 +224,15 @@ heldout_skill_edit_prompt: |
   5. Keep it concrete and skimmable — short bullets, not paragraphs. Do
      not invent facts not supported by the mistakes shown or the
      current document's own existing content.
+  6. PROTECT what's already working. Before editing a bullet or section
+     that plausibly helped produce one of the correct cases shown above,
+     check whether your change would still support that case — if a
+     category has both correct and wrong cases shown, prefer ADDING a
+     new, narrowly-scoped distinction over REWRITING the existing
+     wording, so you don't fix one failure by breaking what already
+     works. Do not rewrite or remove a bullet just to make room for new
+     content when there's no evidence that bullet itself is the
+     problem.
 
   Respond with the full revised document (Markdown), starting with the
   `# Crop Diagnosis — Lessons Learned` heading, no preamble — then, on a

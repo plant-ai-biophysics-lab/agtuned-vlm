@@ -95,7 +95,10 @@ Stages:
                                heldout-zeroshot's own generation+judge logic directly, not
                                reimplemented), then each round 1..N EDITS the previous round's file
                                against ITS OWN TRAIN (--split lessons, n=827) per-task scores + a
-                               sample of its own TRAIN mistakes (never re-summarizing from Step 2's
+                               sample of its own TRAIN mistakes to fix AND a sample of its own TRAIN
+                               correct cases to protect (rule 6 of heldout_skill_edit_prompt — edit
+                               calls that only ever see failures have no reason not to disturb
+                               wording that's already working; never re-summarizing from Step 2's
                                original traces, and VAL is NEVER shown to the edit call) and
                                re-scores on BOTH splits. Every round writes <output_dir>/round<i>/
                                (its own skill_memory.md + train/ and val/ checkpoints) and appends
