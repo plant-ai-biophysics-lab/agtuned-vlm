@@ -346,6 +346,26 @@ uv run python main.py heldout-detection-explain-traces \
     --output_dir outputs_final/heldout_detection_explain_traces/
 ```
 
+**QC**: `src/heldout_detection_explain_traces_qc.py` (`heldout-detection-explain-traces-qc`)
+— no model calls, pure report generator over Step 2's own checkpoint,
+same "read it yourself before trusting it" purpose Step −1's own
+ablation and `detection_qc_plot.py` already serve for the stages
+before this one. Renders one PNG per sampled item: the image with
+predicted (solid lime) and ground-truth (dashed red) boxes overlaid
+(`bbox_viz.plot_predictions`, reused directly), plus a text panel with
+`error_type`/`category`/IoU, both boxes' raw coordinates, the question
+asked, and the model's own written explanation. Round-robin sampled
+across every `error_type` actually present in the checkpoint (not
+hardcoded to a fixed list) so `false_positive` — the most numerous
+category, from `detection-multiclass`'s own deliberate over-generation
+— doesn't dominate `--n_samples` purely by base rate.
+
+```bash
+uv run python main.py heldout-detection-explain-traces-qc \
+    --ckpt outputs_final/heldout_detection_explain_traces/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --n_samples 20
+```
+
 ## Step 3 — summarize into skill_memory_detection.md (map-reduce)
 
 Same map-reduce mechanic as `heldout_summarize.py`, chunked by the
@@ -376,6 +396,23 @@ Stage 3's own loop has run for real whether `--edit_enable_thinking`
 staying off and the channel-leak/rule-violation QC checks are still
 sufficient here, or whether detection's own failure modes need their
 own additions to `check_rule_violations`.
+
+`--feedback_prior_round` (Stage 3's own A/B flag — see
+`docs/stage3_context_memory.md`'s Step 3b: feeds each edit call the
+immediately-prior round's changelog + the TRAIN scores that edit
+produced) carries over for free once the above is wired up, since it's
+part of the same shared `heldout_skill_optimize.py` machinery, not a
+classification-specific addition. Same command shape, pointed at a
+detection skill file once one exists:
+
+```bash
+uv run python main.py heldout-skill-optimize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --init_skill_path <detection skill file, TBD> \
+    --max_rounds 10 \
+    --feedback_prior_round \
+    --output_dir outputs_final/heldout_detection_skill_optimize_feedback/
+```
 
 ## Step 4 — ablation
 

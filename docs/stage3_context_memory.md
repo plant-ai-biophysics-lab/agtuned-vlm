@@ -331,6 +331,26 @@ and appends ONE entry to `--round_log` (default
   own "why", referencing the TRAIN scores/mistakes that motivated each
   change
 
+By default the changelog is write-only — logged to `--round_log` for a
+human to read the full trajectory, never fed back into a later edit
+call. New opt-in `--feedback_prior_round` flag (default off, so it's a
+one-flag A/B test against the original behavior): when on, each round's
+edit call is ALSO shown the IMMEDIATELY-prior round's own changelog
+paired with the TRAIN scores that edit actually produced, so the editor
+can tell whether its last change helped, hurt, or had no real effect
+before making another one. Deliberately only the prior round, not the
+full multi-round history — bounded prompt growth, and avoids the model
+chasing noise across many rounds of small-sample TRAIN scores.
+
+```bash
+uv run python main.py heldout-skill-optimize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --init_skill_path src/config/skill_memory_disease-pest.md \
+    --max_rounds 10 \
+    --feedback_prior_round \
+    --output_dir outputs_final/heldout_skill_optimize_feedback/
+```
+
 Each round **replaces** the document rather than merging onto it (the
 edit call always has the full current document in front of it, so
 nothing is lost by writing a fresh revision — the alternative,
