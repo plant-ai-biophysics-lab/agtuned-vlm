@@ -1,10 +1,11 @@
 # Paper 2, Stage 4 (docs/stage4_detection_context_memory.md) — prompts
 # for the detection skill-memory pipeline's Step -1 (raw-coordinates vs.
-# rendered-overlay representation ablation) and Step 2 (explain traces,
-# src/heldout_detection_explain_traces.py). Kept separate from
-# prompts.yaml/heldout_prompts.yaml since these are detection-specific
-# and reference box-level concepts (predicted box, ground-truth box,
-# IoU) that don't apply to classification.
+# rendered-overlay representation ablation), Step 2 (explain traces,
+# src/heldout_detection_explain_traces.py), and Step 3 (summarize into
+# skill_memory_detection.md, src/heldout_detection_summarize.py). Kept
+# separate from prompts.yaml/heldout_prompts.yaml since these are
+# detection-specific and reference box-level concepts (predicted box,
+# ground-truth box, IoU) that don't apply to classification.
 
 detection_skill_system: "You are an expert agricultural computer vision analyst reviewing a detection model's box predictions against the real objects in the image."
 
@@ -53,3 +54,77 @@ detection_skill_overlay_suffix: |
   The predicted box is drawn in solid lime, the real (ground truth) instance in dashed red, where present.
 
   Respond in 2-4 sentences.
+
+# Step 3 — map phase. Same map-reduce mechanic heldout_summarize.py
+# (Stage 3's own Step 3) uses, chunked by error_type (false_positive/
+# missed/loose_match/worked — Step 2's own failure/success taxonomy)
+# instead of disease/pest/deficiency/healthy. NEW rule specific to
+# detection: a bullet must describe a VISUAL/SPATIAL pattern (shape,
+# boundary, occlusion, clustering), not a coordinate number — "boxes
+# around clustered fruit tend to need splitting when a stem or leaf
+# visually separates two individuals" is useful; "move the box 15px
+# left" is not, even if that number happened to be true for one example
+# (the same per-image-memorization failure mode Stage 3's own edit
+# prompt already forbids).
+# Params: {error_type_label} {n} {explanations_block}
+detection_skill_map_summarize_prompt: |
+  Below are {n} short explanations written about {error_type_label} by a
+  vision-language object-detection model, across various crops and
+  instance types. Each explanation describes ONE specific box-level
+  case's visual evidence.
+
+  {explanations_block}
+
+  Summarize the RECURRING, GENERALIZABLE patterns across these
+  explanations — not a list restating each one individually, and not
+  facts about any single image. Write 4-8 bullet points covering:
+  visual/spatial cues that make an instance easy or hard to localize
+  correctly, common confusions (what gets mistaken for a real instance,
+  what causes a miss, what causes a loose/imprecise box), and anything
+  distinctive worth remembering.
+
+  IMPORTANT: every bullet must describe a VISUAL or SPATIAL pattern
+  (shape, boundary, occlusion, clustering, lighting, scale) that would
+  transfer to a DIFFERENT image of a similar case — never a specific
+  pixel coordinate or a fact tied to one example image. "Boxes around
+  tightly clustered fruit tend to need splitting when a stem or leaf
+  visually separates two individuals" is useful; "move the box left" is
+  not.
+
+  Respond with ONLY the bullet list (plain "- " bullets, no headers, no
+  preamble).
+
+# Step 3 — reduce phase. Merges every chunk-level bullet summary into
+# ONE final skill-memory .md file.
+# Params: {chunk_summaries_block}
+detection_skill_reduce_summarize_prompt: |
+  Below are bullet-point summaries gathered from reviewing a vision-
+  language object-detection model's box predictions against real
+  ground-truth instances, grouped by what kind of case they came from:
+
+  {chunk_summaries_block}
+
+  Write a single, well-organized reference document (Markdown) for
+  another instance of this same model to read BEFORE attempting object
+  detection on crop images — its job is to help that model avoid the
+  same box-level mistakes and reuse what already works. Structure:
+
+  # Object Detection — Lessons Learned
+
+  ## What Worked
+  (visual/spatial cues that reliably lead to a tight, correct box)
+
+  ## What Didn't Work
+  ### False Positives (predicted a box, no real instance there)
+  ### Missed Instances (a real instance with no predicted box at all)
+  ### Loose or Imprecise Boxes (a real match, but not tight — including
+  cases that should have been split into more than one box)
+
+  Do NOT add a "Common Objects/Classes to Know" style reference list, or
+  any section whose bullets are just bare class/category names restated
+  as standalone entries — this document's job is to teach VISUAL/SPATIAL
+  box-prediction behavior, not to enumerate class names. Every bullet
+  must describe a transferable visual or spatial pattern, never a
+  specific coordinate number or a fact tied to one example image.
+
+  Respond with ONLY the Markdown document, no preamble.

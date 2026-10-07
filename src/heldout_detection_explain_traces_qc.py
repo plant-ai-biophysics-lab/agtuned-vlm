@@ -148,6 +148,16 @@ def main(args: argparse.Namespace) -> None:
     print(f"  {len(sampled)} sample(s) from {len(rows)} total: {dict(counts)}")
 
     out_dir = Path(args.out_dir)
+    if out_dir.exists():
+        # Pure report generator, no resume/checkpoint state to preserve —
+        # clear any previous run's PNGs first, otherwise stale files from
+        # an earlier (possibly since-fixed) checkpoint sit here forever:
+        # this run's own sample count/indices rarely line up 1:1 with a
+        # prior run's, so without this a stale qc_sample003_<old-type>.png
+        # can outlive the --ckpt state that produced it, wrongly implying
+        # that category is still being generated.
+        import shutil
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     n_rendered = render_qc_report(sampled, Path(args.images_root), out_dir)
     print(f"\n  {n_rendered} QC report image(s) written to {out_dir}")

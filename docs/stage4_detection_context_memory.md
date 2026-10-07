@@ -381,21 +381,33 @@ uv run python main.py heldout-detection-explain-traces-qc \
     --n_samples 20
 ```
 
-## Step 3 — summarize into skill_memory_detection.md (map-reduce)
+## Step 3 — summarize into skill_memory_detection.md (map-reduce, built)
 
-Same map-reduce mechanic as `heldout_summarize.py`, chunked by the
-Step 2 failure-taxonomy buckets instead of disease/pest/deficiency/
-healthy. Same hard rules carried over (learned the expensive way in
-Stage 3, not re-litigated here): no "common objects to know" bare-label
-reference section, no bullet whose entire content is a bare category
-word, write generalizable guidance not per-image facts. New rule
-specific to detection: a bullet must describe a VISUAL/SPATIAL
-pattern (shape, boundary, occlusion, clustering), not a coordinate
-number — "boxes around clustered fruit tend to need splitting when a
-stem or leaf visually separates two individuals" is useful; "move the
-box 15px left" is not (even if that number happened to be true for one
-example, it's exactly the per-image-memorization failure mode Stage 3's
-own edit prompt now explicitly forbids).
+Built: `src/heldout_detection_summarize.py`.
+
+Same map-reduce mechanic as `heldout_summarize.py`, chunked by Step 2's
+own `error_type` (false_positive/missed/loose_match/worked — no
+separate trace_type dimension to cross it with, since error_type
+already encodes worked-vs-failure directly) instead of disease/pest/
+deficiency/healthy x worked/didnt_work. Same hard rules carried over
+(learned the expensive way in Stage 3, not re-litigated here): no
+"common objects to know" bare-label reference section, no bullet whose
+entire content is a bare category word, write generalizable guidance
+not per-image facts. New rule specific to detection: a bullet must
+describe a VISUAL/SPATIAL pattern (shape, boundary, occlusion,
+clustering), not a coordinate number — "boxes around clustered fruit
+tend to need splitting when a stem or leaf visually separates two
+individuals" is useful; "move the box 15px left" is not (even if that
+number happened to be true for one example, it's exactly the
+per-image-memorization failure mode Stage 3's own edit prompt already
+forbids).
+
+```bash
+uv run python main.py heldout-detection-summarize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --ckpt outputs_final/heldout_detection_explain_traces/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_md outputs_final/heldout_detection_summarize/skill_memory_detection.md
+```
 
 ## Step 3b — self-optimization loop (reuse, not rebuild)
 

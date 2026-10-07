@@ -12,6 +12,7 @@ STAGES = {
     "heldout-detection-zeroshot": "src.heldout_detection_zeroshot",
     "heldout-detection-explain-traces": "src.heldout_detection_explain_traces",
     "heldout-detection-explain-traces-qc": "src.heldout_detection_explain_traces_qc",
+    "heldout-detection-summarize": "src.heldout_detection_summarize",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -149,6 +150,14 @@ Stages:
                                round-robin sampled across every error_type present so no single
                                category dominates the sample. Same "read it yourself" purpose
                                detection_qc_plot.py/the Step −1 ablation already serve.
+    heldout-detection-summarize  Paper 2 Stage 4, Step 3 (docs/stage4_detection_context_memory.md)
+                               — text-only map-reduce, same mechanic heldout-summarize uses: MAP
+                               groups Step 2's explanations by error_type (false_positive/missed/
+                               loose_match/worked — no wrong_class_label, see Step 2's own docstring
+                               for why) into word-bounded chunks, one summarization call per chunk;
+                               REDUCE merges every chunk summary into one skill_memory_detection.md.
+                               New rule vs. classification's own Step 3: every bullet must describe a
+                               VISUAL/SPATIAL pattern, never a coordinate number.
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and
