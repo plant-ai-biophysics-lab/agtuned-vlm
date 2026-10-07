@@ -280,12 +280,11 @@ Mirrors Stage 3's own design choice (explain both "what worked" and
 "what didn't work", not just misses) and reuses the WINNING
 representation from Step −1 (condition (a), raw coordinates + plain
 image — no overlay rendering here at all). Failure/success taxonomy
-(`error_type`, 5 values) explicitly names `detection_box_refine.py`'s
-own already-validated correction categories for the first 3 — not
-invented fresh, since that pipeline already solved "what kinds of box
-errors are there" — plus 2 new ones only meaningful now that ground
-truth is compared directly (`detection_box_refine.py`'s own 3-criterion
-rubric never sees real ground truth, only a model's self-critique):
+(`error_type`, 4 values) names `detection_box_refine.py`'s own
+already-validated correction categories for the first 3 — not invented
+fresh, since that pipeline already solved "what kinds of box errors are
+there" — plus one more (`worked`) for Stage 3's own "explain what
+worked, not just misses" design choice, mirrored here:
 
 - **false_positive** (box_rubric criterion 1, "not a real instance") —
   a predicted box with no matching ground-truth instance at all.
@@ -299,19 +298,35 @@ rubric never sees real ground truth, only a model's self-critique):
   the model's own free-text explanation — Step 3's map-reduce summary
   is what's expected to surface "clustered instances need splitting" as
   a recurring pattern, not a separately-coded detector.
-- **wrong_class_label** — a tight, otherwise-correct box (>=
-  `--loose_iou_threshold`) whose predicted `category_name` disagrees
-  with the ground truth's — real now that Step 1 runs
-  `detection-multiclass` (free-text sub-class text, not the dataset's
-  one coarse class), so a box can genuinely be positioned right but
-  labeled wrong.
-- **worked** — tight box AND matching category — Stage 3's own "explain
-  what worked, not just misses" design choice, mirrored here.
+- **worked** — a tight match (>= `--loose_iou_threshold`).
 
-One pass of `bbox_metrics.match_boxes` per row yields all 5 categories
-directly (`enumerate_items`) — not Step −1's own `find_discrepancies` (3
-categories only) plus a second pass for `wrong_class_label`/`worked`,
-which would call `match_boxes` on the same row twice for no reason.
+**No separate "wrong class label" category**, despite predicted boxes
+carrying their own `category_name` — deliberately, matching a
+precedent already established everywhere else in this pipeline:
+`detection_baseline.py`'s own `score_row` (`match_boxes` +
+`precision_recall_f1`) NEVER reads `category_name`, because
+`detection-multiclass` predicts an open-vocabulary free-text SUB-class
+(e.g. "grape: ripe cluster") while ground truth only ever carries the
+dataset's one coarse class label (e.g. "grape") — the two were never
+meant to be string-compared. A first version of this step DID compare
+them directly and produced a real false positive on the actual lessons
+checkpoint: a correct "grape: ripe cluster" prediction (IoU=0.86) was
+flagged `wrong_class_label` against ground truth whose own label was
+literally `"1"` (`Project-AgML/grape_detection_syntheticday`'s own
+upstream `ClassLabel(names=['grape', '1'])` — a genuinely uninformative
+class name, not fixable from this side), and more generally would have
+misfired on ANY correct prediction whose free-text sub-class wasn't a
+byte-for-byte match to the GT's single coarse label. A loose
+substring-match compromise was considered and rejected — it still
+can't resolve a genuinely uninformative GT label like `"1"` — so
+category agreement is dropped entirely: tight IoU is "worked",
+regardless of what either box's `category_name` says.
+
+One pass of `bbox_metrics.match_boxes` per row yields all 4 categories
+directly (`enumerate_items`) — not Step −1's own `find_discrepancies`
+(covers false_positive/missed/loose_match only) plus a second pass for
+`worked`, which would call `match_boxes` on the same row twice for no
+reason.
 
 **Per-box, not per-image, same as Step −1 already established**: each
 explanation call shows ONE box-level item at a time (one predicted box

@@ -22,10 +22,12 @@ detection_skill_question_missed: "A detection model did NOT predict any box for 
 detection_skill_question_loose_match: "A detection model predicted a box for a '{category}' here, but it does not tightly match the real instance (IoU={iou:.2f} with the real one). Explain what's wrong with the predicted box's size or position relative to the real instance — including whether the box looks like it should be split into more than one instance."
 
 # Step 2 only (ground truth already known, no reveal needed) — a tight
-# box (IoU >= --loose_iou_threshold) whose predicted category disagrees
-# with the real one, or whose category correctly agrees.
-# Params: {pred_category} {gt_category}
-detection_skill_question_wrong_class: "A detection model placed a box in the right location for a real instance here, but labeled it '{pred_category}' when the real instance is actually '{gt_category}'. Explain what visual feature likely caused the model to confuse these two classes."
+# match (IoU >= --loose_iou_threshold). No separate "wrong class label"
+# question: category_name is deliberately never compared here, matching
+# the class-agnostic-scoring precedent every other stage in this
+# pipeline already follows — see heldout_detection_explain_traces.py's
+# own module docstring for the real false-positive case that confirmed
+# why.
 # Params: {category} {iou}
 detection_skill_question_worked: "A detection model correctly identified and tightly matched a real '{category}' instance here (IoU={iou:.2f}). Confirm and describe the specific visual evidence — shape, boundary, distinguishing feature — that made this instance identifiable and its box accurate."
 

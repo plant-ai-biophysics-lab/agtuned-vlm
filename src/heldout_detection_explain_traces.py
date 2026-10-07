@@ -16,11 +16,10 @@ own grading convention before that: ONE box-level item per explanation
 call, never a whole image's full box set at once (ambiguous about which
 sentence refers to which error otherwise).
 
-Failure/success taxonomy (5 categories, `error_type`) — matches
+Failure/success taxonomy (4 categories, `error_type`) — matches
 detection_box_refine.py's own already-validated 3-criterion rubric by
-name for the first 3, plus 2 new ones only possible now that ground
-truth is being compared directly (box_refine's own criteria never see
-real ground truth, only a model's own self-critique):
+name, plus one more (`worked`) for Stage 3's own "explain what worked,
+not just misses" design choice, mirrored here:
   - false_positive     — criterion 1, "not a real instance" (no matching gt)
   - missed              — a real gt instance with no matching prediction
                            at all (detection's analog of classification's
@@ -34,19 +33,35 @@ real ground truth, only a model's own self-critique):
                            (Step 3's map-reduce summary is what's expected
                            to surface "clustered instances need splitting"
                            as a pattern, not a separately-coded detector).
-  - wrong_class_label   — a tight, otherwise-correct box (>= --loose_iou_
-                           threshold) whose predicted category_name
-                           disagrees with the ground truth's — only
-                           meaningful because Step 1 runs detection-
-                           multiclass (free-text sub-class, not a single
-                           coarse per-dataset label).
-  - worked              — tight box AND matching category_name — Stage
-                           3's own "explain what worked, not just misses"
-                           design choice, mirrored here.
+  - worked              — a tight match (>= --loose_iou_threshold).
 
-ONE pass over match_boxes per row produces all 5 categories directly
-(not find_discrepancies + a second pass for wrong_class_label/worked,
-which would call match_boxes on the same row twice for no reason).
+NO separate "wrong_class_label" category, despite predicted boxes
+carrying a `category_name` — deliberately, matching a precedent already
+established everywhere else in this pipeline: `detection_baseline.py`'s
+own `score_row` (`match_boxes` + `precision_recall_f1`) NEVER reads
+`category_name`, because `detection-multiclass` predicts an
+open-vocabulary free-text SUB-class (e.g. "grape: ripe cluster") while
+ground truth only ever carries the dataset's one coarse class label
+(e.g. "grape") — the two were never meant to be string-compared. A
+first version of this module DID compare them directly and produced
+real false positives: a correct "grape: ripe cluster" prediction
+flagged as `wrong_class_label` against ground truth whose own label was
+literally `"1"` (`Project-AgML/grape_detection_syntheticday`'s own
+upstream `ClassLabel(names=['grape', '1'])` — a genuinely uninformative
+class name, not something this pipeline can fix), and more generally
+ANY correct prediction whose free-text sub-class wasn't a byte-for-byte
+match to the GT's single coarse label (e.g. "grape" vs. "grape: ripe
+cluster" — also not a string match, also a correct prediction). Tight
+IoU is all that's checked; a loose-string-matching compromise was
+considered and rejected as still unable to resolve genuinely
+uninformative GT labels like `"1"`, so category agreement is dropped
+entirely rather than partially fixed.
+
+ONE pass over match_boxes per row produces all 4 categories directly
+(not Step -1's own find_discrepancies, which only covers false_positive/
+missed/loose_match — calling it here AND separately checking `matches`
+for `worked` would call match_boxes on the same row twice for no
+reason).
 
 box_idx (0, 1, 2, ... per image, in the FIXED deterministic order this
 module enumerates items) plus error_type stand in for class_label in
@@ -108,9 +123,12 @@ def load_yaml(path: Path) -> dict:
 def enumerate_items(rows: list[dict], iou_threshold: float, loose_iou_threshold: float) -> list[dict]:
     """One entry per box-level item (discrepancy OR successful match) per
     row: {"row", "pred_box", "gt_box", "error_type", "iou", "box_idx"} —
-    see this module's docstring for the 5 error_type values and the
+    see this module's docstring for the 4 error_type values and the
     deterministic box_idx ordering (false_positive, then missed, then
-    every match in match_boxes' own return order)."""
+    every match in match_boxes' own return order). category_name is
+    deliberately NOT compared here — see this module's own docstring for
+    why (tight IoU is "worked", loose IoU is "loose_match", regardless of
+    what either box's category_name says)."""
     items: list[dict] = []
     for r in rows:
         pred_boxes = json.loads(r.get("pred_boxes_json") or "[]")
@@ -126,14 +144,7 @@ def enumerate_items(rows: list[dict], iou_threshold: float, loose_iou_threshold:
                           "error_type": "missed", "iou": 0.0, "box_idx": box_idx})
             box_idx += 1
         for pi, gi, iou in matches:
-            pred_cat = (pred_boxes[pi].get("category_name") or "").strip().lower()
-            gt_cat = (gt_boxes[gi].get("category_name") or "").strip().lower()
-            if iou < loose_iou_threshold:
-                error_type = "loose_match"
-            elif pred_cat != gt_cat:
-                error_type = "wrong_class_label"
-            else:
-                error_type = "worked"
+            error_type = "worked" if iou >= loose_iou_threshold else "loose_match"
             items.append({"row": r, "pred_box": pred_boxes[pi], "gt_box": gt_boxes[gi],
                           "error_type": error_type, "iou": iou, "box_idx": box_idx})
             box_idx += 1
@@ -151,9 +162,6 @@ def build_question(hprompts: dict, item: dict) -> str:
     if error_type == "loose_match":
         return hprompts["detection_skill_question_loose_match"].format(
             category=item["gt_box"]["category_name"], iou=item["iou"])
-    if error_type == "wrong_class_label":
-        return hprompts["detection_skill_question_wrong_class"].format(
-            pred_category=item["pred_box"]["category_name"], gt_category=item["gt_box"]["category_name"])
     return hprompts["detection_skill_question_worked"].format(
         category=item["gt_box"]["category_name"], iou=item["iou"])
 
@@ -181,7 +189,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     if not items:
         raise SystemExit(f"ERROR: no box-level items found in {args.ckpt} — nothing to explain.")
     counts = {t: sum(1 for it in items if it["error_type"] == t) for t in
-              ("false_positive", "missed", "loose_match", "wrong_class_label", "worked")}
+              ("false_positive", "missed", "loose_match", "worked")}
     print(f"  {len(items)} box-level item(s) from {len(input_rows)} row(s): {counts}")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
@@ -262,7 +270,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     del tokenizer
 
     out_counts = {t: sum(1 for r in rows if r["error_type"] == t) for t in
-                  ("false_positive", "missed", "loose_match", "wrong_class_label", "worked")}
+                  ("false_positive", "missed", "loose_match", "worked")}
     print(f"\n  {len(rows)} total item(s): {out_counts}")
     print(f"  Checkpoint: {ckpt_path}")
 
@@ -288,9 +296,10 @@ if __name__ == "__main__":
                               "value Step 1's own scoring used, for consistency.")
     parser.add_argument("--loose_iou_threshold", type=float, default=0.7,
                          help="A real match below this (but above --iou_threshold) is loose_match; "
-                              "at or above it, wrong_class_label or worked depending on whether "
-                              "category_name agrees — same threshold value Step -1's own ablation "
-                              "used (_LOOSE_IOU_THRESHOLD in detection_skill_representation_ablation.py).")
+                              "at or above it, worked — category_name is never compared (see this "
+                              "module's own docstring for why). Same threshold value Step -1's own "
+                              "ablation used (_LOOSE_IOU_THRESHOLD in "
+                              "detection_skill_representation_ablation.py).")
     parser.add_argument("--detection_skill_prompts", default="src/config/detection_skill_prompts.yaml")
     parser.add_argument("--output_dir", default="outputs_final/heldout_detection_explain_traces/")
     parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
