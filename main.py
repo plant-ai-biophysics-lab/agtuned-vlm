@@ -10,6 +10,7 @@ STAGES = {
     "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
     "download-heldout-detection": "scripts.download_heldout_detection",
     "heldout-detection-zeroshot": "src.heldout_detection_zeroshot",
+    "heldout-detection-explain-traces": "src.heldout_detection_explain_traces",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -128,6 +129,19 @@ Stages:
                                prompt come straight from detection_datasets.yaml's own entries.
                                --split lessons (default, TRAIN) or --split eval (VAL, for Step
                                3b/4 later) — never use eval to write the skill-memory file.
+    heldout-detection-explain-traces  Paper 2 Stage 4, Step 2
+                               (docs/stage4_detection_context_memory.md) — box-level explain
+                               traces on Step 1's --split lessons checkpoint, ALL items not just
+                               misses (mirrors Stage 3's own "explain what worked too" choice).
+                               ONE pass of bbox_metrics.match_boxes per row yields 5 error_type
+                               categories: false_positive/missed/loose_match (named after
+                               detection_box_refine.py's own 3-criterion rubric) plus
+                               wrong_class_label/worked (new — only meaningful once ground truth
+                               is compared directly). Per-box, not per-image, one explanation call
+                               per discrepancy/success — same convention detection_skill_
+                               representation_ablation.py's own Step −1 established. Only
+                               condition (a), raw coordinates + plain image — Step −1's settled
+                               winner, no overlay rendering here.
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and

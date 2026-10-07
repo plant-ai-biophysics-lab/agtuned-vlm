@@ -274,43 +274,77 @@ satisfy `load_ckpt`'s hardcoded resume-key contract.
 
 ## Step 2 — explain traces (lessons split, ALL rows not just misses)
 
+Built: `src/heldout_detection_explain_traces.py`.
+
 Mirrors Stage 3's own design choice (explain both "what worked" and
 "what didn't work", not just misses) and reuses the WINNING
-representation from Step −1. Failure taxonomy explicitly mirrors
-`detection_box_refine.py`'s own already-validated correction categories
-— not invented fresh, since that pipeline already solved "what kinds of
-box errors are there":
+representation from Step −1 (condition (a), raw coordinates + plain
+image — no overlay rendering here at all). Failure/success taxonomy
+(`error_type`, 5 values) explicitly names `detection_box_refine.py`'s
+own already-validated correction categories for the first 3 — not
+invented fresh, since that pipeline already solved "what kinds of box
+errors are there" — plus 2 new ones only meaningful now that ground
+truth is compared directly (`detection_box_refine.py`'s own 3-criterion
+rubric never sees real ground truth, only a model's self-critique):
 
-- **not a real instance** (false positive — box_rubric criterion 1)
-- **box not tight** (too loose/too large/cut off — criterion 2)
-- **multiple instances merged** (needs a split — criterion 3)
-- **missed entirely** (a ground-truth box with no matching prediction
-  at all — detection's analog of classification's "false Healthy": the
-  model didn't even attempt the instance)
-- **wrong class label on an otherwise-correct box** (real now that
-  Step 1 runs `detection-multiclass` — its `category_name` is free-text
-  sub-class text, not the dataset's one coarse class, so a box can
-  genuinely be positioned right but labeled wrong)
+- **false_positive** (box_rubric criterion 1, "not a real instance") —
+  a predicted box with no matching ground-truth instance at all.
+- **missed** — a ground-truth box with no matching prediction at all
+  (detection's analog of classification's "false Healthy": the model
+  didn't even attempt the instance).
+- **loose_match** (criterion 2/3, "not tight") — a REAL match (passes
+  `--iou_threshold`) but below `--loose_iou_threshold`: too loose/large/
+  cut off, OR covers more than one real instance and needs splitting.
+  The specific "too loose" vs. "needs splitting" distinction is left to
+  the model's own free-text explanation — Step 3's map-reduce summary
+  is what's expected to surface "clustered instances need splitting" as
+  a recurring pattern, not a separately-coded detector.
+- **wrong_class_label** — a tight, otherwise-correct box (>=
+  `--loose_iou_threshold`) whose predicted `category_name` disagrees
+  with the ground truth's — real now that Step 1 runs
+  `detection-multiclass` (free-text sub-class text, not the dataset's
+  one coarse class), so a box can genuinely be positioned right but
+  labeled wrong.
+- **worked** — tight box AND matching category — Stage 3's own "explain
+  what worked, not just misses" design choice, mirrored here.
+
+One pass of `bbox_metrics.match_boxes` per row yields all 5 categories
+directly (`enumerate_items`) — not Step −1's own `find_discrepancies` (3
+categories only) plus a second pass for `wrong_class_label`/`worked`,
+which would call `match_boxes` on the same row twice for no reason.
 
 **Per-box, not per-image, same as Step −1 already established**: each
-explanation call shows ONE box-level discrepancy at a time (one
-predicted box and/or one ground-truth box — never an image's full box
-set at once). An image with several separate errors gets several
-separate explanation calls, one per discrepancy, exactly like Step −1's
-own sampling (`find_discrepancies`, reused directly — not
-re-implemented) and like `detection_box_verifier.py`'s own per-box
-crop/grade convention. Showing every box at once would make a single
-free-text explanation ambiguous about which sentence refers to which
-error — the same conflated-feedback problem a whole-image rubric call
-would have.
+explanation call shows ONE box-level item at a time (one predicted box
+and/or one ground-truth box — never an image's full box set at once).
+An image with several separate items gets several separate explanation
+calls, exactly like Step −1's own sampling and like
+`detection_box_verifier.py`'s own per-box crop/grade convention.
+Showing every box at once would make a single free-text explanation
+ambiguous about which sentence refers to which error — the same
+conflated-feedback problem a whole-image rubric call would have.
 
 Each explanation call shows: the plain original image + the raw
-`[x1,y1,x2,y2]` coordinates as text (Step −1's settled representation,
-condition (a) — no overlay rendering needed), and asks for 2-4
-sentences of concrete, generalizable guidance — same "explain what
-should have been seen instead" framing as `heldout_explain_miss_prompt`/
+`[x1,y1,x2,y2]` coordinates as text, and asks for 2-4 sentences of
+concrete, generalizable guidance — same "explain what should have been
+seen instead" framing as `heldout_explain_miss_prompt`/
 `heldout_explain_correct_prompt`, adapted to spatial language instead
-of diagnostic language.
+of diagnostic language (`src/config/detection_skill_prompts.yaml`'s
+`detection_skill_question_*` templates).
+
+`box_idx` (0, 1, 2, ... per image, in a fixed deterministic enumeration
+order) plus `error_type` stand in for `class_label` in `load_ckpt`'s
+hardcoded 3-field resume key (`agml_dataset`/`class_label`/
+`image_name`) — same repurposing trick `heldout_zeroshot.py`'s own
+`HELDOUT_CKPT_FIELDS` used for a different reason, needed here because
+several box-level items share one `(agml_dataset, image_name)` pair,
+which alone isn't a unique resume key.
+
+```bash
+uv run python main.py heldout-detection-explain-traces \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --ckpt outputs_final/heldout_detection_zeroshot_lessons/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/heldout_detection_explain_traces/
+```
 
 ## Step 3 — summarize into skill_memory_detection.md (map-reduce)
 

@@ -1,10 +1,10 @@
-# Paper 2, Stage 4 DRAFT (docs/stage4_detection_context_memory_DRAFT.md)
-# — prompts for the detection skill-memory pipeline's own Step -1
-# (raw-coordinates vs. rendered-overlay representation ablation) and,
-# later, Step 2 (explain traces). Kept separate from prompts.yaml/
-# heldout_prompts.yaml since these are detection-specific and reference
-# box-level concepts (predicted box, ground-truth box, IoU) that don't
-# apply to classification.
+# Paper 2, Stage 4 (docs/stage4_detection_context_memory.md) — prompts
+# for the detection skill-memory pipeline's Step -1 (raw-coordinates vs.
+# rendered-overlay representation ablation) and Step 2 (explain traces,
+# src/heldout_detection_explain_traces.py). Kept separate from
+# prompts.yaml/heldout_prompts.yaml since these are detection-specific
+# and reference box-level concepts (predicted box, ground-truth box,
+# IoU) that don't apply to classification.
 
 detection_skill_system: "You are an expert agricultural computer vision analyst reviewing a detection model's box predictions against the real objects in the image."
 
@@ -19,7 +19,15 @@ detection_skill_question_false_positive: "A detection model predicted a box for 
 # Params: {category}
 detection_skill_question_missed: "A detection model did NOT predict any box for the real '{category}' instance shown. Explain what visual cues indicate a real instance is present here that the model likely missed."
 # Params: {category} {iou}
-detection_skill_question_loose_match: "A detection model predicted a box for a '{category}' here, but it does not tightly match the real instance (IoU={iou:.2f} with the real one). Explain what's wrong with the predicted box's size or position relative to the real instance."
+detection_skill_question_loose_match: "A detection model predicted a box for a '{category}' here, but it does not tightly match the real instance (IoU={iou:.2f} with the real one). Explain what's wrong with the predicted box's size or position relative to the real instance — including whether the box looks like it should be split into more than one instance."
+
+# Step 2 only (ground truth already known, no reveal needed) — a tight
+# box (IoU >= --loose_iou_threshold) whose predicted category disagrees
+# with the real one, or whose category correctly agrees.
+# Params: {pred_category} {gt_category}
+detection_skill_question_wrong_class: "A detection model placed a box in the right location for a real instance here, but labeled it '{pred_category}' when the real instance is actually '{gt_category}'. Explain what visual feature likely caused the model to confuse these two classes."
+# Params: {category} {iou}
+detection_skill_question_worked: "A detection model correctly identified and tightly matched a real '{category}' instance here (IoU={iou:.2f}). Confirm and describe the specific visual evidence — shape, boundary, distinguishing feature — that made this instance identifiable and its box accurate."
 
 # Condition (a) — raw coordinates, appended to whichever question
 # template above applies. Shown with the ORIGINAL (unannotated) image.

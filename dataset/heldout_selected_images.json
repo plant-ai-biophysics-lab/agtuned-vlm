@@ -1,0 +1,7297 @@
+{
+  "hf_repo_id": "DigiGreen/Crop_Disease_Images",
+  "rows": {
+    "lessons_0.jpg": {
+      "crop": "Pigeon Pea",
+      "diagnosis": [
+        "Pod Borer",
+        "Boron Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_2.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_3.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Boron Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_4.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_5.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_6.jpg": {
+      "crop": "Cotton",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_7.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Calcium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_9.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_10.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_12.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_13.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_15.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Blast"
+      ],
+      "split": "lessons"
+    },
+    "lessons_16.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_17.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Phosphorus Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_18.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_19.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Phosphorus Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_22.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_23.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_24.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_25.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_26.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_27.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Phosphorus Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_29.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_31.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Phosphorus Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_32.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_34.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_35.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_36.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_37.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Black Rot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_38.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_39.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_40.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_41.jpg": {
+      "crop": "Okra",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_42.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Rust"
+      ],
+      "split": "lessons"
+    },
+    "lessons_43.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_44.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_45.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_46.jpg": {
+      "crop": "Pea",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_47.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_48.jpg": {
+      "crop": "Okra",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_50.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_52.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_53.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Aphids",
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_54.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_55.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips",
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_56.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_58.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_60.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_61.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_62.jpg": {
+      "crop": "Pea",
+      "diagnosis": [
+        "Rust"
+      ],
+      "split": "lessons"
+    },
+    "lessons_64.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_65.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_66.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_67.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "lessons"
+    },
+    "lessons_68.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_69.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_70.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "White Rust"
+      ],
+      "split": "lessons"
+    },
+    "lessons_71.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_73.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_75.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_76.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_77.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Alternaria Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_78.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_79.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_83.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_84.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "lessons"
+    },
+    "lessons_85.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_86.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_88.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_89.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_90.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_91.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Black Rot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_93.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_94.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_95.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_97.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_98.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_99.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_101.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Sterility Mosaic"
+      ],
+      "split": "lessons"
+    },
+    "lessons_102.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_105.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_106.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_107.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_108.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_109.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_110.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_112.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_113.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_114.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_116.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_117.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_118.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Blast"
+      ],
+      "split": "lessons"
+    },
+    "lessons_119.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_120.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Magnesium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_122.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_124.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_125.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_128.jpg": {
+      "crop": "Pigeon Pea",
+      "diagnosis": [
+        "Phytophthora Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_129.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_130.jpg": {
+      "crop": "Squash",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_131.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_132.jpg": {
+      "crop": "Watermelon",
+      "diagnosis": [
+        "Mosaic Virus",
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_133.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_134.jpg": {
+      "crop": "Sponge gourd",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_135.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_136.jpg": {
+      "crop": "Cucumber",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_138.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_139.jpg": {
+      "crop": "Medicinal plants",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_140.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_141.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_142.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_143.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_144.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_145.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_146.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids",
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_147.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_148.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_149.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Fusarium Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_150.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_152.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_153.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Boron Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_154.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_156.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_157.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_160.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_161.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_162.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_163.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_164.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_167.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_168.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_170.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_171.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids",
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_173.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_174.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Red Pumpkin Beetle"
+      ],
+      "split": "lessons"
+    },
+    "lessons_175.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_176.jpg": {
+      "crop": "Chikoo",
+      "diagnosis": [
+        "Cutworms"
+      ],
+      "split": "lessons"
+    },
+    "lessons_177.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_179.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_181.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_183.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Bark Eating Caterpillar"
+      ],
+      "split": "lessons"
+    },
+    "lessons_184.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_186.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Cabbage Looper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_187.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Bark Eating Caterpillar",
+        "Potassium Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_188.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Bacterial Canker"
+      ],
+      "split": "lessons"
+    },
+    "lessons_189.jpg": {
+      "crop": "Lemon",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_190.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_191.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_192.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Boron Deficiency"
+      ],
+      "split": "lessons"
+    },
+    "lessons_193.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_194.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_195.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_197.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_198.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_199.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_200.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_203.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_204.jpg": {
+      "crop": "Spinach",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_205.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_206.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_207.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_208.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_210.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "lessons"
+    },
+    "lessons_211.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_212.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_213.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_214.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_217.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_218.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_220.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_221.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Rice Bug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_222.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_223.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_224.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_226.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Cutworms"
+      ],
+      "split": "lessons"
+    },
+    "lessons_227.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_228.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_229.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_231.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_232.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_233.jpg": {
+      "crop": "Chili",
+      "diagnosis": [
+        "Mosaic Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_234.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_235.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Rust"
+      ],
+      "split": "lessons"
+    },
+    "lessons_236.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_237.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_238.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_239.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Citrus Psyllid"
+      ],
+      "split": "lessons"
+    },
+    "lessons_241.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_243.jpg": {
+      "crop": "Cucumber",
+      "diagnosis": [
+        "Squash Bug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_245.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_246.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot",
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_247.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_248.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_249.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_250.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_252.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_253.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_255.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_256.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_257.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Downy Mildew",
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_258.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus",
+        "Fruit Fly",
+        "Papaya Mealybug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_259.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_261.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Black Rot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_263.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_264.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Citrus Psyllid"
+      ],
+      "split": "lessons"
+    },
+    "lessons_265.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_266.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Potato Tuber Moth",
+        "Cutworms"
+      ],
+      "split": "lessons"
+    },
+    "lessons_267.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_270.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_272.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot",
+        "Banana Weevil"
+      ],
+      "split": "lessons"
+    },
+    "lessons_273.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_274.jpg": {
+      "crop": "Soybean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_275.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_276.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_277.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_278.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus",
+        "Papaya Mealybug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_279.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_280.jpg": {
+      "crop": "Bhindi",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_281.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_282.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_283.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_284.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_285.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_286.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_287.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_288.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_289.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_290.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_291.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_292.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_293.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_294.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_295.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Brown Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_297.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_299.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm",
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_300.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_301.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Rice Bug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_302.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_303.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_304.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_306.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_308.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_309.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Turcicum Leaf Blight",
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_310.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_311.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_312.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_313.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_315.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_316.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_317.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_318.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_319.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_320.jpg": {
+      "crop": "Turmeric",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_321.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_322.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_323.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_324.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_325.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_327.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_329.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_330.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_331.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_332.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Stem Borer",
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_333.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Stem Borer",
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_334.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_336.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_337.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_338.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_339.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_341.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_342.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_343.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_344.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_345.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Panama Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_346.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_349.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_351.jpg": {
+      "crop": "Kidney bean",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_353.jpg": {
+      "crop": "Kidney bean",
+      "diagnosis": [
+        "Cutworms"
+      ],
+      "split": "lessons"
+    },
+    "lessons_354.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Pod Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_355.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Collar Rot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_356.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_357.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_358.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_359.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Stripe Rust"
+      ],
+      "split": "lessons"
+    },
+    "lessons_360.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_361.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_362.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_363.jpg": {
+      "crop": "Kidney bean",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_365.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_366.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_367.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_368.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_369.jpg": {
+      "crop": "Moong",
+      "diagnosis": [
+        "Cercospora Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_373.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_377.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_378.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_379.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_380.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_381.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_382.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_383.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Banded Leaf and Sheath Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_384.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_385.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew",
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_386.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_388.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_389.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_390.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_391.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_392.jpg": {
+      "crop": "Turmeric",
+      "diagnosis": [
+        "Scale Insects"
+      ],
+      "split": "lessons"
+    },
+    "lessons_393.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_394.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_395.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_396.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_397.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_398.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_399.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_400.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_402.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_404.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Anthracnose",
+        "Fruit Fly"
+      ],
+      "split": "lessons"
+    },
+    "lessons_405.jpg": {
+      "crop": "Sponge gourd",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_406.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Anthracnose",
+        "Fruit Fly"
+      ],
+      "split": "lessons"
+    },
+    "lessons_407.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose",
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_409.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt",
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_410.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_411.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_412.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_413.jpg": {
+      "crop": "Cucumber",
+      "diagnosis": [
+        "Powdery Mildew",
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_414.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites",
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_415.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_416.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Dry Root Rot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_417.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_418.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_419.jpg": {
+      "crop": "Red gram",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_420.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Citrus Psyllid"
+      ],
+      "split": "lessons"
+    },
+    "lessons_421.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_423.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_424.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_425.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_426.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt",
+        "Cutworms"
+      ],
+      "split": "lessons"
+    },
+    "lessons_427.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_428.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_429.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Banana Weevil"
+      ],
+      "split": "lessons"
+    },
+    "lessons_430.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_432.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_433.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_436.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_437.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_439.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_440.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Fusarium Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_441.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_442.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_444.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_445.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_446.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_447.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_448.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_449.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Cucumber Beetle"
+      ],
+      "split": "lessons"
+    },
+    "lessons_450.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Thrips",
+        "Spider Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_452.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_454.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Mites",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_455.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_457.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_458.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_460.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_461.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Blast"
+      ],
+      "split": "lessons"
+    },
+    "lessons_462.jpg": {
+      "crop": "Strawberry",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_463.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_464.jpg": {
+      "crop": "Cotton",
+      "diagnosis": [
+        "Bollworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_466.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_467.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_468.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_469.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Turcicum Leaf Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_470.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_471.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Turcicum Leaf Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_472.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_473.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_474.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_475.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot",
+        "Banana Weevil"
+      ],
+      "split": "lessons"
+    },
+    "lessons_476.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_477.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_478.jpg": {
+      "crop": "Lemon",
+      "diagnosis": [
+        "Melanose",
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_479.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_480.jpg": {
+      "crop": "Bhindi",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_481.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_482.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_483.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_484.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_487.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_488.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_489.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_490.jpg": {
+      "crop": "Cotton",
+      "diagnosis": [
+        "Jassids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_491.jpg": {
+      "crop": "Peas",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_492.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_493.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_494.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_495.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Mealybug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_498.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_499.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Botrytis Gray Mold"
+      ],
+      "split": "lessons"
+    },
+    "lessons_500.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_501.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_503.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_504.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_505.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Fruit Fly"
+      ],
+      "split": "lessons"
+    },
+    "lessons_506.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "lessons"
+    },
+    "lessons_507.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_508.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_511.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_512.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Blast"
+      ],
+      "split": "lessons"
+    },
+    "lessons_513.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_515.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Mealybug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_516.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_517.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_520.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_521.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_522.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Citrus Canker",
+        "Citrus Psyllid"
+      ],
+      "split": "lessons"
+    },
+    "lessons_523.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_524.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_525.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_526.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_527.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Mealybug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_528.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Collar Rot",
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_529.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_530.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Citrus Psyllid"
+      ],
+      "split": "lessons"
+    },
+    "lessons_531.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_533.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_534.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_535.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Mosaic Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_536.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_537.jpg": {
+      "crop": "Soybean",
+      "diagnosis": [
+        "Bacterial Blight",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_538.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_540.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_541.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Sheath Blight",
+        "Rice Bug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_543.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Purple Blotch",
+        "Stemphylium Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_544.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_545.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_546.jpg": {
+      "crop": "Gram",
+      "diagnosis": [
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_548.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "lessons"
+    },
+    "lessons_549.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_550.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Scale Insects"
+      ],
+      "split": "lessons"
+    },
+    "lessons_551.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_552.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_553.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_555.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_556.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_557.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_559.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_560.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_561.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_562.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_564.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_565.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Mosaic Virus",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_566.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_568.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_569.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_570.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_571.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_572.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_573.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_574.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Diamondback Moth"
+      ],
+      "split": "lessons"
+    },
+    "lessons_575.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_577.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_578.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_579.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_580.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_581.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_582.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_583.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_584.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_585.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Panama Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_586.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_588.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_589.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_590.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Citrus Canker"
+      ],
+      "split": "lessons"
+    },
+    "lessons_591.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_592.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_593.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_595.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_597.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_598.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_599.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_600.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_601.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_602.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_603.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_604.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_606.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Turcicum Leaf Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_607.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_608.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_609.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_610.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_611.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_612.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_613.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_616.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_617.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_618.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_621.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_622.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_623.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_626.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_627.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_628.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_630.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_631.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_633.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Bacterial Canker",
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_635.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Downy Mildew",
+        "Diamondback Moth"
+      ],
+      "split": "lessons"
+    },
+    "lessons_636.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight",
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_637.jpg": {
+      "crop": "Pomegranate",
+      "diagnosis": [
+        "Scale Insects"
+      ],
+      "split": "lessons"
+    },
+    "lessons_638.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Late Blight",
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_639.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_640.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_641.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_642.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_643.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_645.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_646.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_647.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_648.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_649.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_650.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_651.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew",
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_652.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_653.jpg": {
+      "crop": "Coriander",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_654.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_655.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_656.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_657.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Purple Blotch"
+      ],
+      "split": "lessons"
+    },
+    "lessons_659.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Ascochyta Blight",
+        "Botrytis Gray Mold"
+      ],
+      "split": "lessons"
+    },
+    "lessons_660.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_662.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_663.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_664.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_665.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_666.jpg": {
+      "crop": "Moringa",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_667.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_668.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_669.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_670.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_671.jpg": {
+      "crop": "Custard apple",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_672.jpg": {
+      "crop": "Peas",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_673.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_674.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_675.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_676.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_677.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_678.jpg": {
+      "crop": "Bhindi",
+      "diagnosis": [
+        "Aphids",
+        "Jassids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_679.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_680.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_681.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_682.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Mealybug"
+      ],
+      "split": "lessons"
+    },
+    "lessons_683.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_684.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_685.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_686.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_687.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_688.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_689.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_690.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_691.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "lessons"
+    },
+    "lessons_692.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_695.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_696.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_697.jpg": {
+      "crop": "Barley",
+      "diagnosis": [
+        "Smut"
+      ],
+      "split": "lessons"
+    },
+    "lessons_698.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_699.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_701.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Bacterial Canker"
+      ],
+      "split": "lessons"
+    },
+    "lessons_706.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_707.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_708.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_710.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_712.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_713.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_714.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_715.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_716.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_717.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_718.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_719.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_720.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_721.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_722.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_723.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_724.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_725.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_726.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_727.jpg": {
+      "crop": "Curry leaf",
+      "diagnosis": [
+        "Sooty Mold",
+        "Scale Insects"
+      ],
+      "split": "lessons"
+    },
+    "lessons_728.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Turcicum Leaf Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_729.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_730.jpg": {
+      "crop": "Chili",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_731.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_732.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_733.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_734.jpg": {
+      "crop": "Gram",
+      "diagnosis": [
+        "Scale Insects"
+      ],
+      "split": "lessons"
+    },
+    "lessons_735.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "lessons"
+    },
+    "lessons_736.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Bean Beetle",
+        "Pod Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_737.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_738.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Ascochyta Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_740.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "lessons"
+    },
+    "lessons_744.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_745.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_746.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_747.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_748.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_749.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_750.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Red Pumpkin Beetle"
+      ],
+      "split": "lessons"
+    },
+    "lessons_751.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_753.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_754.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_755.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_757.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_758.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_759.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_760.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Caterpillar"
+      ],
+      "split": "lessons"
+    },
+    "lessons_761.jpg": {
+      "crop": "Lemon",
+      "diagnosis": [
+        "Scab",
+        "Citrus Psyllid"
+      ],
+      "split": "lessons"
+    },
+    "lessons_762.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_764.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_765.jpg": {
+      "crop": "Broad bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_766.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt",
+        "Mites"
+      ],
+      "split": "lessons"
+    },
+    "lessons_767.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_768.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_770.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_771.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Early Blight",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_772.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt",
+        "Shoot and Fruit Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_773.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Blast",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_775.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_776.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew",
+        "Mealybugs"
+      ],
+      "split": "lessons"
+    },
+    "lessons_777.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Purple Blotch",
+        "Onion Maggot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_778.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Panama Wilt",
+        "Banana Weevil"
+      ],
+      "split": "lessons"
+    },
+    "lessons_779.jpg": {
+      "crop": "Jamun",
+      "diagnosis": [
+        "Leaf Spot",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_780.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_781.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_783.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_784.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_785.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Banded Leaf and Sheath Blight"
+      ],
+      "split": "lessons"
+    },
+    "lessons_786.jpg": {
+      "crop": "Lemon",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_787.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Powdery Mildew",
+        "Aphids"
+      ],
+      "split": "lessons"
+    },
+    "lessons_788.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_789.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot"
+      ],
+      "split": "lessons"
+    },
+    "lessons_790.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_792.jpg": {
+      "crop": "Sorghum",
+      "diagnosis": [
+        "Grain Mold",
+        "Stem Borer"
+      ],
+      "split": "lessons"
+    },
+    "lessons_793.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Bacterial Wilt",
+        "Whiteflies"
+      ],
+      "split": "lessons"
+    },
+    "lessons_794.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Fruit Fly"
+      ],
+      "split": "lessons"
+    },
+    "lessons_795.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "lessons"
+    },
+    "lessons_796.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_797.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_798.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_799.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "lessons"
+    },
+    "lessons_800.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_801.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_803.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_805.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "lessons"
+    },
+    "lessons_806.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Rust"
+      ],
+      "split": "lessons"
+    },
+    "lessons_808.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "lessons"
+    },
+    "lessons_809.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "lessons"
+    },
+    "lessons_810.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "lessons"
+    },
+    "lessons_811.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_812.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_813.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_814.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_815.jpg": {
+      "crop": "Rahi",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_817.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_818.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_819.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_820.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_821.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_822.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_825.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_827.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_828.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_829.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_830.jpg": {
+      "crop": "Moringa",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_832.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_833.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_836.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_837.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_839.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_840.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_841.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_842.jpg": {
+      "crop": "Gum",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_843.jpg": {
+      "crop": "Aparajita",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_844.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_845.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_847.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_848.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_849.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_850.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_851.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_852.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_853.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_854.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_855.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_856.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_857.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_860.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_861.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_862.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_863.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_864.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_865.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_866.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_867.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_868.jpg": {
+      "crop": "Kidney bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_869.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_870.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_871.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_872.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_873.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_874.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_875.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_876.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_877.jpg": {
+      "crop": "Carrot",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_878.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_879.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_880.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_881.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_884.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_885.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_886.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_887.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_888.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_889.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_891.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_892.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_893.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_895.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_897.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_899.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_900.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_902.jpg": {
+      "crop": "Peas",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_903.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_904.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_905.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_908.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_909.jpg": {
+      "crop": "Lemongrass",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_910.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_911.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_912.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_913.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_914.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_915.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_917.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_918.jpg": {
+      "crop": "Crossandra",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_919.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_920.jpg": {
+      "crop": "Radish",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_921.jpg": {
+      "crop": "Pepper",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_923.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_925.jpg": {
+      "crop": "Canola",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_926.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_928.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_929.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_930.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_931.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_932.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_933.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_935.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_936.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_937.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_938.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_939.jpg": {
+      "crop": "Watermelon",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_940.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_941.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_942.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_943.jpg": {
+      "crop": "Pomegranate",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_944.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_945.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_946.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_948.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_949.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_950.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_952.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_955.jpg": {
+      "crop": "Radish",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_956.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_957.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_958.jpg": {
+      "crop": "Coriander",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_959.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_960.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_961.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_963.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_964.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_965.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_966.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_968.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_969.jpg": {
+      "crop": "Pearl millet",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_971.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_972.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_973.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_974.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_975.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_976.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_977.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_978.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_979.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_980.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_982.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_983.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_984.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_986.jpg": {
+      "crop": "Fruit trees",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_987.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_988.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_989.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_991.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_992.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_993.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_995.jpg": {
+      "crop": "Green gram",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_996.jpg": {
+      "crop": "Marigold",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_997.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_998.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_999.jpg": {
+      "crop": "Strawberry",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1000.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1003.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1005.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1008.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1010.jpg": {
+      "crop": "Red gram",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1011.jpg": {
+      "crop": "Capsicum",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1012.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1013.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1014.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1016.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1017.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1018.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1019.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1020.jpg": {
+      "crop": "Canola",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1021.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1023.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1024.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "lessons_1025.jpg": {
+      "crop": "Peas",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "lessons"
+    },
+    "eval_8.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "eval"
+    },
+    "eval_11.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Whiteflies"
+      ],
+      "split": "eval"
+    },
+    "eval_14.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Calcium Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_20.jpg": {
+      "crop": "Pea",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_21.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Panama Wilt"
+      ],
+      "split": "eval"
+    },
+    "eval_28.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_30.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_33.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Boron Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_49.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_51.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Cucumber Beetle"
+      ],
+      "split": "eval"
+    },
+    "eval_57.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose",
+        "Boron Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_59.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_63.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "eval"
+    },
+    "eval_72.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_74.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_80.jpg": {
+      "crop": "Watermelon",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_81.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "eval"
+    },
+    "eval_82.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Mealybug"
+      ],
+      "split": "eval"
+    },
+    "eval_87.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_92.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_96.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Phosphorus Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_100.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_103.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_104.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_111.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_115.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_121.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_123.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Cutworms"
+      ],
+      "split": "eval"
+    },
+    "eval_126.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Diamondback Moth"
+      ],
+      "split": "eval"
+    },
+    "eval_127.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Collar Rot"
+      ],
+      "split": "eval"
+    },
+    "eval_137.jpg": {
+      "crop": "Citrus",
+      "diagnosis": [
+        "Leaf Miner",
+        "Nitrogen Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_151.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_155.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Calcium Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_158.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_159.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_165.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_166.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm",
+        "Phosphorus Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_169.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Loose Smut"
+      ],
+      "split": "eval"
+    },
+    "eval_172.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_178.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Blast"
+      ],
+      "split": "eval"
+    },
+    "eval_180.jpg": {
+      "crop": "Cowpea",
+      "diagnosis": [
+        "Leaf Hopper"
+      ],
+      "split": "eval"
+    },
+    "eval_182.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_185.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Root Rot"
+      ],
+      "split": "eval"
+    },
+    "eval_196.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Nitrogen Deficiency"
+      ],
+      "split": "eval"
+    },
+    "eval_201.jpg": {
+      "crop": "Pumpkin",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_202.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_209.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_215.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_216.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_219.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_225.jpg": {
+      "crop": "Lemon",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "eval"
+    },
+    "eval_230.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mealybugs"
+      ],
+      "split": "eval"
+    },
+    "eval_240.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_242.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_244.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_251.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_254.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "eval"
+    },
+    "eval_260.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Collar Rot"
+      ],
+      "split": "eval"
+    },
+    "eval_262.jpg": {
+      "crop": "Gram",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_268.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt",
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_269.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus",
+        "Whiteflies"
+      ],
+      "split": "eval"
+    },
+    "eval_271.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Bacterial Canker",
+        "Mealybugs",
+        "Mango Hopper"
+      ],
+      "split": "eval"
+    },
+    "eval_296.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_298.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_305.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_307.jpg": {
+      "crop": "Cotton",
+      "diagnosis": [
+        "Jassids"
+      ],
+      "split": "eval"
+    },
+    "eval_314.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "eval"
+    },
+    "eval_326.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_328.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "eval"
+    },
+    "eval_335.jpg": {
+      "crop": "Bhindi",
+      "diagnosis": [
+        "Jassids"
+      ],
+      "split": "eval"
+    },
+    "eval_340.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_347.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_348.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_350.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_352.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_364.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_370.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Wilt"
+      ],
+      "split": "eval"
+    },
+    "eval_371.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_372.jpg": {
+      "crop": "Ridge gourd",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_374.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "eval"
+    },
+    "eval_375.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "eval"
+    },
+    "eval_376.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Common Scab"
+      ],
+      "split": "eval"
+    },
+    "eval_387.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_401.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_403.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_408.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_422.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_431.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_434.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_435.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_438.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_443.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_451.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_453.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Early Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_456.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Thrips",
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_459.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "eval"
+    },
+    "eval_465.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_485.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_486.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_496.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_497.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Miner"
+      ],
+      "split": "eval"
+    },
+    "eval_502.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Downy Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_509.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_510.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_514.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Alternaria Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_518.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_519.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_532.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_539.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Early Blight",
+        "Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_542.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Bacterial Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_547.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_554.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_558.jpg": {
+      "crop": "Canola",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_563.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_567.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_576.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_587.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_594.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Papaya Ring Spot Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_596.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Leaf Spot"
+      ],
+      "split": "eval"
+    },
+    "eval_605.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Bacterial Wilt"
+      ],
+      "split": "eval"
+    },
+    "eval_614.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Botrytis Gray Mold"
+      ],
+      "split": "eval"
+    },
+    "eval_615.jpg": {
+      "crop": "Coriander",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_619.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Powdery Mildew"
+      ],
+      "split": "eval"
+    },
+    "eval_620.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_624.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Pod Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_625.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_629.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_632.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_634.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Sigatoka Leaf Spot",
+        "Banana Weevil"
+      ],
+      "split": "eval"
+    },
+    "eval_644.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_658.jpg": {
+      "crop": "Cabbage",
+      "diagnosis": [
+        "Diamondback Moth"
+      ],
+      "split": "eval"
+    },
+    "eval_661.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_693.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Blast"
+      ],
+      "split": "eval"
+    },
+    "eval_694.jpg": {
+      "crop": "Cauliflower",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_700.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "eval"
+    },
+    "eval_702.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_703.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Botrytis Gray Mold"
+      ],
+      "split": "eval"
+    },
+    "eval_704.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_705.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Tobacco Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_709.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_711.jpg": {
+      "crop": "Paddy",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_739.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Fall Armyworm"
+      ],
+      "split": "eval"
+    },
+    "eval_741.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_742.jpg": {
+      "crop": "Bean",
+      "diagnosis": [
+        "Aphids"
+      ],
+      "split": "eval"
+    },
+    "eval_743.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Mosaic Virus"
+      ],
+      "split": "eval"
+    },
+    "eval_752.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Mango Hopper"
+      ],
+      "split": "eval"
+    },
+    "eval_756.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Late Blight"
+      ],
+      "split": "eval"
+    },
+    "eval_763.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Anthracnose"
+      ],
+      "split": "eval"
+    },
+    "eval_769.jpg": {
+      "crop": "Banana",
+      "diagnosis": [
+        "Banana Aphid"
+      ],
+      "split": "eval"
+    },
+    "eval_774.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Phomopsis Blight",
+        "Shoot and Fruit Borer"
+      ],
+      "split": "eval"
+    },
+    "eval_782.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Sheath Blight",
+        "Thrips"
+      ],
+      "split": "eval"
+    },
+    "eval_791.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Leaf Curl Virus",
+        "Mites"
+      ],
+      "split": "eval"
+    },
+    "eval_802.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_804.jpg": {
+      "crop": "Groundnut",
+      "diagnosis": [
+        "Collar Rot"
+      ],
+      "split": "eval"
+    },
+    "eval_807.jpg": {
+      "crop": "Guava",
+      "diagnosis": [
+        "Rust"
+      ],
+      "split": "eval"
+    },
+    "eval_816.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_823.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_824.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_826.jpg": {
+      "crop": "Red gram",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_831.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_834.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_835.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_838.jpg": {
+      "crop": "Bottle gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_846.jpg": {
+      "crop": "Tomato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_858.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_859.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_882.jpg": {
+      "crop": "Chilli",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_883.jpg": {
+      "crop": "Kidney bean",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_890.jpg": {
+      "crop": "Rose",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_894.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_896.jpg": {
+      "crop": "Mango",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_898.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_901.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_906.jpg": {
+      "crop": "Tobacco",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_907.jpg": {
+      "crop": "Bitter gourd",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_916.jpg": {
+      "crop": "Brinjal",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_922.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_924.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_927.jpg": {
+      "crop": "Maize",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_934.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_947.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_951.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_953.jpg": {
+      "crop": "Cucumber",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_954.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_962.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_967.jpg": {
+      "crop": "Peas",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_970.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_981.jpg": {
+      "crop": "Papaya",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_985.jpg": {
+      "crop": "Mustard",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_990.jpg": {
+      "crop": "Arhar",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_994.jpg": {
+      "crop": "Garlic",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1001.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1002.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1004.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1006.jpg": {
+      "crop": "Wheat",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1007.jpg": {
+      "crop": "Rice",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1009.jpg": {
+      "crop": "Onion",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1015.jpg": {
+      "crop": "Potato",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    },
+    "eval_1022.jpg": {
+      "crop": "Chickpea",
+      "diagnosis": [
+        "Healthy"
+      ],
+      "split": "eval"
+    }
+  }
+}
