@@ -11,6 +11,7 @@ STAGES = {
     "download-heldout-detection": "scripts.download_heldout_detection",
     "heldout-detection-zeroshot": "src.heldout_detection_zeroshot",
     "heldout-detection-explain-traces": "src.heldout_detection_explain_traces",
+    "heldout-detection-explain-traces-qc": "src.heldout_detection_explain_traces_qc",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -142,6 +143,12 @@ Stages:
                                representation_ablation.py's own Step −1 established. Only
                                condition (a), raw coordinates + plain image — Step −1's settled
                                winner, no overlay rendering here.
+    heldout-detection-explain-traces-qc  Step 2 QC — no model calls, pure report generator over
+                               Step 2's own checkpoint. Renders a handful of samples (image +
+                               annotated pred/GT boxes + the model's own written explanation),
+                               round-robin sampled across every error_type present so no single
+                               category dominates the sample. Same "read it yourself" purpose
+                               detection_qc_plot.py/the Step −1 ablation already serve.
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and
