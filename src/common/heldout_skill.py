@@ -95,3 +95,31 @@ def build_skill_system_prompt(base_system_prompt: str, skill_memory_path: str) -
         f"problem into a healthy-looking plant is just as wrong as missing a real one.\n\n"
         f"{skill_memory}"
     )
+
+
+def build_detection_skill_system_prompt(base_system_prompt: str, skill_memory_path: str) -> str:
+    """Detection analog of build_skill_system_prompt, for
+    heldout_detection_zeroshot.py's own Step 4 ablation
+    (docs/stage4_detection_context_memory.md). Returns base_system_prompt
+    UNCHANGED if skill_memory_path is falsy, same unconditional-call
+    convention as the classification version.
+
+    Deliberately NO "firm rules" wrapper the way the classification
+    version has — those two rules (specificity, don't-over-diagnose-
+    healthy) were empirically tuned against REAL measured regressions in
+    4 rounds of classification-specific ablation (v1-v4, see this
+    module's own docstring); nothing equivalent has been validated for
+    detection's box-prediction task yet, so inventing box-prediction
+    "firm rules" here would be injecting untested wording, exactly the
+    failure mode this module exists to prevent. Plain reference-material
+    framing only — if a real detection ablation run finds its own
+    regression pattern worth a firm rule, add it here then, grounded in
+    that evidence, not pre-emptively."""
+    if not skill_memory_path:
+        return base_system_prompt
+    skill_memory = Path(skill_memory_path).read_text(encoding="utf-8").strip()
+    return (
+        f"{base_system_prompt}\n\nReference material — lessons learned from reviewing past object "
+        f"detection box predictions on similar images. Use it to inform your predictions, but "
+        f"still base them on what's actually visible in THIS image.\n\n{skill_memory}"
+    )

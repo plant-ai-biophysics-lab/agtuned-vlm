@@ -97,6 +97,74 @@ def build_chunks(rows: list[dict], max_words_per_chunk: int) -> dict[str, list[l
     return chunked
 
 
+def compact_error_type_blocks(
+    error_type: str, summaries: list[dict], max_words_per_group: int,
+    llm, tokenizer, map_template: str, chat_template: str | None, args: argparse.Namespace,
+) -> list[dict]:
+    """Recursively re-condense one error_type's own chunk summaries (via
+    the SAME map_template — structurally identical task whether the N
+    items being condensed are raw explanations (map phase) or already-
+    summarized chunks (here): condense N bullet-texts into 4-8 bullets)
+    until their total word count fits comfortably inside a single reduce
+    call's context budget.
+
+    Needed because build_chunks' own word-bounded chunking only bounds
+    EACH chunk's own size, not how many chunks a bucket produces in
+    total — classification's real run produced ~11 map chunks total
+    (heldout_summarize.py never needed this), but a real detection run
+    produced 110 (box-level granularity, not row-level), and simply
+    concatenating all 110 summaries into one reduce prompt blew
+    --max_model_len entirely (24577 input tokens requested against a
+    24576-token window, leaving ZERO room for --reduce_max_tokens of
+    actual output — a real failure, not a close call)."""
+    summaries = sorted(summaries, key=lambda x: x["chunk_index"])
+    level = 0
+    while True:
+        total_words = sum(len(s["summary"].split()) for s in summaries)
+        if len(summaries) <= 1 or total_words <= max_words_per_group:
+            return summaries
+        level += 1
+        groups: list[list[dict]] = []
+        current: list[dict] = []
+        current_words = 0
+        for s in summaries:
+            w = len(s["summary"].split())
+            if current and current_words + w > max_words_per_group:
+                groups.append(current)
+                current, current_words = [], 0
+            current.append(s)
+            current_words += w
+        if current:
+            groups.append(current)
+        if len(groups) >= len(summaries):
+            # Grouping didn't reduce the count (every item alone already
+            # exceeds the budget) — stop here rather than looping forever.
+            return summaries
+        print(f"    [reduce-compact] {error_type} level {level}: {len(summaries)} summaries "
+              f"({total_words} words) -> {len(groups)} group(s)")
+        new_summaries = []
+        gen_params = SamplingParams(
+            temperature=0.0, max_tokens=args.map_max_tokens, seed=args.seed,
+            skip_special_tokens=not args.enable_thinking,
+        )
+        for gi, group in enumerate(groups):
+            explanations_block = "\n".join(f"{j+1}. {s['summary']}" for j, s in enumerate(group))
+            text = map_template.format(
+                error_type_label=_ERROR_TYPE_LABEL[error_type], n=len(group),
+                explanations_block=explanations_block)
+            hist = [{"role": "user", "content": text}]
+            prompt = render_chat_template(tokenizer, hist, enable_thinking=args.enable_thinking,
+                                           chat_template=chat_template)
+            out = llm.generate([prompt], sampling_params=gen_params)[0]
+            raw = out.outputs[0].text
+            _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+            new_summaries.append({
+                "error_type": error_type, "chunk_index": gi,
+                "n_rows": sum(s["n_rows"] for s in group), "summary": cleaned.strip(),
+            })
+        summaries = new_summaries
+
+
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     hprompts = load_yaml(Path(args.detection_skill_prompts))
     map_template = hprompts["detection_skill_map_summarize_prompt"]
@@ -168,18 +236,13 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     else:
         print("  [map] all chunks already cached")
 
-    print("  [reduce] merging all chunk summaries into the final .md ...")
     by_error_type: dict[str, list[dict]] = defaultdict(list)
     for v in chunk_summaries.values():
         by_error_type[v["error_type"]].append(v)
-    blocks = []
-    for et in _ERROR_TYPES:
-        for v in sorted(by_error_type.get(et, []), key=lambda x: x["chunk_index"]):
-            blocks.append(f"### {et} (n={v['n_rows']})\n{v['summary']}")
-    chunk_summaries_block = "\n\n".join(blocks)
-    reduce_text = reduce_template.format(chunk_summaries_block=chunk_summaries_block)
 
     if llm is None:
+        # Needed even if the map phase itself had nothing pending — the
+        # compaction pass below may still require real generation calls.
         llm, tokenizer = load_llm(
             model_id, quantization=args.quantize,
             gpu_memory_utilization=args.gpu_memory_utilization,
@@ -190,6 +253,24 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             kv_cache_dtype=args.kv_cache_dtype,
             caller_tag="heldout_detection_summarize_reduce",
         )
+
+    print("  [reduce] compacting each error_type bucket's own chunk summaries to fit the "
+          f"reduce call's context budget (--max_words_per_reduce_group {args.max_words_per_reduce_group}) ...")
+    blocks = []
+    for et in _ERROR_TYPES:
+        summaries = by_error_type.get(et, [])
+        if not summaries:
+            continue
+        compacted = compact_error_type_blocks(
+            et, summaries, args.max_words_per_reduce_group, llm, tokenizer, map_template,
+            chat_template, args)
+        for v in compacted:
+            blocks.append(f"### {et} (n={v['n_rows']})\n{v['summary']}")
+
+    print("  [reduce] merging all (compacted) chunk summaries into the final .md ...")
+    chunk_summaries_block = "\n\n".join(blocks)
+    reduce_text = reduce_template.format(chunk_summaries_block=chunk_summaries_block)
+
     hist = [{"role": "user", "content": reduce_text}]
     prompt = render_chat_template(tokenizer, hist, enable_thinking=args.enable_thinking, chat_template=chat_template)
     reduce_params = SamplingParams(
@@ -232,6 +313,17 @@ if __name__ == "__main__":
     parser.add_argument("--max_words_per_chunk", type=int, default=8000,
                          help="An error_type bucket whose raw explanation text exceeds this is split "
                               "into multiple map chunks instead of one call.")
+    parser.add_argument("--max_words_per_reduce_group", type=int, default=1500,
+                         help="Per error_type, chunk summaries are recursively re-condensed "
+                              "(compact_error_type_blocks) until their own total word count is under "
+                              "this, BEFORE the single final reduce call — otherwise a bucket that "
+                              "produced many map chunks (box-level granularity can easily exceed "
+                              "classification's own ~11-chunk real run) can blow the reduce call's "
+                              "entire --max_model_len with zero room left for output (a real failure "
+                              "on a real run: 110 chunks concatenated requested 24577 input tokens "
+                              "against a 24576-token window). 1500 words/error_type x 4 error_types "
+                              "= 6000 words (~8000 tokens) max going into the final reduce call, "
+                              "comfortably under --max_model_len with room for --reduce_max_tokens.")
     parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja")
     parser.add_argument("--map_max_tokens", type=int, default=2048,

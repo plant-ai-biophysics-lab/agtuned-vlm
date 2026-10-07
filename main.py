@@ -13,6 +13,7 @@ STAGES = {
     "heldout-detection-explain-traces": "src.heldout_detection_explain_traces",
     "heldout-detection-explain-traces-qc": "src.heldout_detection_explain_traces_qc",
     "heldout-detection-summarize": "src.heldout_detection_summarize",
+    "heldout-detection-ablation-summary": "src.heldout_detection_ablation_summary",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -158,6 +159,15 @@ Stages:
                                REDUCE merges every chunk summary into one skill_memory_detection.md.
                                New rule vs. classification's own Step 3: every bullet must describe a
                                VISUAL/SPATIAL pattern, never a coordinate number.
+    heldout-detection-ablation-summary  Paper 2 Stage 4, Step 4 (docs/stage4_detection_context_memory.md)
+                               — no GPU, pure post-hoc comparison of two heldout-detection-zeroshot
+                               --split eval checkpoints (--baseline_ckpt without --skill_memory_path,
+                               --skill_ckpt with it). Detection analog of heldout-ablation-summary —
+                               same shape, precision/recall/F1 instead of judge_accuracy (no judge
+                               here — IoU-matched P/R/F1 is already the deterministic ground truth).
+                               Macro-averaged (mean of each row's own precision_at_iou50/
+                               recall_at_iou50/f1_at_iou50), same convention detection_final_
+                               metrics.py's own _aggregate() helper already uses.
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and

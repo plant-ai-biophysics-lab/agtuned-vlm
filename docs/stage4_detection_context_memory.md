@@ -441,14 +441,60 @@ uv run python main.py heldout-skill-optimize \
     --output_dir outputs_final/heldout_detection_skill_optimize_feedback/
 ```
 
-## Step 4 — ablation
+## Step 4 — ablation (baseline vs. not-optimized skill built; optimized-skill condition TBD once Step 3b is wired up for detection)
 
 Same shape as Stage 3's Step 4: baseline (no skill) vs. not-optimized
-skill vs. (once Step 3b has run) self-optimized skill, scored on the
-held-out eval split, `precision`/`recall`/`F1` instead of
-`judge_accuracy` (detection has no judge-based correctness metric —
-IoU-matched P/R/F1 is the ground truth here, already deterministic, no
-judge-leniency confound to worry about the way classification has).
+skill — scored on the held-out eval split, `precision`/`recall`/`F1`
+instead of `judge_accuracy` (detection has no judge-based correctness
+metric — IoU-matched P/R/F1 is the ground truth here, already
+deterministic, no judge-leniency confound to worry about the way
+classification has). A third condition (Step 3b's self-optimized skill)
+will follow the same pattern once that step is wired up for detection
+— not included here yet.
+
+`heldout_detection_zeroshot.py` gained its own `--skill_memory_path`
+(mirroring `heldout_zeroshot.py`'s), injecting the file via a NEW
+`build_detection_skill_system_prompt` (`src/common/heldout_skill.py`) —
+plain reference-material framing only, deliberately WITHOUT
+classification's own "two firm rules" wrapper: those rules (specificity,
+don't-over-diagnose-healthy) were empirically tuned against 4 real
+rounds of classification-specific ablation (v1-v4); nothing equivalent
+has been validated for detection's box-prediction task yet, so
+inventing box-prediction "firm rules" here would inject untested
+wording — exactly what `heldout_skill.py` exists to prevent. If a real
+ablation run surfaces its own regression pattern worth a firm rule,
+add it then, grounded in that evidence.
+
+```bash
+# Without the skill file — the real baseline:
+uv run python main.py heldout-detection-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --output_dir outputs_final/heldout_detection_zeroshot_eval_baseline/
+
+# With the Step 3 skill file injected into the system prompt:
+uv run python main.py heldout-detection-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --skill_memory_path outputs_final/heldout_detection_summarize/skill_memory_detection.md \
+    --output_dir outputs_final/heldout_detection_zeroshot_eval_with_skill/
+
+# Compare:
+uv run python main.py heldout-detection-ablation-summary \
+    --baseline_ckpt outputs_final/heldout_detection_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --skill_ckpt outputs_final/heldout_detection_zeroshot_eval_with_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+```
+
+`heldout-detection-ablation-summary` (`src/heldout_detection_ablation_
+summary.py`) is pure post-hoc comparison (no GPU) — a grouped
+precision/recall/F1 bar chart + JSON, with the same "don't inject on a
+non-improving result" discipline Stage 3's own ablation summary has: a
+blunt `[finding]` line if the F1 delta is `<= 0`. Macro-averaged (mean
+of each row's own `precision_at_iou50`/`recall_at_iou50`/`f1_at_iou50`),
+same convention `detection_final_metrics.py`'s own `_aggregate()`
+helper already uses elsewhere in this pipeline — not a pooled/
+micro-average over summed `n_pred`/`n_gt`/`n_matched`, which is still
+reported alongside for reference.
 
 ## Step 5 — real injection
 

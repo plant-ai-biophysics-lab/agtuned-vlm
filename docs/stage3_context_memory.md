@@ -527,7 +527,7 @@ own effect cleanly first, same reasoning as the original plan):
 ```bash
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --skill_memory_path outputs_final/heldout_summarize/skill_memory_no_common_section.md \
+    --skill_memory_path src/config/skill_memory_disease-pest.md \
     --output_dir outputs_final/vision_baseline_thinking_with_skill/
 ```
 
@@ -566,7 +566,7 @@ nothing extra to configure:
 # 4 GPUs, one process each ($SLURM_ARRAY_TASK_ID = 0, 1, 2, 3):
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --skill_memory_path outputs_final/heldout_summarize/skill_memory_no_common_section.md \
+    --skill_memory_path src/config/skill_memory_disease-pest.md \
     --output_dir outputs_final/vision_baseline_thinking_with_skill/ \
     --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID
 ```
@@ -611,3 +611,21 @@ directory afterward.
   it's still too large for a comfortable context injection even after
   map-reduce, may need a second summarization pass over the file itself.
 - Script/command names for Step 4 — not yet built.
+
+**Noted for later, not current work** — current skill-optimization
+ablations are: (1) normal `heldout-skill-optimize`, (2) the same with
+`--feedback_prior_round`. A third ablation idea, not yet built: decouple
+`--n_examples_per_bucket` into separate `--n_miss_examples_per_bucket`/
+`--n_worked_examples_per_bucket` flags (currently the same value drives
+both) and sweep them — a scatter plot, x=wrong-example count, y=
+right-example count, point size/color=VAL `judge_accuracy` (F1 for
+detection's own eventual version of this), to see whether there's a
+trend in this "learning rate" of the optimization loop. A full N×N grid
+sweep is expensive (each cell is a full multi-round loop) — a cheaper
+1D alternative worth considering first: fix the TOTAL example budget and
+sweep only the wrong:right RATIO (e.g. 18:2, 15:5, 10:10, 5:15, 2:18 at
+a fixed total of 20), which answers roughly the same question in 1/5th
+the runs. Separately, skill.md word-length vs. round's VAL score is
+already free to plot from an existing `round_log.json` (file length per
+round is directly derivable from each round's own `skill_path`) — no
+new runs needed whenever this is wanted.

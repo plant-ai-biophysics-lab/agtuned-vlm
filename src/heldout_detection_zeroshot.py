@@ -57,6 +57,7 @@ from PIL import Image as PILImage
 from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, extract_boxes_json, \
     needs_1000_scale_boxes, uses_json_box_format
 from src.common.dataset_config import crop_display
+from src.common.heldout_skill import build_detection_skill_system_prompt
 from src.common.io import load_prompts
 from src.common.progress import ProgressBar
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
@@ -90,7 +91,8 @@ def det_question_heldout(classes: list[str], crop, prompts: dict, use_json: bool
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
-    system_prompt = prompts.get("assessment_system", "")
+    system_prompt = build_detection_skill_system_prompt(
+        prompts.get("assessment_system", ""), args.skill_memory_path)
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     manifest = load_heldout_detection_manifest(Path(args.manifest))
     dataset_meta = load_dataset_meta(Path(args.config))
@@ -214,6 +216,13 @@ if __name__ == "__main__":
     parser.add_argument("--split", choices=["lessons", "eval"], default="lessons",
                          help="lessons=TRAIN (this step's own primary use), eval=VAL (Step 3b/4 "
                               "later) — never use eval to write the skill-memory file.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Step 4's own ablation flag (docs/stage4_detection_context_memory.md) "
+                              "— injects this file into the system prompt via "
+                              "build_detection_skill_system_prompt (src/common/heldout_skill.py). "
+                              "Only ever pass this with --split eval for the ablation itself; never "
+                              "use it with --split lessons, which would make lesson-generation "
+                              "depend on the very skill file it's supposed to be generating.")
     parser.add_argument("--prompts", default="src/config/prompts_detection.yaml")
     parser.add_argument("--output_dir", default="outputs_final/heldout_detection_zeroshot/")
     parser.add_argument("--iou_threshold", type=float, default=0.5)
