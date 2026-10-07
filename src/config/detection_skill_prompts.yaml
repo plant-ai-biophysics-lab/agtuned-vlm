@@ -128,3 +128,87 @@ detection_skill_reduce_summarize_prompt: |
   specific coordinate number or a fact tied to one example image.
 
   Respond with ONLY the Markdown document, no preamble.
+
+# Step 3b — self-optimization loop's own edit call
+# (src/heldout_detection_skill_optimize.py). Mirrors
+# heldout_skill_edit_prompt (src/config/heldout_prompts.yaml) structurally
+# — same {prior_round_feedback_block}/{task_scores_block}/
+# {miss_examples_block}/{worked_examples_block}/{current_skill_md}
+# placeholders, same ---CHANGELOG--- contract (parsed by the SAME
+# parse_edit_output/diff_skill_text imported directly from
+# heldout_skill_optimize.py, not reimplemented) — but rule 1
+# (specific diagnosis name) and rule 3 (no bare "Common Diseases" list)
+# are swapped for detection's own equivalents: rule 1 -> VISUAL/SPATIAL
+# pattern not a coordinate number (Step 3's own rule, carried over
+# verbatim); rule 3 -> no bare "Common Objects/Classes to Know" list.
+# Params: {prior_round_feedback_block} {task_scores_block}
+# {miss_examples_block} {worked_examples_block} {current_skill_md}
+detection_skill_edit_prompt: |
+  Below is the CURRENT version of a reference document another
+  vision-language object-detection model reads before predicting boxes
+  on crop images. It was just evaluated on a held-out set of images
+  WHILE using this exact document, broken down by box-level outcome:
+  {prior_round_feedback_block}
+  {task_scores_block}
+
+  Here are specific box-level cases where the model, using this exact
+  document, did NOT produce a correct, tight box (false positive,
+  missed instance, or loose/imprecise match):
+
+  {miss_examples_block}
+
+  Here are specific box-level cases where the model, using this exact
+  document, DID produce a correct, tight box — the document is already
+  doing its job for these, do not disturb whatever's working for them:
+
+  {worked_examples_block}
+
+  CURRENT DOCUMENT:
+  {current_skill_md}
+
+  Revise this document to address the weaker box-level outcomes above
+  and the specific cases shown — add, remove, or reword guidance as
+  needed. Rules that must still hold in your revision:
+  1. Every bullet must describe a VISUAL or SPATIAL pattern (shape,
+     boundary, occlusion, clustering, lighting, scale) that would
+     transfer to a DIFFERENT image of a similar case — never a specific
+     pixel coordinate or a fact tied to one example image. "Boxes
+     around tightly clustered fruit tend to need splitting when a stem
+     or leaf visually separates two individuals" is useful; "move the
+     box left" is not, even if that happened to be true for one shown
+     example.
+  2. Write GENERALIZABLE, INSTRUCTIONAL guidance. The cases shown above
+     are EVIDENCE to diagnose what kind of guidance is missing, not
+     source text to copy from — extract the underlying visual/spatial
+     principle behind a case, don't restate its coordinates or its
+     single image's specifics. If a case is genuinely a one-off with
+     nothing generalizable about it, it is fine to leave it out rather
+     than force a bullet out of it.
+  3. Do NOT add a "Common Objects/Classes to Know" style reference
+     list, or any section whose bullets are just bare class/category
+     names restated as standalone entries — this document's job is to
+     teach VISUAL/SPATIAL box-prediction behavior, not to enumerate
+     class names.
+  4. Keep the same overall structure (`# Object Detection — Lessons
+     Learned`, `## What Worked` / `## What Didn't Work` with its False
+     Positives / Missed Instances / Loose or Imprecise Boxes
+     subsections) unless a subsection genuinely has nothing useful to
+     say.
+  5. Keep it concrete and skimmable — short bullets, not paragraphs. Do
+     not invent facts not supported by the cases shown or the current
+     document's own existing content.
+  6. PROTECT what's already working. Before editing a bullet or section
+     that plausibly helped produce one of the correct cases shown above,
+     check whether your change would still support that case — prefer
+     ADDING a new, narrowly-scoped distinction over REWRITING existing
+     wording, so you don't fix one failure by breaking what already
+     works.
+
+  Respond with the full revised document (Markdown), starting with the
+  `# Object Detection — Lessons Learned` heading, no preamble — then, on
+  a new line by itself, write exactly:
+  ---CHANGELOG---
+  followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
+  you made and WHY, each bullet naming the box-level outcome it
+  addresses and referencing the count/case that motivated it. Do not
+  skip this section.

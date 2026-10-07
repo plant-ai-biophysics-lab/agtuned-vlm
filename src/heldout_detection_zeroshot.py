@@ -89,7 +89,7 @@ def det_question_heldout(classes: list[str], crop, prompts: dict, use_json: bool
     return prompts[key].format(class_names=names, crop=crop_display(crop))
 
 
-def run_model(model_id: str, args: argparse.Namespace) -> None:
+def run_model(model_id: str, args: argparse.Namespace) -> tuple[list[dict], Path]:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = build_detection_skill_system_prompt(
         prompts.get("assessment_system", ""), args.skill_memory_path)
@@ -200,6 +200,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
         print(f"  Overall: precision={mean_p:.3f} recall={mean_r:.3f} f1={mean_f1:.3f} (n={len(rows)})")
 
+    return rows, ckpt_path
+
 
 def main(args: argparse.Namespace) -> None:
     if not args.model:
@@ -208,7 +210,13 @@ def main(args: argparse.Namespace) -> None:
     run_model(args.model, args)
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Factored out (not just inlined under __main__) so a future
+    detection-analog of heldout_skill_optimize.py's automated round loop
+    can obtain the EXACT same defaults this CLI uses via
+    `build_arg_parser().parse_args([])` plus a handful of per-round
+    overrides — same reasoning heldout_zeroshot.py's own build_arg_parser
+    documents, mirrored here."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
     parser.add_argument("--manifest", default="dataset/detection_heldout_selected_images.json")
@@ -237,5 +245,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
     parser.add_argument("--kv_cache_dtype", choices=["auto", "fp8"], default=None)
+    return parser
 
-    main(parser.parse_args())
+
+if __name__ == "__main__":
+    main(build_arg_parser().parse_args())

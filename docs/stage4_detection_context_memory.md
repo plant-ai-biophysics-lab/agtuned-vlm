@@ -409,39 +409,68 @@ uv run python main.py heldout-detection-summarize \
     --output_md outputs_final/heldout_detection_summarize/skill_memory_detection.md
 ```
 
-## Step 3b — self-optimization loop (reuse, not rebuild)
+## Step 3b — self-optimization loop (built)
 
-`heldout_skill_optimize.py`'s machinery (automated round loop, round 0
-= score as-is, edit against per-bucket scores + sampled misses, log
-diff + changelog + rule-violations, select best round) is ALREADY
-generic enough in its bucket/scoring abstractions to be reused for
-detection with the bucket categories swapped (box-error taxonomy
-instead of disease/pest/deficiency/healthy) and the scoring call
-swapped (`detection-multiclass`'s own generation+matching instead of
-`heldout-zeroshot`'s classification scoring). Worth checking after
-Stage 3's own loop has run for real whether `--edit_enable_thinking`
-staying off and the channel-leak/rule-violation QC checks are still
-sufficient here, or whether detection's own failure modes need their
-own additions to `check_rule_violations`.
+Built: `src/heldout_detection_skill_optimize.py` (`heldout-detection-
+skill-optimize`) — a SEPARATE script, not a parameterized version of
+`heldout_skill_optimize.py`, to avoid any risk to that actively-used
+classification script; the genuinely domain-agnostic pieces
+(`parse_edit_output`, `diff_skill_text` — pure text/diff processing, no
+classification-specific assumptions) are imported directly from it, not
+duplicated. Same TRAIN/VAL loop structure, resumability, and VAL-only
+round-selection discipline as Stage 3's own loop (not re-litigated
+here — see `docs/stage3_context_memory.md`'s Step 3b), swapped for
+detection's own scoring:
 
-`--feedback_prior_round` (Stage 3's own A/B flag — see
-`docs/stage3_context_memory.md`'s Step 3b: feeds each edit call the
-immediately-prior round's changelog + the TRAIN scores that edit
-produced) carries over for free once the above is wired up, since it's
-part of the same shared `heldout_skill_optimize.py` machinery, not a
-classification-specific addition. Same command shape, pointed at a
-detection skill file once one exists:
+- **Scoring**: `heldout_detection_zeroshot.run_model` (now returns
+  `(rows, ckpt_path)`, mirroring `heldout_zeroshot.py`'s own
+  `run_model` return shape — an additive change, the CLI entry point's
+  behavior is unaffected) instead of `heldout_zeroshot.run_model` — F1
+  (macro-averaged, same convention `heldout_detection_ablation_
+  summary.py` uses) instead of `judge_accuracy`.
+- **Buckets**: Step 2's own `error_type` taxonomy (false_positive/
+  missed/loose_match/worked), computed FRESH each round from that
+  round's own predictions via `enumerate_items` (imported from
+  `heldout_detection_explain_traces.py`, not reimplemented) — instead
+  of disease/pest/deficiency/healthy.
+- **Miss/worked examples shown to the edit call**: box-level structural
+  facts (predicted/ground-truth coordinates, category, IoU) — NOT a
+  written explanation the way classification's examples carry one,
+  since there is no per-round "explain traces" pass (Step 2 is a
+  separate, one-time, GPU-heavy script; re-running it every
+  optimization round would defeat the point of a cheap scoring loop).
+- **Edit prompt rules**: `detection_skill_edit_prompt`
+  (`src/config/detection_skill_prompts.yaml`) carries detection's own
+  VISUAL/SPATIAL-pattern-not-coordinate-number rule and "no bare Common
+  Objects list" rule (Step 3's own rules, reused verbatim) instead of
+  classification's specific-diagnosis-name rule.
+- **QC**: `check_detection_rule_violations` is detection-specific, NOT
+  a reuse of classification's `check_rule_violations` — that function's
+  bare-category-word regex (`"Pest"`, `"Disease"`, etc.) will never fire
+  on detection content, which has different real failure modes: a
+  channel-thought leak (reused as-is, same bug class), a reappeared
+  "Common Objects/Classes to Know" list, and a NEW heuristic for a
+  bullet that looks like it cites a literal coordinate/pixel offset
+  instead of a visual/spatial pattern — detection's own
+  per-image-memorization failure mode.
+
+`--feedback_prior_round` (same semantics as Stage 3's own A/B flag —
+feeds each edit call the immediately-prior round's changelog + the
+box-level outcomes that edit produced) is supported directly, not
+inherited "for free" — this script has its own
+`build_prior_round_feedback_block`, since classification's version is
+coupled to its own `build_task_scores_block`'s dict shape.
 
 ```bash
-uv run python main.py heldout-skill-optimize \
+uv run python main.py heldout-detection-skill-optimize \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --init_skill_path <detection skill file, TBD> \
+    --init_skill_path outputs_final/heldout_detection_summarize/skill_memory_detection.md \
     --max_rounds 10 \
     --feedback_prior_round \
     --output_dir outputs_final/heldout_detection_skill_optimize_feedback/
 ```
 
-## Step 4 — ablation (baseline vs. not-optimized skill built; optimized-skill condition TBD once Step 3b is wired up for detection)
+## Step 4 — ablation (baseline vs. not-optimized skill built; optimized-skill condition follows the same pattern now that Step 3b is wired up — not yet run for real)
 
 Same shape as Stage 3's Step 4: baseline (no skill) vs. not-optimized
 skill — scored on the held-out eval split, `precision`/`recall`/`F1`

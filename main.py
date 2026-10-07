@@ -14,6 +14,7 @@ STAGES = {
     "heldout-detection-explain-traces-qc": "src.heldout_detection_explain_traces_qc",
     "heldout-detection-summarize": "src.heldout_detection_summarize",
     "heldout-detection-ablation-summary": "src.heldout_detection_ablation_summary",
+    "heldout-detection-skill-optimize": "src.heldout_detection_skill_optimize",
     "heldout-zeroshot": "src.heldout_zeroshot",
     "heldout-explain-traces": "src.heldout_explain_traces",
     "heldout-summarize": "src.heldout_summarize",
@@ -168,6 +169,17 @@ Stages:
                                Macro-averaged (mean of each row's own precision_at_iou50/
                                recall_at_iou50/f1_at_iou50), same convention detection_final_
                                metrics.py's own _aggregate() helper already uses.
+    heldout-detection-skill-optimize  Paper 2 Stage 4, Step 3b (docs/stage4_detection_context_memory.md)
+                               — detection analog of heldout-skill-optimize, same TRAIN/VAL loop/
+                               resume/selection machinery and ---CHANGELOG--- contract (parse_edit_
+                               output/diff_skill_text imported directly), swapped for detection's own
+                               scoring: F1 (via heldout-detection-zeroshot) instead of judge_accuracy,
+                               Step 2's own error_type taxonomy (false_positive/missed/loose_match/
+                               worked, via enumerate_items) instead of disease/pest/deficiency/
+                               healthy. Miss/worked examples shown to the edit call are box-level
+                               structural facts (coordinates/category/IoU), not a written explanation
+                               — no per-round "explain traces" pass. Also supports
+                               --feedback_prior_round (same semantics as the classification version).
     heldout-skill-optimize  Paper 2 Stage 3, Step 3b (docs/stage3_context_memory.md) — AUTOMATED
                                self-optimization loop, one invocation runs the whole thing. Feed
                                --init_skill_path (e.g. src/config/skill_memory_disease-pest.md) and
