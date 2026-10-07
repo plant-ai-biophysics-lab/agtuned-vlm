@@ -403,8 +403,10 @@ larger sample together.
 
 ## Step 4 — ablation (built)
 
-Two `heldout-zeroshot` runs against `--split eval` (the slice no other
-step has ever touched), then one comparison:
+Three `heldout-zeroshot` runs against `--split eval` (the slice no
+other step has ever touched) — no skill file, the hand-iterated v4
+skill file, and Step 3b's own automated-optimization output — then
+pairwise comparisons:
 
 ```bash
 # Without the skill file — the real baseline:
@@ -413,33 +415,64 @@ uv run python main.py heldout-zeroshot \
     --split eval \
     --output_dir outputs_final/heldout_zeroshot_eval_baseline/
 
-# With the skill file injected into the system prompt:
+# With the hand-iterated v4 skill file injected into the system prompt:
 uv run python main.py heldout-zeroshot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --split eval \
     --skill_memory_path src/config/skill_memory_disease-pest.md \
     --output_dir outputs_final/heldout_zeroshot_eval_not_optimized_skill/
 
-# Compare:
+# With Step 3b's own self-optimization loop's winning round injected instead
+# (swap in .../heldout_skill_optimize_feedback/skill_memory_best.md if that's
+# the run you want to ablate — whichever --output_dir Step 3b actually wrote):
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --split eval \
+    --skill_memory_path outputs_final/heldout_skill_optimize/skill_memory_best.md \
+    --output_dir outputs_final/heldout_zeroshot_eval_optimized_skill/
+
+# Compare: baseline vs. hand-iterated v4
 uv run python main.py heldout-ablation-summary \
     --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --skill_ckpt outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
+    --skill_ckpt outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --out_dir outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ablation_vs_baseline/
+
+# Compare: baseline vs. Step 3b's optimized skill
+uv run python main.py heldout-ablation-summary \
+    --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --skill_ckpt outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --out_dir outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ablation_vs_baseline/
+
+# Compare: hand-iterated v4 vs. Step 3b's optimized skill — does the
+# automated loop actually beat the hand-crafted file it started from?
+uv run python main.py heldout-ablation-summary \
+    --baseline_ckpt outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --skill_ckpt outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --out_dir outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ablation_vs_v4/
 ```
 
-`--skill_memory_path` (new flag on `heldout-zeroshot`) injects the file
+`--skill_memory_path` (flag on `heldout-zeroshot`) injects the file
 into the SYSTEM prompt only — nothing else about the generation call
-changes between the two runs, so any accuracy delta is attributable to
-the skill file itself. `--output_dir` must differ between the two runs
-(same `--model` otherwise collides on the same checkpoint path).
+changes between runs, so any accuracy delta is attributable to the
+skill file itself. `--output_dir` must differ between runs (same
+`--model` otherwise collides on the same checkpoint path). Each
+`heldout-ablation-summary` call's `--out_dir` is likewise set
+explicitly and distinctly — its own default (`<skill_ckpt's own
+dir>/ablation/`) would otherwise collide across these 3 comparisons,
+since the optimized-skill checkpoint is reused as both a `--skill_ckpt`
+(vs. baseline) and a `--baseline_ckpt` (vs. v4).
 
 `heldout-ablation-summary` is pure post-hoc comparison (no GPU) —
 `judge_accuracy` bar chart + JSON, with an explicit printed warning if
 the two checkpoints don't cover the identical image set (they should,
-since both come from the same seeded `--split eval`), and a blunt
+since all three come from the same seeded `--split eval`), and a blunt
 `[finding]` line if the delta is `<= 0`: **do not inject into
 vision-baseline/verifier-cot based on a non-improving or negative
-result** — the whole point of this step is to not trust the skill file
-just because it looks reasonable on paper.
+result** — the whole point of this step is to not trust a skill file
+just because it looks reasonable on paper. This applies to the
+optimized skill file exactly as much as the hand-iterated one — a
+Step 3b run that merely matched or lost to round 0 (its own documented
+failure mode on a prior real run) should not get injected either.
 
 **Real result** (n=199 held-out eval split, `judge_accuracy` split by
 `bucket_category(class_label)` — disease n=69, pest n=62, deficiency
