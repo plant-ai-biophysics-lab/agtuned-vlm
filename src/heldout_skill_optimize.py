@@ -132,6 +132,29 @@ def build_task_scores_block(scores: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
+def build_prior_round_feedback_block(changelog: str | None, prior_task_scores: dict | None, enabled: bool) -> str:
+    """Empty string when --feedback_prior_round is off (the original
+    behavior, kept default so A/B testing this against the baseline is
+    one flag flip) or there's no prior round yet. When on: the prior
+    round's own stated changelog (what it changed and why) PAIRED with
+    the TRAIN scores that edit actually produced — letting the editor
+    see whether its last change helped, before making another one.
+    Deliberately NOT the full multi-round history (would both bloat the
+    prompt and let the model chase noise across many rounds' worth of
+    small-sample TRAIN scores) — just the immediately-prior round."""
+    if not enabled or changelog is None or prior_task_scores is None:
+        return ""
+    scores_block = build_task_scores_block(prior_task_scores)
+    return (
+        "\nFor reference, here is what you changed in the PREVIOUS round of "
+        "editing this document, and the TRAIN scores that edit actually "
+        "produced (use this to judge whether your last change helped, hurt, "
+        "or had no real effect before making another one):\n\n"
+        f"Previous round's changelog:\n{changelog}\n\n"
+        f"Resulting TRAIN scores:\n{scores_block}\n"
+    )
+
+
 def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, want_correct: bool) -> dict[str, list[dict]]:
     """{bucket: [row, ...]} — up to n_per_bucket rows per bucket matching
     want_correct, sampled (not just the first N) so repeated rounds
@@ -282,8 +305,8 @@ def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: 
 
 
 def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores_block: str,
-                miss_examples_block: str, worked_examples_block: str, edit_template: str,
-                chat_template: str | None, args: argparse.Namespace) -> tuple[str, str, bool, str, str]:
+                miss_examples_block: str, worked_examples_block: str, prior_round_feedback_block: str,
+                edit_template: str, chat_template: str | None, args: argparse.Namespace) -> tuple[str, str, bool, str, str]:
     """ONE edit call. Returns (revised_md, changelog_text, changelog_parsed,
     thinking_trace, raw_cleaned_output) — the last two are for debugging a
     round that looks wrong (truncation, a channel-thought-leak, a model
@@ -295,10 +318,12 @@ def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores
     so the edit call has a concrete reason not to disturb wording that's
     already working (heldout_skill_edit_prompt's own rule 6) — without
     this, every round only ever saw evidence to add/change, never
-    evidence to leave something alone."""
+    evidence to leave something alone. prior_round_feedback_block: empty
+    unless --feedback_prior_round — see build_prior_round_feedback_block."""
     edit_text = edit_template.format(
         current_skill_md=current_skill_md, task_scores_block=task_scores_block,
         miss_examples_block=miss_examples_block, worked_examples_block=worked_examples_block,
+        prior_round_feedback_block=prior_round_feedback_block,
     )
     hist = [{"role": "user", "content": edit_text}]
     prompt = render_chat_template(tokenizer, hist, enable_thinking=args.edit_enable_thinking, chat_template=chat_template)
@@ -341,6 +366,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
 
     current_skill_path = Path(args.init_skill_path)
     current_skill_text = current_skill_path.read_text(encoding="utf-8").strip()
+    prev_changelog: str | None = None  # see build_prior_round_feedback_block / --feedback_prior_round
 
     for round_i in range(args.max_rounds + 1):  # round 0 = score the initial file as-is, no edit
         round_dir = out_dir / f"round{round_i}"
@@ -366,6 +392,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             else:
                 prev_train_rows = []
             prev_train_task_scores = prior["train_task_scores"]
+            prev_changelog = prior["changelog"]
             continue
 
         round_dir.mkdir(parents=True, exist_ok=True)
@@ -394,6 +421,10 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             n_worked = sum(len(v) for v in prev_worked.values())
             print(f"  [edit] {n_examples} TRAIN miss example(s) + {n_worked} TRAIN worked example(s) "
                   f"from round {round_i - 1} shown to the editor")
+            prior_round_feedback_block = build_prior_round_feedback_block(
+                prev_changelog, prev_train_task_scores, args.feedback_prior_round)
+            if args.feedback_prior_round:
+                print(f"  [edit] prior round's changelog + resulting TRAIN scores also shown to the editor")
 
             llm, tokenizer = load_llm(
                 model_id, quantization=args.quantize,
@@ -407,7 +438,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             )
             revised_md, changelog, changelog_parsed, thinking_trace, raw_cleaned = edit_round(
                 model_id, llm, tokenizer, current_skill_text, prev_scores_block, miss_examples_block,
-                worked_examples_block, edit_template, chat_template, args,
+                worked_examples_block, prior_round_feedback_block, edit_template, chat_template, args,
             )
             destroy_llm(llm)
             del tokenizer
@@ -481,6 +512,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
         completed_rounds.add(round_i)
 
         prev_train_rows, prev_train_task_scores = train_rows, train_task_scores
+        prev_changelog = changelog
         current_skill_path = round_skill_path
 
     # Selection is ALWAYS by VAL — TRAIN score never decides the winner,
@@ -549,6 +581,17 @@ if __name__ == "__main__":
                               "examples is already ~10-15K tokens of input alongside the (growing) "
                               "skill_md itself — pushing much past this risks crowding out "
                               "--edit_max_tokens within --max_model_len.")
+    parser.add_argument("--feedback_prior_round", action=argparse.BooleanOptionalAction, default=False,
+                         help="OFF by default (original behavior — flip with --feedback_prior_round "
+                              "to A/B test). When on, each edit call (round i>0) is ALSO shown the "
+                              "immediately-prior round's own changelog (what it changed and why) "
+                              "paired with the TRAIN scores that edit actually produced — so the "
+                              "editor can tell whether its last change helped before making another "
+                              "one. Currently the changelog is write-only (logged to --round_log for "
+                              "human reading, never fed back) — this is the one flag that changes "
+                              "that. Deliberately only the IMMEDIATELY-prior round, not the full "
+                              "history (bounded prompt growth, avoids chasing noise across many "
+                              "rounds of small-sample TRAIN scores).")
     parser.add_argument("--heldout_prompts", default="src/config/heldout_prompts.yaml")
     parser.add_argument("--manifest", default="dataset/heldout_selected_images.json")
     parser.add_argument("--images_root", default="dataset/images_heldout")

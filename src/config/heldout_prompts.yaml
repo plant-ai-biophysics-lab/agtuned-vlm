@@ -177,7 +177,7 @@ heldout_skill_edit_prompt: |
   vision-language model reads before diagnosing crop disease/pest/
   nutrient-deficiency images. It was just evaluated on a held-out set of
   images WHILE using this exact document, broken down by category:
-
+  {prior_round_feedback_block}
   {task_scores_block}
 
   Here are specific cases where the model, using this exact document,
