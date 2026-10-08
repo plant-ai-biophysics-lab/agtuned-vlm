@@ -87,10 +87,11 @@ def build_prompt_text(r: dict, miss_template: str, correct_template: str) -> tup
 
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
+    prefix = "heldout_quality_" if getattr(args, "domain", "disease_pest") == "quality" else "heldout_"
     hprompts = load_yaml(Path(args.heldout_prompts))
-    system_prompt = hprompts["heldout_lesson_system"]
-    miss_template = hprompts["heldout_explain_miss_prompt"]
-    correct_template = hprompts["heldout_explain_correct_prompt"]
+    system_prompt = hprompts[f"{prefix}lesson_system"]
+    miss_template = hprompts[f"{prefix}explain_miss_prompt"]
+    correct_template = hprompts[f"{prefix}explain_correct_prompt"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     with open(args.ckpt, newline="", encoding="utf-8") as f:
@@ -179,6 +180,9 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
+    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+                         help="Selects which heldout_prompts.yaml template set to use "
+                              "(heldout_* vs heldout_quality_*).")
     parser.add_argument("--ckpt", required=True,
                          help="heldout-zeroshot's own output checkpoint CSV — ALL judged rows "
                               "(judged_correct in {0,1}) are processed, not just misses.")

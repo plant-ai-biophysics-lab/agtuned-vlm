@@ -47,7 +47,7 @@ from src.common.metrics import extract_channel_thought
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.vision_eval import safe_model_name
 from src.common.progress import ProgressBar
-from src.heldout_zeroshot import bucket_category
+from src.heldout_zeroshot import bucket_category_for_domain
 
 try:
     from vllm import SamplingParams
@@ -63,16 +63,20 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def build_chunks(rows: list[dict], max_words_per_chunk: int) -> dict[tuple[str, str], list[list[dict]]]:
+def build_chunks(rows: list[dict], max_words_per_chunk: int,
+                  bucket_fn=bucket_category_for_domain("disease_pest")) -> dict[tuple[str, str], list[list[dict]]]:
     """{(category, trace_type): [chunk_rows, ...]} — a bucket's rows are
     kept in one chunk unless their total explanation word count exceeds
     max_words_per_chunk, in which case they're split sequentially into
     multiple word-bounded chunks (not by row count — explanation length
     varies a lot, so a fixed row count per chunk would under/overshoot
-    the context budget depending on which rows landed in it)."""
+    the context budget depending on which rows landed in it). `bucket_fn`
+    defaults to disease/pest's bucket_category; run_model passes
+    bucket_category_quality instead for --domain quality (a single flat
+    "quality" bucket — see that function's own docstring for why)."""
     buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in rows:
-        buckets[(bucket_category(r["class_label"]), r["trace_type"])].append(r)
+        buckets[(bucket_fn(r["class_label"]), r["trace_type"])].append(r)
 
     chunked: dict[tuple[str, str], list[list[dict]]] = {}
     for key, bucket_rows in buckets.items():
@@ -93,10 +97,13 @@ def build_chunks(rows: list[dict], max_words_per_chunk: int) -> dict[tuple[str, 
 
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
+    domain = getattr(args, "domain", "disease_pest")
+    prefix = "heldout_quality_" if domain == "quality" else "heldout_"
     hprompts = load_yaml(Path(args.heldout_prompts))
-    map_template = hprompts["heldout_map_summarize_prompt"]
-    reduce_template = hprompts["heldout_reduce_summarize_prompt"]
+    map_template = hprompts[f"{prefix}map_summarize_prompt"]
+    reduce_template = hprompts[f"{prefix}reduce_summarize_prompt"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
+    bucket_fn = bucket_category_for_domain(domain)
 
     with open(args.ckpt, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -104,7 +111,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     if not rows:
         raise SystemExit(f"ERROR: {args.ckpt} has no non-blank explanation rows.")
 
-    chunked = build_chunks(rows, args.max_words_per_chunk)
+    chunked = build_chunks(rows, args.max_words_per_chunk, bucket_fn=bucket_fn)
     flat_chunks = [(cat, tt, i, chunk) for (cat, tt), chunks in chunked.items() for i, chunk in enumerate(chunks)]
     n_total_calls = len(flat_chunks)
     print(f"  {len(rows)} explanation row(s), {len(chunked)} (category, trace_type) bucket(s), "
@@ -220,6 +227,10 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
+    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+                         help="Selects both the bucketing heuristic (disease/pest/deficiency/healthy "
+                              "vs. a single flat 'quality' bucket) and which heldout_prompts.yaml "
+                              "template pair to use (heldout_* vs heldout_quality_*).")
     parser.add_argument("--ckpt", required=True,
                          help="heldout-explain-traces's own output checkpoint CSV.")
     parser.add_argument("--heldout_prompts", default="src/config/heldout_prompts.yaml")

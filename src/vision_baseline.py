@@ -221,6 +221,17 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     skill_system_prompt = (
         build_skill_system_prompt(system_prompt, args.skill_memory_path) if args.skill_memory_path else None
     )
+    # Quality's own skill-memory file (same Stage 3 pipeline, --domain
+    # quality — docs/stage3_context_memory.md) — a SEPARATE flag/file from
+    # the disease/pest one above, gated independently to
+    # task_type == "quality_identification" only, never mixed with the
+    # disease/pest file (quality has no disease/pest content and vice
+    # versa). Both flags can be set in the same run — each only ever
+    # applies to its own task_type's rows.
+    quality_skill_system_prompt = (
+        build_skill_system_prompt(system_prompt, args.quality_skill_memory_path)
+        if args.quality_skill_memory_path else None
+    )
     manifest = load_manifest(Path(args.manifest))
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     if args.rubric:
@@ -333,9 +344,12 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             if args.rubric:
                 question = apply_rubric(question, task_type, structured_templates, task_type_to_rubric)
 
-            row_system_prompt = (
-                skill_system_prompt if skill_system_prompt and task_type in DISEASE_TASK_TYPES else system_prompt
-            )
+            if skill_system_prompt and task_type in DISEASE_TASK_TYPES:
+                row_system_prompt = skill_system_prompt
+            elif quality_skill_system_prompt and task_type == "quality_identification":
+                row_system_prompt = quality_skill_system_prompt
+            else:
+                row_system_prompt = system_prompt
             preds = run_batch(llm, tokenizer, images, question, system_prompt=row_system_prompt,
                                enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens,
                                chat_template=chat_template)
@@ -669,6 +683,12 @@ if __name__ == "__main__":
                               "src/common/heldout_skill.py's own docstring for the full validation "
                               "history and exact wrapper wording used (not reconfigurable here, by "
                               "design — the wording itself was what was validated).")
+    parser.add_argument("--quality_skill_memory_path", default=None,
+                         help="Quality's own skill-memory file (docs/stage3_context_memory.md, "
+                              "--domain quality's own heldout-summarize output) — a SEPARATE flag/file "
+                              "from --skill_memory_path above, gated per-row to "
+                              "task_type == \"quality_identification\" only. Both flags can be set in "
+                              "the same run; each only ever applies to its own task_type's rows.")
     parser.add_argument("--chat_template_path", default=None,
                          help="Override the tokenizer's own bundled chat template with a Jinja file at "
                               "this path — needed for --enable_thinking to actually do anything on some "

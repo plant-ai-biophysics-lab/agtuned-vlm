@@ -53,7 +53,18 @@ except ImportError:
 # source, class_label is the real ground truth (diagnosis, joined) —
 # same "the thing being judged against" role it plays in every AgML
 # checkpoint — and image_name is the actual cached filename.
-_HELDOUT_TAG = "DigiGreen_crop_disease_images"
+#
+# --domain quality (new) reuses this exact same script/schema against
+# download_heldout_quality.py's own manifest instead of Digital Green's
+# (see that script's docstring for why quality needs its own held-out
+# source — no external quality-labeled dataset exists to borrow the way
+# Digital Green covers disease/pest). Only the question wording and the
+# checkpoint's agml_dataset tag actually differ between domains; every
+# other mechanic (resume, judging, chunking) is domain-agnostic.
+_HELDOUT_TAG_BY_DOMAIN = {
+    "disease_pest": "DigiGreen_crop_disease_images",
+    "quality": "AgML_heldout_quality",
+}
 HELDOUT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "crop", "image_name", "details", "country", "state", "split",
     "prediction", "raw_response", "extracted_answer", "reasoning",
@@ -84,6 +95,23 @@ def bucket_category(label: str) -> str:
     return "disease"
 
 
+def bucket_category_quality(label: str) -> str:
+    """Quality's analog of bucket_category() — a single flat bucket.
+    Unlike disease/pest/deficiency/healthy (meaningfully different visual
+    failure modes worth separate skill-file sections), the 5 held-out
+    quality datasets (grading/maturity/ripeness/condition, 5 different
+    crops) don't share a keyword-detectable taxonomy the way pest/
+    deficiency words do — grading labels like "grade-1"/"A"/"ripe" give no
+    reliable textual signal to split on. One bucket keeps Step 3's
+    map-reduce grouping meaningful (worked vs. didn't work) without
+    inventing a fake category split."""
+    return "quality"
+
+
+def bucket_category_for_domain(domain: str):
+    return bucket_category_quality if domain == "quality" else bucket_category
+
+
 def load_heldout_manifest(path: Path) -> dict:
     return json.loads(path.read_text())["rows"]
 
@@ -105,6 +133,14 @@ def _cls_question(crop: str) -> str:
             f"If the plant appears healthy, say so.")
 
 
+def _quality_question(crop: str, prompts: dict) -> str:
+    # Reuses the exact same question template the main AgML eval uses for
+    # quality_identification rows (src/vision_baseline.py::cls_question) —
+    # so the held-out ablation measures the same question-framing the real
+    # eval/injection will actually ask, not an independently-drifted one.
+    return prompts["visual_classification_quality"].format(crop=crop)
+
+
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     if args.skill_memory_path and args.wrapper_only:
@@ -121,6 +157,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         system_prompt = build_skill_system_prompt(prompts.get("assessment_system", ""), args.skill_memory_path)
     gen_template = prompts["assessment_classification_tagged"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
+    domain = getattr(args, "domain", "disease_pest")
+    heldout_tag = _HELDOUT_TAG_BY_DOMAIN[domain]
+    question_fn = (lambda crop: _quality_question(crop, prompts)) if domain == "quality" else _cls_question
 
     all_rows = load_heldout_manifest(Path(args.manifest))
     class_list_text = build_class_list_text(all_rows)
@@ -136,14 +175,14 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     if rows:
         print(f"  [resume] {len(rows)} rows already scored in {ckpt_path.name}")
 
-    pending = {k: r for k, r in selected.items() if (_HELDOUT_TAG, "; ".join(r["diagnosis"]), f"{k}.jpg") not in seen}
+    pending = {k: r for k, r in selected.items() if (heldout_tag, "; ".join(r["diagnosis"]), f"{k}.jpg") not in seen}
     if not pending:
         print("  Nothing to do — all rows already checkpointed.")
     else:
         images_root = Path(args.images_root)
         keys = list(pending.keys())
         images = [PILImage.open(images_root / f"{k}.jpg").convert("RGB") for k in keys]
-        questions = [gen_template.format(question=_cls_question(pending[k]["crop"])) for k in keys]
+        questions = [gen_template.format(question=question_fn(pending[k]["crop"])) for k in keys]
         histories = [
             ([{"role": "system", "content": system_prompt}] if system_prompt else [])
             + [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": q}]}]
@@ -186,7 +225,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 r = pending[k]
                 diagnosis_text = "; ".join(r["diagnosis"])
                 row = {
-                    "agml_dataset": _HELDOUT_TAG, "class_label": diagnosis_text,
+                    "agml_dataset": heldout_tag, "class_label": diagnosis_text,
                     "crop": r["crop"], "image_name": f"{k}.jpg",
                     "details": r["details"], "country": r["country"], "state": r["state"],
                     "split": r["split"],
@@ -229,6 +268,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argument list and risking the two drifting apart."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
+    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+                         help="disease_pest (default) asks the Digital Green disease/pest/deficiency "
+                              "question and tags rows DigiGreen_crop_disease_images. quality asks the "
+                              "same visual_classification_quality question the main AgML eval uses and "
+                              "tags rows AgML_heldout_quality — pair with --manifest/--images_root "
+                              "pointed at download-heldout-quality's own output.")
     parser.add_argument("--manifest", default="dataset/heldout_selected_images.json")
     parser.add_argument("--images_root", default="dataset/images_heldout")
     parser.add_argument("--split", choices=["lessons", "eval"], default="lessons",

@@ -84,15 +84,23 @@ from src.common.chat_prompt import render_chat_template
 from src.common.metrics import extract_channel_thought
 from src.common.vision_eval import safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
-from src.heldout_zeroshot import bucket_category, build_arg_parser as build_zeroshot_arg_parser, run_model as run_zeroshot
+from src.heldout_zeroshot import (bucket_category_for_domain,
+                                   build_arg_parser as build_zeroshot_arg_parser, run_model as run_zeroshot)
 
 try:
     from vllm import SamplingParams
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
 
-_BUCKETS = ["disease", "pest", "deficiency", "healthy"]
+_BUCKETS_BY_DOMAIN = {
+    "disease_pest": ["disease", "pest", "deficiency", "healthy"],
+    "quality": ["quality"],  # see bucket_category_quality's own docstring for why this is flat
+}
 _CHANGELOG_DELIM = "---CHANGELOG---"
+
+
+def _buckets_for_domain(domain: str) -> list[str]:
+    return _BUCKETS_BY_DOMAIN[domain]
 
 
 def load_yaml(path: Path) -> dict:
@@ -101,17 +109,20 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def compute_task_scores(rows: list[dict]) -> dict[str, dict]:
+def compute_task_scores(rows: list[dict], domain: str = "disease_pest") -> dict[str, dict]:
     """{bucket: {"accuracy", "n"}} — same bucket_category heuristic Step
-    1/3 use, applied to each row's own class_label (ground truth)."""
+    1/3 use, applied to each row's own class_label (ground truth). domain
+    selects bucket_category (disease/pest/deficiency/healthy) vs.
+    bucket_category_quality (a single flat "quality" bucket)."""
+    bucket_fn = bucket_category_for_domain(domain)
     per_bucket: dict[str, list[int]] = defaultdict(list)
     for r in rows:
         jc = r.get("judged_correct")
         if jc in (None, ""):
             continue
-        per_bucket[bucket_category(r["class_label"])].append(int(jc))
+        per_bucket[bucket_fn(r["class_label"])].append(int(jc))
     out = {}
-    for b in _BUCKETS:
+    for b in _buckets_for_domain(domain):
         vals = per_bucket.get(b, [])
         out[b] = {"accuracy": round(sum(vals) / len(vals), 4) if vals else None, "n": len(vals)}
     return out
@@ -122,9 +133,9 @@ def compute_overall_accuracy(rows: list[dict]) -> float | None:
     return round(sum(vals) / len(vals), 4) if vals else None
 
 
-def build_task_scores_block(scores: dict[str, dict]) -> str:
+def build_task_scores_block(scores: dict[str, dict], domain: str = "disease_pest") -> str:
     lines = []
-    for b in _BUCKETS:
+    for b in _buckets_for_domain(domain):
         s = scores[b]
         if s["n"] == 0:
             continue
@@ -132,7 +143,8 @@ def build_task_scores_block(scores: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
-def build_prior_round_feedback_block(changelog: str | None, prior_task_scores: dict | None, enabled: bool) -> str:
+def build_prior_round_feedback_block(changelog: str | None, prior_task_scores: dict | None, enabled: bool,
+                                      domain: str = "disease_pest") -> str:
     """Empty string when --feedback_prior_round is off (the original
     behavior, kept default so A/B testing this against the baseline is
     one flag flip) or there's no prior round yet. When on: the prior
@@ -144,7 +156,7 @@ def build_prior_round_feedback_block(changelog: str | None, prior_task_scores: d
     small-sample TRAIN scores) — just the immediately-prior round."""
     if not enabled or changelog is None or prior_task_scores is None:
         return ""
-    scores_block = build_task_scores_block(prior_task_scores)
+    scores_block = build_task_scores_block(prior_task_scores, domain=domain)
     return (
         "\nFor reference, here is what you changed in the PREVIOUS round of "
         "editing this document, and the TRAIN scores that edit actually "
@@ -155,7 +167,8 @@ def build_prior_round_feedback_block(changelog: str | None, prior_task_scores: d
     )
 
 
-def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, want_correct: bool) -> dict[str, list[dict]]:
+def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, want_correct: bool,
+                               domain: str = "disease_pest") -> dict[str, list[dict]]:
     """{bucket: [row, ...]} — up to n_per_bucket rows per bucket matching
     want_correct, sampled (not just the first N) so repeated rounds
     against the same TRAIN split don't always see the identical subset.
@@ -163,6 +176,7 @@ def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, wa
     split it's given, but the loop's own design never calls it on VAL
     rows. Shared by sample_miss_examples/sample_worked_examples so the
     two can never silently drift in sampling behavior."""
+    bucket_fn = bucket_category_for_domain(domain)
     rng = random.Random(seed)
     matched: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
@@ -170,31 +184,34 @@ def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, wa
             continue
         if (int(r["judged_correct"]) == 1) != want_correct:
             continue
-        matched[bucket_category(r["class_label"])].append(r)
+        matched[bucket_fn(r["class_label"])].append(r)
     out = {}
-    for b in _BUCKETS:
+    for b in _buckets_for_domain(domain):
         pool = matched.get(b, [])
         out[b] = rng.sample(pool, min(n_per_bucket, len(pool)))
     return out
 
 
-def sample_miss_examples(rows: list[dict], n_per_bucket: int, seed: int) -> dict[str, list[dict]]:
+def sample_miss_examples(rows: list[dict], n_per_bucket: int, seed: int,
+                          domain: str = "disease_pest") -> dict[str, list[dict]]:
     """Up to n_per_bucket WRONG rows per bucket — what to fix."""
-    return _sample_rows_by_judgement(rows, n_per_bucket, seed, want_correct=False)
+    return _sample_rows_by_judgement(rows, n_per_bucket, seed, want_correct=False, domain=domain)
 
 
-def sample_worked_examples(rows: list[dict], n_per_bucket: int, seed: int) -> dict[str, list[dict]]:
+def sample_worked_examples(rows: list[dict], n_per_bucket: int, seed: int,
+                            domain: str = "disease_pest") -> dict[str, list[dict]]:
     """Up to n_per_bucket RIGHT rows per bucket — what to protect. Same
     seed as the paired sample_miss_examples call (caller's choice) is
     fine — they draw from disjoint pools (judged_correct 0 vs 1), so
     using the same seed doesn't correlate which specific rows get picked
     from each."""
-    return _sample_rows_by_judgement(rows, n_per_bucket, seed, want_correct=True)
+    return _sample_rows_by_judgement(rows, n_per_bucket, seed, want_correct=True, domain=domain)
 
 
-def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_label: str) -> str:
+def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_label: str,
+                           domain: str = "disease_pest") -> str:
     blocks = []
-    for b in _BUCKETS:
+    for b in _buckets_for_domain(domain):
         for r in examples_by_bucket.get(b, []):
             blocks.append(
                 f"[{b}] {r.get('crop', '?')} plant — model {outcome_label} "
@@ -205,12 +222,12 @@ def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_lab
     return "\n\n".join(blocks)
 
 
-def build_miss_examples_block(examples_by_bucket: dict[str, list[dict]]) -> str:
-    return _build_examples_block(examples_by_bucket, "answered")
+def build_miss_examples_block(examples_by_bucket: dict[str, list[dict]], domain: str = "disease_pest") -> str:
+    return _build_examples_block(examples_by_bucket, "answered", domain=domain)
 
 
-def build_worked_examples_block(examples_by_bucket: dict[str, list[dict]]) -> str:
-    return _build_examples_block(examples_by_bucket, "correctly answered")
+def build_worked_examples_block(examples_by_bucket: dict[str, list[dict]], domain: str = "disease_pest") -> str:
+    return _build_examples_block(examples_by_bucket, "correctly answered", domain=domain)
 
 
 def diff_skill_text(old_text: str, new_text: str) -> dict:
@@ -301,7 +318,8 @@ def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: 
     round_args.output_dir = str(split_dir)
     round_args.rerun = False
     rows, _ckpt_path = run_zeroshot(model_id, round_args)
-    return rows, compute_overall_accuracy(rows), compute_task_scores(rows)
+    domain = getattr(round_args, "domain", "disease_pest")
+    return rows, compute_overall_accuracy(rows), compute_task_scores(rows, domain=domain)
 
 
 def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores_block: str,
@@ -339,8 +357,10 @@ def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores
 
 
 def run_loop(model_id: str, args: argparse.Namespace) -> None:
+    domain = getattr(args, "domain", "disease_pest")
+    prefix = "heldout_quality_" if domain == "quality" else "heldout_"
     hprompts = load_yaml(Path(args.heldout_prompts))
-    edit_template = hprompts["heldout_skill_edit_prompt"]
+    edit_template = hprompts[f"{prefix}skill_edit_prompt"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
 
     out_dir = Path(args.output_dir)
@@ -355,7 +375,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
     # scripts can never silently drift apart on defaults.
     base_args = build_zeroshot_arg_parser().parse_args([])
     base_args.model = model_id
-    for flag in ("manifest", "images_root", "prompts", "chat_template_path", "gen_max_tokens",
+    for flag in ("domain", "manifest", "images_root", "prompts", "chat_template_path", "gen_max_tokens",
                  "chunk_size", "quantize", "gpu_memory_utilization", "max_model_len",
                  "vision_token_budget", "max_num_seqs", "enforce_eager", "kv_cache_dtype",
                  "enable_thinking", "skip_judge", "judge_model", "judge_quantize",
@@ -412,17 +432,19 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             # Steered ONLY by TRAIN (lessons) — prev_train_rows/
             # prev_train_task_scores come from round (i-1)'s TRAIN pass
             # below, never its VAL pass. VAL never reaches this call.
-            prev_scores_block = build_task_scores_block(prev_train_task_scores)
-            prev_misses = sample_miss_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i)
-            miss_examples_block = build_miss_examples_block(prev_misses)
+            prev_scores_block = build_task_scores_block(prev_train_task_scores, domain=domain)
+            prev_misses = sample_miss_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i,
+                                                domain=domain)
+            miss_examples_block = build_miss_examples_block(prev_misses, domain=domain)
             n_examples = sum(len(v) for v in prev_misses.values())
-            prev_worked = sample_worked_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i)
-            worked_examples_block = build_worked_examples_block(prev_worked)
+            prev_worked = sample_worked_examples(prev_train_rows, args.n_examples_per_bucket, args.seed + round_i,
+                                                  domain=domain)
+            worked_examples_block = build_worked_examples_block(prev_worked, domain=domain)
             n_worked = sum(len(v) for v in prev_worked.values())
             print(f"  [edit] {n_examples} TRAIN miss example(s) + {n_worked} TRAIN worked example(s) "
                   f"from round {round_i - 1} shown to the editor")
             prior_round_feedback_block = build_prior_round_feedback_block(
-                prev_changelog, prev_train_task_scores, args.feedback_prior_round)
+                prev_changelog, prev_train_task_scores, args.feedback_prior_round, domain=domain)
             if args.feedback_prior_round:
                 print(f"  [edit] prior round's changelog + resulting TRAIN scores also shown to the editor")
 
@@ -485,7 +507,7 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             if judged < len(rows):
                 print(f"  [QC] WARNING: only {judged}/{len(rows)} {label} rows judged this round — "
                       f"not directly comparable to a round with full coverage.")
-            for b in _BUCKETS:
+            for b in _buckets_for_domain(domain):
                 s = task_scores[b]
                 if s["n"]:
                     print(f"    {label} {b}: {s['accuracy']:.4f} (n={s['n']})")
@@ -552,6 +574,11 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
+    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+                         help="Selects the bucket taxonomy (disease/pest/deficiency/healthy vs. a "
+                              "single flat 'quality' bucket), which heldout_prompts.yaml edit-prompt "
+                              "template to use, and is forwarded into every heldout-zeroshot scoring "
+                              "call this loop makes (question wording, checkpoint tag).")
     parser.add_argument("--init_skill_path", required=True,
                          help="Starting skill.md — e.g. src/config/skill_memory_disease-pest.md. "
                               "Round 0 scores this file AS-IS before any editing.")

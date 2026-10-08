@@ -8,6 +8,7 @@ STAGES = {
     "migrate-datasets":   "scripts.agml_hf.migrate_datasets_yaml",
     "download-datasets":  "scripts.agml_hf.download_and_sample",
     "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
+    "download-heldout-quality": "scripts.download_heldout_quality",
     "download-heldout-detection": "scripts.download_heldout_detection",
     "heldout-detection-zeroshot": "src.heldout_detection_zeroshot",
     "heldout-detection-explain-traces": "src.heldout_detection_explain_traces",
@@ -95,6 +96,16 @@ Stages:
                                stratified by crop, seeded by --seed) — the eval split must never be
                                used to write the skill-memory file this stage builds toward.
                                Resumable (an already-cached image/row is skipped).
+    download-heldout-quality  Paper 2 Stage 3, Step 0b (docs/stage3_context_memory.md) — download +
+                               cache 5 of AgML's own 24 quality_identification datasets (skip:true in
+                               datasets.yaml) as the quality-domain analog of
+                               download-heldout-digitalgreen — no external quality-labeled dataset
+                               exists to borrow, so these 5 are held out of the main AgML eval
+                               entirely instead. Writes dataset/images_heldout_quality/ +
+                               dataset/heldout_quality_selected_images.json, same lessons/eval split
+                               mechanism (--eval_frac, --seed) and row schema as
+                               download-heldout-digitalgreen, so every Stage 3 script below works
+                               unchanged against it via --manifest/--images_root + --domain quality.
     download-heldout-detection  Paper 2 Stage 4, Step 0 (docs/stage4_detection_context_memory.md)
                                — download + cache 15 ENTIRE Project-AgML detection datasets split
                                by DATASET MEMBERSHIP (not a within-dataset random split): 10
