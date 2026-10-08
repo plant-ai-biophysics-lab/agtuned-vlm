@@ -71,45 +71,15 @@ uv run python main.py heldout-zeroshot \
     --split eval \
     --output_dir outputs_final/heldout_zeroshot_eval_baseline/
 
-# Hand-iterated v4 skill file:
+# With skill file:
 uv run python main.py heldout-zeroshot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --split eval \
     --skill_memory_path src/config/skill_memory_disease-pest.md \
     --output_dir outputs_final/heldout_zeroshot_eval_not_optimized_skill/
-
-# Step 3b's optimized skill:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --split eval \
-    --skill_memory_path outputs_final/heldout_skill_optimize/skill_memory_best.md \
-    --output_dir outputs_final/heldout_zeroshot_eval_optimized_skill/
-
-# Compare: baseline vs. hand-iterated v4
-uv run python main.py heldout-ablation-summary \
-    --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --skill_ckpt outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --out_dir outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ablation_vs_baseline/
-
-# Compare: baseline vs. Step 3b's optimized skill
-uv run python main.py heldout-ablation-summary \
-    --baseline_ckpt outputs_final/heldout_zeroshot_eval_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --skill_ckpt outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --out_dir outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ablation_vs_baseline/
-
-# Compare: hand-iterated v4 vs. Step 3b's optimized skill
-uv run python main.py heldout-ablation-summary \
-    --baseline_ckpt outputs_final/heldout_zeroshot_eval_not_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --skill_ckpt outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --out_dir outputs_final/heldout_zeroshot_eval_optimized_skill/RedHatAI_gemma-4-31B-it-FP8-dynamic/ablation_vs_v4/
 ```
 
-Args to note: `--split eval` for all three runs, distinct `--output_dir` per run, distinct `--out_dir` per comparison, `--baseline_ckpt`/`--skill_ckpt` (required).
-
-| Version | overall | disease | pest | deficiency | healthy |
-|---|---|---|---|---|---|
-| baseline (no skill) | 0.3618 | 0.2319 | 0.1452 | 0.1000 | 0.7931 |
-| not optimized skill (`skill_memory_disease-pest.md`) | 0.4221 (+0.0603) | 0.2754 (+0.0435) | 0.2419 (+0.0967) | 0.3000 (+0.2000) | 0.8103 (+0.0172) |
+Args to note: `--split eval`, distinct `--output_dir` per run.
 
 ## Step 5 — inject into vision-baseline
 
