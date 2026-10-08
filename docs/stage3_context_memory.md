@@ -2,6 +2,21 @@
 
 [← Back to README](../README.md)
 
+## Model support
+
+`heldout-zeroshot`/`heldout-explain-traces`/`heldout-summarize`/`heldout-skill-optimize` default to `RedHatAI/gemma-4-31B-it-FP8-dynamic`, but work with any model vLLM `0.20.1` supports — including Qwen (e.g. `Qwen/Qwen3.8-27B-FP8`, confirmed registered in this repo's pinned vLLM version, no upgrade needed).
+
+- **`--chat_template_path`** defaults to the vendored `src/config/tool_chat_template_gemma4.jinja` (Gemma-4's own bundled template has no thinking support at all). Qwen's own bundled template already supports `enable_thinking` natively — pass `--chat_template_path ""` to use it instead of Gemma's template.
+- **Thinking-trace extraction is model-agnostic** (`extract_thinking`, `src/common/metrics.py`) — tries Gemma-4's `<|channel>thought...<channel|>` format first, falls back to Qwen's `<think>...</think>` tags, so neither model leaks a raw thinking block into a checkpointed prediction/explanation/the skill-memory `.md` itself.
+- **`--judge_model`** defaults to whatever `--model` is (the model judges its own output) — pass `--judge_model` explicitly to judge with a different model, e.g. keeping Gemma-4 as judge while generating with Qwen so a Qwen-vs-Gemma comparison isn't also confounded by a different judge.
+
+```bash
+uv run python main.py heldout-zeroshot \
+    --model Qwen/Qwen3.8-27B-FP8 \
+    --chat_template_path "" \
+    --split lessons
+```
+
 ## Step 0 — download the held-out dataset (disease/pest)
 
 ```bash
@@ -217,7 +232,7 @@ Repeat Steps 0-5 for object detection, after classification gains hold up. See [
 | `--max_model_len` | `24576` |
 | `--max_num_seqs` | `64` |
 | `--kv_cache_dtype` | `None` |
-| `--judge_model` | `RedHatAI/gemma-4-31B-it-FP8-dynamic` |
+| `--judge_model` | `None` (→ `--model`) |
 | `--judge_confidence_threshold` | `1` |
 | `--judge_chunk_size` | `200` |
 | `--judge_max_tokens` | `1024` |
@@ -288,7 +303,7 @@ Repeat Steps 0-5 for object detection, after classification gains hold up. See [
 | `--gpu_memory_utilization` | `0.9` |
 | `--max_model_len` | `24576` |
 | `--max_num_seqs` | `64` |
-| `--judge_model` | `RedHatAI/gemma-4-31B-it-FP8-dynamic` |
+| `--judge_model` | `None` (→ `--model`) |
 | `--judge_confidence_threshold` | `1` |
 | `--judge_chunk_size` | `200` |
 | `--judge_max_tokens` | `1024` |

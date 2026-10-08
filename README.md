@@ -48,21 +48,6 @@ Browse Stage 0b's output: dataset/crop/class per record, the grounding sources f
 | 6 | [docs/stage6_detection_verifier.md](docs/stage6_detection_verifier.md) | Detection verifier — the spatial-task analog of Stage 5, applied to object detection. Design not started yet (placeholder doc) |
 | 7 | [docs/stage7_react_baseline.md](docs/stage7_react_baseline.md) | ReAct baseline: a tool-using agent (`read`/`glob`/`grep`/`write` + agml-agent's `retrieve`/`search_agml`) over the model's own native tool calling via vLLM — one checkpoint row per episode (resumable), a shared per-model trajectory log, and a Streamlit viewer (`app/react_baseline_viewer.py`); starts with a 3-task text-only smoke test, real heldout-image harness not built yet |
 
-### Model support (Stage 3 context-memory pipeline)
-
-`heldout-zeroshot`/`heldout-explain-traces`/`heldout-summarize`/`heldout-skill-optimize` (docs/stage3_context_memory.md) default to `RedHatAI/gemma-4-31B-it-FP8-dynamic`, but work with any model vLLM `0.20.1` supports — including Qwen (e.g. `Qwen/Qwen3.8-27B-FP8`, confirmed registered in this repo's pinned vLLM version, no upgrade needed).
-
-- **`--chat_template_path`** defaults to the vendored `src/config/tool_chat_template_gemma4.jinja` (Gemma-4's own bundled template has no thinking support at all). Qwen's own bundled template already supports `enable_thinking` natively — pass `--chat_template_path ""` to use it instead of Gemma's template.
-- **Thinking-trace extraction is model-agnostic** (`extract_thinking`, `src/common/metrics.py`) — tries Gemma-4's `<|channel>thought...<channel|>` format first, falls back to Qwen's `<think>...</think>` tags, so neither model leaks a raw thinking block into a checkpointed prediction/explanation/the skill-memory `.md` itself.
-- **`--judge_model`** stays independent of `--model` — keep it on Gemma-4 (the default) so a Qwen-vs-Gemma generation comparison isn't also confounded by a different judge, unless you're deliberately testing judge choice too.
-
-```bash
-uv run python main.py heldout-zeroshot \
-    --model Qwen/Qwen3.8-27B-FP8 \
-    --chat_template_path "" \
-    --split lessons
-```
-
 ### Viewers
 
 ```bash
