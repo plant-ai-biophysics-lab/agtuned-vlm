@@ -41,11 +41,7 @@ uv run python main.py download-heldout-species
 
 iNatAg-mini (`Project-AgML/iNatAg-mini` on HuggingFace) — external to AgML's own 25 `species_identification` datasets (never wired into `datasets.yaml`, same separation as Digital Green/quality). 40 species (20 crop-labeled + 20 weed-labeled, seeded) downloaded whole (one `.zip` per species, ~3.48 GB), subsampled to `--images_per_species` (default 50) each for a 2,000-image local pool (1,600 lessons / 400 eval).
 
-Args to note: `--n_crop_species`, `--n_weed_species`, `--images_per_species` (download size is fixed by species count — this only controls the local pool size), `--eval_frac`, `--seed`.
-
-**Not yet wired into Steps 1-3b** — `--domain species` support (question wording, bucketing, species-flavored prompts) doesn't exist yet in `heldout-zeroshot`/`heldout-explain-traces`/`heldout-summarize`/`heldout-skill-optimize`, same follow-up work `--domain quality` needed.
-
-Args to note: `--eval_frac`, `--seed`, `--images_root`, `--output`.
+Args to note: `--n_crop_species`, `--n_weed_species`, `--images_per_species` (download size is fixed by species count — this only controls the local pool size), `--selection_log` (written once, then reused on every later run — the committed, definitive record of which species were selected, same role `skip: true` + `notes` plays for quality's datasets.yaml entries), `--eval_frac`, `--seed`.
 
 ## Step 1 — zero-shot prediction
 
@@ -61,9 +57,17 @@ uv run python main.py heldout-zeroshot \
     --manifest dataset/heldout_quality_selected_images.json \
     --images_root dataset/images_heldout_quality \
     --output_dir outputs_final/heldout_zeroshot_quality/
+
+# species:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --domain species \
+    --manifest dataset/heldout_species_selected_images.json \
+    --images_root dataset/images_heldout_species \
+    --output_dir outputs_final/heldout_zeroshot_species/
 ```
 
-Args to note: `--domain` (`disease_pest` default, `quality`), `--split` (`lessons` default, `eval` for Step 4), `--skill_memory_path`, `--manifest`/`--images_root` (must match `--domain`), `--rerun`.
+Args to note: `--domain` (`disease_pest` default, `quality`, `species`), `--split` (`lessons` default, `eval` for Step 4), `--skill_memory_path`, `--manifest`/`--images_root` (must match `--domain`), `--rerun`.
 
 ## Step 2 — reveal ground truth, every row
 
@@ -80,6 +84,14 @@ uv run python main.py heldout-explain-traces \
     --images_root dataset/images_heldout_quality \
     --ckpt outputs_final/heldout_zeroshot_quality/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
     --output_dir outputs_final/heldout_explain_traces_quality/
+
+# species:
+uv run python main.py heldout-explain-traces \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --domain species \
+    --images_root dataset/images_heldout_species \
+    --ckpt outputs_final/heldout_zeroshot_species/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/heldout_explain_traces_species/
 ```
 
 Args to note: `--domain`, `--ckpt` (required), `--images_root` (must match `--domain`), `--gen_max_tokens` (bump if thinking traces truncate).
@@ -99,6 +111,14 @@ uv run python main.py heldout-summarize \
     --ckpt outputs_final/heldout_explain_traces_quality/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
     --output_dir outputs_final/heldout_summarize_quality/ \
     --output_md outputs_final/heldout_summarize_quality/skill_memory_quality.md
+
+# species:
+uv run python main.py heldout-summarize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --domain species \
+    --ckpt outputs_final/heldout_explain_traces_species/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
+    --output_dir outputs_final/heldout_summarize_species/ \
+    --output_md outputs_final/heldout_summarize_species/skill_memory_species.md
 ```
 
 Args to note: `--domain`, `--max_words_per_chunk`, `--output_md`, `--rerun`.
@@ -130,6 +150,16 @@ uv run python main.py heldout-skill-optimize \
     --init_skill_path outputs_final/heldout_summarize_quality/skill_memory_quality.md \
     --max_rounds 10 \
     --output_dir outputs_final/heldout_skill_optimize_quality/
+
+# species:
+uv run python main.py heldout-skill-optimize \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --domain species \
+    --manifest dataset/heldout_species_selected_images.json \
+    --images_root dataset/images_heldout_species \
+    --init_skill_path outputs_final/heldout_summarize_species/skill_memory_species.md \
+    --max_rounds 10 \
+    --output_dir outputs_final/heldout_skill_optimize_species/
 ```
 
 Args to note: `--domain` (also forwarded into every scoring call this loop makes — `--manifest`/`--images_root` must match it), `--init_skill_path` (required), `--max_rounds` (required), `--n_examples_per_bucket`, `--feedback_prior_round`, `--round_log`, `--output_dir`. Winning round is written to `<output_dir>/skill_memory_best.md`.
@@ -168,6 +198,25 @@ uv run python main.py heldout-zeroshot \
     --split eval \
     --skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md \
     --output_dir outputs_final/heldout_zeroshot_quality_eval_with_skill/
+
+# species baseline, no skill file:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --domain species \
+    --manifest dataset/heldout_species_selected_images.json \
+    --images_root dataset/images_heldout_species \
+    --split eval \
+    --output_dir outputs_final/heldout_zeroshot_species_eval_baseline/
+
+# species with skill file:
+uv run python main.py heldout-zeroshot \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --domain species \
+    --manifest dataset/heldout_species_selected_images.json \
+    --images_root dataset/images_heldout_species \
+    --split eval \
+    --skill_memory_path outputs_final/heldout_skill_optimize_species/skill_memory_best.md \
+    --output_dir outputs_final/heldout_zeroshot_species_eval_with_skill/
 ```
 
 Args to note: `--domain`, `--split eval`, distinct `--output_dir` per run.
@@ -373,6 +422,7 @@ Repeat Steps 0-5 for object detection, after classification gains hold up. See [
 |---|---|
 | `--images_root` | `dataset/images_heldout_species` |
 | `--output` | `dataset/heldout_species_selected_images.json` |
+| `--selection_log` | `dataset/heldout_species_selection.json` |
 | `--n_crop_species` | `20` |
 | `--n_weed_species` | `20` |
 | `--images_per_species` | `50` |

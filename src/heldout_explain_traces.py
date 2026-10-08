@@ -87,7 +87,8 @@ def build_prompt_text(r: dict, miss_template: str, correct_template: str) -> tup
 
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
-    prefix = "heldout_quality_" if getattr(args, "domain", "disease_pest") == "quality" else "heldout_"
+    domain = getattr(args, "domain", "disease_pest")
+    prefix = f"heldout_{domain}_" if domain != "disease_pest" else "heldout_"
     hprompts = load_yaml(Path(args.heldout_prompts))
     system_prompt = hprompts[f"{prefix}lesson_system"]
     miss_template = hprompts[f"{prefix}explain_miss_prompt"]
@@ -182,7 +183,7 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
-    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+    parser.add_argument("--domain", choices=["disease_pest", "quality", "species"], default="disease_pest",
                          help="Selects which heldout_prompts.yaml template set to use "
                               "(heldout_* vs heldout_quality_*).")
     parser.add_argument("--ckpt", required=True,

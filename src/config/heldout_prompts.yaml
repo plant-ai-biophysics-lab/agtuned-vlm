@@ -407,3 +407,172 @@ heldout_quality_skill_edit_prompt: |
   followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
   you made and WHY, referencing the score or mistake that motivated each
   one. Do not skip this section.
+
+# ─────────────────────────────────────────────────────────────────────────
+# Species-identification domain (docs/stage3_context_memory.md, species
+# extension) — same Step 1-3b pipeline, same param names as the heldout_*
+# templates above, applied to iNatAg-mini's held-out plant/weed species
+# slice (scripts/download_heldout_species.py — 20 crop-labeled + 20
+# weed-labeled species, external to AgML's own 25 species_identification
+# datasets, same held-out separation Digital Green/quality use) instead
+# of Digital Green. No expert `details` text exists for these rows
+# (always ""), so these templates never reference {expert_details}.
+# Two real buckets ("plant"/"weed" — see bucket_category_species's own
+# docstring for why this split IS meaningful here, unlike quality's flat
+# single bucket), so structure mirrors disease/pest's multi-section
+# design more than quality's single-section one.
+
+heldout_species_lesson_system: |
+  You are an expert botanist/agronomist writing short training notes for
+  another vision-language model that identifies plant and weed species
+  from photos. Write concrete, visually-grounded notes — actual leaf
+  shape/margin/venation, flower structure, growth habit, stem/bark
+  features, fruit or seed-pod shape visible in THIS image — never vague
+  generalities like "look more carefully."
+
+# "what didn't work" — Params: {crop} {model_reasoning} {wrong_prediction} {ground_truth} {expert_details}
+heldout_species_explain_miss_prompt: |
+  A vision-language model was shown this image of a plant and asked to
+  identify its species. It answered INCORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer (WRONG): "{wrong_prediction}"
+  The ACTUAL correct answer: "{ground_truth}"
+
+  In 2-4 sentences, explain what specific visual evidence (visible in
+  THIS image — leaf shape/margin/venation, flower structure, growth
+  habit, stem/bark features, fruit or seed-pod shape) should have led to
+  the correct species instead — point out specifically where the model's
+  own stated reasoning went wrong. If the mistake was confusing two
+  similar-looking species, say specifically what distinguishes them in
+  this case.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# "what worked" — Params: {crop} {model_reasoning} {correct_prediction} {ground_truth} {expert_details}
+heldout_species_explain_correct_prompt: |
+  A vision-language model was shown this image of a plant and asked to
+  identify its species. It answered CORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer: "{correct_prediction}" (matches the correct answer:
+  "{ground_truth}")
+
+  In 2-4 sentences, confirm and articulate the specific visual evidence
+  (visible in THIS image) that correctly supports this species
+  identification. IMPORTANT: if the model's own stated reasoning actually
+  cited the WRONG evidence or reasoned unsoundly despite landing on the
+  correct final answer (a lucky guess, not real identification skill),
+  say so explicitly instead of crediting reasoning that wasn't actually
+  sound.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# Params: {category} {trace_type_label} {n} {explanations_block} — category is "plant" or "weed" here.
+heldout_species_map_summarize_prompt: |
+  Below are {n} short explanations written about {trace_type_label} when
+  a vision-language model identified "{category}" species in images.
+  Each explanation describes ONE specific image's visual evidence.
+
+  {explanations_block}
+
+  Summarize the RECURRING, GENERALIZABLE patterns across these
+  explanations — not a list restating each one individually, and not
+  facts about any single image. Write 4-8 bullet points covering: common
+  visual cues that correctly identify a species or genus, common
+  mistakes or confusions between similar-looking species to watch for,
+  and anything distinctive worth remembering. Be concrete (leaf shape,
+  flower structure, growth habit, bark, fruit/seed shape) — never vague
+  advice like "look more carefully."
+
+  IMPORTANT: this reader will eventually use these notes to NAME a
+  specific species. Every bullet must point toward a SPECIFIC species or
+  a narrow, genuinely distinguishing feature, never a bare generic word
+  like "Plant" or "Weed" standing alone as a bullet's entire content.
+
+  Respond with ONLY the bullet list (plain "- " bullets, no headers, no
+  preamble).
+
+# Params: {chunk_summaries_block}
+heldout_species_reduce_summarize_prompt: |
+  Below are bullet-point summaries gathered from reviewing a vision-
+  language model's plant/weed species identification attempts, grouped
+  by category ("plant" or "weed") and by whether the model got it right
+  ("what worked") or wrong ("what didn't work"):
+
+  {chunk_summaries_block}
+
+  Write a single, well-organized reference document (Markdown) for
+  another instance of this same model to read BEFORE attempting species
+  identification — its job is to help that model avoid the same mistakes
+  and reuse what already works. Structure:
+
+  # Plant & Weed Species Identification — Lessons Learned
+
+  ## What Worked
+  (organized by category — plant, weed — only include categories with
+  real content above)
+
+  ## What Didn't Work
+  (same categories — concrete, actionable guidance, not vague warnings)
+
+  Keep it concrete and skimmable — short bullets, not paragraphs. Do not
+  invent facts not supported by the summaries above. Do not add a
+  "Common Species to Know" style reference list whose bullets are just
+  bare species names restated as standalone entries.
+
+# Params: {current_skill_md} {task_scores_block} {miss_examples_block} {worked_examples_block} {prior_round_feedback_block}
+heldout_species_skill_edit_prompt: |
+  Below is the CURRENT version of a reference document another
+  vision-language model reads before identifying plant/weed species from
+  images. It was just evaluated on a held-out set of images WHILE using
+  this exact document, broken down by category:
+  {prior_round_feedback_block}
+  {task_scores_block}
+
+  Here are specific cases where the model, using this exact document,
+  still got the answer wrong:
+
+  {miss_examples_block}
+
+  Here are specific cases where the model, using this exact document,
+  got the answer RIGHT — the document is already doing its job for
+  these, do not disturb whatever's working for them:
+
+  {worked_examples_block}
+
+  CURRENT DOCUMENT:
+  {current_skill_md}
+
+  Revise this document to address the weaker categories above and the
+  specific mistakes shown. Rules that must still hold in your revision:
+  1. Every bullet must point toward a SPECIFIC species or a narrow,
+     genuinely distinguishing feature, never a bare generic word like
+     "Plant"/"Weed" standing alone as a bullet's entire content.
+  2. Write GENERALIZABLE, INSTRUCTIONAL guidance — a visual pattern that
+     would help identify a species across DIFFERENT images of it, not a
+     fact tied to one specific example image. Do NOT lift text from a
+     single miss example verbatim — extract the underlying visual
+     principle instead.
+  3. Do NOT add a "Common Species to Know" style reference list.
+  4. Keep the same overall structure (`# Plant & Weed Species
+     Identification — Lessons Learned`, `## What Worked` / `## What
+     Didn't Work`, organized by category) unless a category genuinely
+     has nothing useful to say.
+  5. Keep it concrete and skimmable — short bullets, not paragraphs.
+  6. PROTECT what's already working — before editing a bullet that
+     plausibly helped produce one of the correct cases shown above,
+     check whether your change would still support that case; prefer
+     ADDING a new, narrowly-scoped distinction over REWRITING existing
+     wording.
+
+  Respond with the full revised document (Markdown), starting with the
+  `# Plant & Weed Species Identification — Lessons Learned` heading, no
+  preamble — then, on a new line by itself, write exactly:
+  ---CHANGELOG---
+  followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
+  you made and WHY, each bullet naming the category/bucket it addresses
+  and referencing the score or mistake that motivated it. Do not skip
+  this section.

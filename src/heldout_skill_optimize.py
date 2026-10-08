@@ -95,6 +95,7 @@ except ImportError:
 _BUCKETS_BY_DOMAIN = {
     "disease_pest": ["disease", "pest", "deficiency", "healthy"],
     "quality": ["quality"],  # see bucket_category_quality's own docstring for why this is flat
+    "species": ["plant", "weed"],  # see bucket_category_species's own docstring
 }
 _CHANGELOG_DELIM = "---CHANGELOG---"
 
@@ -120,7 +121,7 @@ def compute_task_scores(rows: list[dict], domain: str = "disease_pest") -> dict[
         jc = r.get("judged_correct")
         if jc in (None, ""):
             continue
-        per_bucket[bucket_fn(r["class_label"])].append(int(jc))
+        per_bucket[bucket_fn(r)].append(int(jc))
     out = {}
     for b in _buckets_for_domain(domain):
         vals = per_bucket.get(b, [])
@@ -184,7 +185,7 @@ def _sample_rows_by_judgement(rows: list[dict], n_per_bucket: int, seed: int, wa
             continue
         if (int(r["judged_correct"]) == 1) != want_correct:
             continue
-        matched[bucket_fn(r["class_label"])].append(r)
+        matched[bucket_fn(r)].append(r)
     out = {}
     for b in _buckets_for_domain(domain):
         pool = matched.get(b, [])
@@ -213,8 +214,13 @@ def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_lab
     blocks = []
     for b in _buckets_for_domain(domain):
         for r in examples_by_bucket.get(b, []):
+            # species' own "crop" field holds "crop"/"weed" (the bucket
+            # itself), not an actual plant name — "{crop} plant" would
+            # read as the nonsensical "crop plant"/"weed plant" there, so
+            # that lead-in is skipped entirely for this domain.
+            subject = "" if domain == "species" else f"{r.get('crop', '?')} plant — "
             blocks.append(
-                f"[{b}] {r.get('crop', '?')} plant — model {outcome_label} "
+                f"[{b}] {subject}model {outcome_label} "
                 f"\"{(r.get('extracted_answer') or r.get('prediction') or '').strip()}\", actual answer: "
                 f"\"{r['class_label']}\". Model's own reasoning: \"{(r.get('reasoning') or '').strip()[:500]}\". "
                 f"Expert's observations: \"{(r.get('details') or '').strip()[:500]}\"."
@@ -360,7 +366,7 @@ def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores
 
 def run_loop(model_id: str, args: argparse.Namespace) -> None:
     domain = getattr(args, "domain", "disease_pest")
-    prefix = "heldout_quality_" if domain == "quality" else "heldout_"
+    prefix = f"heldout_{domain}_" if domain != "disease_pest" else "heldout_"
     hprompts = load_yaml(Path(args.heldout_prompts))
     edit_template = hprompts[f"{prefix}skill_edit_prompt"]
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
@@ -578,7 +584,7 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
-    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+    parser.add_argument("--domain", choices=["disease_pest", "quality", "species"], default="disease_pest",
                          help="Selects the bucket taxonomy (disease/pest/deficiency/healthy vs. a "
                               "single flat 'quality' bucket), which heldout_prompts.yaml edit-prompt "
                               "template to use, and is forwarded into every heldout-zeroshot scoring "

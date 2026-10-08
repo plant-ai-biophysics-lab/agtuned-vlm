@@ -76,7 +76,7 @@ def build_chunks(rows: list[dict], max_words_per_chunk: int,
     "quality" bucket — see that function's own docstring for why)."""
     buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in rows:
-        buckets[(bucket_fn(r["class_label"]), r["trace_type"])].append(r)
+        buckets[(bucket_fn(r), r["trace_type"])].append(r)
 
     chunked: dict[tuple[str, str], list[list[dict]]] = {}
     for key, bucket_rows in buckets.items():
@@ -98,7 +98,7 @@ def build_chunks(rows: list[dict], max_words_per_chunk: int,
 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     domain = getattr(args, "domain", "disease_pest")
-    prefix = "heldout_quality_" if domain == "quality" else "heldout_"
+    prefix = f"heldout_{domain}_" if domain != "disease_pest" else "heldout_"
     hprompts = load_yaml(Path(args.heldout_prompts))
     map_template = hprompts[f"{prefix}map_summarize_prompt"]
     reduce_template = hprompts[f"{prefix}reduce_summarize_prompt"]
@@ -229,7 +229,7 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
-    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+    parser.add_argument("--domain", choices=["disease_pest", "quality", "species"], default="disease_pest",
                          help="Selects both the bucketing heuristic (disease/pest/deficiency/healthy "
                               "vs. a single flat 'quality' bucket) and which heldout_prompts.yaml "
                               "template pair to use (heldout_* vs heldout_quality_*).")

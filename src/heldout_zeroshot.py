@@ -64,6 +64,7 @@ except ImportError:
 _HELDOUT_TAG_BY_DOMAIN = {
     "disease_pest": "DigiGreen_crop_disease_images",
     "quality": "AgML_heldout_quality",
+    "species": "iNatAg-mini_heldout",
 }
 HELDOUT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "crop", "image_name", "details", "country", "state", "split",
@@ -108,8 +109,33 @@ def bucket_category_quality(label: str) -> str:
     return "quality"
 
 
+def bucket_category_species(row: dict) -> str:
+    """Species' analog of bucket_category() — "plant" or "weed", read
+    directly from the row's own `crop` field (download_heldout_species.py
+    stores the species' crop/weed label there, not an actual crop name —
+    species_identification's question has no {crop} slot to fill, so this
+    field was free to repurpose, same "closest-matching real meaning"
+    convention HELDOUT_CKPT_FIELDS itself already uses for class_label/
+    agml_dataset). Unlike quality's ungroupable grading labels, iNatAg-mini
+    rows DO carry a real, meaningful 2-way split worth separate skill-file
+    sections — defaults to "plant" for anything not explicitly "weed"
+    (covers a future row with a missing/unexpected crop field value)."""
+    return "weed" if (row.get("crop") or "").strip().lower() == "weed" else "plant"
+
+
 def bucket_category_for_domain(domain: str):
-    return bucket_category_quality if domain == "quality" else bucket_category
+    """Returns a function taking the FULL row dict (not just the label) —
+    disease_pest/quality's own bucket functions only need class_label, so
+    they're wrapped here rather than changed themselves; species needs the
+    row's crop field too, so wrapping at this one dispatch point is what
+    lets every call site (build_chunks, compute_task_scores,
+    _sample_rows_by_judgement) stay domain-agnostic without each one
+    knowing which fields each domain's bucketing actually reads."""
+    if domain == "quality":
+        return lambda r: bucket_category_quality(r["class_label"])
+    if domain == "species":
+        return bucket_category_species
+    return lambda r: bucket_category(r["class_label"])
 
 
 def load_heldout_manifest(path: Path) -> dict:
@@ -141,6 +167,14 @@ def _quality_question(crop: str, prompts: dict) -> str:
     return prompts["visual_classification_quality"].format(crop=crop)
 
 
+def _species_question(prompts: dict) -> str:
+    # Reuses the exact same question vision_baseline.py::cls_question
+    # falls through to for species_identification rows (no {crop} slot —
+    # "What plant or weed is exhibited in this image?" already covers
+    # both plant-variety and weed identification without needing one).
+    return prompts["visual_classification_weed"]
+
+
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     if args.skill_memory_path and args.wrapper_only:
@@ -159,7 +193,12 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     domain = getattr(args, "domain", "disease_pest")
     heldout_tag = _HELDOUT_TAG_BY_DOMAIN[domain]
-    question_fn = (lambda crop: _quality_question(crop, prompts)) if domain == "quality" else _cls_question
+    if domain == "quality":
+        question_fn = lambda crop: _quality_question(crop, prompts)
+    elif domain == "species":
+        question_fn = lambda crop: _species_question(prompts)
+    else:
+        question_fn = _cls_question
 
     all_rows = load_heldout_manifest(Path(args.manifest))
     class_list_text = build_class_list_text(all_rows)
@@ -275,7 +314,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     argument list and risking the two drifting apart."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
-    parser.add_argument("--domain", choices=["disease_pest", "quality"], default="disease_pest",
+    parser.add_argument("--domain", choices=["disease_pest", "quality", "species"], default="disease_pest",
                          help="disease_pest (default) asks the Digital Green disease/pest/deficiency "
                               "question and tags rows DigiGreen_crop_disease_images. quality asks the "
                               "same visual_classification_quality question the main AgML eval uses and "

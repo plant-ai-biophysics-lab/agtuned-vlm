@@ -33,21 +33,36 @@ images total (1,600 lessons / 400 eval after the usual 80/20 split).
 Writes dataset/heldout_species_selected_images.json in the same row shape
 download_heldout_digitalgreen.py/download_heldout_quality.py use
 (image_path, crop, diagnosis as a 1-element list, details, country,
-state, split) plus two extra fields — agml_dataset (constant tag) and
-species_category ("crop"/"weed", from the zip's own label subfolder) —
-so every downstream Stage 3 script works via --manifest/--images_root
-pointed here, once --domain species support is added to them (not yet
-built — this script only produces the held-out data, Step 1-3b's own
-species-domain prompts/bucketing are a separate follow-up). "diagnosis"
-holds the species' own binomial name (underscore->space cleaned) as a
-1-element list — the real ground-truth label for a species-identification
-question. "crop"/"details"/"country"/"state" are always empty/generic —
-no per-row location or expert-note metadata exists here the way Digital
-Green has.
+state, split), with one field reused for a real purpose rather than left
+blank: "crop" holds the species' own "crop"/"weed" LABEL (from the zip's
+own label subfolder), not an actual crop name — species_identification's
+question has no {crop} slot to fill (see _species_question,
+heldout_zeroshot.py), so this was free to repurpose; bucket_category_species
+reads it directly to split Step 3's lessons into "plant"/"weed" sections.
+"diagnosis" holds the species' own binomial name (underscore->space
+cleaned) as a 1-element list — the real ground-truth label for a
+species-identification question. "details"/"country"/"state" are always
+empty — no per-row expert-note or location metadata exists here the way
+Digital Green has.
 
 Row keys and cached image paths follow the same flat convention
 download_heldout_quality.py uses (images_root/<key>.jpg, no per-species
 subdirectory) — keys are "<species>__<image_id>" (globally unique).
+
+**Species-selection reproducibility**: unlike quality (whose held-out
+source is a fixed, committed `skip: true` list in datasets.yaml — a
+permanent, human-readable record needing no extra logging) or Digital
+Green (the whole external dataset, no selection to log at all), WHICH 40
+species get drawn here is a seeded random choice against the LIVE HF repo
+listing — if that repo ever gains/loses species between runs, the exact
+same --seed would no longer reproduce the exact same 40-species draw.
+--selection_log (default dataset/heldout_species_selection.json) fixes
+this: written ONCE on the first real run (species list + crop/weed label
++ the exact settings that produced it), then READ (not regenerated) on
+every later run regardless of upstream repo drift or whether the first
+run was interrupted partway through. This is the definitive, committed
+answer to "which species were used" — check it into version control
+alongside the manifest.
 
 --eval_frac (default 0.2) splits each species' own (already-subsampled)
 rows into lessons/eval independently, seeded by --seed.
@@ -137,15 +152,32 @@ def main(args: argparse.Namespace) -> None:
     images_root.mkdir(parents=True, exist_ok=True)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = Path(args.selection_log)
 
     manifest = load_manifest(out_path)
     rows = manifest["rows"]
     n_before = len(rows)
 
-    species_list = select_species(args.n_crop_species, args.n_weed_species, args.seed)
-    print(f"  {len(species_list)} species selected "
-          f"({sum(1 for _, c in species_list if c == 'crop')} crop, "
-          f"{sum(1 for _, c in species_list if c == 'weed')} weed)")
+    if log_path.exists():
+        log = json.loads(log_path.read_text())
+        species_list = [(s["name"], s["category"]) for s in log["species"]]
+        print(f"  Reusing species selection from {log_path} "
+              f"({len(species_list)} species, logged {log['generated_at']}) — "
+              f"--n_crop_species/--n_weed_species/--seed ignored for selection (delete this file "
+              f"to redraw).")
+    else:
+        species_list = select_species(args.n_crop_species, args.n_weed_species, args.seed)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(json.dumps({
+            "generated_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+            "seed": args.seed,
+            "n_crop_species": args.n_crop_species,
+            "n_weed_species": args.n_weed_species,
+            "species": [{"name": s, "category": c} for s, c in species_list],
+        }, indent=2))
+        print(f"  {len(species_list)} species selected and logged to {log_path} "
+              f"({sum(1 for _, c in species_list if c == 'crop')} crop, "
+              f"{sum(1 for _, c in species_list if c == 'weed')} weed)")
 
     rng = random.Random(args.seed)
     row_keys_by_species: dict[str, list[str]] = defaultdict(list)
@@ -177,9 +209,11 @@ def main(args: argparse.Namespace) -> None:
                 with zf.open(member) as f:
                     PILImage.open(f).convert("RGB").save(img_path, format="JPEG")
                 rows[key] = {
-                    "image_path": str(img_path), "crop": "", "diagnosis": [display_name],
+                    # "crop" holds the crop/weed LABEL, not a crop name —
+                    # see this module's own docstring for why.
+                    "image_path": str(img_path), "crop": category, "diagnosis": [display_name],
                     "details": "", "country": "", "state": "",
-                    "agml_dataset": "iNatAg-mini_heldout", "species_category": category,
+                    "agml_dataset": "iNatAg-mini_heldout",
                     "split": None,
                 }
 
@@ -204,6 +238,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--images_root", default="dataset/images_heldout_species")
     parser.add_argument("--output", default="dataset/heldout_species_selected_images.json")
+    parser.add_argument("--selection_log", default="dataset/heldout_species_selection.json",
+                         help="Written once on the first run (which species were chosen + why), then "
+                              "READ (not regenerated) on every later run — the definitive, committed "
+                              "record of species selection. Delete it to force a fresh draw.")
     parser.add_argument("--n_crop_species", type=int, default=20)
     parser.add_argument("--n_weed_species", type=int, default=20)
     parser.add_argument("--images_per_species", type=int, default=50,
