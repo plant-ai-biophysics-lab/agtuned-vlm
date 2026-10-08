@@ -137,7 +137,10 @@ def _detection_crop_label(crop_val) -> str:
     return crop_val
 
 
-def make_detection_charts(config_path: Path, manifest_path: Path, chart_dir: Path) -> None:
+def make_detection_charts(
+    config_path: Path, manifest_path: Path, chart_dir: Path, outer_label_fontsize: int = 9,
+    small_inner_pct_threshold: float = 8,
+) -> None:
     chart_dir.mkdir(parents=True, exist_ok=True)
     datasets = active_datasets(config_path)
     ds_by_name = {d.agml_name: d for d in datasets}
@@ -170,6 +173,8 @@ def make_detection_charts(config_path: Path, manifest_path: Path, chart_dir: Pat
         breakdown_filename="detection_classes_by_cropcategory_breakdown.csv",
         chart_filename="detection_classes_by_cropcategory_nested_pie.png",
         color_map=CROP_CATEGORY_COLOR, display_fn=_display_crop_category,
+        outer_label_fontsize=outer_label_fontsize,
+        small_inner_pct_threshold=small_inner_pct_threshold,
     )
 
     # ── Chart B: detection target type (inner) -> crop category (outer) ────
@@ -192,6 +197,8 @@ def make_detection_charts(config_path: Path, manifest_path: Path, chart_dir: Pat
         breakdown_filename="detection_classes_by_target_type_breakdown.csv",
         chart_filename="detection_classes_by_target_type_nested_pie.png",
         color_map=TARGET_TYPE_COLOR, display_fn=_display_target_type,
+        outer_label_fontsize=outer_label_fontsize,
+        small_inner_pct_threshold=small_inner_pct_threshold,
     )
 
     print(f"\n  {len(ds_entries)} active detection dataset(s) charted "
@@ -203,8 +210,18 @@ def main() -> None:
     ap.add_argument("--config", default="src/config/detection_datasets.yaml")
     ap.add_argument("--manifest", default="dataset/selected_images_detection_10.json")
     ap.add_argument("--chart_dir", default="outputs/agml_hf_detection/")
+    ap.add_argument("--outer_label_fontsize", type=int, default=9,
+                     help="Font size for the outer leader-line labels on both nested donuts — "
+                          "default 9 matches every other chart in this pipeline.")
+    ap.add_argument("--small_inner_pct_threshold", type=float, default=8,
+                     help="Inner-ring wedges below this percent get a leader-labeled callout "
+                          "outside the ring instead of inline text — default 8 (higher than "
+                          "classification's 3) since these two charts have more, smaller inner "
+                          "wedges (crop category / target type) that would otherwise overlap.")
     args = ap.parse_args()
-    make_detection_charts(Path(args.config), Path(args.manifest), Path(args.chart_dir))
+    make_detection_charts(Path(args.config), Path(args.manifest), Path(args.chart_dir),
+                           outer_label_fontsize=args.outer_label_fontsize,
+                           small_inner_pct_threshold=args.small_inner_pct_threshold)
 
 
 if __name__ == "__main__":

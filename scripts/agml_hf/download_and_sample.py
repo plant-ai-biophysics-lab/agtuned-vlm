@@ -535,6 +535,8 @@ def _render_task_nested_donut(
     category_fn=None,
     color_map: dict | None = None,
     display_fn=None,
+    outer_label_fontsize: int = 9,
+    small_inner_pct_threshold: float = 3,
 ) -> None:
     """Task type (inner ring, by class count) -> some second attribute
     (outer ring) — generic over whatever per-task Counter it's given
@@ -546,7 +548,14 @@ def _render_task_nested_donut(
     _task_outer_entries / _crop_category. `color_map`/`display_fn` default
     to TASK_COLOR/_display_task (classification's own inner-ring keys) —
     overridden by chart_detection_catalog.py, whose inner-ring keys are
-    crop categories / detection target types, not task types."""
+    crop categories / detection target types, not task types.
+    `small_inner_pct_threshold` is the cutoff (in percent of the inner ring)
+    below which an inner wedge is too thin for its own 3-line inline text
+    block and gets a leader-labeled callout outside the ring instead —
+    default 3 matches classification's own already-approved 4-category
+    chart; chart_detection_catalog.py passes a higher value since its charts
+    have more, smaller inner wedges (crop category / target type) that would
+    otherwise overlap at the same threshold."""
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -563,13 +572,12 @@ def _render_task_nested_donut(
     outer_entries = _task_outer_entries(class_task_types, groups_by_task, top_n, unit_name,
                                          category_fn=category_fn, color_map=color_map)
 
-    outer_vals, outer_colors, outer_labels, outer_task = [], [], [], []
+    outer_vals, outer_colors, outer_labels = [], [], []
     for t in inner_labels:
         for label, val, color in outer_entries[t]:
             outer_vals.append(val)
             outer_colors.append(color)
             outer_labels.append(f"{label} ({val})")
-            outer_task.append(t)
 
     fig, ax = plt.subplots(figsize=(13, 10))
     ring_w = 0.46  # thick enough that even the smallest task's two-line label fits inside it
@@ -595,24 +603,23 @@ def _render_task_nested_donut(
     # for every one of its wedges (_add_leader_labels), just applied
     # selectively here since most inner wedges ARE big enough to hold
     # inline text.
-    _SMALL_INNER_PCT = 3
+    _SMALL_INNER_PCT = small_inner_pct_threshold
     ring_inner_r = 1 - 2 * ring_w
     ring_outer_r = 1 - ring_w
     total_inner = sum(inner_vals)
-    small_inner = []  # (task, ang_deg, label) — placed after the outer ring, see below
-    for t, wedge, val, label in zip(inner_labels, inner_wedges, inner_vals, inner_callouts):
+    small_inner_wedges, small_inner_labels = [], []  # folded into the outer
+    # ring's own _add_leader_labels call below (same column/spread pass) so
+    # several small inner wedges clustered at similar angles (e.g. three
+    # 5%-ish categories next to each other) get spread apart from EACH
+    # OTHER too, not just anchored independently where they could overlap.
+    for wedge, val, label in zip(inner_wedges, inner_vals, inner_callouts):
         ang = (wedge.theta2 - wedge.theta1) / 2.0 + wedge.theta1
         rad = np.deg2rad(ang)
         pct = 100 * val / total_inner
         name, count = label.split(" (")
         if pct < _SMALL_INNER_PCT:
-            # Too thin for its own 3-line text block — leader-labeled
-            # instead, anchored directly above its own first outer-ring
-            # child (same task, e.g. pest/damage sitting right above its
-            # own "cash crop (1)"/"multi-crop (1)" sub-wedges) once that
-            # child's real on-screen position is known — see below, after
-            # the outer ring's own _add_leader_labels call returns it.
-            small_inner.append((t, ang, f"{name} ({count}, {pct:.0f}%)"))
+            small_inner_wedges.append(wedge)
+            small_inner_labels.append(f"{name} ({count}, {pct:.0f}%)")
             continue
         # Small (but not tiny) wedges sit further out toward the ring's
         # outer edge, where the arc is wider — near the hole all wedges
@@ -624,23 +631,11 @@ def _render_task_nested_donut(
                  f"{name}\n({count}\n{pct:.0f}%",
                  ha="center", va="center", fontsize=9, linespacing=1.3, fontweight="bold")
 
-    placed = _add_leader_labels(ax, outer_wedges, outer_labels, radius=1,
-                                 xoff=1.25, yoff=1.15, fontsize=9)
-    for t, ang, label in small_inner:
-        # First outer-ring entry for this same task — e.g. pest/damage's own
-        # "multi-crop / unspecified (1)" sub-wedge — already placed above;
-        # anchor directly above IT (same x column, a small fixed y nudge)
-        # rather than re-entering the generic spread pass, which has no way
-        # to know "stay next to this specific sibling" on its own.
-        sib_idx = outer_task.index(t)
-        ha, xtext, ytext = placed[sib_idx]
-        rad = np.deg2rad(ang)
-        anchor = (np.cos(rad) * ring_outer_r, np.sin(rad) * ring_outer_r)
-        ax.annotate(
-            label, xy=anchor, xytext=(xtext, ytext + 0.16),
-            horizontalalignment=ha, verticalalignment="center", fontsize=9, fontweight="bold",
-            arrowprops=dict(arrowstyle="-", color="#555555", lw=0.6, connectionstyle="arc3,rad=0.0"),
-        )
+    combined_wedges = list(outer_wedges) + small_inner_wedges
+    combined_labels = list(outer_labels) + small_inner_labels
+    combined_radii = [1] * len(outer_wedges) + [ring_outer_r] * len(small_inner_wedges)
+    _add_leader_labels(ax, combined_wedges, combined_labels, radius=combined_radii,
+                        xoff=1.25, yoff=1.15, fontsize=outer_label_fontsize)
 
     plt.tight_layout()
     path = chart_dir / chart_filename
@@ -729,6 +724,7 @@ def _render_task_continent_grouped_bar(
 def make_charts(
     datasets: list[DatasetConfig], manifest: dict, chart_dir: Path,
     digital_green_manifest: Path | None = None,
+    outer_label_fontsize: int = 9,
 ) -> None:
     """Summary figures for a download_and_sample run: how many datasets/classes/images
     ended up in the selection, and how it breaks down by task type.
@@ -738,7 +734,12 @@ def make_charts(
     When given and present on disk, its classes are folded into the
     "classes by task type" charts (1b, 5, 6) via
     _digital_green_class_task_crop_counts — see that function's docstring
-    for the task-type mapping. None/missing is a no-op, not an error."""
+    for the task-type mapping. None/missing is a no-op, not an error.
+
+    outer_label_fontsize: forwarded to both nested-donut charts' (6, 6b)
+    own _add_leader_labels calls — default 9 matches every other call site
+    in this pipeline; bump it for a larger-text variant without touching
+    the default."""
     import matplotlib.pyplot as plt
 
     dg_class_task_counts, dg_crop_by_task = (
@@ -996,6 +997,7 @@ def make_charts(
                                       # whole category is one combined wedge
                                       # (e.g. "fruit crops"). See
                                       # _task_outer_entries.
+        outer_label_fontsize=outer_label_fontsize,
     )
 
     # ── 6b. Same nested donut, outer ring by LOCATION (country) instead of
@@ -1027,6 +1029,7 @@ def make_charts(
         top_n=8, unit_name="countries", breakdown_key="country",
         breakdown_filename="classes_by_task_type_location_breakdown.csv",
         chart_filename="classes_by_task_type_location_nested_pie.png",
+        outer_label_fontsize=outer_label_fontsize,
     )
 
     # ── 6c. Bar-chart companion to 6b — grouped (not stacked) by continent
@@ -1092,6 +1095,9 @@ def main() -> None:
                      help="Digital Green's own held-out manifest (download_heldout_digitalgreen.py's "
                           "output) — its classes are folded into the 'classes by task type' charts "
                           "alongside the AgML catalog. Pass '' to skip (missing file is also a no-op).")
+    ap.add_argument("--outer_label_fontsize", type=int, default=9,
+                     help="Font size for the outer leader-line labels on both nested-donut charts "
+                          "(crop, location) — default 9 matches every other chart in this pipeline.")
     ap.add_argument("--no_charts", action="store_true", help="skip chart generation")
     ap.add_argument("--plot_only", action="store_true",
                      help="skip download/sampling entirely; just regenerate charts from the "
@@ -1120,7 +1126,8 @@ def main() -> None:
             sys.exit(1)
         manifest = json.loads(out_path.read_text())
         make_charts(datasets, manifest, Path(args.chart_dir), \
-                    digital_green_manifest=Path(args.digital_green_manifest) if args.digital_green_manifest else None)
+                    digital_green_manifest=Path(args.digital_green_manifest) if args.digital_green_manifest else None,
+                    outer_label_fontsize=args.outer_label_fontsize)
         return
 
     prior_manifest = json.loads(Path(args.from_manifest).read_text()) if args.from_manifest else None
@@ -1203,7 +1210,8 @@ def main() -> None:
     if not args.no_charts:
         print(f"\n=== Generating summary charts -> {args.chart_dir} ===")
         make_charts(datasets, manifest, Path(args.chart_dir), \
-                    digital_green_manifest=Path(args.digital_green_manifest) if args.digital_green_manifest else None)
+                    digital_green_manifest=Path(args.digital_green_manifest) if args.digital_green_manifest else None,
+                    outer_label_fontsize=args.outer_label_fontsize)
 
 
 if __name__ == "__main__":
