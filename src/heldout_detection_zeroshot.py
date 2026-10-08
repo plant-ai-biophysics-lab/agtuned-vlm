@@ -147,7 +147,12 @@ def run_model(model_id: str, args: argparse.Namespace) -> tuple[list[dict], Path
         )
 
         t_start = time.perf_counter()
-        pbar = ProgressBar(total=len(groups), desc="Datasets")
+        # total=n_pending (images), not len(groups) (datasets) — datasets
+        # vary wildly in image count/generation cost, so a per-dataset unit
+        # makes the ETA's rolling-window rate swing wildly between updates
+        # instead of converging; per-image units average over much more
+        # uniform work and give a stable estimate.
+        pbar = ProgressBar(total=n_pending, desc="Datasets")
         for agml_name, ds_rows in groups:
             pbar.desc = f"Datasets ({agml_name})"
             meta = dataset_meta.get(agml_name, {"classes": [], "crop": None})
@@ -183,7 +188,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> tuple[list[dict], Path
                 }
                 append_ckpt_row(ckpt_path, row, fields=DET_CKPT_FIELDS)
                 rows.append(row)
-            pbar.update()
+            pbar.update(len(ds_rows))
         pbar.finish()
 
         elapsed = time.perf_counter() - t_start
