@@ -1,0 +1,168 @@
+{
+  "generated_at": "2026-10-08T16:26:17",
+  "seed": 42,
+  "n_crop_species": 20,
+  "n_weed_species": 20,
+  "species": [
+    {
+      "name": "acacia_glaucocarpa",
+      "category": "crop"
+    },
+    {
+      "name": "acacia_ligulata",
+      "category": "crop"
+    },
+    {
+      "name": "acacia_melanoxylon",
+      "category": "crop"
+    },
+    {
+      "name": "alliaria_petiolata",
+      "category": "crop"
+    },
+    {
+      "name": "allocasuarina_littoralis",
+      "category": "crop"
+    },
+    {
+      "name": "aloysia_triphylla",
+      "category": "crop"
+    },
+    {
+      "name": "ammophila_breviligulata",
+      "category": "crop"
+    },
+    {
+      "name": "arctostaphylos_uva-ursi",
+      "category": "crop"
+    },
+    {
+      "name": "brosimum_alicastrum",
+      "category": "crop"
+    },
+    {
+      "name": "capsella_bursa-pastoris",
+      "category": "crop"
+    },
+    {
+      "name": "centropodia_glauca",
+      "category": "crop"
+    },
+    {
+      "name": "eucalyptus_bosistoana",
+      "category": "crop"
+    },
+    {
+      "name": "indigofera_schimperi",
+      "category": "crop"
+    },
+    {
+      "name": "luffa_cylindrica",
+      "category": "crop"
+    },
+    {
+      "name": "morus_alba",
+      "category": "crop"
+    },
+    {
+      "name": "panicum_obtusum",
+      "category": "crop"
+    },
+    {
+      "name": "pistacia_lentiscus",
+      "category": "crop"
+    },
+    {
+      "name": "plantago_ovata",
+      "category": "crop"
+    },
+    {
+      "name": "platanus_orientalis",
+      "category": "crop"
+    },
+    {
+      "name": "terminalia_paniculata",
+      "category": "crop"
+    },
+    {
+      "name": "acanthospermum_hispidum",
+      "category": "weed"
+    },
+    {
+      "name": "alchemilla_monticola",
+      "category": "weed"
+    },
+    {
+      "name": "cicuta_maculata",
+      "category": "weed"
+    },
+    {
+      "name": "coreopsis_tinctoria",
+      "category": "weed"
+    },
+    {
+      "name": "corispermum_hyssopifolium",
+      "category": "weed"
+    },
+    {
+      "name": "crinum_americanum",
+      "category": "weed"
+    },
+    {
+      "name": "dichondra_micrantha",
+      "category": "weed"
+    },
+    {
+      "name": "hordeum_distichon",
+      "category": "weed"
+    },
+    {
+      "name": "ipomoea_lacunosa",
+      "category": "weed"
+    },
+    {
+      "name": "leptochloa_nealleyi",
+      "category": "weed"
+    },
+    {
+      "name": "matricaria_chamomila",
+      "category": "weed"
+    },
+    {
+      "name": "mirabilis_jalapa",
+      "category": "weed"
+    },
+    {
+      "name": "orobanche_minor",
+      "category": "weed"
+    },
+    {
+      "name": "panicum_racemosum",
+      "category": "weed"
+    },
+    {
+      "name": "polygonum_orientale",
+      "category": "weed"
+    },
+    {
+      "name": "ranunculus_cymbalaria",
+      "category": "weed"
+    },
+    {
+      "name": "rhamnus_cathartica",
+      "category": "weed"
+    },
+    {
+      "name": "sagittaria_latifolia",
+      "category": "weed"
+    },
+    {
+      "name": "sisymbrium_orientale",
+      "category": "weed"
+    },
+    {
+      "name": "thermopsis_rhombifolia",
+      "category": "weed"
+    }
+  ]
+}
