@@ -9,6 +9,7 @@ STAGES = {
     "download-datasets":  "scripts.agml_hf.download_and_sample",
     "download-heldout-digitalgreen": "scripts.download_heldout_digitalgreen",
     "download-heldout-quality": "scripts.download_heldout_quality",
+    "download-heldout-species": "scripts.download_heldout_species",
     "download-heldout-detection": "scripts.download_heldout_detection",
     "heldout-detection-zeroshot": "src.heldout_detection_zeroshot",
     "heldout-detection-explain-traces": "src.heldout_detection_explain_traces",
@@ -106,6 +107,16 @@ Stages:
                                mechanism (--eval_frac, --seed) and row schema as
                                download-heldout-digitalgreen, so every Stage 3 script below works
                                unchanged against it via --manifest/--images_root + --domain quality.
+    download-heldout-species  Paper 2 Stage 3, Step 0c (docs/stage3_context_memory.md) — download +
+                               cache a held-out slice of iNatAg-mini (Project-AgML/iNatAg-mini,
+                               external to AgML's own 25 species_identification datasets, same
+                               separation as Digital Green/quality) as the species-domain lesson-
+                               building source. 40 species (20 crop-labeled + 20 weed-labeled,
+                               seeded) downloaded whole (one .zip per species, ~3.48 GB), subsampled
+                               to --images_per_species (default 50) each for a 2,000-image local
+                               pool. Writes dataset/images_heldout_species/ +
+                               dataset/heldout_species_selected_images.json, same lessons/eval split
+                               mechanism as the other two held-out sources.
     download-heldout-detection  Paper 2 Stage 4, Step 0 (docs/stage4_detection_context_memory.md)
                                — download + cache 15 ENTIRE Project-AgML detection datasets split
                                by DATASET MEMBERSHIP (not a within-dataset random split): 10

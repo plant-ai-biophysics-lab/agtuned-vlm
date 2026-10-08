@@ -33,6 +33,18 @@ uv run python main.py download-heldout-quality
 
 5 of AgML's 24 `quality_identification` datasets (`skip: true` in `src/config/datasets.yaml`) are held out as the quality-domain lesson-building source, never sampled into the main AgML eval: `VegNet_quality_classification`, `banana_bunch_maturity_classification`, `coffee_bean_quality_classification`, `pomegranate_quality_classification`, `riseholme_strawberry_classification_2021`.
 
+## Step 0c — download the held-out dataset (species)
+
+```bash
+uv run python main.py download-heldout-species
+```
+
+iNatAg-mini (`Project-AgML/iNatAg-mini` on HuggingFace) — external to AgML's own 25 `species_identification` datasets (never wired into `datasets.yaml`, same separation as Digital Green/quality). 40 species (20 crop-labeled + 20 weed-labeled, seeded) downloaded whole (one `.zip` per species, ~3.48 GB), subsampled to `--images_per_species` (default 50) each for a 2,000-image local pool (1,600 lessons / 400 eval).
+
+Args to note: `--n_crop_species`, `--n_weed_species`, `--images_per_species` (download size is fixed by species count — this only controls the local pool size), `--eval_frac`, `--seed`.
+
+**Not yet wired into Steps 1-3b** — `--domain species` support (question wording, bucketing, species-flavored prompts) doesn't exist yet in `heldout-zeroshot`/`heldout-explain-traces`/`heldout-summarize`/`heldout-skill-optimize`, same follow-up work `--domain quality` needed.
+
 Args to note: `--eval_frac`, `--seed`, `--images_root`, `--output`.
 
 ## Step 1 — zero-shot prediction
@@ -352,5 +364,17 @@ Repeat Steps 0-5 for object detection, after classification gains hold up. See [
 |---|---|
 | `--images_root` | `dataset/images_heldout_quality` |
 | `--output` | `dataset/heldout_quality_selected_images.json` |
+| `--eval_frac` | `0.2` |
+| `--seed` | `42` |
+
+### `download-heldout-species`
+
+| Arg | Default |
+|---|---|
+| `--images_root` | `dataset/images_heldout_species` |
+| `--output` | `dataset/heldout_species_selected_images.json` |
+| `--n_crop_species` | `20` |
+| `--n_weed_species` | `20` |
+| `--images_per_species` | `50` |
 | `--eval_frac` | `0.2` |
 | `--seed` | `42` |
