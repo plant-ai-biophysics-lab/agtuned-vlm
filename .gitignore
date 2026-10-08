@@ -43,4 +43,6 @@ experiments/**/**/*.npy
 /dataset/.DS_Store
 /dataset/images_detection
 /dataset/images_heldout
+/dataset/images_heldout_quality
+/dataset/images_heldout_species
 /legacy
