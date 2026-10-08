@@ -56,6 +56,7 @@ from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_l
 from src.common.bbox_parse import clamp_box, denormalize_box_1000, extract_boxes, extract_boxes_json, \
     needs_1000_scale_boxes, uses_json_box_format
 
+from src.common.heldout_skill import build_detection_skill_system_prompt
 from src.detection_baseline import DET_CKPT_FIELDS, run_batch, score_row
 
 # GEMINI_cowpea_flower_detection: the same 990-image dataset
@@ -83,6 +84,22 @@ def det_question_multiclass(ds, prompts: dict, use_json: bool = False) -> str:
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    # Paper 2 Stage 4's detection skill-memory file
+    # (docs/stage4_detection_context_memory.md, Step 3's own
+    # heldout-detection-summarize output) — unlike classification's
+    # DISEASE_TASK_TYPES gate (needed because Digital Green has zero
+    # quality/species content), detection has ONE task_type across every
+    # active dataset and the held-out TRAIN pool (Step 0) was deliberately
+    # picked for domain diversity (growth-stage, multiclass weed-ID,
+    # organ-level, multi-scale, crop-vs-weed, ripeness) — so no per-row
+    # gating here, applied uniformly to every dataset this run touches.
+    # Plain reference-material framing only (build_detection_skill_system_prompt),
+    # deliberately WITHOUT classification's own "two firm rules" wrapper —
+    # see that function's own docstring for why.
+    skill_system_prompt = (
+        build_detection_skill_system_prompt(system_prompt, args.skill_memory_path)
+        if args.skill_memory_path else system_prompt
+    )
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     manifest = load_manifest(Path(args.manifest))
     rescale_1000 = needs_1000_scale_boxes(model_id)
@@ -157,7 +174,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             question = det_question_multiclass(ds, prompts, use_json=use_json)
 
             results = run_batch(
-                llm, tokenizer, images, question, system_prompt=system_prompt,
+                llm, tokenizer, images, question, system_prompt=skill_system_prompt,
                 enable_thinking=args.enable_thinking, chat_template=chat_template,
                 gen_max_tokens=args.gen_max_tokens,
             )
@@ -239,6 +256,12 @@ if __name__ == "__main__":
     parser.add_argument("--gen_max_tokens", type=int, default=4096,
                          help="Same default as detection_baseline.py — real headroom for a "
                               "thinking trace before box output.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Paper 2 Stage 4's detection skill-memory file "
+                              "(docs/stage4_detection_context_memory.md, heldout-detection-summarize's "
+                              "own output) — injected into the system prompt for every active dataset "
+                              "this run touches (no per-row task_type gate — detection has only one "
+                              "task_type, unlike classification's disease/pest-only gate).")
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
