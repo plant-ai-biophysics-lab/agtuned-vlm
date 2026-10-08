@@ -81,7 +81,7 @@ import shutil
 from collections import defaultdict
 
 from src.common.chat_prompt import render_chat_template
-from src.common.metrics import extract_channel_thought
+from src.common.metrics import extract_thinking
 from src.common.vision_eval import safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.heldout_zeroshot import (bucket_category_for_domain,
@@ -351,7 +351,9 @@ def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores
     )
     out = llm.generate([prompt], sampling_params=gen_params)[0]
     raw = out.outputs[0].text
-    thinking, cleaned = extract_channel_thought(raw) if args.edit_enable_thinking else ("", raw)
+    # Unconditional — see extract_thinking's own docstring; strips either
+    # Gemma-4's channel format or Qwen's <think> tags.
+    thinking, cleaned = extract_thinking(raw)
     revised_md, changelog, changelog_parsed = parse_edit_output(cleaned)
     return revised_md, changelog, changelog_parsed, thinking, cleaned
 
@@ -568,6 +570,8 @@ def main(args: argparse.Namespace) -> None:
     if not Path(args.init_skill_path).exists():
         print(f"ERROR: --init_skill_path {args.init_skill_path!r} does not exist.")
         sys.exit(1)
+    if not args.judge_model:
+        args.judge_model = args.model
     run_loop(args.model, args)
 
 
@@ -664,7 +668,9 @@ if __name__ == "__main__":
     parser.add_argument("--enforce_eager", action="store_true")
     parser.add_argument("--kv_cache_dtype", choices=["auto", "fp8"], default=None)
     parser.add_argument("--skip_judge", action="store_true")
-    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
+    parser.add_argument("--judge_model", default=None,
+                         help="Defaults to --model (same model judges its own output) when not given "
+                              "— pass this explicitly to judge with a different model.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200)

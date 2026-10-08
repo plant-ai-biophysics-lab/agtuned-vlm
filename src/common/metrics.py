@@ -78,6 +78,39 @@ def extract_channel_thought(text: str) -> tuple[str, str]:
     remainder = (text[: m.start()] + text[m.end() :]).lstrip("\n")
     return thinking, remainder
 
+
+# Capturing variant of THINK_RE (above) — THINK_RE itself has no group,
+# it's only ever used with .sub() to strip the whole tag; this one is for
+# extract_thinking() below, which needs the INNER text, not just removal.
+_THINK_CAPTURE_RE = re.compile(r"<(?:think|thought)>(.*?)</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_thinking(text: str) -> tuple[str, str]:
+    """Model-agnostic thinking-trace extraction — tries Gemma-4's own
+    <|channel>thought...<channel|> format first (extract_channel_thought,
+    a no-op for every other model family), then strips any <think>/
+    <thought>...</think|thought> tags (Qwen's own convention) from
+    whatever's left, capturing their inner text too. Returns
+    (thinking_text, cleaned) — thinking_text prefers the channel-format
+    text when both somehow appear (shouldn't happen in practice, no model
+    emits both conventions).
+
+    Exists so heldout_zeroshot.py/heldout_explain_traces.py/
+    heldout_summarize.py/heldout_skill_optimize.py (Paper 2 Stage 3) can
+    run against EITHER Gemma-4 or a Qwen model without a raw, unstripped
+    thinking block leaking into a checkpointed prediction/explanation/the
+    skill-memory .md itself — those 4 scripts previously called
+    extract_channel_thought() alone, which silently left Qwen's <think>
+    tags completely unhandled. Safe to call unconditionally (regardless of
+    --enable_thinking) — a cheap no-op parse when no thinking block of
+    either kind is present, same convention vision_baseline.py's own
+    run_batch already uses for its two-step channel+think handling."""
+    channel_thinking, after_channel = extract_channel_thought(text)
+    m = _THINK_CAPTURE_RE.search(after_channel)
+    tag_thinking = m.group(1).strip() if m else ""
+    cleaned = THINK_RE.sub("", after_channel).strip()
+    return (channel_thinking or tag_thinking), cleaned
+
 # Single point of control for which prompts.yaml judge template new judge
 # calls default to, pipeline-wide — every active caller (vision_baseline.py's
 # run_judge_phase, majority_vote.py, cot_vision.py, cot_step_analysis.py,

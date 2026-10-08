@@ -34,7 +34,7 @@ from PIL import Image as PILImage
 from src.common.chat_prompt import render_chat_template
 from src.common.heldout_skill import build_skill_system_prompt, build_wrapper_only_system_prompt
 from src.common.io import load_prompts
-from src.common.metrics import extract_answer_tag, extract_channel_thought
+from src.common.metrics import extract_answer_tag, extract_thinking
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, run_judge_phase, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.progress import ProgressBar
@@ -220,7 +220,12 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
             for k, out in zip(chunk_keys, outputs):
                 raw = out.outputs[0].text
-                thinking, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+                # Unconditional (not gated on --enable_thinking) — a cheap
+                # no-op parse when no thinking block is present, and
+                # correctly strips either Gemma-4's channel format or
+                # Qwen's <think> tags regardless of which model this run
+                # used (see extract_thinking's own docstring).
+                thinking, cleaned = extract_thinking(raw)
                 answer, _ = extract_answer_tag(cleaned)
                 r = pending[k]
                 diagnosis_text = "; ".join(r["diagnosis"])
@@ -256,6 +261,8 @@ def main(args: argparse.Namespace) -> None:
     if not args.model:
         print("ERROR: --model is required.")
         sys.exit(1)
+    if not args.judge_model:
+        args.judge_model = args.model
     run_model(args.model, args)
 
 
@@ -315,7 +322,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # this dataset's {class_list} is supplied directly via extra_keys above, not an AgML datasets.yaml.
     parser.add_argument("--rejudge", action="store_true")
     parser.add_argument("--skip_judge", action="store_true")
-    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic")
+    parser.add_argument("--judge_model", default=None,
+                         help="Defaults to --model (same model judges its own output) when not given "
+                              "— pass this explicitly to judge with a different model.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200)

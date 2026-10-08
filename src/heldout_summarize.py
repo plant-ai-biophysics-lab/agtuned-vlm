@@ -43,7 +43,7 @@ import json
 from collections import defaultdict
 
 from src.common.chat_prompt import render_chat_template
-from src.common.metrics import extract_channel_thought
+from src.common.metrics import extract_thinking
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.vision_eval import safe_model_name
 from src.common.progress import ProgressBar
@@ -158,7 +158,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                                            chat_template=chat_template)
             out = llm.generate([prompt], sampling_params=gen_params)[0]
             raw = out.outputs[0].text
-            _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+            # Unconditional — see extract_thinking's own docstring; strips
+            # either Gemma-4's channel format or Qwen's <think> tags.
+            _, cleaned = extract_thinking(raw)
             chunk_summaries[f"{cat}|{tt}|{i}"] = {
                 "category": cat, "trace_type": tt, "chunk_index": i, "n_rows": len(chunk),
                 "summary": cleaned.strip(),
@@ -204,7 +206,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     )
     out = llm.generate([prompt], sampling_params=reduce_params)[0]
     raw = out.outputs[0].text
-    _, md_text = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+    _, md_text = extract_thinking(raw)
     md_text = md_text.strip()
 
     destroy_llm(llm)

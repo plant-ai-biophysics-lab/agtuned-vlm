@@ -48,7 +48,7 @@ import csv
 from PIL import Image as PILImage
 
 from src.common.chat_prompt import render_chat_template
-from src.common.metrics import extract_channel_thought
+from src.common.metrics import extract_thinking
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 from src.common.progress import ProgressBar
@@ -153,7 +153,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
 
         for r, (trace_type, _), out in zip(chunk, trace_types_and_texts, outputs):
             raw = out.outputs[0].text
-            _, cleaned = extract_channel_thought(raw) if args.enable_thinking else ("", raw)
+            # Unconditional — see extract_thinking's own docstring; strips
+            # either Gemma-4's channel format or Qwen's <think> tags.
+            _, cleaned = extract_thinking(raw)
             explanation = cleaned.strip()
             row = dict(r)
             row["trace_type"] = trace_type
