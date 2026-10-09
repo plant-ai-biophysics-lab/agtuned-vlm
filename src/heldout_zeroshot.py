@@ -70,6 +70,18 @@ HELDOUT_CKPT_FIELDS = [
     "agml_dataset", "class_label", "crop", "image_name", "details", "country", "state", "split",
     "prediction", "raw_response", "extracted_answer", "reasoning",
     "judge_gt_hint", "class_list_text", "judged_correct", "judge_reasoning",
+    # Additive, not a resume-key field (load_ckpt's seen-set only ever
+    # reads agml_dataset/class_label/image_name, hardcoded — adding a
+    # column here doesn't touch that). "agml_dataset" above is a per-
+    # DOMAIN constant (same value for every row, even across quality's 5
+    # real source datasets or species' 40 species) — this instead
+    # preserves whichever REAL source dataset the manifest row itself
+    # came from (download_heldout_quality.py's own real agml_name per
+    # row), when the manifest has one. Blank for disease_pest (Digital
+    # Green genuinely is one dataset) and for species (no per-row
+    # dataset identity exists there either — crop/weed, already
+    # captured in "crop", is the only real grouping dimension available).
+    "source_dataset",
 ]
 
 # Heuristic category bucketing — used for the Step 1 trend analysis
@@ -272,7 +284,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "agml_dataset": heldout_tag, "class_label": diagnosis_text,
                     "crop": r["crop"], "image_name": f"{k}.jpg",
                     "details": r["details"], "country": r["country"], "state": r["state"],
-                    "split": r["split"],
+                    "split": r["split"], "source_dataset": r.get("agml_dataset", ""),
                     "prediction": cleaned, "raw_response": raw, "extracted_answer": answer,
                     "reasoning": thinking,
                     "judge_gt_hint": diagnosis_text, "class_list_text": class_list_text,

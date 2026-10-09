@@ -63,6 +63,30 @@ def compute_metrics(rows: list[dict]) -> dict:
     return out
 
 
+def compute_f1_by_dataset(rows: list[dict]) -> dict:
+    """{agml_dataset: row-level macro F1} plus "macro_of_datasets" — the
+    unweighted mean across datasets, every dataset counted once
+    regardless of its own row count. Reported alongside the row-weighted
+    `f1` in compute_metrics — a real VAL split was found to have one
+    dataset holding 46% of the rows (51/111) with a far harder detection
+    task than the other 4 (avg ~50 ground-truth instances/image vs.
+    ~2-40), so the row-weighted macro F1 mostly reported how THAT ONE
+    dataset was doing, not a balanced read across the whole held-out
+    pool. Same reasoning as heldout_detection_skill_optimize.py's own
+    compute_overall_f1_by_dataset, duplicated here (not imported) since
+    this script is a pure post-hoc, no-GPU comparator with no other
+    dependency on that module."""
+    from collections import defaultdict
+    by_ds: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        if r.get("f1_at_iou50") in (None, ""):
+            continue
+        by_ds[r["agml_dataset"]].append(float(r["f1_at_iou50"]))
+    per_dataset = {name: round(sum(vals) / len(vals), 4) for name, vals in by_ds.items()}
+    macro_of_datasets = round(sum(per_dataset.values()) / len(per_dataset), 4) if per_dataset else None
+    return {"per_dataset": per_dataset, "macro_of_datasets": macro_of_datasets}
+
+
 def plot_ablation(baseline: dict, skill: dict, out_path: Path, title: str = "") -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -115,24 +139,48 @@ def main(args: argparse.Namespace) -> None:
 
     baseline = compute_metrics(baseline_rows)
     skill = compute_metrics(skill_rows)
+    baseline_by_ds = compute_f1_by_dataset(baseline_rows)
+    skill_by_ds = compute_f1_by_dataset(skill_rows)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.skill_ckpt).parent / "ablation"
     out_path = out_dir / "ablation.png"
     plot_ablation(baseline, skill, out_path, title=args.title)
 
     deltas = {m: round(skill[m] - baseline[m], 4) for m in _METRICS}
-    result = {"without_skill_file": baseline, "with_skill_file": skill, "delta": deltas}
+    f1_dataset_delta = (
+        round(skill_by_ds["macro_of_datasets"] - baseline_by_ds["macro_of_datasets"], 4)
+        if baseline_by_ds["macro_of_datasets"] is not None and skill_by_ds["macro_of_datasets"] is not None
+        else None
+    )
+    result = {
+        "without_skill_file": baseline, "with_skill_file": skill, "delta": deltas,
+        "f1_by_dataset": {"without_skill_file": baseline_by_ds, "with_skill_file": skill_by_ds,
+                           "delta_macro_of_datasets": f1_dataset_delta},
+    }
     json_path = out_dir / "ablation.json"
     json_path.write_text(json.dumps(result, indent=2))
 
     print(f"  Without skill file: " + ", ".join(f"{m}={baseline[m]:.4f}" for m in _METRICS) + f" (n={baseline['n']})")
     print(f"  With skill file:    " + ", ".join(f"{m}={skill[m]:.4f}" for m in _METRICS) + f" (n={skill['n']})")
-    print(f"  Delta: " + ", ".join(f"{m}={deltas[m]:+.4f}" for m in _METRICS))
+    print(f"  Delta (row-weighted macro): " + ", ".join(f"{m}={deltas[m]:+.4f}" for m in _METRICS))
+    print(f"\n  F1 by dataset (unweighted mean across datasets, not rows):")
+    print(f"    Without skill: {baseline_by_ds['macro_of_datasets']}  |  With skill: "
+          f"{skill_by_ds['macro_of_datasets']}  |  Delta: {f1_dataset_delta:+.4f}"
+          if f1_dataset_delta is not None else "    n/a")
+    for name in sorted(set(baseline_by_ds["per_dataset"]) | set(skill_by_ds["per_dataset"])):
+        b = baseline_by_ds["per_dataset"].get(name)
+        s = skill_by_ds["per_dataset"].get(name)
+        print(f"      {name}: without={b} with={s}")
     print(f"\n  Saved: {out_path}")
     print(f"  Saved: {json_path}")
     if deltas["f1"] <= 0:
-        print("\n  [finding] skill file did NOT improve held-out F1 — "
+        print("\n  [finding] skill file did NOT improve held-out F1 (row-weighted) — "
               "do not inject into detection-multiclass based on this run.")
+    if f1_dataset_delta is not None and f1_dataset_delta <= 0 and deltas["f1"] > 0:
+        print("\n  [finding] row-weighted F1 improved but the UNWEIGHTED per-dataset average did not — "
+              "the apparent gain may be concentrated in (or an artifact of) whichever dataset has the "
+              "most rows, not a broad improvement. Check the per-dataset breakdown above before trusting "
+              "this as a real win.")
 
 
 if __name__ == "__main__":

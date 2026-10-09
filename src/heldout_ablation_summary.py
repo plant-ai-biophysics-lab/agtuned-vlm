@@ -43,6 +43,29 @@ def compute_judge_accuracy(rows: list[dict]) -> dict:
     return {"n": len(rows), "n_judged": len(judged), "judge_accuracy": round(acc, 4)}
 
 
+def compute_accuracy_by_source_dataset(rows: list[dict]) -> dict:
+    """{source_dataset: row-level judge_accuracy} plus "macro_of_datasets"
+    — the unweighted mean across datasets, every dataset counted once
+    regardless of its own row count. Only populated for --domain quality
+    checkpoints (heldout_zeroshot.py's "source_dataset" field is blank
+    for disease_pest/species — see HELDOUT_CKPT_FIELDS' own docstring);
+    {} otherwise, not an error. Added after the detection analog of this
+    script (heldout_detection_ablation_summary.py) found a real
+    row-weighting distortion in its own VAL split — one dataset holding
+    46% of the rows was dominating the aggregate number."""
+    from collections import defaultdict
+    by_ds: dict[str, list[int]] = defaultdict(list)
+    for r in rows:
+        src = r.get("source_dataset") or ""
+        jc = r.get("judged_correct")
+        if not src or jc in (None, ""):
+            continue
+        by_ds[src].append(int(jc))
+    per_dataset = {name: round(sum(vals) / len(vals), 4) for name, vals in by_ds.items()}
+    macro_of_datasets = round(sum(per_dataset.values()) / len(per_dataset), 4) if per_dataset else None
+    return {"per_dataset": per_dataset, "macro_of_datasets": macro_of_datasets}
+
+
 def plot_ablation(baseline: dict, skill: dict, out_path: Path, title: str = "") -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -86,24 +109,48 @@ def main(args: argparse.Namespace) -> None:
 
     baseline = compute_judge_accuracy(baseline_rows)
     skill = compute_judge_accuracy(skill_rows)
+    baseline_by_ds = compute_accuracy_by_source_dataset(baseline_rows)
+    skill_by_ds = compute_accuracy_by_source_dataset(skill_rows)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.skill_ckpt).parent / "ablation"
     out_path = out_dir / "ablation.png"
     plot_ablation(baseline, skill, out_path, title=args.title)
 
-    result = {"without_skill_file": baseline, "with_skill_file": skill,
-              "delta": round(skill["judge_accuracy"] - baseline["judge_accuracy"], 4)}
+    delta = round(skill["judge_accuracy"] - baseline["judge_accuracy"], 4)
+    dataset_delta = (
+        round(skill_by_ds["macro_of_datasets"] - baseline_by_ds["macro_of_datasets"], 4)
+        if baseline_by_ds.get("macro_of_datasets") is not None and skill_by_ds.get("macro_of_datasets") is not None
+        else None
+    )
+    result = {
+        "without_skill_file": baseline, "with_skill_file": skill, "delta": delta,
+        "accuracy_by_source_dataset": {"without_skill_file": baseline_by_ds, "with_skill_file": skill_by_ds,
+                                        "delta_macro_of_datasets": dataset_delta},
+    }
     json_path = out_dir / "ablation.json"
     json_path.write_text(json.dumps(result, indent=2))
 
     print(f"  Without skill file: judge_accuracy={baseline['judge_accuracy']:.4f} (n={baseline['n']})")
     print(f"  With skill file:    judge_accuracy={skill['judge_accuracy']:.4f} (n={skill['n']})")
-    print(f"  Delta: {result['delta']:+.4f}")
+    print(f"  Delta (row-level): {delta:+.4f}")
+    if dataset_delta is not None:
+        print(f"\n  Accuracy by source dataset (unweighted mean across datasets, not rows):")
+        print(f"    Without skill: {baseline_by_ds['macro_of_datasets']}  |  With skill: "
+              f"{skill_by_ds['macro_of_datasets']}  |  Delta: {dataset_delta:+.4f}")
+        for name in sorted(set(baseline_by_ds["per_dataset"]) | set(skill_by_ds["per_dataset"])):
+            b = baseline_by_ds["per_dataset"].get(name)
+            s = skill_by_ds["per_dataset"].get(name)
+            print(f"      {name}: without={b} with={s}")
     print(f"\n  Saved: {out_path}")
     print(f"  Saved: {json_path}")
-    if result["delta"] <= 0:
-        print("\n  [finding] skill file did NOT improve held-out judge_accuracy — "
+    if delta <= 0:
+        print("\n  [finding] skill file did NOT improve held-out judge_accuracy (row-level) — "
               "do not inject into vision-baseline/verifier-cot based on this run.")
+    if dataset_delta is not None and dataset_delta <= 0 and delta > 0:
+        print("\n  [finding] row-level accuracy improved but the UNWEIGHTED per-dataset average did not "
+              "— the apparent gain may be concentrated in whichever source dataset has the most rows, "
+              "not a broad improvement. Check the per-dataset breakdown above before trusting this as a "
+              "real win.")
 
 
 if __name__ == "__main__":

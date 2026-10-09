@@ -90,6 +90,31 @@ def compute_overall_f1(rows: list[dict]) -> float | None:
     return round(sum(vals) / len(vals), 4) if vals else None
 
 
+def compute_overall_f1_by_dataset(rows: list[dict]) -> dict:
+    """{agml_dataset: row-level macro F1} plus a "macro_of_datasets" key —
+    the unweighted mean of each dataset's own F1, every dataset counted
+    once regardless of how many rows it contributed. compute_overall_f1
+    above weights by ROW, which a real run found badly distorted: VAL's 5
+    datasets aren't equal-sized (one real run had 51/111 rows — 46% — all
+    from a single dataset whose detection task is far harder than the
+    other 4, averaging ~50 ground-truth instances/image vs. the others'
+    ~2-40), so a row-weighted macro F1 mostly reports how THAT one
+    dataset is doing, swamping any real signal from the other 4 where a
+    skill file actually has a chance to show an effect. Reported
+    ALONGSIDE, not instead of, the row-level number — both are real,
+    legitimate ways to aggregate; which one answers the question you're
+    actually asking depends on whether you care about "images" or
+    "datasets" as the unit of generalization."""
+    by_ds: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        if r.get("f1_at_iou50") in (None, ""):
+            continue
+        by_ds[r["agml_dataset"]].append(float(r["f1_at_iou50"]))
+    per_dataset = {name: round(sum(vals) / len(vals), 4) for name, vals in by_ds.items()}
+    macro_of_datasets = round(sum(per_dataset.values()) / len(per_dataset), 4) if per_dataset else None
+    return {"per_dataset": per_dataset, "macro_of_datasets": macro_of_datasets}
+
+
 def compute_error_type_breakdown(rows: list[dict], iou_threshold: float, loose_iou_threshold: float) -> dict:
     """{error_type: {"count": n, "frac": n/total}} — fresh box-level
     classification of THIS round's own predictions via enumerate_items
@@ -195,11 +220,13 @@ def check_detection_rule_violations(skill_md: str) -> list[str]:
 
 
 def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: str,
-                 base_args: argparse.Namespace) -> tuple[list[dict], float | None, dict]:
+                 base_args: argparse.Namespace) -> tuple[list[dict], float | None, dict, dict]:
     """Runs heldout-detection-zeroshot's own --split {lessons,eval}
     generation+scoring logic (via heldout_detection_zeroshot.run_model,
     reused directly — not reimplemented) against skill_memory_path.
-    Returns (rows, overall_f1, error_type_breakdown)."""
+    Returns (rows, overall_f1, error_type_breakdown, f1_by_dataset) — see
+    compute_overall_f1_by_dataset's own docstring for why both a row-level
+    and a dataset-level F1 are reported."""
     round_args = argparse.Namespace(**vars(base_args))
     round_args.skill_memory_path = str(skill_memory_path)
     round_args.split = split
@@ -207,7 +234,7 @@ def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: 
     round_args.rerun = False
     rows, _ckpt_path = run_det_zeroshot(model_id, round_args)
     breakdown = compute_error_type_breakdown(rows, base_args.iou_threshold, base_args.loose_iou_threshold)
-    return rows, compute_overall_f1(rows), breakdown
+    return rows, compute_overall_f1(rows), breakdown, compute_overall_f1_by_dataset(rows)
 
 
 def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores_block: str,
@@ -348,12 +375,19 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             for v in rule_violations:
                 print(f"    - {v}")
 
-        train_rows, train_f1, train_breakdown = score_round(model_id, round_skill_path, train_dir, "lessons", base_args)
-        print(f"  [round {round_i}] TRAIN F1={train_f1 if train_f1 is not None else 'n/a'} (n={len(train_rows)})")
+        train_rows, train_f1, train_breakdown, train_f1_by_ds = score_round(
+            model_id, round_skill_path, train_dir, "lessons", base_args)
+        print(f"  [round {round_i}] TRAIN F1={train_f1 if train_f1 is not None else 'n/a'} "
+              f"(row-macro, n={len(train_rows)}) | dataset-macro="
+              f"{train_f1_by_ds['macro_of_datasets']}")
 
-        val_rows, val_f1, val_breakdown = score_round(model_id, round_skill_path, val_dir, "eval", base_args)
-        print(f"  [round {round_i}] VAL   F1={val_f1 if val_f1 is not None else 'n/a'} (n={len(val_rows)}) "
-              f"<- used for round selection")
+        val_rows, val_f1, val_breakdown, val_f1_by_ds = score_round(
+            model_id, round_skill_path, val_dir, "eval", base_args)
+        print(f"  [round {round_i}] VAL   F1={val_f1 if val_f1 is not None else 'n/a'} "
+              f"(row-macro, n={len(val_rows)}) | dataset-macro={val_f1_by_ds['macro_of_datasets']} "
+              f"<- row-macro used for round selection")
+        for name, f1 in sorted(val_f1_by_ds["per_dataset"].items()):
+            print(f"      VAL {name}: {f1}")
 
         for label, breakdown in (("TRAIN", train_breakdown), ("VAL", val_breakdown)):
             for et in _ERROR_TYPES:
@@ -368,9 +402,11 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             "train_overall_f1": train_f1,
             "train_n_rows_total": len(train_rows),
             "train_error_type_breakdown": train_breakdown,
+            "train_f1_by_dataset": train_f1_by_ds,
             "val_overall_f1": val_f1,
             "val_n_rows_total": len(val_rows),
             "val_error_type_breakdown": val_breakdown,
+            "val_f1_by_dataset": val_f1_by_ds,
             "diff_vs_previous_round": diff_summary,
             "changelog": changelog,
             "changelog_parsed": changelog_parsed,
@@ -392,7 +428,8 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
     best = max(scored, key=lambda h: h["val_overall_f1"])
     best_out_path = out_dir / "skill_memory_best.md"
     shutil.copy(best["skill_path"], best_out_path)
-    print(f"\n  Best round: {best['round']} (VAL F1={best['val_overall_f1']:.4f}, "
+    print(f"\n  Best round: {best['round']} (VAL F1={best['val_overall_f1']:.4f} row-macro / "
+          f"{best['val_f1_by_dataset']['macro_of_datasets']} dataset-macro, "
           f"TRAIN F1={best['train_overall_f1']})")
     print(f"  Copied to: {best_out_path}")
     print(f"  Full trajectory: {round_log_path}")

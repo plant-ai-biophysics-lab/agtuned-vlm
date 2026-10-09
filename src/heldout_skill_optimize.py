@@ -134,6 +134,30 @@ def compute_overall_accuracy(rows: list[dict]) -> float | None:
     return round(sum(vals) / len(vals), 4) if vals else None
 
 
+def compute_accuracy_by_source_dataset(rows: list[dict]) -> dict:
+    """{source_dataset: row-level accuracy} plus "macro_of_datasets" — the
+    unweighted mean across datasets, every dataset counted once
+    regardless of its own row count. Only meaningful for --domain quality
+    (its 5 held-out source datasets have real, uneven row counts — this
+    is the classification analog of heldout_detection_skill_optimize.py's
+    own compute_overall_f1_by_dataset, added after that one surfaced a
+    real row-weighting distortion in detection's own VAL split). Empty
+    dict (not an error) for disease_pest (Digital Green is one dataset,
+    "source_dataset" is blank for every row) and species (no per-row
+    dataset identity exists there — see HELDOUT_CKPT_FIELDS' own
+    docstring for why)."""
+    by_ds: dict[str, list[int]] = defaultdict(list)
+    for r in rows:
+        src = r.get("source_dataset") or ""
+        jc = r.get("judged_correct")
+        if not src or jc in (None, ""):
+            continue
+        by_ds[src].append(int(jc))
+    per_dataset = {name: round(sum(vals) / len(vals), 4) for name, vals in by_ds.items()}
+    macro_of_datasets = round(sum(per_dataset.values()) / len(per_dataset), 4) if per_dataset else None
+    return {"per_dataset": per_dataset, "macro_of_datasets": macro_of_datasets}
+
+
 def build_task_scores_block(scores: dict[str, dict], domain: str = "disease_pest") -> str:
     lines = []
     for b in _buckets_for_domain(domain):
@@ -310,11 +334,13 @@ def check_rule_violations(skill_md: str) -> list[str]:
 
 
 def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: str,
-                 base_args: argparse.Namespace) -> tuple[list[dict], float | None, dict]:
+                 base_args: argparse.Namespace) -> tuple[list[dict], float | None, dict, dict]:
     """Runs heldout-zeroshot's own --split {lessons,eval} generation+judge
     logic (via heldout_zeroshot.run_model, reused directly — not
     reimplemented) against skill_memory_path, writing its checkpoint
-    under split_dir. Returns (rows, overall_accuracy, task_scores). split
+    under split_dir. Returns (rows, overall_accuracy, task_scores,
+    accuracy_by_source_dataset) — the last is {} unless --domain quality
+    (see compute_accuracy_by_source_dataset's own docstring). split
     is "lessons" (TRAIN — drives the next edit) or "eval" (VAL — selects
     the best round only, caller must never feed this into an edit)."""
     round_args = argparse.Namespace(**vars(base_args))
@@ -325,7 +351,8 @@ def score_round(model_id: str, skill_memory_path: Path, split_dir: Path, split: 
     round_args.rerun = False
     rows, _ckpt_path = run_zeroshot(model_id, round_args)
     domain = getattr(round_args, "domain", "disease_pest")
-    return rows, compute_overall_accuracy(rows), compute_task_scores(rows, domain=domain)
+    return (rows, compute_overall_accuracy(rows), compute_task_scores(rows, domain=domain),
+            compute_accuracy_by_source_dataset(rows))
 
 
 def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores_block: str,
@@ -496,19 +523,24 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             for v in rule_violations:
                 print(f"    - {v}")
 
-        train_rows, train_acc, train_task_scores = score_round(
+        train_rows, train_acc, train_task_scores, train_acc_by_ds = score_round(
             model_id, round_skill_path, train_dir, "lessons", base_args)
         train_judged = sum(1 for r in train_rows if r.get("judged_correct") not in (None, ""))
         train_acc_str = f"{train_acc:.4f}" if train_acc is not None else "n/a"
         print(f"  [round {round_i}] TRAIN judge_accuracy={train_acc_str} "
-              f"(n_judged={train_judged}/{len(train_rows)})")
+              f"(n_judged={train_judged}/{len(train_rows)})"
+              + (f" | dataset-macro={train_acc_by_ds['macro_of_datasets']}" if train_acc_by_ds else ""))
 
-        val_rows, val_acc, val_task_scores = score_round(
+        val_rows, val_acc, val_task_scores, val_acc_by_ds = score_round(
             model_id, round_skill_path, val_dir, "eval", base_args)
         val_judged = sum(1 for r in val_rows if r.get("judged_correct") not in (None, ""))
         val_acc_str = f"{val_acc:.4f}" if val_acc is not None else "n/a"
         print(f"  [round {round_i}] VAL   judge_accuracy={val_acc_str} "
-              f"(n_judged={val_judged}/{len(val_rows)}) <- used for round selection")
+              f"(n_judged={val_judged}/{len(val_rows)})"
+              + (f" | dataset-macro={val_acc_by_ds['macro_of_datasets']}" if val_acc_by_ds else "")
+              + " <- row-level used for round selection")
+        for name, acc in sorted(val_acc_by_ds.get("per_dataset", {}).items()):
+            print(f"      VAL {name}: {acc}")
 
         for label, rows, judged, task_scores in (("TRAIN", train_rows, train_judged, train_task_scores),
                                                    ("VAL", val_rows, val_judged, val_task_scores)):
@@ -528,10 +560,12 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
             "train_n_rows_total": len(train_rows),
             "train_n_judged_total": train_judged,
             "train_task_scores": train_task_scores,
+            "train_accuracy_by_source_dataset": train_acc_by_ds,
             "val_overall_judge_accuracy": val_acc,
             "val_n_rows_total": len(val_rows),
             "val_n_judged_total": val_judged,
             "val_task_scores": val_task_scores,
+            "val_accuracy_by_source_dataset": val_acc_by_ds,
             "diff_vs_previous_round": diff_summary,
             "changelog": changelog,
             "changelog_parsed": changelog_parsed,
@@ -554,9 +588,11 @@ def run_loop(model_id: str, args: argparse.Namespace) -> None:
     best = max(scored, key=lambda h: h["val_overall_judge_accuracy"])
     best_out_path = out_dir / "skill_memory_best.md"
     shutil.copy(best["skill_path"], best_out_path)
+    best_val_by_ds = best.get("val_accuracy_by_source_dataset") or {}
     print(f"\n  Best round: {best['round']} "
-          f"(VAL judge_accuracy={best['val_overall_judge_accuracy']:.4f}, "
-          f"TRAIN judge_accuracy={best['train_overall_judge_accuracy']})")
+          f"(VAL judge_accuracy={best['val_overall_judge_accuracy']:.4f} row-level"
+          + (f" / {best_val_by_ds['macro_of_datasets']} dataset-macro" if best_val_by_ds else "")
+          + f", TRAIN judge_accuracy={best['train_overall_judge_accuracy']})")
     print(f"  Copied to: {best_out_path}")
     print(f"  Full trajectory: {round_log_path}")
     if best["round"] == 0:
