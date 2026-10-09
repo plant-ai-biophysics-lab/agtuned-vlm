@@ -197,12 +197,38 @@ detection_skill_edit_prompt: |
   5. Keep it concrete and skimmable — short bullets, not paragraphs. Do
      not invent facts not supported by the cases shown or the current
      document's own existing content.
-  6. PROTECT what's already working. Before editing a bullet or section
-     that plausibly helped produce one of the correct cases shown above,
-     check whether your change would still support that case — prefer
-     ADDING a new, narrowly-scoped distinction over REWRITING existing
-     wording, so you don't fix one failure by breaking what already
-     works.
+  6. PROTECT only what's ACTUALLY working. Before editing a bullet that
+     plausibly produced one of the correct cases shown above, check
+     whether your change would still support that case. This protects
+     specific bullets with real evidence behind them — it is NOT a
+     reason to leave the "What Didn't Work" sections untouched by
+     default. A bullet with no worked-case evidence tying it to current
+     success is fair game to revise, merge, or remove.
+  7. BEFORE ADDING A NEW BULLET, check whether an EXISTING bullet
+     (anywhere in the document, not just in the same subsection)
+     already describes the same underlying mechanism — even if this
+     round's case looks superficially different. "Boxed a patch of
+     background vegetation as an instance," "boxed general plant
+     clusters as the target," and "boxed broad non-target greenery" are
+     THE SAME pattern wearing different names — if a case like this
+     round's shows up and something close already exists, STRENGTHEN or
+     RE-WORD the existing bullet to cover both, do not add a
+     near-duplicate one next to it. Likewise, two or more existing
+     bullets that turn out to describe the same mechanism should be
+     MERGED into one, not left standing side by side. A bullet that
+     only ever matched one single case in one single round is a
+     candidate for removal, not a permanent fixture — favor a shorter
+     document with fewer, stronger, more general bullets over a longer
+     one with many narrow, overlapping ones.
+  8. If the prior round's changelog and scores shown above (when
+     present) show the previous round's edit did NOT improve (or made
+     worse) the scores it was meant to help, do not just repeat the
+     same kind of edit again (e.g. another
+     "add one more narrow bullet") — name that explicitly in this
+     round's changelog and try a genuinely different kind of change
+     instead: merging/consolidating existing bullets, rewording a
+     bullet that may be too vague or too narrow to act on, or removing
+     one that isn't earning its place.
 
   Respond with the full revised document (Markdown), starting with the
   `# Object Detection — Lessons Learned` heading, no preamble — then, on
@@ -210,5 +236,7 @@ detection_skill_edit_prompt: |
   ---CHANGELOG---
   followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
   you made and WHY, each bullet naming the box-level outcome it
-  addresses and referencing the count/case that motivated it. Do not
-  skip this section.
+  addresses and referencing the count/case that motivated it. If you
+  merged, reworded, or removed anything (rule 7) or changed approach
+  because the prior round's edit didn't help (rule 8), say so
+  explicitly. Do not skip this section.
