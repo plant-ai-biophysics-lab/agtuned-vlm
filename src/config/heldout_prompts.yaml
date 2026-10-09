@@ -599,6 +599,19 @@ heldout_species_skill_edit_prompt: |
      categories, not a growing list of species-specific facts) — a
      species-specific detail belongs in What Worked/Didn't Work, not
      here.
+  8. Per-species entries in `## What Worked`/`## What Didn't Work` must
+     not accumulate duplicates. BEFORE adding a new bullet for a
+     species, check whether that species already has an entry anywhere
+     in the document (either section) — if it does, UPDATE/MERGE into
+     that existing bullet (e.g. add a new distinguishing detail or a new
+     look-alike comparison to it) rather than appending a second,
+     separate bullet for the same species. Likewise, if two existing
+     bullets both describe distinguishing the same pair of species,
+     merge them into one. A bullet for a species that hasn't produced a
+     new miss or worked case in several rounds and adds little beyond
+     what a near-identical bullet already covers is a candidate for
+     trimming — favor a smaller set of well-maintained entries over an
+     ever-growing list.
 
   Respond with the full revised document (Markdown), starting with the
   `# Plant & Weed Species Identification — Lessons Learned` heading, no
