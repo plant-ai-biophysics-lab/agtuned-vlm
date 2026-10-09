@@ -46,6 +46,14 @@ lesson-building slice and a held-out eval slice independently
 (stratified by sub-dataset, which is already effectively stratified by
 crop — each of the 5 covers exactly one crop), seeded by --seed.
 
+--max_per_dataset (default 400, so ~2,000 total across the 5 datasets —
+matching iNatAg-mini's scale, down from the full 13,899 when this cap
+was None) caps how many rows are sampled from each sub-dataset BEFORE
+the eval/lessons split, stratified by class within that sub-dataset
+(round-robin over classes so no single class dominates the budget) and
+seeded by --seed. Pass 0 to disable the cap and take every row, as
+before.
+
 Usage:
     uv run python scripts/download_heldout_quality.py
 """
@@ -80,6 +88,30 @@ def load_manifest(path: Path) -> dict:
     if path.exists():
         return json.loads(path.read_text())
     return {"hf_repo_id": "Project-AgML/<per-row agml_dataset>", "rows": {}}
+
+
+def stratified_sample_indices(labels: list, max_n: int, seed: int) -> list[int]:
+    """Round-robin over distinct label values so no single class eats the
+    whole --max_per_dataset budget, seeded and order-independent of the
+    dataset's own row order."""
+    rng = random.Random(seed)
+    by_label: dict = defaultdict(list)
+    for idx, label in enumerate(labels):
+        by_label[label].append(idx)
+    for idxs in by_label.values():
+        rng.shuffle(idxs)
+
+    selected: list[int] = []
+    queues = list(by_label.values())
+    i = 0
+    while len(selected) < max_n and any(queues):
+        q = queues[i % len(queues)]
+        if q:
+            selected.append(q.pop())
+        i += 1
+        if i > 10 * max_n + len(labels):  # safety valve, should never trigger
+            break
+    return sorted(selected)
 
 
 def assign_splits(row_keys_by_dataset: dict[str, list[str]], eval_frac: float, seed: int) -> dict[str, str]:
@@ -118,7 +150,14 @@ def main(args: argparse.Namespace) -> None:
         image_col = find_image_column(ds.features)
         class_names = resolve_class_names(ds, label_col)
 
-        for idx in range(len(ds)):
+        if args.max_per_dataset:
+            indices = stratified_sample_indices(ds[label_col], args.max_per_dataset, args.seed)
+            print(f"  Sampling {len(indices)}/{len(ds)} row(s) from {agml_name} "
+                  f"(--max_per_dataset={args.max_per_dataset}).")
+        else:
+            indices = range(len(ds))
+
+        for idx in indices:
             key = f"{agml_name}__{idx}"
             row_keys_by_dataset[agml_name].append(key)
             img_path = images_root / f"{key}.jpg"
@@ -157,5 +196,9 @@ if __name__ == "__main__":
     parser.add_argument("--eval_frac", type=float, default=0.2,
                          help="Fraction of each held-out sub-dataset's own rows reserved for eval, "
                               "never used to write the skill-memory file.")
+    parser.add_argument("--max_per_dataset", type=int, default=400,
+                         help="Cap rows sampled per sub-dataset (stratified by class), so ~2,000 "
+                              "total across the 5 datasets — matching iNatAg-mini's scale. 0 = no "
+                              "cap, take every row (the old behavior, 13,899 total).")
     parser.add_argument("--seed", type=int, default=42)
     main(parser.parse_args())
