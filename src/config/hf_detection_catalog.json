@@ -1638,6 +1638,48 @@
     "preferred_config": "raw",
     "repo_id": "Project-AgML/sunflower_detection"
   },
+  "synthetic_cowpea_flower_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 141,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.007
+    },
+    "class_names": [
+      "flower"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {},
+        "splits": {}
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/synthetic_cowpea_flower_detection"
+  },
+  "synthetic_cowpea_pod_detection": {
+    "bbox_convention": {
+      "format": "xywh",
+      "n_probed": 160,
+      "scale": "normalized",
+      "xyxy_consistent_frac": 0.006
+    },
+    "class_names": [
+      "pods"
+    ],
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {},
+        "splits": {}
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
+    "repo_id": "Project-AgML/synthetic_cowpea_pod_detection"
+  },
   "tomato_disease_detection": {
     "bbox_convention": {
       "format": "xywh",

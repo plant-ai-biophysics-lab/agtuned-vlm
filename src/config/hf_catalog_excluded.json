@@ -1530,11 +1530,27 @@
     "repo_id": "Project-AgML/sunflower_detection"
   },
   "synthetic_cowpea_flower_detection": {
-    "error": "Dataset at 'hf://datasets/Project-AgML/synthetic_cowpea_flower_detection@791609c4cb36068ea5293eec1544dc75adc3b706' doesn't contain data files matching the patterns for config 'synthetic', check `data_files` and `data_fir` parameters in the `configs` YAML field in README.md. ",
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {},
+        "splits": {}
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
     "repo_id": "Project-AgML/synthetic_cowpea_flower_detection"
   },
   "synthetic_cowpea_pod_detection": {
-    "error": "Dataset at 'hf://datasets/Project-AgML/synthetic_cowpea_pod_detection@a761b228792644f49a822a10a0c7ddbfc8ea6144' doesn't contain data files matching the patterns for config 'synthetic', check `data_files` and `data_fir` parameters in the `configs` YAML field in README.md. ",
+    "configs": {
+      "default": {
+        "class_names": null,
+        "features": {},
+        "splits": {}
+      }
+    },
+    "dataset_type": "detection",
+    "preferred_config": "default",
     "repo_id": "Project-AgML/synthetic_cowpea_pod_detection"
   },
   "tomato_disease_detection": {
