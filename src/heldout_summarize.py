@@ -96,6 +96,76 @@ def build_chunks(rows: list[dict], max_words_per_chunk: int,
     return chunked
 
 
+def compact_bucket_blocks(
+    cat: str, tt: str, summaries: list[dict], max_words_per_group: int,
+    llm, tokenizer, map_template: str, chat_template: str | None, args: argparse.Namespace,
+) -> list[dict]:
+    """Recursively re-condense one (category, trace_type) bucket's own
+    chunk summaries (via the SAME map_template — structurally identical
+    task whether the N items being condensed are raw explanations [map
+    phase] or already-summarized chunks [here]) until their total word
+    count fits comfortably inside a single reduce call's context budget.
+
+    Detection analog (heldout_detection_summarize.py's own
+    compact_error_type_blocks) was built after a real run produced 110
+    map chunks (box-level granularity) that blew --max_model_len when
+    concatenated into one reduce prompt. Classification's own real runs
+    hadn't needed this (disease/pest: ~11 chunks total) — but a real
+    --domain quality run produced 81 chunks for its single flat "quality"
+    bucket (no sub-category split to spread chunks across), totaling
+    ~18.7K tokens of chunk-summary text alone against a 24576-token
+    window — leaving so little room that --reduce_max_tokens couldn't
+    help no matter how high it was set; the model's output was being cut
+    off by the context window itself, not a max_tokens cap."""
+    summaries = sorted(summaries, key=lambda x: x["chunk_index"])
+    level = 0
+    while True:
+        total_words = sum(len(s["summary"].split()) for s in summaries)
+        if len(summaries) <= 1 or total_words <= max_words_per_group:
+            return summaries
+        level += 1
+        groups: list[list[dict]] = []
+        current: list[dict] = []
+        current_words = 0
+        for s in summaries:
+            w = len(s["summary"].split())
+            if current and current_words + w > max_words_per_group:
+                groups.append(current)
+                current, current_words = [], 0
+            current.append(s)
+            current_words += w
+        if current:
+            groups.append(current)
+        if len(groups) >= len(summaries):
+            # Grouping didn't reduce the count (every item alone already
+            # exceeds the budget) — stop here rather than looping forever.
+            return summaries
+        print(f"    [reduce-compact] {cat}/{tt} level {level}: {len(summaries)} summaries "
+              f"({total_words} words) -> {len(groups)} group(s)")
+        new_summaries = []
+        gen_params = SamplingParams(
+            temperature=0.0, max_tokens=args.map_max_tokens, seed=args.seed,
+            skip_special_tokens=not args.enable_thinking,
+        )
+        for gi, group in enumerate(groups):
+            explanations_block = "\n".join(f"{j+1}. {s['summary']}" for j, s in enumerate(group))
+            text = map_template.format(
+                category=cat, trace_type_label=_TRACE_TYPE_LABEL[tt], n=len(group),
+                explanations_block=explanations_block,
+            )
+            hist = [{"role": "user", "content": text}]
+            prompt = render_chat_template(tokenizer, hist, enable_thinking=args.enable_thinking,
+                                           chat_template=chat_template)
+            out = llm.generate([prompt], sampling_params=gen_params)[0]
+            raw = out.outputs[0].text
+            _, cleaned = extract_thinking(raw)
+            new_summaries.append({
+                "category": cat, "trace_type": tt, "chunk_index": gi,
+                "n_rows": sum(s["n_rows"] for s in group), "summary": cleaned.strip(),
+            })
+        summaries = new_summaries
+
+
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     domain = getattr(args, "domain", "disease_pest")
     prefix = f"heldout_{domain}_" if domain != "disease_pest" else "heldout_"
@@ -177,15 +247,9 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     # unnecessarily before realizing reduce is all that's left — but
     # here they share one load since both run in the same invocation.
     print("  [reduce] merging all chunk summaries into the final .md ...")
-    by_section: dict[str, list[dict]] = defaultdict(list)
+    by_bucket: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for v in chunk_summaries.values():
-        by_section[v["trace_type"]].append(v)
-    blocks = []
-    for tt in ("worked", "didnt_work"):
-        for v in sorted(by_section.get(tt, []), key=lambda x: x["category"]):
-            blocks.append(f"### {v['category']} — {_TRACE_TYPE_LABEL[tt]} (n={v['n_rows']})\n{v['summary']}")
-    chunk_summaries_block = "\n\n".join(blocks)
-    reduce_text = reduce_template.format(chunk_summaries_block=chunk_summaries_block)
+        by_bucket[(v["category"], v["trace_type"])].append(v)
 
     if llm is None:
         llm, tokenizer = load_llm(
@@ -198,6 +262,25 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             kv_cache_dtype=args.kv_cache_dtype,
             caller_tag="heldout_summarize_reduce",
         )
+
+    compacted: dict[tuple[str, str], list[dict]] = {}
+    for (cat, tt), summaries in by_bucket.items():
+        compacted[(cat, tt)] = compact_bucket_blocks(
+            cat, tt, summaries, args.max_words_per_reduce_group, llm, tokenizer, map_template,
+            chat_template, args,
+        )
+
+    by_section: dict[str, list[dict]] = defaultdict(list)
+    for (cat, tt), summaries in compacted.items():
+        for v in summaries:
+            by_section[tt].append(v)
+    blocks = []
+    for tt in ("worked", "didnt_work"):
+        for v in sorted(by_section.get(tt, []), key=lambda x: x["category"]):
+            blocks.append(f"### {v['category']} — {_TRACE_TYPE_LABEL[tt]} (n={v['n_rows']})\n{v['summary']}")
+    chunk_summaries_block = "\n\n".join(blocks)
+    reduce_text = reduce_template.format(chunk_summaries_block=chunk_summaries_block)
+
     hist = [{"role": "user", "content": reduce_text}]
     prompt = render_chat_template(tokenizer, hist, enable_thinking=args.enable_thinking, chat_template=chat_template)
     reduce_params = SamplingParams(
@@ -244,6 +327,13 @@ if __name__ == "__main__":
     parser.add_argument("--max_words_per_chunk", type=int, default=8000,
                          help="A (category, trace_type) bucket whose raw explanation text exceeds "
                               "this is split into multiple map chunks instead of one call.")
+    parser.add_argument("--max_words_per_reduce_group", type=int, default=1500,
+                         help="A (category, trace_type) bucket whose MAP-phase chunk summaries "
+                              "together exceed this many words are recursively re-condensed "
+                              "(compact_bucket_blocks) before the final reduce call — prevents a "
+                              "bucket with many map chunks (e.g. --domain quality's single flat "
+                              "bucket) from blowing --max_model_len when concatenated into one "
+                              "reduce prompt, a real failure found on a 81-chunk quality run.")
     parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja")
     parser.add_argument("--map_max_tokens", type=int, default=2048,
