@@ -511,9 +511,23 @@ heldout_species_reduce_summarize_prompt: |
 
   # Plant & Weed Species Identification — Lessons Learned
 
+  ## General Identification Checklist
+  A SPECIES-AGNOSTIC list of the visual feature CATEGORIES worth
+  examining on ANY plant or weed, even one not covered anywhere else in
+  this document — e.g. "leaf margin shape (entire/toothed/lobed) and
+  venation pattern", "flower symmetry (radial vs. bilateral) and petal
+  count", "fruit/seed-pod shape and arrangement", "growth habit (erect/
+  climbing/rosette/tussock)", "bark/stem surface texture". Derive this
+  FROM the recurring feature types actually mentioned across the
+  per-species summaries above — don't invent a generic botany checklist
+  from nothing. This section is what lets the reader apply SOMETHING
+  useful to a species it has never seen named anywhere in this document;
+  the sections below are useful only for species that happen to match.
+
   ## What Worked
   (organized by category — plant, weed — only include categories with
-  real content above)
+  real content above; per-species entries naming a specific species and
+  its distinguishing features, same as before)
 
   ## What Didn't Work
   (same categories — concrete, actionable guidance, not vague warnings)
@@ -521,7 +535,10 @@ heldout_species_reduce_summarize_prompt: |
   Keep it concrete and skimmable — short bullets, not paragraphs. Do not
   invent facts not supported by the summaries above. Do not add a
   "Common Species to Know" style reference list whose bullets are just
-  bare species names restated as standalone entries.
+  bare species names restated as standalone entries — the per-species
+  bullets under What Worked/Didn't Work are fine (they carry real
+  distinguishing content, not bare names), that warning is specifically
+  about a bullet with no content beyond the name itself.
 
 # Params: {current_skill_md} {task_scores_block} {miss_examples_block} {worked_examples_block} {prior_round_feedback_block}
 heldout_species_skill_edit_prompt: |
@@ -548,25 +565,40 @@ heldout_species_skill_edit_prompt: |
 
   Revise this document to address the weaker categories above and the
   specific mistakes shown. Rules that must still hold in your revision:
-  1. Every bullet must point toward a SPECIFIC species or a narrow,
-     genuinely distinguishing feature, never a bare generic word like
-     "Plant"/"Weed" standing alone as a bullet's entire content.
+  1. In the `## What Worked`/`## What Didn't Work` sections, every
+     bullet must point toward a SPECIFIC species or a narrow, genuinely
+     distinguishing feature, never a bare generic word like "Plant"/
+     "Weed" standing alone as a bullet's entire content.
   2. Write GENERALIZABLE, INSTRUCTIONAL guidance — a visual pattern that
      would help identify a species across DIFFERENT images of it, not a
      fact tied to one specific example image. Do NOT lift text from a
      single miss example verbatim — extract the underlying visual
      principle instead.
-  3. Do NOT add a "Common Species to Know" style reference list.
+  3. Do NOT add a "Common Species to Know" style reference list separate
+     from the sections below (the per-species bullets already in `##
+     What Worked`/`## What Didn't Work` are fine — they carry real
+     distinguishing content, not bare names).
   4. Keep the same overall structure (`# Plant & Weed Species
-     Identification — Lessons Learned`, `## What Worked` / `## What
-     Didn't Work`, organized by category) unless a category genuinely
-     has nothing useful to say.
+     Identification — Lessons Learned`, `## General Identification
+     Checklist`, `## What Worked` / `## What Didn't Work`, organized by
+     category) unless a section genuinely has nothing useful to say.
   5. Keep it concrete and skimmable — short bullets, not paragraphs.
   6. PROTECT what's already working — before editing a bullet that
      plausibly helped produce one of the correct cases shown above,
      check whether your change would still support that case; prefer
      ADDING a new, narrowly-scoped distinction over REWRITING existing
      wording.
+  7. `## General Identification Checklist` is SPECIES-AGNOSTIC — it must
+     stay useful for a species not named anywhere else in this document.
+     If a new miss case reveals a visual feature category (e.g.
+     venation, bark texture, fruit arrangement) not yet on the
+     checklist, add it there — but check first whether an existing
+     checklist item already covers the same feature category before
+     adding a near-duplicate; strengthen/reword the existing one
+     instead. This section should stay short (a handful of feature
+     categories, not a growing list of species-specific facts) — a
+     species-specific detail belongs in What Worked/Didn't Work, not
+     here.
 
   Respond with the full revised document (Markdown), starting with the
   `# Plant & Weed Species Identification — Lessons Learned` heading, no
