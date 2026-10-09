@@ -46,203 +46,92 @@ Args to note: `--n_crop_species`, `--n_weed_species`, `--images_per_species` (do
 ## Step 1 — zero-shot prediction
 
 ```bash
-# disease/pest (default domain):
 uv run python main.py heldout-zeroshot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic
-
-# quality:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain quality \
-    --manifest dataset/heldout_quality_selected_images.json \
-    --images_root dataset/images_heldout_quality \
-    --output_dir outputs_final/heldout_zeroshot_quality/
-
-# species:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain species \
-    --manifest dataset/heldout_species_selected_images.json \
-    --images_root dataset/images_heldout_species \
-    --output_dir outputs_final/heldout_zeroshot_species/
 ```
 
 Args to note: `--domain` (`disease_pest` default, `quality`, `species`), `--split` (`lessons` default, `eval` for Step 4), `--skill_memory_path`, `--manifest`/`--images_root` (must match `--domain`), `--rerun`.
 
+- quality: add `--domain quality --manifest dataset/heldout_quality_selected_images.json --images_root dataset/images_heldout_quality --output_dir outputs_final/heldout_zeroshot_quality/`
+- species: add `--domain species --manifest dataset/heldout_species_selected_images.json --images_root dataset/images_heldout_species --output_dir outputs_final/heldout_zeroshot_species/`
+
 ## Step 2 — reveal ground truth, every row
 
 ```bash
-# disease/pest:
 uv run python main.py heldout-explain-traces \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --ckpt outputs_final/heldout_zeroshot/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
-
-# quality:
-uv run python main.py heldout-explain-traces \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain quality \
-    --images_root dataset/images_heldout_quality \
-    --ckpt outputs_final/heldout_zeroshot_quality/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --output_dir outputs_final/heldout_explain_traces_quality/
-
-# species:
-uv run python main.py heldout-explain-traces \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain species \
-    --images_root dataset/images_heldout_species \
-    --ckpt outputs_final/heldout_zeroshot_species/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --output_dir outputs_final/heldout_explain_traces_species/
 ```
 
 Args to note: `--domain`, `--ckpt` (required), `--images_root` (must match `--domain`), `--gen_max_tokens` (bump if thinking traces truncate).
 
+- quality: add `--domain quality --images_root dataset/images_heldout_quality --ckpt outputs_final/heldout_zeroshot_quality/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv --output_dir outputs_final/heldout_explain_traces_quality/`
+- species: add `--domain species --images_root dataset/images_heldout_species --ckpt outputs_final/heldout_zeroshot_species/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv --output_dir outputs_final/heldout_explain_traces_species/`
+
 ## Step 3 — summarize into the skill `.md`
 
 ```bash
-# disease/pest:
 uv run python main.py heldout-summarize \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --ckpt outputs_final/heldout_explain_traces/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv
-
-# quality:
-uv run python main.py heldout-summarize \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain quality \
-    --ckpt outputs_final/heldout_explain_traces_quality/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --output_dir outputs_final/heldout_summarize_quality/ \
-    --output_md outputs_final/heldout_summarize_quality/skill_memory_quality.md
-
-# species:
-uv run python main.py heldout-summarize \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain species \
-    --ckpt outputs_final/heldout_explain_traces_species/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
-    --output_dir outputs_final/heldout_summarize_species/ \
-    --output_md outputs_final/heldout_summarize_species/skill_memory_species.md
 ```
 
 Args to note: `--domain`, `--max_words_per_chunk`, `--output_md`, `--rerun`.
 
+- quality: add `--domain quality --ckpt outputs_final/heldout_explain_traces_quality/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv --output_dir outputs_final/heldout_summarize_quality/ --output_md outputs_final/heldout_summarize_quality/skill_memory_quality.md`
+- species: add `--domain species --ckpt outputs_final/heldout_explain_traces_species/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv --output_dir outputs_final/heldout_summarize_species/ --output_md outputs_final/heldout_summarize_species/skill_memory_species.md`
+
 ## Step 3b — self-optimization loop
 
 ```bash
-# disease/pest:
 uv run python main.py heldout-skill-optimize \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --init_skill_path src/config/skill_memory_disease-pest.md \
     --max_rounds 10 \
     --output_dir outputs_final/heldout_skill_optimize/
-
-# disease/pest with prior-round feedback:
-uv run python main.py heldout-skill-optimize \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --init_skill_path src/config/skill_memory_disease-pest.md \
-    --max_rounds 10 \
-    --feedback_prior_round \
-    --output_dir outputs_final/heldout_skill_optimize_feedback/
-
-# quality:
-uv run python main.py heldout-skill-optimize \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain quality \
-    --manifest dataset/heldout_quality_selected_images.json \
-    --images_root dataset/images_heldout_quality \
-    --init_skill_path outputs_final/heldout_summarize_quality/skill_memory_quality.md \
-    --max_rounds 10 \
-    --output_dir outputs_final/heldout_skill_optimize_quality/
-
-# species:
-uv run python main.py heldout-skill-optimize \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain species \
-    --manifest dataset/heldout_species_selected_images.json \
-    --images_root dataset/images_heldout_species \
-    --init_skill_path outputs_final/heldout_summarize_species/skill_memory_species.md \
-    --max_rounds 10 \
-    --output_dir outputs_final/heldout_skill_optimize_species/
 ```
 
 Args to note: `--domain` (also forwarded into every scoring call this loop makes — `--manifest`/`--images_root` must match it), `--init_skill_path` (required), `--max_rounds` (required), `--n_examples_per_bucket`, `--feedback_prior_round`, `--round_log`, `--output_dir`. Winning round is written to `<output_dir>/skill_memory_best.md`.
 
+- prior-round feedback: add `--feedback_prior_round --output_dir outputs_final/heldout_skill_optimize_feedback/`
+- quality: add `--domain quality --manifest dataset/heldout_quality_selected_images.json --images_root dataset/images_heldout_quality --init_skill_path outputs_final/heldout_summarize_quality/skill_memory_quality.md --output_dir outputs_final/heldout_skill_optimize_quality/`
+- species: add `--domain species --manifest dataset/heldout_species_selected_images.json --images_root dataset/images_heldout_species --init_skill_path outputs_final/heldout_summarize_species/skill_memory_species.md --output_dir outputs_final/heldout_skill_optimize_species/`
+
 ## Step 4 — ablation
 
 ```bash
-# disease/pest baseline, no skill file:
+# baseline, no skill file:
 uv run python main.py heldout-zeroshot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --split eval \
     --output_dir outputs_final/heldout_zeroshot_eval_baseline/
 
-# disease/pest with skill file:
+# with skill file:
 uv run python main.py heldout-zeroshot \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --split eval \
     --skill_memory_path src/config/skill_memory_disease-pest.md \
     --output_dir outputs_final/heldout_zeroshot_eval_not_optimized_skill/
-
-# quality baseline, no skill file:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain quality \
-    --manifest dataset/heldout_quality_selected_images.json \
-    --images_root dataset/images_heldout_quality \
-    --split eval \
-    --output_dir outputs_final/heldout_zeroshot_quality_eval_baseline/
-
-# quality with skill file:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain quality \
-    --manifest dataset/heldout_quality_selected_images.json \
-    --images_root dataset/images_heldout_quality \
-    --split eval \
-    --skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md \
-    --output_dir outputs_final/heldout_zeroshot_quality_eval_with_skill/
-
-# species baseline, no skill file:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain species \
-    --manifest dataset/heldout_species_selected_images.json \
-    --images_root dataset/images_heldout_species \
-    --split eval \
-    --output_dir outputs_final/heldout_zeroshot_species_eval_baseline/
-
-# species with skill file:
-uv run python main.py heldout-zeroshot \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --domain species \
-    --manifest dataset/heldout_species_selected_images.json \
-    --images_root dataset/images_heldout_species \
-    --split eval \
-    --skill_memory_path outputs_final/heldout_skill_optimize_species/skill_memory_best.md \
-    --output_dir outputs_final/heldout_zeroshot_species_eval_with_skill/
 ```
 
 Args to note: `--domain`, `--split eval`, distinct `--output_dir` per run.
 
+- quality: add `--domain quality --manifest dataset/heldout_quality_selected_images.json --images_root dataset/images_heldout_quality` to both, `--skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md` on the skill run, `--output_dir outputs_final/heldout_zeroshot_quality_eval_{baseline,with_skill}/`
+- species: add `--domain species --manifest dataset/heldout_species_selected_images.json --images_root dataset/images_heldout_species` to both, `--skill_memory_path outputs_final/heldout_skill_optimize_species/skill_memory_best.md` on the skill run, `--output_dir outputs_final/heldout_zeroshot_species_eval_{baseline,with_skill}/`
+
 ## Step 5 — inject into vision-baseline
 
 ```bash
-# disease/pest skill only:
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --skill_memory_path src/config/skill_memory_disease-pest.md \
     --output_dir outputs_final/vision_baseline_thinking_with_skill/
-
-# quality skill only:
-uv run python main.py vision-baseline \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --quality_skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md \
-    --output_dir outputs_final/vision_baseline_thinking_with_quality_skill/
-
-# both at once (each gated to its own task_type, never mixed):
-uv run python main.py vision-baseline \
-    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --skill_memory_path src/config/skill_memory_disease-pest.md \
-    --quality_skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md \
-    --output_dir outputs_final/vision_baseline_thinking_with_all_skills/
 ```
+
+Args to note: `--skill_memory_path` (gated per-row to `task_type in {disease, pest_damage}`), `--quality_skill_memory_path` (gated per-row to `task_type == quality_identification`, independent flag/file — both can be set in the same run, each only ever applies to its own task_type), `--task_types` (restrict the run to specific task_type(s) instead of every active one — e.g. `--task_types disease pest_damage` to test only the disease/pest skill), `--output_dir` (must not collide with `outputs_final/vision_baseline_thinking/`).
+
+- quality skill only: swap `--skill_memory_path ...` for `--quality_skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md`
+- both at once: pass both flags together
 
 Sharded across GPUs:
 
@@ -250,21 +139,18 @@ Sharded across GPUs:
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --skill_memory_path src/config/skill_memory_disease-pest.md \
-    --quality_skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md \
-    --output_dir outputs_final/vision_baseline_thinking_with_all_skills/ \
+    --output_dir outputs_final/vision_baseline_thinking_with_skill/ \
     --num_shards 4 --shard_index $SLURM_ARRAY_TASK_ID
 ```
 
-Merge shards:
+Merge shards (no `--skill_memory_path`/`--num_shards`/`--shard_index` needed — just merges whatever shard files are already in `--output_dir`):
 
 ```bash
 uv run python main.py vision-baseline \
     --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
-    --output_dir outputs_final/vision_baseline_thinking_with_all_skills/ \
+    --output_dir outputs_final/vision_baseline_thinking_with_skill/ \
     --merge_shards
 ```
-
-Args to note: `--skill_memory_path` (gated per-row to `task_type in {disease, pest_damage}`), `--quality_skill_memory_path` (gated per-row to `task_type == quality_identification`, independent flag/file), `--output_dir` (must not collide with `outputs_final/vision_baseline_thinking/`), `--num_shards`/`--shard_index`, `--merge_shards`.
 
 ## Step 6 (not built)
 

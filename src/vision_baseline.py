@@ -291,6 +291,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             names = sample_class_images(list(path_by_name.keys()), args.n_samples)
             crop_val, clean_label = parse_class_label(raw_label, ds.crop)
             task_type = ds.effective_task_type(raw_label)
+            if args.task_types and task_type not in args.task_types:
+                continue
             aliases = ds.effective_search_terms(raw_label)[1:]  # [1:] drops raw_label itself
             gt_hint = judge_gt_hint(clean_label, aliases)
             all_groups.append((ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name))
@@ -689,6 +691,14 @@ if __name__ == "__main__":
                               "from --skill_memory_path above, gated per-row to "
                               "task_type == \"quality_identification\" only. Both flags can be set in "
                               "the same run; each only ever applies to its own task_type's rows.")
+    parser.add_argument("--task_types", nargs="+", default=None,
+                         choices=["disease", "pest_damage", "quality_identification", "species_identification"],
+                         help="Restrict this run to only these task_type(s) — e.g. "
+                              "--task_types disease pest_damage to test the disease/pest skill file "
+                              "alone without also running quality/species rows. Filtered per-CLASS via "
+                              "DatasetConfig.effective_task_type (class_overrides can route individual "
+                              "classes to a different task_type than their dataset's own default), not "
+                              "per-dataset. Default: no filter, every active task_type runs.")
     parser.add_argument("--chat_template_path", default=None,
                          help="Override the tokenizer's own bundled chat template with a Jinja file at "
                               "this path — needed for --enable_thinking to actually do anything on some "
