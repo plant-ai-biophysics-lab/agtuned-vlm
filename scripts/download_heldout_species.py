@@ -186,7 +186,14 @@ def main(args: argparse.Namespace) -> None:
         # Row already fully cached for this species? Skip the zip
         # download/extraction entirely — resumable the same way
         # download_heldout_digitalgreen.py's image-cache check works.
-        already_cached = [k for k in rows if k.startswith(f"{species}__")]
+        # Checked against the ACTUAL image file on disk, not just manifest
+        # row presence — a manifest pulled from git (committed JSON, see
+        # this module's own docstring) has every row already, on a
+        # machine that has never downloaded a single real image yet, so
+        # row-presence alone would wrongly skip every species's download.
+        already_cached = [
+            k for k in rows if k.startswith(f"{species}__") and (images_root / f"{k}.jpg").exists()
+        ]
         if len(already_cached) >= args.images_per_species:
             row_keys_by_species[species] = already_cached[: args.images_per_species]
             continue
@@ -198,13 +205,31 @@ def main(args: argparse.Namespace) -> None:
                 m for m in zf.namelist()
                 if m.startswith(f"{species}/{category}/") and Path(m).suffix in _IMAGE_EXTS
             ]
-            picked = rng.sample(members, min(args.images_per_species, len(members)))
-            for member in picked:
-                image_id = Path(member).stem
+            # Already-recorded rows for this species (e.g. a manifest
+            # pulled from git on a machine with no images yet) pin down
+            # EXACTLY which image_ids to re-materialize — never a fresh
+            # rng.sample() in that case, which could silently select a
+            # different subset than what's actually committed. Only draws
+            # a new random sample when this species has no (or fewer than
+            # --images_per_species) rows recorded yet — i.e. a genuinely
+            # new selection, same as the first machine that ever ran this.
+            recorded_ids = {k.split("__", 1)[1] for k in rows if k.startswith(f"{species}__")}
+            member_by_id = {Path(m).stem: m for m in members}
+            if len(recorded_ids) >= args.images_per_species:
+                target_ids = sorted(recorded_ids)[: args.images_per_species]
+            else:
+                picked = rng.sample(members, min(args.images_per_species, len(members)))
+                target_ids = [Path(m).stem for m in picked]
+            for image_id in target_ids:
                 key = f"{species}__{image_id}"
                 row_keys_by_species[species].append(key)
                 img_path = images_root / f"{key}.jpg"
-                if key in rows and img_path.exists():
+                if img_path.exists():
+                    continue
+                member = member_by_id.get(image_id)
+                if member is None:
+                    print(f"  [warn] {key}: recorded in the manifest but not found in "
+                          f"{species}.zip — skipping (upstream zip contents may have changed).")
                     continue
                 with zf.open(member) as f:
                     PILImage.open(f).convert("RGB").save(img_path, format="JPEG")
