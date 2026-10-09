@@ -63,6 +63,18 @@ verifier — for both classification (`verifier_cot.py`) and object detection
   time) to the same two-pass teacher-forced/prefill extraction the verifier
   uses.
 
+## Model support
+
+`verifier-cot` (`src/verifier_cot.py`) defaults to `RedHatAI/gemma-4-31B-it-FP8-dynamic` (the unquantized `google/gemma-4-26B-A4B-it`, ~52GB of bf16 weights, OOM'd on real hardware — this FP8-quantized checkpoint is what every other stage already uses) and works with Qwen too — `--chat_template_path` already defaults to `None` here (unlike Stage 3's scripts, this one never hardcoded a Gemma-only template), so no override is needed either way. Thinking-trace extraction is model-agnostic (`extract_thinking`, same as Stage 3) — tries Gemma-4's channel format first, falls back to Qwen's `<think>` tags.
+
+```bash
+# Gemma-4 (default):
+uv run python main.py verifier-cot --model RedHatAI/gemma-4-31B-it-FP8-dynamic --verifier_type ppt
+
+# Qwen:
+uv run python main.py verifier-cot --model Qwen/Qwen3.8-27B-FP8 --verifier_type ppt
+```
+
 ## Step 1 — run verifier-cot and verifier-lmv
 
 `--verifier_type ppt` is required explicitly — `verifier-cot`'s default is
@@ -71,8 +83,8 @@ verifier, see [docs/stage3_verifier_grade.md](stage3_verifier_grade.md)),
 not this stage's K-candidate + PPT-tournament mechanism.
 
 ```bash
-uv run python main.py verifier-cot --model google/gemma-4-26B-A4B-it --verifier_type ppt
-uv run python src/verifier_lmv.py --model google/gemma-4-26B-A4B-it \
+uv run python main.py verifier-cot --model RedHatAI/gemma-4-31B-it-FP8-dynamic --verifier_type ppt
+uv run python src/verifier_lmv.py --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
     --output_dir outputs_final/verifier_lmv/
 ```
 
@@ -141,7 +153,7 @@ rather than touching `outputs_final/cot_compare/`:
 ```bash
 uv run python main.py verifier-summary \
     --verifier_dir outputs_final/verifier_cot/ \
-    --model google/gemma-4-26B-A4B-it
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 ```
 
 Produces `verifier_summary.png` / `verifier_summary_by_task.png` — bar chart

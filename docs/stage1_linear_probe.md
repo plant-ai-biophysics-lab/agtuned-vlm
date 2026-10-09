@@ -4,6 +4,10 @@
 
 Tests whether a backbone's frozen vision features are linearly separable across classes — trains a single linear layer (no hidden units) on frozen embeddings, per the paper's "Linear probing" section.
 
+## Model support
+
+Already covers both current model families — `src/linear_probe/probe_config.yaml`'s `models` list is `[Qwen/Qwen3.5-9B, Qwen/Qwen3.5-27B, google/gemma-4-E4B-it, google/gemma-4-26B-A4B-it]`. These are deliberately the plain, full-precision HF checkpoints, **not** the FP8 vLLM-serving checkpoint (`RedHatAI/gemma-4-31B-it-FP8-dynamic`) used for generation everywhere else in this repo — `probe.py` loads via plain `transformers.AutoModel`/`AutoModelForImageTextToText`, not vLLM, and a vLLM-specific FP8-dynamic export isn't the right artifact for that loading path. No code changes needed here for Qwen — it already works via this config.
+
 Produces `outputs_final/linear_probe/linear_probe_results.json` plus summary charts (`summary_by_task.png`, `summary_overall.png`, t-SNE, confusion matrices).
 
 ## Step 0 (optional) — pre-check backbones

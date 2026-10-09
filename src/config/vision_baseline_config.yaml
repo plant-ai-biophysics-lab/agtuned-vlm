@@ -9,8 +9,11 @@
 
 # ── Model ────────────────────────────────────────────────────────────────────
 # Set here for convenience, or pass --model on the command line per run —
-# whichever you pass on the CLI wins.
-model: google/gemma-4-26B-A4B-it
+# whichever you pass on the CLI wins. RedHatAI/gemma-4-31B-it-FP8-dynamic
+# (FP8-quantized) — the unquantized google/gemma-4-26B-A4B-it (~52GB of
+# bf16 weights alone) OOM'd on real hardware; this is what every other
+# stage in this repo already standardizes on.
+model: RedHatAI/gemma-4-31B-it-FP8-dynamic
 
 # ── Data sources ─────────────────────────────────────────────────────────────
 config: src/config/datasets.yaml

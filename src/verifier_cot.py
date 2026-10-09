@@ -93,8 +93,8 @@ from src.common.dataset_config import (
 )
 from src.common.io import append_jsonl, load_prompts
 from src.common.metrics import (
-    contains_match, extract_answer_tag, extract_channel_thought, resolve_class, rouge_scores_per_sample,
-    sample_class_images,
+    contains_match, extract_answer_tag, extract_channel_thought, extract_thinking, resolve_class,
+    rouge_scores_per_sample, sample_class_images,
 )
 from src.common.ppt_scoring import _truncate_keep_answer, score_prefill_params
 from src.common.ppt_orchestration import (
@@ -694,7 +694,11 @@ def run_group_top3_verifier_rubric(
     evidence_completion_tokens: dict[int, int] = {}
     for i, sent_text, out in zip(active, evidence_texts, evidence_outs):
         raw = out.outputs[0].text
-        _, evidence_text = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        # Unconditional (not gated on enable_thinking) and model-agnostic
+        # (extract_thinking) — strips either Gemma-4's channel format or
+        # Qwen's <think> tags, cheap no-op otherwise. See that function's
+        # own docstring (src/common/metrics.py).
+        _, evidence_text = extract_thinking(raw)
         evidence_text = evidence_text.strip()
         evidence_by_image[i] = evidence_text
         evidence_prompt_tokens[i] = len(getattr(out, "prompt_token_ids", None) or [])
@@ -739,7 +743,9 @@ def run_group_top3_verifier_rubric(
     scoring_completion_tokens: dict[int, int] = {i: 0 for i in active}
     for (i, cand_idx), scoring_text_sent, out in zip(flat, scoring_texts, scoring_outs):
         raw = out.outputs[0].text
-        _, scoring_text = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        # Unconditional + model-agnostic — see the evidence_text call site
+        # above for why.
+        _, scoring_text = extract_thinking(raw)
         scoring_text = scoring_text.strip()
         s_prompt_tokens = len(getattr(out, "prompt_token_ids", None) or [])
         s_completion_tokens = len(getattr(out.outputs[0], "token_ids", None) or [])
@@ -1884,8 +1890,11 @@ if __name__ == "__main__":
     parser.add_argument("--vision_token_budget", type=int, default=DEFAULT_VISION_TOKEN_BUDGET)
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
-    parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
-                         help="Fixed judge model used for every baseline/model being evaluated.")
+    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic",
+                         help="Fixed judge model used for every baseline/model being evaluated. The "
+                              "unquantized google/gemma-4-26B-A4B-it (26B params in bf16, ~52GB of "
+                              "weights alone) OOM'd on real hardware — this FP8-quantized checkpoint "
+                              "is what every other judge call in this repo already uses successfully.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200)

@@ -22,6 +22,18 @@ Judging runs automatically as part of this same command (the pipeline-wide `hybr
 
 Add `--no-enable_thinking` — same command otherwise, a different `--output_dir` (e.g. `outputs_final/vision_baseline/`) so the two checkpoints don't collide.
 
+## Rubric CoT (structured fill-in-the-blank, no verifier/tournament)
+
+```bash
+uv run python main.py vision-baseline \
+    --model RedHatAI/gemma-4-31B-it-FP8-dynamic \
+    --rubric \
+    --gen_max_tokens 1024 \
+    --output_dir outputs_final/vision_baseline_rubric_thinking/
+```
+
+`--rubric` wraps the question through `verifier_prompts.yaml`'s structured fill-in-the-blank criteria chain (`task_type_to_rubric`) — the same model-facing template `verifier-cot` uses for its own K-candidate generation ([Stage 4](stage4_verifier.md)), but as a single plain answer with no candidate pool and no tournament ranking at all. This is the "Rubric-based CoT" condition — isolates whether the structured-criteria prompt alone helps, independent of PPT-tournament selection. Combine freely with `--enable_thinking`/`--no-enable_thinking` (independent knobs — this changes what's asked, thinking changes whether the model reasons before answering); raise `--gen_max_tokens` (e.g. 1024+) since the rubric prompt asks for several fields before the final answer, on top of any thinking trace.
+
 ## What's next
 
 Stage 0 (judge tests), Stage 2 (same idea for detection), Stage 4 (`verifier-cot --from_ckpt` grades these trajectories directly), Stage 6 (ReAct agent answers the same question for comparison).
@@ -53,7 +65,7 @@ Don't leave shard files sitting alongside the merged canonical file when pointin
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--model` | *(config: `google/gemma-4-26B-A4B-it`)* | Model to run |
+| `--model` | *(config: `RedHatAI/gemma-4-31B-it-FP8-dynamic`)* | Model to run — Qwen also works (e.g. `Qwen/Qwen3.8-27B-FP8`), pass `--chat_template_path ""` alongside it |
 | `--enable_thinking` / `--no-enable_thinking` | **on** (config) | Extended thinking — `--no-enable_thinking` to opt out |
 | `--gen_max_tokens` | `4096` (config) | Generation budget (`256` if thinking is off) |
 | `--chat_template_path` | vendored Gemma-4 template (config) | Custom chat template — pass `""` to unset for a non-Gemma model |
