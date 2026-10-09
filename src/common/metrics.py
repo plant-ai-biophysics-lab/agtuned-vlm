@@ -84,6 +84,17 @@ def extract_channel_thought(text: str) -> tuple[str, str]:
 # extract_thinking() below, which needs the INNER text, not just removal.
 _THINK_CAPTURE_RE = re.compile(r"<(?:think|thought)>(.*?)</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
+# Qwen's own bundled chat template pre-seeds the opening <think> tag into
+# the PROMPT itself (not the generated text) whenever its native thinking
+# support is used — so a Qwen completion only ever contains the CLOSING
+# tag. _THINK_CAPTURE_RE/THINK_RE above require a matched pair and are a
+# silent no-op for that shape (confirmed real bug: a Qwen3.8-27B-FP8
+# vision-baseline run had judge_accuracy collapse to 0.0379 because the
+# entire unstripped chain-of-thought was landing in "prediction"). This
+# fallback treats everything up to the FIRST closing tag as the
+# (unseeded) thinking block when no opening tag is found.
+_THINK_CLOSE_ONLY_CAPTURE_RE = re.compile(r"^(.*?)</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
 
 def extract_thinking(text: str) -> tuple[str, str]:
     """Model-agnostic thinking-trace extraction — tries Gemma-4's own
@@ -107,8 +118,13 @@ def extract_thinking(text: str) -> tuple[str, str]:
     run_batch already uses for its two-step channel+think handling."""
     channel_thinking, after_channel = extract_channel_thought(text)
     m = _THINK_CAPTURE_RE.search(after_channel)
-    tag_thinking = m.group(1).strip() if m else ""
-    cleaned = THINK_RE.sub("", after_channel).strip()
+    if m:
+        tag_thinking = m.group(1).strip()
+        cleaned = THINK_RE.sub("", after_channel).strip()
+    else:
+        m2 = _THINK_CLOSE_ONLY_CAPTURE_RE.match(after_channel)
+        tag_thinking = m2.group(1).strip() if m2 else ""
+        cleaned = _THINK_CLOSE_ONLY_CAPTURE_RE.sub("", after_channel, count=1).strip() if m2 else after_channel.strip()
     return (channel_thinking or tag_thinking), cleaned
 
 # Single point of control for which prompts.yaml judge template new judge
@@ -243,10 +259,20 @@ def extract_answer_tag(text: str) -> tuple[str, bool]:
     desc_augmented_vision_v2.py) can reuse the exact same convention —
     call resolve_class on the extracted tag content instead of the raw
     free-text prediction, which is what actually determines
-    resolved_class/correct in each of those scripts."""
-    m = _ANSWER_TAG_RE.search(text)
-    if m:
-        return m.group(1).strip(), True
+    resolved_class/correct in each of those scripts.
+
+    Uses the LAST <answer> occurrence (preferring a non-empty one), not the
+    first — confirmed real bug (2026-10, Qwen3.8-27B-FP8 vision-baseline
+    run, judge_accuracy=0.0379): a long free-reasoning model routinely
+    discusses the prompt's own instructions mid-thought (e.g. "...wrapped
+    in <answer></answer> tags..."), producing an earlier, spurious, often-
+    empty match that .search() (first-match) would grab instead of the
+    real final answer near the end of the response."""
+    matches = list(_ANSWER_TAG_RE.finditer(text))
+    if matches:
+        non_empty = [m for m in matches if m.group(1).strip()]
+        chosen = non_empty[-1] if non_empty else matches[-1]
+        return chosen.group(1).strip(), True
     return text.strip(), False
 
 

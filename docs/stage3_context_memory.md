@@ -300,6 +300,7 @@ Repeat Steps 0-5 for object detection, after classification gains hold up. See [
 | `--images_root` | `dataset/images_heldout_quality` |
 | `--output` | `dataset/heldout_quality_selected_images.json` |
 | `--eval_frac` | `0.2` |
+| `--max_per_dataset` | `400` (→ ~2,000 total across the 5 datasets, stratified by class; `0` = no cap, every row) |
 | `--seed` | `42` |
 
 ### `download-heldout-species`

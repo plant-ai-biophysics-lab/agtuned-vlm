@@ -93,6 +93,18 @@ except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+# Qwen's own bundled chat template (used whenever --chat_template_path "" is
+# passed to run with Qwen's native thinking support) pre-seeds the opening
+# <think> tag into the PROMPT itself, not the generated text — so a Qwen
+# completion only ever contains the CLOSING tag. _THINK_RE above requires a
+# matched pair and is a silent no-op for that shape, which was a real,
+# confirmed bug: a Qwen3.8-27B-FP8 vision-baseline run had judge_accuracy
+# collapse to 0.0379 because the entire 10-18K char chain-of-thought was
+# landing in "prediction" unstripped (reasoning="" on 100% of rows, even the
+# 80.7% that had a real closing </think>). This fallback treats everything
+# up to the FIRST closing tag as the (unseeded) thinking block when no
+# opening tag is found.
+_THINK_CLOSE_ONLY_RE = re.compile(r"^.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
 # extract_channel_thought (Gemma-4's <|channel>thought...<channel|> format)
 # now lives in src/common/metrics.py — shared with apply_judge, which needs
@@ -142,7 +154,12 @@ def apply_rubric(question: str, task_type: str, structured_templates: dict, task
 # ── vLLM helpers ─────────────────────────────────────────────────────────────
 
 def _clean(text: str) -> str:
-    return _THINK_RE.sub("", text).strip()
+    stripped = _THINK_RE.sub("", text)
+    if stripped == text:
+        # No matched <think>...</think> pair — try the opening-tag-was-in-
+        # the-prompt case (see _THINK_CLOSE_ONLY_RE above) before giving up.
+        stripped = _THINK_CLOSE_ONLY_RE.sub("", text, count=1)
+    return stripped.strip()
 
 
 def run_batch(
