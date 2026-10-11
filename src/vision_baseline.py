@@ -249,6 +249,16 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         build_skill_system_prompt(system_prompt, args.quality_skill_memory_path)
         if args.quality_skill_memory_path else None
     )
+    # Species' own skill-memory file (same Stage 3 pipeline, --domain
+    # species — docs/stage3_context_memory.md) — a THIRD independent flag/
+    # file, gated to task_type == "species_identification" only, same
+    # pattern as quality's own flag above (never mixed with disease/pest or
+    # quality's file). All three flags can be set in the same run — each
+    # only ever applies to its own task_type's rows.
+    species_skill_system_prompt = (
+        build_skill_system_prompt(system_prompt, args.species_skill_memory_path)
+        if args.species_skill_memory_path else None
+    )
     manifest = load_manifest(Path(args.manifest))
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     if args.rubric:
@@ -367,6 +377,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 row_system_prompt = skill_system_prompt
             elif quality_skill_system_prompt and task_type == "quality_identification":
                 row_system_prompt = quality_skill_system_prompt
+            elif species_skill_system_prompt and task_type == "species_identification":
+                row_system_prompt = species_skill_system_prompt
             else:
                 row_system_prompt = system_prompt
             preds = run_batch(llm, tokenizer, images, question, system_prompt=row_system_prompt,
@@ -708,6 +720,12 @@ if __name__ == "__main__":
                               "from --skill_memory_path above, gated per-row to "
                               "task_type == \"quality_identification\" only. Both flags can be set in "
                               "the same run; each only ever applies to its own task_type's rows.")
+    parser.add_argument("--species_skill_memory_path", default=None,
+                         help="Species' own skill-memory file (docs/stage3_context_memory.md, "
+                              "--domain species's own heldout-summarize output) — a THIRD independent "
+                              "flag/file, gated per-row to task_type == \"species_identification\" only. "
+                              "All three skill-memory flags can be set in the same run; each only ever "
+                              "applies to its own task_type's rows.")
     parser.add_argument("--task_types", nargs="+", default=None,
                          choices=["disease", "pest_damage", "quality_identification", "species_identification"],
                          help="Restrict this run to only these task_type(s) — e.g. "

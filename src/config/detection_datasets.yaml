@@ -812,7 +812,7 @@ datasets:
     notes: ''
 
   - agml_name: synthetic_cowpea_flower_detection
-    crop: null
+    crop: cowpea
     task_type: object_detection
     n_images: 0
     classes:
@@ -828,7 +828,7 @@ datasets:
     notes: 'HELD OUT for Paper 2 Stage 4 skill-memory lessons/eval (docs/stage4_detection_context_memory.md) -- do not flip skip back to false, do not include in Stage 2/6 sampling. See scripts/download_heldout_detection.py.'
 
   - agml_name: synthetic_cowpea_pod_detection
-    crop: null
+    crop: cowpea
     task_type: object_detection
     n_images: 0
     classes:

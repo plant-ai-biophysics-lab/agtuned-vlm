@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -60,7 +61,7 @@ CROP_CATEGORY_COLOR = {
     "fruit": "#55A868", "vegetable": "#4C72B0", "grain": "#C44E52",
     "legume": "#8172B2", "cash crop": "#CCB974", "herb/spice": "#64B5CD",
     "nut/oilseed": "#937860", "ornamental": "#DA8BC3",
-    "non-crop species": "#8C8C8C", "multi-crop / unspecified": "#B0673F",
+    "non-crop species": "#8C8C8C", "multi-crop": "#B0673F",
     "other": "#888888",
 }
 
@@ -80,15 +81,35 @@ _PRODUCE_WORDS = ["fruit", "berry", "grape", "apple", "avocado", "mango", "orang
                    "quince", "date", "pod", "bean", "capsicum", "corn", "maize", "onion",
                    "rockmelon", "cacao", "wheat head", "panicle", "sunflower", "ripe", "unripe",
                    "ripening", "mature", "immature", "spoiled", "cavity", "almond", "coffee", "leek"]
+# Split out of the old catch-all "other" bucket (2026-10, real review of
+# every one of its 62 class names across the full active+held-out pool):
+# bare color/stage codes from fruit ripeness-grading datasets (strawberry/
+# tomato color classes, date maturity stages 0-3, tea age stages T1-T4,
+# pomegranate "mid-growth") — genuinely about WHEN in development the box
+# was drawn, not just that it's produce, so kept distinct from
+# produce_fruit rather than folded into it. Checked AFTER produce_fruit/
+# organ/pest/disease/weed (all above) so a specific match there always
+# wins — e.g. "red_spider_mite" hits PEST first, never lands here.
+_RIPENESS_WORDS = ["green", "red", "pink", "white", "b_green", "l_green", "lw", "sw",
+                     "large_white", "small_white", "mid-growth", "t1", "t2", "t3", "t4"]
+# The generic "this is the crop (not the weed)" label in several crop-vs-
+# weed binary detection datasets, plus the specific crop-species names used
+# the same way in weed_crop_detection (Canola/Field Pea/Flax/Lentil/Sugar
+# beet — that dataset's "classes" ARE crop species, not organs/produce).
+# Checked LAST (right before the final "other" fallback) since bare "crop"
+# or a bare species name could otherwise shadow a more specific match.
+_CROP_PLANT_WORDS = ["crop", "canola", "field pea", "flax", "lentil", "sugar beet", "tree"]
 
 TARGET_TYPE_COLOR = {
     "produce_fruit": "#55A868", "plant_part": "#4C72B0", "disease_symptom": "#C44E52",
-    "pest_damage": "#DD8452", "weed_noncrop": "#8172B2", "other": "#888888",
+    "pest_damage": "#DD8452", "weed_noncrop": "#8172B2", "ripeness_stage": "#CCB974",
+    "crop_plant": "#64B5CD", "other": "#888888",
 }
 _TARGET_TYPE_DISPLAY = {
     "produce_fruit": "produce / fruit", "plant_part": "plant part",
     "disease_symptom": "disease symptom", "pest_damage": "pest / damage",
-    "weed_noncrop": "weed / non-crop", "other": "other / ambiguous",
+    "weed_noncrop": "weed / non-crop", "ripeness_stage": "ripeness / growth stage",
+    "crop_plant": "crop plant, non-weed", "other": "other / ambiguous",
 }
 
 
@@ -96,9 +117,9 @@ def _detection_target_type(class_name: str) -> str:
     """What a detection box is actually drawn around, not what crop it's
     on — see this module's docstring for how these buckets were derived
     from the real class-name vocabulary. "other" for bare/ambiguous labels
-    (color names, ripeness-stage codes like "T1", ground-truth placeholders
-    like "0"/"object") — degrades gracefully, same convention as
-    _crop_category's own "other" fallback."""
+    genuinely unresolvable from the class name alone (ground-truth
+    placeholders like "0"/"object"/"Maybe") — degrades gracefully, same
+    convention as _crop_category's own "other" fallback."""
     n = class_name.lower()
     if any(w in n for w in _PEST_WORDS):
         return "pest_damage"
@@ -112,6 +133,10 @@ def _detection_target_type(class_name: str) -> str:
         return "produce_fruit"
     if "flower" in n or "plant" in n:
         return "plant_part"
+    if any(w in n for w in _RIPENESS_WORDS):
+        return "ripeness_stage"
+    if any(w in n for w in _CROP_PLANT_WORDS):
+        return "crop_plant"
     return "other"
 
 
@@ -133,13 +158,65 @@ def _detection_crop_label(crop_val) -> str:
     if isinstance(crop_val, list):
         return " / ".join(crop_val)
     if not crop_val or crop_val == "mixed":
-        return "multi-crop / unspecified"
+        return "multi-crop"
     return crop_val
+
+
+def _display_dataset_name(agml_name: str) -> str:
+    """Turn an agml_name into a short, readable outer-ring sub-label for
+    the multi-crop bucket (e.g. "plant_doc_detection" -> "plant doc") —
+    used ONLY for datasets whose crop genuinely spans multiple species
+    (confirmed real case, 2026-10: with every single-crop dataset's "crop"
+    field correctly filled in, "multi-crop" is dominated by one 28-class
+    dataset (plant_doc_detection) plus a handful of smaller ones
+    (weed_crop_detection, vegetable_crop_early_detection, ...) — a single
+    opaque "multi-crop (N)" outer wedge hid which dataset that N actually
+    came from. Strips the generic "_detection"/"_detection_augmented"
+    suffix (uninformative here — every entry in this file is a detection
+    dataset) and converts underscores to spaces; deliberately NOT
+    title-cased — matches the lowercase convention every other outer-ring
+    crop label in this chart already uses."""
+    name = re.sub(r"_detection(_augmented)?$", "", agml_name)
+    return name.replace("_", " ")
+
+
+def _load_detection_heldout_classes(heldout_manifest_path: Path) -> dict[str, list[str]]:
+    """The 15 detection datasets held out for Paper 2 Stage 4's
+    skill-memory pipeline (`skip: true` in detection_datasets.yaml, notes
+    starting "HELD OUT for Paper 2 Stage 4" — see that file's own header
+    comment) never appear in the active 10/class sampling manifest
+    (dataset/selected_images_detection_10.json), so they're invisible to
+    this chart's main loop unless folded in separately here — same role
+    _digital_green_class_task_crop_counts/_species_class_task_crop_counts
+    play for the classification chart. Returns {agml_dataset: [distinct
+    class names]}, same shape as an active manifest entry's "classes" list
+    (just a list, not the sampled-index dict — image indices aren't needed
+    for a class-count chart), built from
+    dataset/detection_heldout_selected_images.json's own row-level
+    `boxes[].category_name` (download_heldout_detection.py's output; no
+    `--classes` key to read at the dataset level the way the active
+    manifest has one). Returns {} if the manifest hasn't been generated yet
+    (chart generation shouldn't hard-fail just because this optional extra
+    source is missing)."""
+    if not heldout_manifest_path.exists():
+        return {}
+    rows = json.loads(heldout_manifest_path.read_text())["rows"]
+    classes_by_dataset: dict[str, set[str]] = defaultdict(set)
+    for r in rows.values():
+        ds_name = r.get("agml_dataset")
+        if not ds_name:
+            continue
+        for b in r.get("boxes") or []:
+            name = (b.get("category_name") or "").strip()
+            if name:
+                classes_by_dataset[ds_name].add(name)
+    return {name: sorted(classes) for name, classes in classes_by_dataset.items()}
 
 
 def make_detection_charts(
     config_path: Path, manifest_path: Path, chart_dir: Path, outer_label_fontsize: int = 9,
     small_inner_pct_threshold: float = 8,
+    detection_heldout_manifest: Path | None = None,
 ) -> None:
     chart_dir.mkdir(parents=True, exist_ok=True)
     datasets = active_datasets(config_path)
@@ -154,6 +231,32 @@ def make_detection_charts(
         print("  No datasets in manifest overlap the active config — skipping detection charts.")
         return
 
+    # Fold in the 15 Stage-4-held-out detection datasets alongside the 39
+    # active ones, so this chart's totals match the paper's real combined
+    # dataset count (54 datasets / 200 classes) rather than only the
+    # active-sampling subset. Their crop/category metadata still lives in
+    # detection_datasets.yaml (skip: true doesn't remove the entry, just
+    # excludes it from active_datasets()) — load_datasets() (unfiltered)
+    # resolves it the same way --include_skipped does for the
+    # classification chart.
+    heldout_classes = (
+        _load_detection_heldout_classes(detection_heldout_manifest) if detection_heldout_manifest else {}
+    )
+    if heldout_classes:
+        from src.common.dataset_config import load_datasets
+        full_ds_by_name = {d.agml_name: d for d in load_datasets(config_path)}
+        n_heldout_classes = 0
+        for name, class_names in heldout_classes.items():
+            cfg = full_ds_by_name.get(name)
+            if cfg is None:
+                print(f"  [warn] held-out detection dataset {name!r} not found in {config_path} — skipped")
+                continue
+            ds_by_name[name] = cfg
+            ds_entries[name] = {"classes": class_names}
+            n_heldout_classes += len(class_names)
+        print(f"  Stage-4 held-out detection: +{len(heldout_classes)} datasets, "
+              f"+{n_heldout_classes} classes folded in")
+
     # ── Chart A: crop category (inner) -> individual crop (outer) ──────────
     cropcat_counts: Counter = Counter()
     cropcat_by_cat: dict[str, Counter] = defaultdict(Counter)
@@ -164,7 +267,16 @@ def make_detection_charts(
         cat = _crop_category(crop_label)
         n_classes = len(entry["classes"])
         cropcat_counts[cat] += n_classes
-        cropcat_by_cat[cat][crop_label] += n_classes
+        # A genuinely multi-crop dataset (plant_doc_detection spans apple/
+        # bell pepper/.../tomato, weed_crop_detection spans several row
+        # crops, ...) still gets one shared crop_label ("multi-crop") from
+        # _detection_crop_label — fine for the INNER ring (that's correctly
+        # one category), but it collapsed the OUTER ring into a single
+        # opaque "multi-crop (N)" wedge that hid which dataset(s) N came
+        # from. Use the dataset's own name there instead, same role an
+        # individual crop name plays for every other category.
+        outer_label = crop_label if cat != "multi-crop" else _display_dataset_name(name)
+        cropcat_by_cat[cat][outer_label] += n_classes
 
     cropcat_types = sorted(cropcat_counts, key=lambda c: -cropcat_counts[c])
     _render_task_nested_donut(
@@ -175,6 +287,15 @@ def make_detection_charts(
         color_map=CROP_CATEGORY_COLOR, display_fn=_display_crop_category,
         outer_label_fontsize=outer_label_fontsize,
         small_inner_pct_threshold=small_inner_pct_threshold,
+        # Several SMALL categories (grain, vegetable) were each naming
+        # 3-5 singleton/doubleton crops individually since top_n=8 never
+        # truncated a category with fewer than 8 members to begin with —
+        # that's what made this chart's top-left corner crowded, not the
+        # big fruit category (which top_n=8 already summarized fine).
+        # min_outer_count=2 folds any crop appearing only once into its
+        # category's "N remaining crops" bucket instead, leaving every
+        # other category (including fruit) untouched.
+        min_outer_count=2,
     )
 
     # ── Chart B: detection target type (inner) -> crop category (outer) ────
@@ -201,7 +322,7 @@ def make_detection_charts(
         small_inner_pct_threshold=small_inner_pct_threshold,
     )
 
-    print(f"\n  {len(ds_entries)} active detection dataset(s) charted "
+    print(f"\n  {len(ds_entries)} detection dataset(s) charted "
           f"({sum(len(e['classes']) for e in ds_entries.values())} classes total).")
 
 
@@ -218,10 +339,18 @@ def main() -> None:
                           "outside the ring instead of inline text — default 8 (higher than "
                           "classification's 3) since these two charts have more, smaller inner "
                           "wedges (crop category / target type) that would otherwise overlap.")
+    ap.add_argument("--detection_heldout_manifest", default="dataset/detection_heldout_selected_images.json",
+                     help="The 15 detection datasets held out for Paper 2 Stage 4's skill-memory "
+                          "pipeline (download_heldout_detection.py's output) — their classes are "
+                          "folded into both charts alongside the 39 active datasets. Pass '' to "
+                          "skip (missing file is also a no-op).")
     args = ap.parse_args()
     make_detection_charts(Path(args.config), Path(args.manifest), Path(args.chart_dir),
                            outer_label_fontsize=args.outer_label_fontsize,
-                           small_inner_pct_threshold=args.small_inner_pct_threshold)
+                           small_inner_pct_threshold=args.small_inner_pct_threshold,
+                           detection_heldout_manifest=(
+                               Path(args.detection_heldout_manifest) if args.detection_heldout_manifest else None
+                           ))
 
 
 if __name__ == "__main__":
