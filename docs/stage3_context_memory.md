@@ -128,10 +128,11 @@ uv run python main.py vision-baseline \
     --output_dir outputs_final/vision_baseline_thinking_with_skill/
 ```
 
-Args to note: `--skill_memory_path` (gated per-row to `task_type in {disease, pest_damage}`), `--quality_skill_memory_path` (gated per-row to `task_type == quality_identification`, independent flag/file — both can be set in the same run, each only ever applies to its own task_type), `--task_types` (restrict the run to specific task_type(s) instead of every active one — e.g. `--task_types disease pest_damage` to test only the disease/pest skill), `--output_dir` (must not collide with `outputs_final/vision_baseline_thinking/`).
+Args to note: `--skill_memory_path` (gated per-row to `task_type in {disease, pest_damage}`), `--quality_skill_memory_path` (gated per-row to `task_type == quality_identification`, independent flag/file), `--species_skill_memory_path` (gated per-row to `task_type == species_identification`, independent flag/file, added 2026-10 — same pattern as quality's flag) — all three can be set in the same run, each only ever applies to its own task_type. Also `--task_types` (restrict the run to specific task_type(s) instead of every active one — e.g. `--task_types disease pest_damage` to test only the disease/pest skill), `--output_dir` (must not collide with `outputs_final/vision_baseline_thinking/`).
 
 - quality skill only: swap `--skill_memory_path ...` for `--quality_skill_memory_path outputs_final/heldout_skill_optimize_quality/skill_memory_best.md`
-- both at once: pass both flags together
+- species skill only: swap `--skill_memory_path ...` for `--species_skill_memory_path outputs_final/heldout_skill_optimize_species/skill_memory_best.md`
+- any combination at once: pass multiple flags together — each only ever applies to its own task_type's rows
 
 Sharded across GPUs:
 
@@ -276,6 +277,7 @@ Repeat Steps 0-5 for object detection, after classification gains hold up. See [
 | `--gen_max_tokens` | `256` |
 | `--skill_memory_path` | `None` |
 | `--quality_skill_memory_path` | `None` |
+| `--species_skill_memory_path` | `None` |
 | `--chat_template_path` | `None` |
 | `--judge_model` | `RedHatAI/gemma-4-31B-it-FP8-dynamic` |
 | `--judge_confidence_threshold` | `1` |

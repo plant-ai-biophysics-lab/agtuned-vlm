@@ -65,14 +65,23 @@ verifier — for both classification (`verifier_cot.py`) and object detection
 
 ## Model support
 
-`verifier-cot` (`src/verifier_cot.py`) defaults to `RedHatAI/gemma-4-31B-it-FP8-dynamic` (the unquantized `google/gemma-4-26B-A4B-it`, ~52GB of bf16 weights, OOM'd on real hardware — this FP8-quantized checkpoint is what every other stage already uses) and works with Qwen too — `--chat_template_path` already defaults to `None` here (unlike Stage 3's scripts, this one never hardcoded a Gemma-only template), so no override is needed either way. Thinking-trace extraction is model-agnostic (`extract_thinking`, same as Stage 3) — tries Gemma-4's channel format first, falls back to Qwen's `<think>` tags.
+`verifier-cot` (`src/verifier_cot.py`) defaults to `RedHatAI/gemma-4-31B-it-FP8-dynamic` (the unquantized `google/gemma-4-26B-A4B-it`, ~52GB of bf16 weights, OOM'd on real hardware — this FP8-quantized checkpoint is what every other stage already uses) and works with Qwen too, but needs two overrides — **correction (2026-10)**: an earlier version of this doc claimed `--chat_template_path` already defaults to `None` here and needs no override; that's wrong. The argparse default is `None`, but `src/config/verifier_config.yaml` (loaded automatically) sets it to the vendored Gemma-4 template, which silently wins unless you override it on the command line:
+
+- **`--chat_template_path ""`** — unsets the Gemma-4 template the config defaults to; Qwen's own bundled template already handles thinking natively, and forcing the Gemma template onto it renders a broken prompt, not just a missing-thinking one.
+- **`--gen_max_tokens`** (config default `4096`) — confirmed too low for Qwen in practice (real bug, Stage 1 vision-baseline run: near-zero `judge_accuracy` because most responses truncated mid-thought before reaching `<answer>`). Qwen's chain-of-thought runs noticeably longer than Gemma-4's; bump to `8192`+. This matters more here than for plain classification — verifier-cot generates `--k_candidates` (default 4) separate structured candidates per image, each needing its own full thinking trace + fill-in-the-blank fields + answer, so the truncation risk compounds per candidate.
+
+Thinking-trace extraction is model-agnostic (`extract_thinking`, same as Stage 3) — tries Gemma-4's channel format first, falls back to Qwen's `<think>` tags; also handles Qwen's "closing-tag-only" shape (its chat template seeds the opening `<think>` into the prompt, not the output) since 2026-10.
 
 ```bash
 # Gemma-4 (default):
 uv run python main.py verifier-cot --model RedHatAI/gemma-4-31B-it-FP8-dynamic --verifier_type ppt
 
 # Qwen:
-uv run python main.py verifier-cot --model Qwen/Qwen3.8-27B-FP8 --verifier_type ppt
+uv run python main.py verifier-cot \
+    --model Qwen/Qwen3.8-27B-FP8 \
+    --verifier_type ppt \
+    --chat_template_path "" \
+    --gen_max_tokens 8192
 ```
 
 ## Step 1 — run verifier-cot and verifier-lmv
