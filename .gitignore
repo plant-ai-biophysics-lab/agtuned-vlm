@@ -46,3 +46,4 @@ experiments/**/**/*.npy
 /dataset/images_heldout_quality
 /dataset/images_heldout_species
 /legacy
+/scripts

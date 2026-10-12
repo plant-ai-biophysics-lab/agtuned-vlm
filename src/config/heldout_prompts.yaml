@@ -410,7 +410,7 @@ heldout_quality_skill_edit_prompt: |
      a total vocabulary mismatch. Every bullet or indicator you write
      must be framed as "this VISUAL pattern indicates X" where X maps
      onto whichever label scheme the image's OWN question is actually
-     asking for, never as "the answer is {ripeness word}" stated as if
+     asking for, never stated as a bare ripeness/condition word as if
      that vocabulary applies universally. If `## Grade-Specific Logic`
      (or an equivalent section) already documents a non-ripeness scale,
      strengthen/expand it rather than letting the ripeness vocabulary
