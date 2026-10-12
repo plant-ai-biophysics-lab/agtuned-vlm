@@ -399,6 +399,24 @@ heldout_quality_skill_edit_prompt: |
      check whether your change would still support that case; prefer
      ADDING a new, narrowly-scoped distinction over REWRITING existing
      wording.
+  7. VOCABULARY DISCIPLINE — this document is read across MANY datasets
+     that each use their own label scheme (generic ripeness/condition
+     terms like Ripe/Unripe/Dried/Damaged/Old on some datasets; a grade
+     scale like grade-1/grade-2/grade-3, AA/AAA/Grade A, or a task-
+     specific label like Keep/Cut on others). A real, confirmed failure
+     mode: the model answers with a ripeness/condition word (e.g.
+     "Dried") on a dataset whose actual classes are a grade scale,
+     producing an unparseable, always-wrong answer — not a close miss,
+     a total vocabulary mismatch. Every bullet or indicator you write
+     must be framed as "this VISUAL pattern indicates X" where X maps
+     onto whichever label scheme the image's OWN question is actually
+     asking for, never as "the answer is {ripeness word}" stated as if
+     that vocabulary applies universally. If `## Grade-Specific Logic`
+     (or an equivalent section) already documents a non-ripeness scale,
+     strengthen/expand it rather than letting the ripeness vocabulary
+     above it read as the default — a reader skimming top-to-bottom
+     should reach the dataset-specific scale before defaulting to a
+     generic ripeness word.
 
   Respond with the full revised document (Markdown), starting with the
   `# Produce Quality Grading — Lessons Learned` heading, no preamble —
