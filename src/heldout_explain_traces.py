@@ -68,19 +68,40 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+# Cap on the embedded `model_reasoning` field — Step 1's full narrative is
+# unbounded, and some models (confirmed on Qwen, see docs/stage4_verifier.md's
+# own note on its verbose/rambling completions) can produce thousands of
+# tokens per row. Re-embedding that whole text into THIS stage's own prompt
+# (on top of the image's vision tokens, system prompt, and expert details)
+# can push the prompt alone past --max_model_len with zero budget left for
+# output — a real failure seen in practice (vLLM: "requested 0 output
+# tokens... prompt contains at least 16385 input tokens" against a 16384
+# limit). 3000 chars (~750 tokens) keeps more than enough of the model's
+# actual stated reasoning for the explainer to work with, regardless of how
+# verbose the source model's own completions get.
+_MAX_MODEL_REASONING_CHARS = 3000
+
+
+def _truncate_reasoning(text: str) -> str:
+    if len(text) <= _MAX_MODEL_REASONING_CHARS:
+        return text
+    return text[:_MAX_MODEL_REASONING_CHARS] + " [...truncated]"
+
+
 def build_prompt_text(r: dict, miss_template: str, correct_template: str) -> tuple[str, str]:
     """Returns (trace_type, prompt_text) — judged_correct picks the
     template; `prediction` is Step 1's full narrative (not the bare
     extracted answer) in both cases, so the explanation can address the
     model's own stated reasoning, not just its final label."""
+    model_reasoning = _truncate_reasoning(r["prediction"])
     if r.get("judged_correct") == "1":
         text = correct_template.format(
-            crop=r["crop"], model_reasoning=r["prediction"], correct_prediction=r["extracted_answer"],
+            crop=r["crop"], model_reasoning=model_reasoning, correct_prediction=r["extracted_answer"],
             ground_truth=r["class_label"], expert_details=r["details"],
         )
         return "worked", text
     text = miss_template.format(
-        crop=r["crop"], model_reasoning=r["prediction"], wrong_prediction=r["extracted_answer"],
+        crop=r["crop"], model_reasoning=model_reasoning, wrong_prediction=r["extracted_answer"],
         ground_truth=r["class_label"], expert_details=r["details"],
     )
     return "didnt_work", text
