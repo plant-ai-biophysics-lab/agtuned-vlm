@@ -113,7 +113,8 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             preamble, _suffix = split_chosen(rows[i]["chosen"])
             text = template.format(analysis=preamble)
             hist = [{"role": "user", "content": text}]
-            prompt = render_chat_template(tokenizer, hist, enable_thinking=False, chat_template=chat_template)
+            prompt = render_chat_template(tokenizer, hist, enable_thinking=args.enable_thinking,
+                                           chat_template=chat_template)
             out = llm.generate([prompt], sampling_params=gen_params)[0]
             raw = out.outputs[0].text
             _, cleaned = extract_thinking(raw)
@@ -157,6 +158,11 @@ if __name__ == "__main__":
                               "Pass e.g. 'disease_pest,quality,species,detection' to also reword "
                               "detection's collated-explanation preamble.")
     parser.add_argument("--heldout_prompts", default="src/config/heldout_prompts.yaml")
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
+                         help="OFF by default, unlike every other generation stage here — this is a "
+                              "short rewrite task with no real need to deliberate, and thinking tokens "
+                              "would only slow it down. Pass --enable_thinking to turn it back on if "
+                              "rewrite quality ever looks like it's the bottleneck.")
     parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja")
     parser.add_argument("--gen_max_tokens", type=int, default=400,
                          help="A 2-4 sentence rewrite needs far less than explain-traces' own budget.")
