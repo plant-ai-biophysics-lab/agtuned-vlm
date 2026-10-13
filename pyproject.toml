@@ -46,6 +46,11 @@ dependencies = [
     "unsloth; sys_platform == 'linux'",
     "unsloth-zoo; sys_platform == 'linux'",
     "trl>=0.12.0; sys_platform == 'linux'",
+    # OpenAI-compatible client — used by stage4_grpo_unified.py to call the
+    # standalone vLLM judge server over HTTP (not bundled with vllm/trl
+    # itself; already resolved transitively via one of them, declared
+    # explicitly here since the training script imports it directly).
+    "openai>=1.0.0",
     # Training loss/metrics dashboard (report_to="trackio" in the fine-tuning
     # scripts above) — local-first, no account needed, cross-platform
     "trackio>=0.1.0",
