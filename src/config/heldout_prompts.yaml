@@ -88,6 +88,41 @@ heldout_explain_correct_prompt: |
   Respond with ONLY the explanation text — no headers, no restating the
   question.
 
+# heldout_dpo_reword.py — rewrites a `chosen` DPO completion's reasoning
+# preamble from third-person evaluator voice (how heldout_explain_traces.py's
+# own explanation/analysis is naturally written, since it's consumed by
+# heldout_summarize.py for a DIFFERENT purpose — advisory skill-memory
+# bullets — which genuinely wants that register) into first-person
+# diagnostic voice matching the policy's own natural completion style.
+# Text-only (no image — paraphrasing already-written text, not re-examining
+# the image) and deliberately a REWRITE task, not a fresh explanation task —
+# preserves the existing evidence/conclusion rather than re-deriving it, to
+# avoid introducing new factual drift during a purely stylistic rewrite.
+# Params: {analysis}
+heldout_dpo_chosen_rewrite_prompt: |
+  Below is an analysis written from an outside observer's perspective,
+  explaining the visual evidence behind a conclusion about an image.
+  Rewrite it as a direct, first-person response — as if YOU are the one
+  looking at the image for the first time and answering the original
+  question yourself, not commenting on someone else's answer.
+
+  Rules:
+  - Use first person ("I can see...", "This shows...", "Looking closely
+    at..."), never third person wording like "the model", "the
+    diagnosis", or "the expert".
+  - Preserve every piece of visual evidence and reasoning in the
+    analysis below exactly — do not add new claims, drop evidence, or
+    change the conclusion.
+  - Keep it to 2-4 sentences.
+  - Do not add any closing tag, label, or coordinates of your own —
+    whatever follows this text is appended separately, after your
+    response.
+
+  Analysis to rewrite:
+  "{analysis}"
+
+  Respond with ONLY the rewritten first-person text.
+
 # Step 3 (heldout_summarize.py) — map phase. Summarizes ONE chunk of
 # Step 2 explanations (all from the same heuristic category + trace_type
 # bucket — see bucket_category() in heldout_zeroshot.py — split further

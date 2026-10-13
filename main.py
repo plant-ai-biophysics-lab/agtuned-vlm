@@ -22,6 +22,7 @@ STAGES = {
     "heldout-summarize": "src.heldout_summarize",
     "heldout-skill-optimize": "src.heldout_skill_optimize",
     "heldout-ablation-summary": "src.heldout_ablation_summary",
+    "heldout-dpo-reword": "src.heldout_dpo_reword",
     "catalog-detection-datasets":  "scripts.agml_hf.catalog_detection_datasets",
     "report-detection-catalog":    "scripts.agml_hf.report_detection_catalog",
     "migrate-detection-datasets":  "scripts.agml_hf.migrate_detection_datasets_yaml",
