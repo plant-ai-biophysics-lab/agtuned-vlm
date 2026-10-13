@@ -249,10 +249,13 @@ def main() -> None:
     for domain, default_dir, default_images_root in _CLASSIFICATION_DOMAINS:
         ap.add_argument(f"--{domain}_explain_dir", default=default_dir)
         ap.add_argument(f"--{domain}_images_root", default=default_images_root)
-    ap.add_argument("--detection_zeroshot_ckpt", default="outputs_final/heldout_detection_zeroshot/"
+    ap.add_argument("--detection_zeroshot_ckpt", default="outputs_final/heldout_detection_zeroshot_lessons/"
                      "RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv",
                      help="IMAGE-level checkpoint (one row per image, has raw_prediction/gt_boxes_json/"
-                          "f1_at_iou50) — NOT the per-box explain-traces checkpoint below.")
+                          "f1_at_iou50) — NOT the per-box explain-traces checkpoint below. Must be the "
+                          "LESSONS-split run (--split lessons at generation time), confirmed as the "
+                          "real local convention (759 rows, matching the lessons-split detection count) "
+                          "— not the bare 'heldout_detection_zeroshot' dir this defaulted to before.")
     ap.add_argument("--detection_explain_ckpt", default="outputs_final/heldout_detection_explain_traces/"
                      "RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv",
                      help="Per-BOX checkpoint (one row per error instance) — collated per-image here.")
