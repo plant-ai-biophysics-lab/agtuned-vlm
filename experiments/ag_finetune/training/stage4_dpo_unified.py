@@ -199,18 +199,34 @@ def main() -> None:
     lightning_experiment = None
     callbacks = []
     if args.lightning_experiment_name:
-        import litlogger
-        print(f"  Logging to Lightning AI experiment {args.lightning_experiment_name!r} "
-              f"(teamspace={args.lightning_teamspace!r})")
-        lightning_experiment = litlogger.init(
-            name=args.lightning_experiment_name, teamspace=args.lightning_teamspace,
-        )
-        lightning_experiment["model"] = args.model
-        lightning_experiment["data"] = args.data
-        lightning_experiment["lr"] = args.lr
-        lightning_experiment["beta"] = args.beta
-        lightning_experiment["batch_size"] = args.batch_size
-        callbacks.append(build_lightning_logger_callback(lightning_experiment))
+        # Defensive — this is a purely optional observability feature; a
+        # missing/broken litlogger (e.g. pip-installed into a different
+        # Python environment than `uv run` actually uses, or a Lightning
+        # env-snapshot that didn't capture it) must never be able to crash
+        # an otherwise-healthy multi-hour training job. Warn and continue
+        # without Lightning logging rather than letting the exception
+        # propagate out of main().
+        try:
+            import litlogger
+            print(f"  Logging to Lightning AI experiment {args.lightning_experiment_name!r} "
+                  f"(teamspace={args.lightning_teamspace!r})")
+            lightning_experiment = litlogger.init(
+                name=args.lightning_experiment_name, teamspace=args.lightning_teamspace,
+            )
+            lightning_experiment["model"] = args.model
+            lightning_experiment["data"] = args.data
+            lightning_experiment["lr"] = args.lr
+            lightning_experiment["beta"] = args.beta
+            lightning_experiment["batch_size"] = args.batch_size
+            callbacks.append(build_lightning_logger_callback(lightning_experiment))
+        except Exception as e:
+            print(f"  [warn] --lightning_experiment_name was set but litlogger setup failed "
+                  f"({type(e).__name__}: {e}) — continuing WITHOUT Lightning experiment tracking. "
+                  f"If this is an import error, check `uv run python -c 'import litlogger'` works "
+                  f"(uv run uses its own managed venv, separate from any plain `pip install` you "
+                  f"may have run interactively — try `uv add litlogger` or `uv pip install litlogger` "
+                  f"instead).")
+            lightning_experiment = None
 
     trainer = DPOTrainer(
         model=model,
