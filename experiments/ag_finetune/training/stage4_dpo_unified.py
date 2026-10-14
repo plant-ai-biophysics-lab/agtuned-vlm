@@ -61,6 +61,31 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
+def build_lightning_logger_callback(experiment):
+    """Returns a transformers.TrainerCallback instance that forwards every
+    scalar in HF Trainer's `logs` dict (loss, rewards/margins, learning
+    rate, etc. — whatever DPOTrainer passes at each --logging_steps
+    interval) to a Lightning AI `litlogger` experiment, so training is
+    visible live in Lightning's Experiments viewer. litlogger is NOT a
+    built-in HF Trainer integration (unlike wandb/tensorboard), so this is
+    a small custom bridge rather than a report_to="..." string — one
+    experiment[key] time-series per metric name, appended on every log
+    event. Imports transformers.TrainerCallback lazily (only when this
+    function is actually called, i.e. --lightning_experiment_name was
+    passed) so a run on non-Lightning infra pays zero cost for this."""
+    from transformers import TrainerCallback
+
+    class LightningLoggerCallback(TrainerCallback):
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if not logs:
+                return
+            for key, value in logs.items():
+                if isinstance(value, (int, float)):
+                    experiment[key].append(value)
+
+    return LightningLoggerCallback()
+
+
 def build_prompt(question: str, system_prompt: str) -> list[dict]:
     """Same shape (and same system_prompt — assessment_system, applied
     uniformly to every task including detection) as
@@ -84,6 +109,20 @@ def main() -> None:
     ap.add_argument("--output_dir", default="outputs/checkpoints/stage4_dpo_unified")
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--batch_size", type=int, default=2)
+    ap.add_argument("--save_steps", type=int, default=200,
+                     help="Checkpoint frequency — lower this (e.g. 50-100) on interruptible/spot "
+                          "compute to bound how much work a mid-run interruption can lose.")
+    ap.add_argument("--save_total_limit", type=int, default=3,
+                     help="Keep only the N most recent checkpoints (HF Trainer deletes older ones "
+                          "automatically) — without a cap, frequent --save_steps on a long run can "
+                          "fill disk with checkpoint directories that are no longer needed once a "
+                          "newer one exists.")
+    ap.add_argument("--resume_from_checkpoint", default=None,
+                     help="Explicit checkpoint directory to resume from (e.g. "
+                          "outputs/checkpoints/stage4_dpo_unified/checkpoint-400). If omitted, the "
+                          "script auto-detects the latest checkpoint already in --output_dir and "
+                          "resumes from it if one exists — the normal case after an interruption on "
+                          "spot/preemptible compute, no flag needed to just continue where it left off.")
     ap.add_argument("--lr", type=float, default=5e-6,
                      help="DPO typically wants a lower LR than GRPO/SFT — 5e-6 is a common default "
                           "for preference tuning (vs. GRPO's 1e-5 in the sibling script); raise toward "
@@ -111,6 +150,13 @@ def main() -> None:
                      help="QLoRA 4-bit — same reasoning as stage4_grpo_unified.py's own flag: bf16 "
                           "needs ~62GB for a 31B model's weights alone, out of reach on a single 48GB "
                           "card; 4-bit brings that to ~16GB.")
+    ap.add_argument("--lightning_experiment_name", default=None,
+                     help="If set, logs every training metric (loss, rewards/margins, lr, ...) live to "
+                          "a Lightning AI `litlogger` experiment of this name, viewable in Lightning's "
+                          "Experiments viewer while training runs. Off by default — no litlogger import "
+                          "or API call happens unless this is passed.")
+    ap.add_argument("--lightning_teamspace", default="default-teamspace",
+                     help="Only used when --lightning_experiment_name is set.")
     args = ap.parse_args()
 
     from datasets import Dataset, Image as HFImage
@@ -146,10 +192,31 @@ def main() -> None:
     )
     FastVisionModel.for_training(model)
 
+    # Lightning AI live experiment tracking (opt-in) — a litlogger
+    # experiment + a TrainerCallback bridge (build_lightning_logger_callback,
+    # above) that forwards every HF Trainer log event to it, since
+    # litlogger is not a built-in report_to="..." integration.
+    lightning_experiment = None
+    callbacks = []
+    if args.lightning_experiment_name:
+        import litlogger
+        print(f"  Logging to Lightning AI experiment {args.lightning_experiment_name!r} "
+              f"(teamspace={args.lightning_teamspace!r})")
+        lightning_experiment = litlogger.init(
+            name=args.lightning_experiment_name, teamspace=args.lightning_teamspace,
+        )
+        lightning_experiment["model"] = args.model
+        lightning_experiment["data"] = args.data
+        lightning_experiment["lr"] = args.lr
+        lightning_experiment["beta"] = args.beta
+        lightning_experiment["batch_size"] = args.batch_size
+        callbacks.append(build_lightning_logger_callback(lightning_experiment))
+
     trainer = DPOTrainer(
         model=model,
         processing_class=processor,
         train_dataset=dataset,
+        callbacks=callbacks or None,
         args=DPOConfig(
             output_dir=args.output_dir,
             num_train_epochs=args.epochs,
@@ -162,14 +229,40 @@ def main() -> None:
             max_length=args.max_length,
             bf16=True,
             logging_steps=20,
-            save_steps=200,
+            save_steps=args.save_steps,
+            save_total_limit=args.save_total_limit,
             # No ref_model passed to DPOTrainer below — a PEFT model gets
             # its reference log-probs by disabling the LoRA adapter on
             # this SAME model (confirmed in the real trl source, see this
             # module's own docstring), not a second loaded copy.
         ),
     )
-    trainer.train()
+
+    # Resume support for interruptible/spot compute — explicit
+    # --resume_from_checkpoint wins; otherwise auto-detect the latest
+    # checkpoint already in --output_dir (the normal case right after a
+    # preemption) via HF's own get_last_checkpoint, same mechanism
+    # Trainer's own resume_from_checkpoint=True would use internally, done
+    # explicitly here so a genuinely fresh --output_dir (no checkpoints
+    # yet) doesn't hit the ValueError Trainer raises when
+    # resume_from_checkpoint=True finds nothing to resume from.
+    resume_checkpoint = args.resume_from_checkpoint
+    if resume_checkpoint is None:
+        from transformers.trainer_utils import get_last_checkpoint
+        resume_checkpoint = get_last_checkpoint(args.output_dir)
+    if resume_checkpoint:
+        print(f"  Resuming from checkpoint: {resume_checkpoint}")
+    else:
+        print("  No checkpoint found — starting fresh.")
+
+    try:
+        trainer.train(resume_from_checkpoint=resume_checkpoint)
+    finally:
+        # finalize() even on a crash/interrupt, so whatever metrics did
+        # get logged are still visible in the Experiments viewer rather
+        # than left in a dangling, never-finalized state.
+        if lightning_experiment is not None:
+            lightning_experiment.finalize()
 
     model.save_pretrained(f"{args.output_dir}/lora_adapters")
     processor.save_pretrained(f"{args.output_dir}/lora_adapters")
