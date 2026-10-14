@@ -150,6 +150,15 @@ def main() -> None:
                      help="QLoRA 4-bit — same reasoning as stage4_grpo_unified.py's own flag: bf16 "
                           "needs ~62GB for a 31B model's weights alone, out of reach on a single 48GB "
                           "card; 4-bit brings that to ~16GB.")
+    ap.add_argument("--dataset_num_proc", type=int, default=4,
+                     help="Worker processes for DPOTrainer's own dataset .map() calls (prompt "
+                          "extraction, chat-template rendering, tokenization). Left unset before, "
+                          "TRL/HF datasets auto-detects this from CPU core count — on a machine with "
+                          "many cores this can spawn a high process count that each decode/hold images "
+                          "in memory simultaneously, causing a real CPU-RAM OOM kill (confirmed: a run "
+                          "died silently at num_proc=20, 99% through tokenization, before any GPU "
+                          "training step even started). 4 is a conservative default; raise it if your "
+                          "machine has RAM to spare and dataset-prep speed matters.")
     ap.add_argument("--lightning_experiment_name", default=None,
                      help="If set, logs every training metric (loss, rewards/margins, lr, ...) live to "
                           "a Lightning AI `litlogger` experiment of this name, viewable in Lightning's "
@@ -213,11 +222,15 @@ def main() -> None:
             lightning_experiment = litlogger.init(
                 name=args.lightning_experiment_name, teamspace=args.lightning_teamspace,
             )
-            lightning_experiment["model"] = args.model
-            lightning_experiment["data"] = args.data
-            lightning_experiment["lr"] = args.lr
-            lightning_experiment["beta"] = args.beta
-            lightning_experiment["batch_size"] = args.batch_size
+            # litlogger's metadata assignment only accepts str or File
+            # (confirmed: TypeError: Can only assign str or File, got float,
+            # on a real run) -- cast every value explicitly rather than
+            # relying on litlogger to coerce native Python types itself.
+            lightning_experiment["model"] = str(args.model)
+            lightning_experiment["data"] = str(args.data)
+            lightning_experiment["lr"] = str(args.lr)
+            lightning_experiment["beta"] = str(args.beta)
+            lightning_experiment["batch_size"] = str(args.batch_size)
             callbacks.append(build_lightning_logger_callback(lightning_experiment))
         except Exception as e:
             print(f"  [warn] --lightning_experiment_name was set but litlogger setup failed "
@@ -247,6 +260,7 @@ def main() -> None:
             logging_steps=20,
             save_steps=args.save_steps,
             save_total_limit=args.save_total_limit,
+            dataset_num_proc=args.dataset_num_proc,
             # No ref_model passed to DPOTrainer below — a PEFT model gets
             # its reference log-probs by disabling the LoRA adapter on
             # this SAME model (confirmed in the real trl source, see this
