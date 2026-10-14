@@ -63,6 +63,29 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+# Per-row cap on explanation length used for chunking/prompt-building —
+# build_chunks' own word-bound guard (below) only prevents ACCUMULATING
+# multiple rows past max_words_per_chunk; it does nothing to bound a
+# SINGLE row's explanation on its own, since the guard only fires when
+# `current` is already non-empty. A single outlier explanation (confirmed
+# real on Qwen, whose completions are documented elsewhere in this repo as
+# running long/rambling) can land alone in its own chunk at whatever
+# length it actually is — easily enough on its own to blow the summarize
+# stage's own --max_model_len (confirmed real failure: vLLM
+# "prompt contains at least 24577 input tokens" against a 24576 limit).
+# 500 words (~5-10x the explain prompt's own "2-4 sentences" instruction)
+# is generous headroom for a legitimate explanation while still capping
+# any runaway generation.
+_MAX_EXPLANATION_WORDS = 500
+
+
+def _truncate_explanation(text: str) -> str:
+    words = text.split()
+    if len(words) <= _MAX_EXPLANATION_WORDS:
+        return text
+    return " ".join(words[:_MAX_EXPLANATION_WORDS]) + " [...truncated]"
+
+
 def build_chunks(rows: list[dict], max_words_per_chunk: int,
                   bucket_fn=bucket_category_for_domain("disease_pest")) -> dict[tuple[str, str], list[list[dict]]]:
     """{(category, trace_type): [chunk_rows, ...]} — a bucket's rows are
@@ -73,9 +96,16 @@ def build_chunks(rows: list[dict], max_words_per_chunk: int,
     the context budget depending on which rows landed in it). `bucket_fn`
     defaults to disease/pest's bucket_category; run_model passes
     bucket_category_quality instead for --domain quality (a single flat
-    "quality" bucket — see that function's own docstring for why)."""
+    "quality" bucket — see that function's own docstring for why).
+
+    Truncates each row's `explanation` in place via _truncate_explanation
+    before computing its word count — both the chunk-count math below AND
+    every downstream reader of `r["explanation"]` (explanations_block in
+    the map phase) see the already-truncated text, so a single oversized
+    outlier can never dominate a chunk or blow the prompt budget."""
     buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in rows:
+        r["explanation"] = _truncate_explanation(r["explanation"])
         buckets[(bucket_fn(r), r["trace_type"])].append(r)
 
     chunked: dict[tuple[str, str], list[list[dict]]] = {}
