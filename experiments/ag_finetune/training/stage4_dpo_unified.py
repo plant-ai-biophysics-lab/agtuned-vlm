@@ -180,11 +180,35 @@ def main() -> None:
     rows = [json.loads(l) for l in Path(args.data).read_text().splitlines() if l.strip()]
     print(f"Loaded {len(rows):,} DPO pair(s) across tasks: {sorted({r['task'] for r in rows})}")
 
+    # Hard character-level cap on chosen/rejected BEFORE tokenization —
+    # confirmed real bug: a dense-scene detection row's collated per-box
+    # explanation + box_2d JSON array can reach 100K+ combined characters
+    # (confirmed directly in the real data: one row hit 106,573 chars vs.
+    # a ~8,600-char median), enough to spike a single dataset.map() worker's
+    # memory regardless of --dataset_num_proc, causing a silent OOM kill
+    # during tokenization with no Python traceback. DPOConfig's own
+    # --max_completion_length truncates by TOKEN COUNT, but only after the
+    # full string is already tokenized — too late to prevent the memory
+    # spike on an outlier this size. 12,000 chars is comfortably above the
+    # real median (~8,600) and above --max_completion_length's own 2048-
+    # token budget (roughly 8,000-10,000 chars for this kind of text), so
+    # nothing that would have survived DPOConfig's own truncation gets cut
+    # any harder here — this only clips the genuine outliers.
+    _MAX_CHARS = 12000
+
+    def _cap(text: str) -> str:
+        return text if len(text) <= _MAX_CHARS else text[:_MAX_CHARS] + " [...truncated]"
+
+    n_capped = sum(1 for r in rows if len(r["chosen"]) > _MAX_CHARS or len(r["rejected"]) > _MAX_CHARS)
+    if n_capped:
+        print(f"  [warn] {n_capped} row(s) had chosen/rejected text over {_MAX_CHARS} chars, capped "
+              f"before tokenization to avoid a single outlier row spiking worker memory.")
+
     cols: dict[str, list] = {
         "images": [row["image_path"] for row in rows],  # cast to HFImage() below for lazy decoding
         "prompt": [build_prompt(row["question"], system_prompt) for row in rows],
-        "chosen": [[{"role": "assistant", "content": row["chosen"]}] for row in rows],
-        "rejected": [[{"role": "assistant", "content": row["rejected"]}] for row in rows],
+        "chosen": [[{"role": "assistant", "content": _cap(row["chosen"])}] for row in rows],
+        "rejected": [[{"role": "assistant", "content": _cap(row["rejected"])}] for row in rows],
     }
     dataset = Dataset.from_dict(cols).cast_column("images", HFImage())
 
