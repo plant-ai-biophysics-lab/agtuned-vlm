@@ -79,11 +79,38 @@ def load_yaml(path: Path) -> dict:
 _MAX_EXPLANATION_WORDS = 500
 
 
-def _truncate_explanation(text: str) -> str:
+def _truncate_words(text: str, max_words: int) -> str:
     words = text.split()
-    if len(words) <= _MAX_EXPLANATION_WORDS:
+    if len(words) <= max_words:
         return text
-    return " ".join(words[:_MAX_EXPLANATION_WORDS]) + " [...truncated]"
+    return " ".join(words[:max_words]) + " [...truncated]"
+
+
+def _truncate_explanation(text: str) -> str:
+    return _truncate_words(text, _MAX_EXPLANATION_WORDS)
+
+
+# Per-item cap on a SUMMARY (map-phase output, or a prior reduce-recursion
+# level's own output) used inside compact_bucket_blocks' recursive
+# condensing. Deliberately well under --max_words_per_reduce_group's own
+# default (1500) — real bug found: compact_bucket_blocks' own "grouping
+# didn't reduce the count" safety valve (meant only to stop an infinite
+# loop when every item ALREADY exceeds the group budget alone) silently
+# returns the full, UNREDUCED summary list in that case, with no bound at
+# all on their total size — confirmed root cause of a real failure
+# (vLLM: "prompt contains at least 24577 input tokens" against a
+# 24576-token limit, on a Qwen run whose individual map-phase summaries
+# ran long enough that none of them could combine with another under the
+# 1500-word group cap, so the safety valve fired immediately and handed
+# back dozens of still-oversized summaries untouched). Capping each item
+# at 400 words guarantees at least 3 can combine under any
+# --max_words_per_reduce_group default, so the safety valve's silent-
+# overflow path should no longer be reachable in practice.
+_MAX_SUMMARY_WORDS = 400
+
+
+def _truncate_summary(text: str) -> str:
+    return _truncate_words(text, _MAX_SUMMARY_WORDS)
 
 
 def build_chunks(rows: list[dict], max_words_per_chunk: int,
@@ -148,6 +175,8 @@ def compact_bucket_blocks(
     help no matter how high it was set; the model's output was being cut
     off by the context window itself, not a max_tokens cap."""
     summaries = sorted(summaries, key=lambda x: x["chunk_index"])
+    for s in summaries:
+        s["summary"] = _truncate_summary(s["summary"])
     level = 0
     while True:
         total_words = sum(len(s["summary"].split()) for s in summaries)
@@ -191,7 +220,7 @@ def compact_bucket_blocks(
             _, cleaned = extract_thinking(raw)
             new_summaries.append({
                 "category": cat, "trace_type": tt, "chunk_index": gi,
-                "n_rows": sum(s["n_rows"] for s in group), "summary": cleaned.strip(),
+                "n_rows": sum(s["n_rows"] for s in group), "summary": _truncate_summary(cleaned.strip()),
             })
         summaries = new_summaries
 
