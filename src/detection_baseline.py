@@ -62,6 +62,7 @@ from src.common.metrics import extract_channel_thought
 from src.common.progress import ProgressBar
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
+from src.common.heldout_skill import build_detection_skill_system_prompt
 
 try:
     from vllm import SamplingParams
@@ -173,6 +174,16 @@ def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    # Same skill-injection pattern as detection_multiclass.py's own
+    # run_model — plain reference-material framing only
+    # (build_detection_skill_system_prompt), deliberately WITHOUT
+    # classification's own "two firm rules" wrapper, see that function's
+    # own docstring for why. detection_baseline.py had no skill-memory
+    # support at all until this was added.
+    skill_system_prompt = (
+        build_detection_skill_system_prompt(system_prompt, args.skill_memory_path)
+        if args.skill_memory_path else system_prompt
+    )
     chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     manifest = load_manifest(Path(args.manifest))
     rescale_1000 = needs_1000_scale_boxes(model_id)
@@ -267,7 +278,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 question = apply_rubric_detection(question, use_json, vprompts)
 
             results = run_batch(
-                llm, tokenizer, images, question, system_prompt=system_prompt,
+                llm, tokenizer, images, question, system_prompt=skill_system_prompt,
                 enable_thinking=args.enable_thinking, chat_template=chat_template,
                 gen_max_tokens=args.gen_max_tokens,
             )
@@ -368,6 +379,13 @@ if __name__ == "__main__":
                               "no reasoning. No tournament/verifier machinery — same single-shot "
                               "generation, just a different prompt. Pass a different --output_dir "
                               "so this doesn't overwrite the plain baseline's checkpoint.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Paper 2 Stage 4's detection skill-memory file "
+                              "(docs/stage4_detection_context_memory.md, heldout-detection-summarize's "
+                              "own output) — injected into the system prompt for every active dataset "
+                              "this run touches (no per-row task_type gate — detection has only one "
+                              "task_type, unlike classification's disease/pest-only gate). Same pattern "
+                              "as detection_multiclass.py's own flag of the same name.")
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
