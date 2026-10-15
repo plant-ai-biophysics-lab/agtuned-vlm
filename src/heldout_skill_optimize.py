@@ -235,6 +235,21 @@ def sample_worked_examples(rows: list[dict], n_per_bucket: int, seed: int,
 
 def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_label: str,
                            domain: str = "disease_pest") -> str:
+    """Real bug fixed here (2026-10): with up to 4 category buckets x
+    --n_examples_per_bucket (10) examples x 2 blocks (miss + worked), this
+    can concatenate up to ~80 examples into the edit prompt. Even with
+    reasoning/details individually bounded, that many examples adds up to
+    tens of thousands of characters before the (separately unbounded)
+    current_skill_md and prior_round_feedback_block are even added on top
+    — confirmed real failure on Qwen (vLLM: "prompt contains at least
+    24577 input tokens" against a 24576 limit), where verbose/rambling
+    completions push the SAME per-example character budget that worked
+    for Gemma over the token limit. Tightened reasoning/details from 500
+    to 250 chars each to buy real headroom, and added a cap to the
+    extracted_answer/prediction fallback, which previously had NONE at
+    all — unlike reasoning/details, it could silently carry a full raw
+    completion when extracted_answer parsing failed (a real, confirmed
+    Qwen-specific issue elsewhere in this pipeline)."""
     blocks = []
     for b in _buckets_for_domain(domain):
         for r in examples_by_bucket.get(b, []):
@@ -243,11 +258,12 @@ def _build_examples_block(examples_by_bucket: dict[str, list[dict]], outcome_lab
             # read as the nonsensical "crop plant"/"weed plant" there, so
             # that lead-in is skipped entirely for this domain.
             subject = "" if domain == "species" else f"{r.get('crop', '?')} plant — "
+            answer_text = (r.get('extracted_answer') or r.get('prediction') or '').strip()[:200]
             blocks.append(
                 f"[{b}] {subject}model {outcome_label} "
-                f"\"{(r.get('extracted_answer') or r.get('prediction') or '').strip()}\", actual answer: "
-                f"\"{r['class_label']}\". Model's own reasoning: \"{(r.get('reasoning') or '').strip()[:500]}\". "
-                f"Expert's observations: \"{(r.get('details') or '').strip()[:500]}\"."
+                f"\"{answer_text}\", actual answer: "
+                f"\"{r['class_label']}\". Model's own reasoning: \"{(r.get('reasoning') or '').strip()[:250]}\". "
+                f"Expert's observations: \"{(r.get('details') or '').strip()[:250]}\"."
             )
     return "\n\n".join(blocks)
 
