@@ -394,6 +394,30 @@ def edit_round(model_id: str, llm, tokenizer, current_skill_md: str, task_scores
     )
     hist = [{"role": "user", "content": edit_text}]
     prompt = render_chat_template(tokenizer, hist, enable_thinking=args.edit_enable_thinking, chat_template=chat_template)
+
+    # Hard safety net, independent of which upstream field is responsible
+    # (examples blocks, current_skill_md growing round-over-round, or a
+    # verbose prior-round changelog) -- confirmed real failure even after
+    # capping individual example fields: a species round-2 edit call still
+    # hit vLLM's "prompt contains at least 24577 input tokens" against a
+    # 24576 limit, with far fewer examples than disease_pest's worst case
+    # (2 buckets vs. 4), so some OTHER field was still large enough alone.
+    # Rather than keep chasing individual fields one at a time, measure the
+    # ACTUAL rendered prompt's real token count and truncate from the
+    # FRONT if it's still over budget -- the template's own field order
+    # (heldout_prompts.yaml) puts current_skill_md and the final response-
+    # format instructions LAST, so truncating from the front drops the
+    # oldest/least-critical context (prior-round feedback, early examples)
+    # first, while guaranteeing the model still sees the document it's
+    # actually editing and the instructions for how to respond.
+    max_prompt_tokens = args.max_model_len - args.edit_max_tokens - 64  # safety margin
+    token_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    if len(token_ids) > max_prompt_tokens:
+        print(f"  [warn] edit prompt was {len(token_ids)} tokens, over the {max_prompt_tokens}-token "
+              f"budget -- truncated from the front (kept the end: current document + instructions).")
+        token_ids = token_ids[-max_prompt_tokens:]
+        prompt = tokenizer.decode(token_ids, skip_special_tokens=False)
+
     gen_params = SamplingParams(
         temperature=0.0, max_tokens=args.edit_max_tokens, seed=args.seed,
         skip_special_tokens=not args.edit_enable_thinking,
