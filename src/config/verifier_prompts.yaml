@@ -1,6 +1,20 @@
-# Verifier prompt templates for Stage 4 (verifier-cot) — single-round
-# K-candidate + PPT-tournament verifier, see docs/stage4_verifier.md.
+# Verifier prompt templates for verifier-cot (--verifier_type simple, the
+# default, Paper 2 Stage 3, see docs/stage3_verifier_grade.md; and
+# --verifier_type ppt, the single-round K-candidate + PPT-tournament
+# verifier, see docs/stage4_verifier.md).
 #
+# - grading_prompt — --verifier_type simple's own scoring call: ONE
+#   trajectory (no pool, no pairwise duel), graded against EACH numbered
+#   rubric criterion independently on a 1-3 scale, via
+#   <criterion_N>score</criterion_N> tags (parsed by verifier_cot.py's
+#   _parse_criterion_scores). Summed and normalized to [0, 1] as
+#   verifier_score. This is a deliberately simpler mechanism than
+#   pairwise_prompt below — absolute per-criterion grading of a single
+#   answer instead of a comparative letter-scale judgment between two —
+#   meant to test whether a coarser, cheaper signal (no K-candidate
+#   generation, no tournament) still correlates with correctness enough to
+#   be useful as e.g. a stopping/feedback gate in the ReAct setup
+#   (docs/stage4_react_baseline.md). Params: {rubric} {question} {trajectory}
 # - pairwise_prompt — used by the single-round verifier's PPT tournament
 #   duels (ranking the pool) AND by src/verifier_lmv.py's own PPT baseline — the
 #   dual-trajectory scoring template (arXiv:2607.05391 Section 3.2:
@@ -51,6 +65,34 @@
 # content, same precedent as src/verifier_vision.py's inline
 # _RUBRIC_DISEASE/_RUBRIC_WEED (moved here so they're edit-without-redeploy,
 # same convention as cot_prompts.yaml's step chains).
+#
+# disease_pest criterion 7 (added after a real-run observation, Slack
+# 2026-09): the model was consistently predicting a specific causal pest
+# ("rice stem borer") for images whose ground-truth label was the symptom
+# it causes ("dead heart") — factually related, arguably not even wrong,
+# but a real category slip between "the symptom/condition" and "the
+# specific organism that causes it" that the classification prompt alone
+# (visual_classification_disease, src/config/prompts.yaml) doesn't
+# disambiguate, and datasets themselves aren't consistent about which
+# convention a given ground-truth label uses (sometimes it's the symptom,
+# sometimes the specific disease/pest) — so a rubric criterion can't just
+# require ONE or the other. Deliberately NOT solved by splitting
+# disease/pest_damage into separate rubrics either: visually, a disease and
+# a pest's damage can look identical, so which task_type a class happens
+# to be tagged doesn't reliably tell you which naming convention applies.
+# The actual fix, scoped to the verifier's own grading (not the baseline
+# prompt): don't force a single guess — structured_templates.disease_pest's
+# Diagnosis line now explicitly allows the model to state BOTH the symptom
+# AND its probable cause together (e.g. "Dead heart, likely caused by stem
+# borer") when it has an opinion on both, instead of only ever printing the
+# specific causal guess with the symptom it's based on left unstated. This
+# criterion then checks for exactly that — a causal claim grounded in its
+# own supporting symptom, not a bare guess. Since verifier-cot's
+# --verifier_type simple grading and --verifier_type ppt's pairwise
+# comparison both read this same {rubric} text, this applies to both
+# without any code change — only --verifier_type simple's metrics.json
+# verifier_score_correlation (docs/stage3_verifier_grade.md) will show
+# whether it actually moves anything.
 
 rubrics:
   disease_pest: |
@@ -60,6 +102,7 @@ rubrics:
     4. If pest-related, does it account for visible pest signs (webbing, frass, eggs, insect bodies)?
     5. Does it reflect whether the damage is systemic/uniform or isolated/localized?
     6. Is the stated condition (disease name, pest, or stress type) visually consistent with the image?
+    7. If it names a specific causal pest or disease, does it also name (in the Diagnosis line or the answer itself) the visible symptom/damage pattern that diagnosis is based on — rather than stating only the specific cause with no mention of the symptom it was inferred from? (E.g. "dead heart" is a symptom several rice pests can cause — "dead heart, likely caused by stem borer" grounds the guess; "stem borer" alone does not.) A trajectory that instead states only the symptom/damage pattern, with no specific causal guess at all, still fully satisfies this criterion — this only penalizes a bare, ungrounded causal guess.
   species_identification: &species_identification_rubric |
     1. Does it match the visible leaf arrangement, shape, margins, and venation pattern?
     2. Does it align with the plant's growth habit (erect, prostrate, climbing) and stem characteristics?
@@ -90,9 +133,9 @@ structured_templates:
     Symptom color, shape, and texture:
     Visible pest signs, if any (webbing, frass, eggs, insect bodies — or "none observed"):
     Damage pattern (systemic/uniform across the plant, or isolated/localized):
-    Diagnosis (disease name, pest, or stress type):
+    Diagnosis (disease name, pest, or stress type — if you can identify the specific disease/pest causing what you see, name it; if you're only confident about the symptom/damage pattern itself and not its specific cause, state that instead of guessing; if you're confident about both, state both together, e.g. "Dead heart, likely caused by stem borer" — don't state only a specific causal guess without the symptom it's based on):
 
-    After filling in every line above, restate your Diagnosis line's answer wrapped in <answer></answer> tags (e.g. <answer>Early Blight</answer>) — as briefly and precisely as you can state it, not a full sentence.
+    After filling in every line above, restate your Diagnosis line's answer wrapped in <answer></answer> tags (e.g. <answer>Early Blight</answer>, or <answer>Dead heart, likely caused by stem borer</answer> if stating both a symptom and its probable cause) — as briefly and precisely as you can state it, not a full sentence.
   species_identification: &species_identification_template |
     {question}
 
@@ -117,6 +160,75 @@ structured_templates:
 
     After filling in every line above, restate your Quality/ripeness assessment line's answer wrapped in <answer></answer> tags (e.g. <answer>Overripe</answer>) — as briefly and precisely as you can state it, not a full sentence.
 
+# --verifier_type top3 --top3_mode explicit (verifier_cot.py's
+# run_group_top3): ONE generation call per image, asking the model to
+# state its observations ONCE (shared evidence, same fields as
+# structured_templates above) then give 3 EXPLICITLY DIFFERENT ranked
+# possibilities instead of one. NOTE the header comment above already
+# documents a near-identical earlier attempt at this
+# ("multi_hypothesis") that was tried and reverted for the K-candidate/
+# PPT design — only 15.6% of wrong predictions had the correct answer
+# among 6 forced-diverse hypotheses, because forcing diversity competed
+# against the model's own best-calibrated guess. This is being retried
+# here anyway (2026-10-01, explicit user request) because the downstream
+# mechanism is different: back then the pool was ranked by a PPT
+# tournament; here each possibility is graded independently against the
+# rubric (run_group_top3's existing per-candidate grading, unchanged) and
+# the highest-scoring one wins by argmax, not a pairwise comparison — a
+# priori not guaranteed to fail the same way, but NOT yet validated
+# either. Run the smoke test (docs/stage3_classification_verifier.md)
+# before trusting this at scale; top3_pool_analysis's pool_coverage is
+# the metric that tells you whether this explicit-diversity instruction
+# is actually working better than --top3_mode resample's independent
+# temperature sampling.
+# Params: {question}
+structured_templates_top3_explicit:
+  disease_pest: |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Crop or plant species affected:
+    Plant part(s) showing symptoms (leaves / stem / fruit / roots):
+    Symptom color, shape, and texture:
+    Visible pest signs, if any (webbing, frass, eggs, insect bodies — or "none observed"):
+    Damage pattern (systemic/uniform across the plant, or isolated/localized):
+
+    Based on everything you observed above, give your 3 most likely diagnoses (disease name, pest, or stress type), ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same diagnosis restated or trivial variations of it — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence (e.g. "Dead heart, likely caused by stem borer" if stating both a symptom and its probable cause), one per tag:
+
+    <answer_1></answer_1>
+    <answer_2></answer_2>
+    <answer_3></answer_3>
+  species_identification: &species_identification_top3_explicit_template |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Leaf arrangement, shape, margins, and venation pattern:
+    Growth habit (erect / prostrate / climbing) and stem characteristics:
+    Flower or seed structures, if visible (or "not visible"):
+
+    Based on everything you observed above, give your 3 most likely species identifications (Scientific Name and/or Common Name), ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same species restated — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence, one per tag:
+
+    <answer_1></answer_1>
+    <answer_2></answer_2>
+    <answer_3></answer_3>
+  weed_identification: *species_identification_top3_explicit_template
+  quality_identification: |
+    {question}
+
+    Answer by filling in each line below based on what you directly observe in the image. Keep each line brief — a few words to one short phrase, not a full sentence.
+
+    Size and shape relative to a typical mature specimen:
+    Observed color and its position between unripe and overripe/spoiled:
+    Surface texture and firmness cues (bruising, wrinkling, gloss, softness):
+
+    Based on everything you observed above, give your 3 most likely quality/ripeness assessments, ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same assessment restated — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence, one per tag:
+
+    <answer_1></answer_1>
+    <answer_2></answer_2>
+    <answer_3></answer_3>
+
 # Maps dataset task_type (src/config/datasets.yaml) -> rubric key above —
 # mirrors cot_prompts.yaml's task_type_to_cot routing.
 task_type_to_rubric:
@@ -125,6 +237,140 @@ task_type_to_rubric:
   species_identification:  species_identification
   weed_identification:     weed_identification
   quality_identification:  quality_identification
+
+# --verifier_type simple's own grading call (verifier_cot.py's
+# run_group_simple). Text-only, no image — the trajectory already states
+# what it observed, same convention pairwise_prompt below uses. One line
+# per numbered rubric criterion is expected back; N in each <criterion_N>
+# tag must match that criterion's own number in {rubric} so
+# _parse_criterion_scores can key off it directly.
+# Params: {rubric} {question} {trajectory}
+grading_prompt: |
+  You are an expert agricultural scientist reviewer grading a single trajectory (there is no second trajectory to compare it against).
+
+  Evaluation Criteria:
+  {rubric}
+
+  Task: {question}
+
+  Trajectory: {trajectory}
+
+  Grade how well the trajectory satisfies EACH numbered criterion above, independently, on this 3-point scale:
+    1 = not satisfied — no supporting evidence cited for this criterion
+    2 = partially satisfied — some supporting evidence cited, but incomplete or unclear
+    3 = fully satisfied — clear, specific supporting evidence cited from the trajectory's own text
+
+  Output exactly one line per numbered criterion above, in this format (N is that criterion's own number, SCORE is 1, 2, or 3):
+  <criterion_N>SCORE</criterion_N>
+
+  Grades:
+
+# --top3_mode verifier_rubric (verifier_cot.py's run_group_top3_verifier_rubric,
+# 2026-10-03) — candidate-generation template with NO observational
+# preamble, unlike structured_templates_top3_explicit above. In this mode
+# the verifier does its own independent rubric-based observation
+# separately (verifier_rubric_fill_prompt below) and each candidate is
+# graded against THAT shared evidence, not its own stated reasoning — so
+# there's no reason to ask the generation call to restate rubric-aligned
+# observations itself (the thing suspected of driving the near-ceiling
+# score=3 ceiling effect: a trajectory that pre-fills exactly the fields
+# the rubric asks about trivially "cites" something for every criterion
+# regardless of whether the citation is actually correct). ONE shared
+# template, not indexed by rubric_key, since it never shows the rubric at
+# all.
+# Params: {question}
+structured_templates_top3_plain: |
+  {question}
+
+  Give your 3 most likely answers, ranked from most to least likely. The 3 possibilities must be genuinely DIFFERENT from each other, not the same answer restated or trivial variations of it — if you are only confident in one, still give your best two alternative guesses for the other two slots rather than repeating it. State each as briefly and precisely as you can, not a full sentence, one per tag:
+
+  <answer_1></answer_1>
+  <answer_2></answer_2>
+  <answer_3></answer_3>
+
+# --top3_mode verifier_rubric's own evidence-gathering call — the
+# verifier examines the image ONCE, independently of any candidate
+# answer (no candidate text shown at all here), and states what it
+# directly observes for EACH rubric criterion. This becomes the one
+# shared evidence base every candidate is scored against in
+# verifier_score_against_evidence_prompt below — a genuine second look
+# at the image, not a repeat of whatever the candidate-generation call
+# already claimed about itself.
+# Params: {rubric} {question}
+verifier_rubric_fill_prompt: |
+  You are an expert agricultural scientist examining an image for the following task:
+
+  Task: {question}
+
+  For EACH numbered item below, state what you directly observe in the image — be specific and concrete (colors, shapes, textures, patterns, counts), not a vague generality. If something isn't visible or determinable from the image, say so explicitly rather than guessing.
+
+  {rubric}
+
+  Output exactly one line per numbered item above, in this format (N is that item's own number):
+  <evidence_N>your observation</evidence_N>
+
+# --top3_mode verifier_rubric's own per-candidate scoring call — grades
+# ONE candidate answer against the verifier's OWN evidence
+# (verifier_rubric_fill_prompt's output), not against anything the
+# candidate itself claimed (there is no candidate trajectory here, only
+# a short final answer). The evidence is the same, fixed text for every
+# candidate scored against it for this image, so a difference in score
+# between candidates reflects how well each one's answer actually fits
+# that one shared evidence base, not a difference in how much each
+# candidate happened to write.
+# Params: {rubric} {question} {evidence} {answer}
+verifier_score_against_evidence_prompt: |
+  You are an expert agricultural scientist reviewer. You previously examined an image and recorded the following observations:
+
+  Task: {question}
+
+  Observations:
+  {evidence}
+
+  A candidate answer is proposed: "{answer}"
+
+  Evaluation Criteria:
+  {rubric}
+
+  Grade how well the OBSERVATIONS ABOVE support this candidate answer, criterion by criterion, independently, on this 3-point scale:
+    1 = not supported — the observations give no evidence for this criterion under this candidate answer
+    2 = partially supported — some supporting evidence, but incomplete or unclear
+    3 = fully supported — the observations clearly and specifically support this criterion under this candidate answer
+
+  Output exactly one line per numbered criterion above, in this format (N is that criterion's own number, SCORE is 1, 2, or 3):
+  <criterion_N>SCORE</criterion_N>
+
+# src/verifier_cot_top3_refine.py's own correction call (classification
+# analog of detection_box_refine.py's correct-and-reverify mechanism) —
+# shown to the MODEL being tested (not the verifier), when the winning
+# candidate from --top3_mode verifier_rubric scored <= 2 on any
+# criterion. Shows the SAME evidence the verifier used to grade it
+# (verifier_rubric_fill_prompt's own output, carried over unchanged —
+# never re-derived), exactly which criteria it failed (with their own
+# rubric question text, not just a bare number), and the other
+# round-1 candidates that lost — the model can keep its original
+# answer, switch to one of the losing candidates, or give something
+# else entirely. ONE corrective answer back, same <answer></answer>
+# convention as every other stage.
+# Params: {question} {evidence} {current_answer} {failing_criteria} {other_candidates}
+top3_refine_prompt: |
+  An answer you gave was flagged as weakly supported on some evaluation criteria. Reconsider it using the observations below — the SAME observations an independent review of the image already recorded (not a new look at the image, your own prior answer, or anything else).
+
+  Task: {question}
+
+  Observations:
+  {evidence}
+
+  Your current answer: "{current_answer}"
+
+  This answer was NOT well supported on:
+  {failing_criteria}
+
+  Other answers you considered earlier but did not choose:
+  {other_candidates}
+
+  Based on the observations above, give your best final answer — this can be your original answer again if you still believe it's correct, one of the other answers you considered, or something different entirely. Respond with ONLY:
+  <answer></answer>
 
 # The single-round verifier's PPT tournament duels AND src/verifier_lmv.py's PPT
 # baseline. This is the free-generation (pass 1) prompt only — it
@@ -152,6 +398,15 @@ pairwise_prompt: |
   Trajectory A: {trajectory_a}
   Trajectory B: {trajectory_b}
 
-  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. If either trajectory's stated answer has a visually similar but distinct condition it could easily be confused with (e.g. Black Sigatoka vs. Yellow Sigatoka, or two look-alike species), explicitly check whether the trajectory's cited evidence actually distinguishes between them — not just whether it names a plausible general category. Immediately after this analysis you will be asked to rate each trajectory on a 20-point letter scale from A to T (A = clearly and completely correct, T = clearly and completely incorrect, with the letters in between spanning that range), so make sure your analysis actually justifies whatever gap (or lack of gap) you're about to score.
+  Write 2-4 sentences comparing what each trajectory actually diagnoses and how well it matches the visual evidence and the evaluation criteria above. Name the specific difference between A and B — do not just restate that both look reasonable, and do not treat them as tied unless one is genuinely indistinguishable from the other in correctness. If either trajectory's stated answer has a visually similar but distinct condition it could easily be confused with (e.g. Black Sigatoka vs. Yellow Sigatoka, or two look-alike species), explicitly check whether the trajectory's cited evidence actually distinguishes between them — not just whether it names a plausible general category.
+
+  Immediately after this analysis you will be asked to rate EACH trajectory independently on a 20-point letter scale from A to T, anchored to how many of the numbered Evaluation Criteria above that trajectory actually satisfies WITH EVIDENCE CITED FROM ITS OWN TEXT — not a vague overall impression of correctness:
+    A-C — satisfies essentially ALL of the criteria, each with specific supporting evidence. No real gap.
+    D-H — satisfies MOST of the criteria (clear majority), but at least one is unaddressed, unclear, or only weakly supported.
+    I-M — satisfies SOME of the criteria — genuine, cited gaps outnumber the supported points, even if the overall diagnosis still sounds plausible.
+    N-T — satisfies at most ONE criterion, or the cited evidence actively contradicts the stated diagnosis.
+  Apply this same four-band anchor separately to Trajectory A and Trajectory B — each trajectory's score reflects how well THAT trajectory satisfies the criteria, not which one you'd pick as the winner.
+
+  Before scoring, state in your analysis which band (A-C / D-H / I-M / N-T) each trajectory falls into and why. If your analysis finds a real difference in how many criteria the two trajectories satisfy, THEIR SCORES MUST LAND IN DIFFERENT BANDS — do not describe a criteria-satisfaction gap between A and B and then score them within a few letters of each other; let the bands above drive real separation whenever a genuine difference exists, not just a tie-break in the same band.
 
   Analysis:

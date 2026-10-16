@@ -24,6 +24,13 @@ budget:
 Status: **in progress** — this doc is updated as each sub-stage lands. See
 the implementation plan for full design rationale and the exact file list.
 
+**See [docs/stage2_object_detection.md](stage2_object_detection.md)
+first** — a simpler, earlier Paper 1 stage (Detection-Baseline vs.
+Detection-Baseline-with-Rubric, no tournament machinery) that shares this
+stage's data-prep pipeline (5a below) and `detection_baseline.py` script.
+This doc (Stage 5) is the later Paper 2 extension: adding the
+K-candidate + PPT-tournament Detection-Verifier on top.
+
 ## Sub-stages
 
 | Sub-stage | Script | Status | Output |
@@ -104,14 +111,14 @@ echo "=== finished: $n_ok ok, $n_timeout timed out, $n_fail failed out of $TOTAL
 ## Step 3 — baseline inference
 
 ```bash
-uv run python main.py detection-baseline --model google/gemma-4-E4B-it
+uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 ```
 
 ## Step 4 — QC: plot predicted vs. ground-truth boxes
 
 ```bash
 uv run python main.py detection-qc-plot \
-  --ckpt outputs_final/detection_baseline/google_gemma-4-E4B-it/ckpt_google_gemma-4-E4B-it.csv \
+  --ckpt outputs_final/detection_baseline/RedHatAI_gemma-4-31B-it-FP8-dynamic/ckpt_RedHatAI_gemma-4-31B-it-FP8-dynamic.csv \
   --n_per_dataset 3
 ```
 
@@ -125,7 +132,7 @@ rescale-back fix in `src/common/bbox_parse.py`).
 ## Step 5 — verifier
 
 ```bash
-uv run python main.py detection-verifier --model google/gemma-4-E4B-it
+uv run python main.py detection-verifier --model RedHatAI/gemma-4-31B-it-FP8-dynamic
 ```
 
 Emits one row per image (same single-round shape as `verifier_cot.py`):

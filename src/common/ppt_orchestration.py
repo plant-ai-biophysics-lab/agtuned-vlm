@@ -37,7 +37,8 @@ from typing import Callable
 
 from src.common.chat_prompt import render_chat_template
 from src.common.ppt_scoring import (
-    analysis_before_tags, build_score_prompt, extract_tag_score, pairwise_scoring_prompt,
+    analysis_before_tags, build_score_prompt, extract_tag_score, letter_probability_diagnostics,
+    pairwise_scoring_prompt,
 )
 
 try:
@@ -60,6 +61,15 @@ class PairScoreResult:
     analysis: str
     prompt_tokens: int
     completion_tokens: int
+    # Diagnostic-only (Paper 2 Stage 2, docs/legacy/stage2_verifier_corrections_paused.md)
+    # — letter_probability_diagnostics' raw max/sum breakdown for each
+    # side's forced score-token position, and each side's trajectory word
+    # count. None for any caller that doesn't need this (no behavior
+    # change; nothing here feeds the actual r_a/r_b score).
+    diag_a: dict | None = None
+    diag_b: dict | None = None
+    words_a: int | None = None
+    words_b: int | None = None
 
 
 @dataclass
@@ -108,10 +118,11 @@ def score_pairs_batch(
     if trajectory_text_fn is None:
         trajectory_text_fn = lambda i, k: pools[i][k]  # noqa: E731
 
-    base_prompts, owners_list = [], []
+    base_prompts, owners_list, words_list = [], [], []
     for i in active:
         a, b = pair_by_image[i]
         text_a, text_b = trajectory_text_fn(i, a), trajectory_text_fn(i, b)
+        words_list.append((len(text_a.split()), len(text_b.split())))
         swapped = rng.random() < 0.5
         traj_a, traj_b = (text_b, text_a) if swapped else (text_a, text_b)
         pw_text = pairwise_scoring_prompt(rubric=rubric, question=question, trajectory_a=traj_a,
@@ -140,7 +151,9 @@ def score_pairs_batch(
 
     scores_a: list[float | None] = [None] * len(owners_list)
     scores_b: list[float | None] = [None] * len(owners_list)
-    for tag, scores in (("<score_A>", scores_a), ("<score_B>", scores_b)):
+    diags_a: list[dict | None] = [None] * len(owners_list)
+    diags_b: list[dict | None] = [None] * len(owners_list)
+    for tag, scores, diags in (("<score_A>", scores_a, diags_a), ("<score_B>", scores_b, diags_b)):
         score_prompts = [build_score_prompt(bp, an, tag) for bp, an in zip(base_prompts, analyses)]
         score_outputs = llm.generate(score_prompts, sampling_params=score_params)
         if call_stats is not None:
@@ -149,6 +162,7 @@ def score_pairs_batch(
         for idx, (analysis, out) in enumerate(zip(analyses, score_outputs)):
             comp = out.outputs[0]
             scores[idx] = extract_tag_score(analysis, tag, comp.text, comp.logprobs or [])
+            diags[idx] = letter_probability_diagnostics(comp.logprobs or [])
             pass_tokens[idx][0] += len(getattr(out, "prompt_token_ids", None) or [])
             pass_tokens[idx][1] += len(getattr(comp, "token_ids", None) or [])
 
@@ -157,9 +171,13 @@ def score_pairs_batch(
     for idx, (i, a, b, swapped, pw_text) in enumerate(owners_list):
         sa, sb = scores_a[idx], scores_b[idx]
         r_a, r_b = (sb, sa) if swapped else (sa, sb)
+        da, db = diags_a[idx], diags_b[idx]
+        diag_a, diag_b = (db, da) if swapped else (da, db)
+        wa, wb = words_list[idx]
         results[i] = PairScoreResult(
             r_a=r_a, r_b=r_b, analysis=analyses[idx],
             prompt_tokens=pass_tokens[idx][0], completion_tokens=pass_tokens[idx][1],
+            diag_a=diag_a, diag_b=diag_b, words_a=wa, words_b=wb,
         )
         owners[i] = PairOwner(index=i, a=a, b=b, swapped=swapped, prompt_text=pw_text)
     return results, owners

@@ -150,6 +150,18 @@ def denormalize_box_1000(bbox: list[float], img_w: int, img_h: int) -> list[floa
     return [x1 / 1000.0 * img_w, y1 / 1000.0 * img_h, x2 / 1000.0 * img_w, y2 / 1000.0 * img_h]
 
 
+def normalize_box_1000_y_first(bbox: list[float], img_w: int, img_h: int) -> list[float]:
+    """Inverse of denormalize_box_1000, reordered into box_2d's native
+    y-first [y1, x1, y2, x2] convention — used to render a known-correct
+    (pixel-space, x1,y1,x2,y2) box, e.g. ground truth, BACK into the exact
+    output shape Gemma's own box_2d JSON format expects. Needed for
+    building a synthetic "ideal" completion (DPO's `chosen` text) from
+    ground-truth boxes rather than from a model generation — see
+    experiments/ag_finetune/data_prep/build_dpo_unified_data.py."""
+    x1, y1, x2, y2 = bbox
+    return [y1 / img_h * 1000.0, x1 / img_w * 1000.0, y2 / img_h * 1000.0, x2 / img_w * 1000.0]
+
+
 def needs_1000_scale_boxes(model_id: str) -> bool:
     """True for model families empirically confirmed to report boxes on
     Gemma's native 0-1000 normalized scale rather than real pixels,

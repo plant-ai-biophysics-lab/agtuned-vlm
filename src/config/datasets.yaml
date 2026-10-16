@@ -1884,9 +1884,11 @@ datasets:
   location:
   - asia
   - india
-  skip: false
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review
+    review | HELD OUT for Stage 3 quality skill-memory lesson-building — see
+    docs/stage3_context_memory.md (Step 0b). Never sampled into the main AgML
+    quality_identification eval.
 - agml_name: WaterHyacinth_variety_classification
   crop: mixed
   task_type: species_identification
@@ -2014,9 +2016,11 @@ datasets:
   location:
   - europe
   - portugal
-  skip: false
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review
+    review | HELD OUT for Stage 3 quality skill-memory lesson-building — see
+    docs/stage3_context_memory.md (Step 0b). Never sampled into the main AgML
+    quality_identification eval.
 - agml_name: banana_grade_variety_classification
   crop: banana
   task_type: quality_identification
@@ -2342,9 +2346,11 @@ datasets:
   location:
   - asia
   - india
-  skip: false
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review | bean grading (A/AA/AAA/etc.)
+    review | bean grading (A/AA/AAA/etc.) | HELD OUT for Stage 3 quality
+    skill-memory lesson-building — see docs/stage3_context_memory.md (Step 0b).
+    Never sampled into the main AgML quality_identification eval.
 - agml_name: corn_leaf_pest_classification
   crop: maize
   task_type: pest_damage
@@ -3395,9 +3401,11 @@ datasets:
   location:
   - asia
   - india
-  skip: false
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review
+    review | HELD OUT for Stage 3 quality skill-memory lesson-building — see
+    docs/stage3_context_memory.md (Step 0b). Never sampled into the main AgML
+    quality_identification eval.
 - agml_name: pomegranate_thermal_defect_classification
   crop: pomegranate
   task_type: quality_identification
@@ -3740,9 +3748,11 @@ datasets:
   location:
   - europe
   - united_kingdom
-  skip: false
+  skip: true
   notes: NEW - auto-added by migrate_datasets_yaml.py, needs crop/task_type/location
-    review
+    review | HELD OUT for Stage 3 quality skill-memory lesson-building — see
+    docs/stage3_context_memory.md (Step 0b). Never sampled into the main AgML
+    quality_identification eval.
 - agml_name: sapota_fruit_size_classification
   crop: sapota
   task_type: quality_identification

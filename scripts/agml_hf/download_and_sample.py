@@ -101,6 +101,41 @@ def with_retry(fn, *args, **kwargs):
             time.sleep(wait)
 
 
+def fallback_parquet_data_files(repo_id: str) -> list[str] | None:
+    """hf:// URIs for every real *.parquet file in repo_id, or None if
+    there aren't any. Shared by every caller below that needs to bypass a
+    repo's own broken README-declared config — confirmed on
+    Project-AgML/synthetic_cowpea_{flower,pod}_detection: the repo's
+    README declares a config (e.g. "synthetic") whose data_files glob
+    pattern matches ZERO real files, so get_dataset_config_names()/
+    load_dataset(repo_id, ANY_cfg_name, ...) raises EmptyDatasetError for
+    every config name tried, not just the broken one — only loading via
+    the GENERIC "parquet" builder pointed at explicit hf:// URIs (which
+    never consults the repo's own README/configs metadata at all) works.
+    General — not hardcoded to these two repo names, in case another
+    AgML repo has the same README bug."""
+    from huggingface_hub import list_repo_files
+    parquet_files = [f for f in list_repo_files(repo_id, repo_type="dataset") if f.endswith(".parquet")]
+    if not parquet_files:
+        return None
+    return [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
+
+
+def load_dataset_safe(repo_id: str, cfg_name: str | None, split: str):
+    """load_dataset(repo_id, cfg_name, split=split), falling back to
+    fallback_parquet_data_files()'s generic-parquet-builder bypass on
+    EmptyDatasetError — see that function's own docstring for why."""
+    from datasets import load_dataset
+    from datasets.data_files import EmptyDatasetError
+    try:
+        return load_dataset(repo_id, cfg_name, split=split)
+    except EmptyDatasetError:
+        data_files = fallback_parquet_data_files(repo_id)
+        if data_files is None:
+            raise
+        return load_dataset("parquet", data_files=data_files, split=split)
+
+
 def find_label_column(features) -> str:
     for key in ("label", "labels", "class", "class_label"):
         if key in features:
@@ -116,11 +151,9 @@ def resolve_class_names(ds, label_col: str) -> list[str] | None:
 def process_dataset(agml_name: str, hf_config: str | None, catalog: dict,
                      n_per_class: int, seed: int,
                      fixed_indices: dict[str, list[int]] | None):
-    from datasets import load_dataset
-
     config = hf_config or catalog.get(agml_name, {}).get("preferred_config")
     repo_id = f"Project-AgML/{agml_name}"
-    ds = load_dataset(repo_id, config, split="train")
+    ds = load_dataset_safe(repo_id, config, split="train")
     label_col = find_label_column(ds.features)
     class_names = resolve_class_names(ds, label_col)
 
@@ -198,20 +231,32 @@ def _spread_label_positions(natural_ys: list[float], min_gap: float) -> list[flo
     return result
 
 
-def _add_leader_labels(ax, wedges, labels, radius, xoff, yoff, fontsize, min_gap: float = 0.075) -> None:
+def _add_leader_labels(ax, wedges, labels, radius, xoff, yoff, fontsize, min_gap: float = 0.075) -> list[tuple]:
     """Leader-line labels around a ring, split into a left column (x<0) and
     a right column (x>=0) — each column's label y-positions are indepedently
     spread apart (see _spread_label_positions) so tightly clustered wedges
     (several thin slices within a narrow angular range) never produce
-    overlapping text, regardless of how close their wedges actually are."""
+    overlapping text, regardless of how close their wedges actually are.
+
+    `radius` may be a single number (every wedge anchors on the same ring)
+    or a per-wedge list — used to fold a DIFFERENT ring's wedge into this
+    same column/spread pass (e.g. a tiny inner-ring wedge sharing the outer
+    ring's label column) without a second, independent placement that could
+    land on top of — or, worse, draw a long diagonal connector straight
+    through — labels this same call already placed. Returns each label's
+    final (ha, xtext, ytext) in input order, so a caller can anchor a LATER,
+    separate annotation relative to one of these already-placed labels
+    (see _render_task_nested_donut's small-inner-wedge handling)."""
     import numpy as np
 
+    radii = radius if isinstance(radius, (list, tuple)) else [radius] * len(wedges)
+    max_radius = max(radii) if radii else 1.0
     sides: dict[bool, list[int]] = {True: [], False: []}  # True = right (x>=0)
     positions = []
-    for wedge, label in zip(wedges, labels):
+    for wedge, label, r in zip(wedges, labels, radii):
         ang = (wedge.theta2 - wedge.theta1) / 2.0 + wedge.theta1
-        x, y = np.cos(np.deg2rad(ang)) * radius, np.sin(np.deg2rad(ang)) * radius
-        positions.append((ang, x, y))
+        x, y = np.cos(np.deg2rad(ang)) * r, np.sin(np.deg2rad(ang)) * r
+        positions.append((ang, x, y, r))
         sides[x >= 0].append(len(positions) - 1)
 
     adjusted_y = [0.0] * len(labels)
@@ -223,22 +268,37 @@ def _add_leader_labels(ax, wedges, labels, radius, xoff, yoff, fontsize, min_gap
         for i, y in zip(idxs, spread):
             adjusted_y[i] = y
 
+    placed = []
     for i, label in enumerate(labels):
-        ang, x, _ = positions[i]
+        ang, x, _, r = positions[i]
         ha = "left" if x >= 0 else "right"
+        xtext = xoff * (1 if x >= 0 else -1)
         # "angle" (the elbow-shaped connector) computes its bend via a
         # line-intersection that's undefined right at exactly 0/180 deg (a
         # wedge pointing due left/right) and looks stretched/bad well before
         # that too — a wedge within ~20 deg of the horizontal gets a plain
         # straight connector instead; everything else keeps the elbow look.
+        # Only for wedges anchored near the OUTER radius, though — a small
+        # inner wedge folded into this same pass (see
+        # _render_task_nested_donut's small-inner-wedge handling) anchors at
+        # a much smaller radius, so a straight line to the same xoff=1.25
+        # text column stretches across the entire outer ring and whatever
+        # other labels sit in between (confirmed real bug: a detection
+        # chart's near-horizontal "vegetable" category wedge, anchored at
+        # ring_outer_r≈0.54, drew a straight line all the way out through
+        # several unrelated outer-ring crop labels). The elbow connector has
+        # no such issue — it bends inward first, so it stays short and
+        # legible regardless of anchor radius.
         nearest_pole = round(ang / 180) * 180
-        near_horizontal = abs(ang - nearest_pole) < 20
+        near_horizontal = abs(ang - nearest_pole) < 20 and r >= 0.9 * max_radius
         connectionstyle = "arc3,rad=0.0" if near_horizontal else f"angle,angleA=0,angleB={ang}"
         ax.annotate(
-            label, xy=(x, positions[i][2]), xytext=(xoff * (1 if x >= 0 else -1), adjusted_y[i]),
-            horizontalalignment=ha, verticalalignment="center", fontsize=fontsize,
+            label, xy=(x, positions[i][2]), xytext=(xtext, adjusted_y[i]),
+            horizontalalignment=ha, verticalalignment="center", fontsize=fontsize, fontweight="bold",
             arrowprops=dict(arrowstyle="-", color="#555555", lw=0.6, connectionstyle=connectionstyle),
         )
+        placed.append((ha, xtext, adjusted_y[i]))
+    return placed
 
 
 # Broad crop-type taxonomy for the "remaining crops" bucket on the crop
@@ -258,6 +318,10 @@ CROP_CATEGORY = {
     "jujube": "fruit", "mango": "fruit", "orange": "fruit", "plum": "fruit", "pomegranate": "fruit",
     "sapota": "fruit", "strawberry": "fruit", "fruit": "fruit", "aegle_marmelos": "fruit",
     "hog_plum": "fruit", "lemon": "fruit", "mulberry": "fruit",
+    "chikoo": "fruit",  # Hindi name for sapota — Digital Green uses the regional name
+    "jamun": "fruit",  # Hindi name for java_plum
+    "papaya": "fruit", "watermelon": "fruit",  # Digital Green crop names, not yet seen in AgML
+    "kumquat": "fruit", "quince": "fruit",  # detection-catalog crop names, not yet seen elsewhere
     # Vegetable
     "ash_gourd": "vegetable", "cauliflower": "vegetable", "chilli": "vegetable",
     "cucumber": "vegetable", "eggplant": "vegetable", "okra": "vegetable", "onion": "vegetable",
@@ -266,24 +330,126 @@ CROP_CATEGORY = {
                            # lone 4-class wedge landing right at the ring's 0deg/360deg seam —
                            # folded in with vegetable crops to avoid that connector artifact
                            # rather than leaving a single-crop herb/spice sliver there
+    # Digital Green crop names/regional synonyms not in AgML's own vocabulary:
+    "chili": "vegetable",  # single-L spelling variant of "chilli"
+    "bhindi": "vegetable",  # Hindi name for okra
+    "brinjal": "vegetable",  # Indian-English name for eggplant
+    "cabbage": "vegetable", "garlic": "vegetable", "potato": "vegetable", "pumpkin": "vegetable",
+    "squash": "vegetable", "bitter_gourd": "vegetable", "bottle_gourd": "vegetable",
+    "ridge_gourd": "vegetable", "sponge_gourd": "vegetable",
+    "broccoli": "vegetable", "lettuce": "vegetable",  # detection-catalog crop names
     # Grain / cereal
     "corn": "grain", "maize": "grain", "paddy": "grain", "rice": "grain", "sorghum": "grain",
+    "barley": "grain", "wheat": "grain",
     # Legume
     "bean": "legume", "blackgram": "legume", "lentil": "legume", "soybean": "legume",
+    "chickpea": "legume", "gram": "legume",  # "gram" is the generic Indian-English term for chickpea
+    "kidney_bean": "legume", "moong": "legume", "pea": "legume", "cowpea": "legume",
+    "pigeon_pea": "legume", "arhar": "legume", "red_gram": "legume",  # 3 names for the same crop
     # Cash / industrial crop
     "cotton": "cash crop", "jute": "cash crop", "tea": "cash crop", "coffee": "cash crop",
-    "arabica_coffee": "cash crop", "sugarcane": "cash crop",
+    "arabica_coffee": "cash crop", "sugarcane": "cash crop", "tobacco": "cash crop",
+    "cocoa": "cash crop",  # detection-catalog crop name
     # Herb / spice / medicinal
     "betel_leaf": "herb/spice", "chitrak": "herb/spice", "lemongrass": "herb/spice",
-    "medicinal_plant": "herb/spice", "moringa": "herb/spice",
+    "medicinal_plant": "herb/spice", "medicinal_plants": "herb/spice", "moringa": "herb/spice",
+    "coriander": "herb/spice", "curry_leaf": "herb/spice", "turmeric": "herb/spice",
     # Nut / oilseed
-    "pistachio": "nut/oilseed", "sunflower": "nut/oilseed",
+    "pistachio": "nut/oilseed", "sunflower": "nut/oilseed", "almond": "nut/oilseed",
+    "cashew": "nut/oilseed",  # detection-catalog crop name, not yet seen elsewhere
+    "canola": "nut/oilseed", "groundnut": "nut/oilseed", "mustard": "nut/oilseed",
     # Ornamental
     "rose": "ornamental", "money_plant": "ornamental",
     # Non-crop
     "weed / non-crop species": "non-crop species",
-    "multi-crop / unspecified": "multi-crop / unspecified",
+    "multi-crop": "multi-crop",
 }
+
+
+def _digital_green_class_task_crop_counts(manifest_path: Path) -> tuple[Counter, dict[str, Counter]]:
+    """Digital Green's held-out Crop_Disease_Images dataset — deliberately
+    NOT wired through datasets.yaml/DatasetConfig (see
+    scripts/download_heldout_digitalgreen.py's own docstring: different HF
+    org, multi-label `diagnosis` column) — folded into these same
+    class_task_counts/crop_by_task dicts so it shows up alongside the AgML
+    catalog in the "classes by task type" charts instead of being invisible
+    there. Returns (Counter(), {}) if the manifest hasn't been downloaded
+    yet (chart generation shouldn't hard-fail just because this optional
+    extra source is missing).
+
+    "class" = one (crop, diagnosis) pair, not a bare diagnosis string — this
+    dataset spans many crops in one HF dataset (unlike almost every AgML
+    disease/pest dataset, which is single-crop), so "Pod Borer" on pigeon
+    pea and a same-named condition on another crop are two distinct
+    diagnosable classes, the same granularity an AgML class already has.
+
+    task_type comes from heldout_zeroshot.py's own bucket_category
+    heuristic (disease/pest/deficiency/healthy), folded into this chart's
+    existing 4-way AgML taxonomy per explicit user direction (no separate
+    "deficiency"/"healthy" task type exists here): pest -> pest_damage,
+    deficiency -> disease (both are plant-health diagnoses), healthy ->
+    dropped entirely (not a diagnosable condition, nothing to count)."""
+    if not manifest_path.exists():
+        return Counter(), {}
+
+    from src.heldout_zeroshot import bucket_category
+
+    rows = json.loads(manifest_path.read_text())["rows"]
+    pairs: set[tuple[str, str]] = set()
+    for r in rows.values():
+        crop = (r.get("crop") or "unknown").strip()
+        for d in r.get("diagnosis") or []:
+            d = d.strip()
+            if d:
+                pairs.add((crop, d))
+
+    class_task_counts: Counter = Counter()
+    crop_by_task: dict[str, Counter] = defaultdict(Counter)
+    for crop, diagnosis in pairs:
+        bucket = bucket_category(diagnosis)
+        if bucket == "healthy":
+            continue
+        task = "pest_damage" if bucket == "pest" else "disease"  # deficiency folds into disease
+        crop_label = crop.lower().replace(" ", "_")
+        class_task_counts[task] += 1
+        crop_by_task[task][crop_label] += 1
+    return class_task_counts, crop_by_task
+
+
+def _species_class_task_crop_counts(manifest_path: Path) -> tuple[Counter, dict[str, Counter]]:
+    """iNatAg-mini's held-out species manifest (download_heldout_species.py's
+    own output, dataset/heldout_species_selected_images.json by default) —
+    same row shape as Digital Green's manifest by deliberate convention (see
+    that script's docstring), folded into the same class_task_counts/
+    crop_by_task dicts as _digital_green_class_task_crop_counts so species
+    classes show up alongside the AgML catalog instead of being invisible.
+    Returns (Counter(), {}) if the manifest hasn't been downloaded yet.
+
+    Unlike Digital Green, every row here is already species_identification
+    (no bucket_category heuristic needed — the "diagnosis" field IS the
+    species name) and "crop" holds iNatAg-mini's own crop/weed category
+    label (not an actual crop name — see download_heldout_species.py), so
+    the crop breakdown for this source is coarse (two buckets: "crop",
+    "weed") rather than per-species."""
+    if not manifest_path.exists():
+        return Counter(), {}
+
+    rows = json.loads(manifest_path.read_text())["rows"]
+    pairs: set[tuple[str, str]] = set()
+    for r in rows.values():
+        crop = (r.get("crop") or "unknown").strip()
+        for d in r.get("diagnosis") or []:
+            d = d.strip()
+            if d:
+                pairs.add((crop, d))
+
+    class_task_counts: Counter = Counter()
+    crop_by_task: dict[str, Counter] = defaultdict(Counter)
+    for crop, _species in pairs:
+        crop_label = crop.lower().replace(" ", "_")
+        class_task_counts["species_identification"] += 1
+        crop_by_task["species_identification"][crop_label] += 1
+    return class_task_counts, crop_by_task
 
 
 def _crop_category(crop_label: str) -> str:
@@ -334,7 +500,7 @@ def _write_breakdown_csv(
 
 def _task_outer_entries(
     class_task_types: list[str], groups_by_task: dict[str, Counter], top_n: int, unit_name: str,
-    category_fn=None,
+    category_fn=None, color_map: dict | None = None, min_count: int = 1,
 ) -> dict[str, list[tuple[str, int, tuple]]]:
     """{task: [(label, value, color), ...]}.
 
@@ -370,7 +536,21 @@ def _task_outer_entries(
         group = groups_by_task[t]
 
         if category_fn is None:
-            top = group.most_common(top_n)
+            # Rank-based top_n alone (the original behavior, min_count=1)
+            # still shows every individually-ranked item even when a
+            # category is small — a 4-crop "grain" category with
+            # corn=4/maize=1/rice=1/wheat=1 never gets truncated by top_n=8
+            # at all, so all 4 show individually regardless. min_count>1
+            # additionally folds any individually-ranked item BELOW that
+            # count into the remainder bucket — confirmed real fix for a
+            # crowded detection chart (2026-10): several small categories
+            # (grain, vegetable) were each naming 3-5 singleton/doubleton
+            # crops individually, while the chart's actually-large category
+            # (fruit, 10 members) was comfortably summarized by the
+            # existing top_n=8 cutoff alone. Scoped to min_count so the
+            # already-fine big category is untouched — only genuinely
+            # sparse long-tail entries get swept into "N remaining X".
+            top = [(name, n) for name, n in group.most_common(top_n) if n >= min_count]
             top_names = {name for name, _ in top}
             remainder_items = [(name, n) for name, n in group.items() if name not in top_names]
             entries = list(top)
@@ -399,7 +579,7 @@ def _task_outer_entries(
                     entries.append((noun, total))
 
         entries.sort(key=lambda e: -e[1])
-        shades = _shade_gradient_by_value(TASK_COLOR.get(t, "#888888"), [v for _, v in entries])
+        shades = _shade_gradient_by_value((color_map or TASK_COLOR).get(t, "#888888"), [v for _, v in entries])
         result[t] = [(label, val, color) for (label, val), color in zip(entries, shades)]
     return result
 
@@ -416,6 +596,11 @@ def _render_task_nested_donut(
     breakdown_filename: str,
     chart_filename: str,
     category_fn=None,
+    color_map: dict | None = None,
+    display_fn=None,
+    outer_label_fontsize: int = 9,
+    small_inner_pct_threshold: float = 3,
+    min_outer_count: int = 1,
 ) -> None:
     """Task type (inner ring, by class count) -> some second attribute
     (outer ring) — generic over whatever per-task Counter it's given
@@ -424,19 +609,36 @@ def _render_task_nested_donut(
     copy. `unit_name` names what's being bucketed for the "N remaining
     {unit_name}" catch-all label (e.g. "crops", "countries"). `category_fn`
     splits that catch-all into per-category sub-wedges instead — see
-    _task_outer_entries / _crop_category."""
+    _task_outer_entries / _crop_category. `color_map`/`display_fn` default
+    to TASK_COLOR/_display_task (classification's own inner-ring keys) —
+    overridden by chart_detection_catalog.py, whose inner-ring keys are
+    crop categories / detection target types, not task types.
+    `small_inner_pct_threshold` is the cutoff (in percent of the inner ring)
+    below which an inner wedge is too thin for its own 3-line inline text
+    block and gets a leader-labeled callout outside the ring instead —
+    default 3 matches classification's own already-approved 4-category
+    chart; chart_detection_catalog.py passes a higher value since its charts
+    have more, smaller inner wedges (crop category / target type) that would
+    otherwise overlap at the same threshold.
+    `min_outer_count` (default 1, a no-op) forwards to _task_outer_entries'
+    own min_count — see that function's docstring for why a category can
+    still look crowded even when top_n alone never truncates it."""
     import matplotlib.pyplot as plt
     import numpy as np
 
+    color_map = color_map or TASK_COLOR
+    display_fn = display_fn or _display_task
+
     inner_labels = class_task_types
     inner_vals = [class_task_counts[t] for t in inner_labels]
-    inner_colors = [TASK_COLOR.get(t, "#888888") for t in inner_labels]
-    inner_callouts = [f"{_display_task(t)} ({class_task_counts[t]} classes)" for t in inner_labels]
+    inner_colors = [color_map.get(t, "#888888") for t in inner_labels]
+    inner_callouts = [f"{display_fn(t)} ({class_task_counts[t]} classes)" for t in inner_labels]
 
     _write_breakdown_csv(chart_dir, breakdown_filename, breakdown_key,
                           class_task_types, groups_by_task, top_n, category_fn=category_fn)
     outer_entries = _task_outer_entries(class_task_types, groups_by_task, top_n, unit_name,
-                                         category_fn=category_fn)
+                                         category_fn=category_fn, color_map=color_map,
+                                         min_count=min_outer_count)
 
     outer_vals, outer_colors, outer_labels = [], [], []
     for t in inner_labels:
@@ -447,13 +649,33 @@ def _render_task_nested_donut(
 
     fig, ax = plt.subplots(figsize=(13, 10))
     ring_w = 0.46  # thick enough that even the smallest task's two-line label fits inside it
+    # startangle=90, counterclock=False: conventional clock-face layout
+    # (12 o'clock, clockwise) — chosen over matplotlib's own default
+    # (startangle=0, counterclockwise) specifically because the default
+    # puts the wrap-around seam (where the LAST wedge ends and the FIRST
+    # wedge begins again) at due-right/horizontal (3 o'clock). When several
+    # small wedges end up adjacent to that seam (confirmed real case: a
+    # cluster of ~5 small crop categories after two large ones ate most of
+    # the circle), _add_leader_labels' near_horizontal special-case (and,
+    # independently, the wedges' own thin radial edges) all point in nearly
+    # the same near-0deg direction, producing long, confusing,
+    # near-horizontal leader lines that visually cut straight through the
+    # rest of the ring. Starting at 12 o'clock instead means the seam lands
+    # at due-LEFT (9 o'clock) — still a seam, but one far less likely to
+    # coincide with where a crowded tail of small wedges lands for typical
+    # (descending-count-sorted) data here, since the big wedges are listed
+    # FIRST and so start right at the 12 o'clock mark rather than straddling
+    # the seam themselves.
     inner_wedges, _ = ax.pie(
         inner_vals, radius=1 - ring_w, colors=inner_colors,
+        startangle=90, counterclock=False,
         wedgeprops=dict(width=ring_w, edgecolor="white", linewidth=1.5))
     outer_wedges, _, _ = ax.pie(
         outer_vals, radius=1, colors=outer_colors,
+        startangle=90, counterclock=False,
         wedgeprops=dict(width=ring_w, edgecolor="white", linewidth=1),
-        autopct=lambda p: f"{p:.0f}%" if p >= 6 else "", pctdistance=1 - ring_w / 2 + 0.03)
+        autopct=lambda p: f"{p:.0f}%" if p >= 6 else "", pctdistance=1 - ring_w / 2 + 0.03,
+        textprops=dict(fontweight="bold"))
     ax.set(aspect="equal")
 
     # Task name, class count, and percentage as ONE compact text block (3
@@ -462,26 +684,55 @@ def _render_task_nested_donut(
     # the ring's inner edge (nearer the hole/center), where matplotlib
     # doesn't need to fan two elements across the wedge's full radial span
     # to keep them apart. Contained within even the thinnest wedge.
+    # Inner wedges too thin for their own 3-line text block (name/count/pct)
+    # to fit without colliding with a neighbor get a leader-line label
+    # outside the ring instead — same mechanism the outer ring already uses
+    # for every one of its wedges (_add_leader_labels), just applied
+    # selectively here since most inner wedges ARE big enough to hold
+    # inline text.
+    _SMALL_INNER_PCT = small_inner_pct_threshold
     ring_inner_r = 1 - 2 * ring_w
     ring_outer_r = 1 - ring_w
     total_inner = sum(inner_vals)
+    small_inner_wedges, small_inner_labels = [], []  # folded into the outer
+    # ring's own _add_leader_labels call below (same column/spread pass) so
+    # several small inner wedges clustered at similar angles (e.g. three
+    # 5%-ish categories next to each other) get spread apart from EACH
+    # OTHER too, not just anchored independently where they could overlap.
     for wedge, val, label in zip(inner_wedges, inner_vals, inner_callouts):
         ang = (wedge.theta2 - wedge.theta1) / 2.0 + wedge.theta1
         rad = np.deg2rad(ang)
         pct = 100 * val / total_inner
-        # Small wedges sit further out toward the ring's outer edge, where
-        # the arc is wider — near the hole all wedges converge tightly, so a
-        # smaller wedge benefits more from the extra room a larger radius
-        # gives than a big wedge does.
-        frac = 0.58 if pct < 15 else 0.38
-        label_r = ring_inner_r + (ring_outer_r - ring_inner_r) * frac
         name, count = label.split(" (")
+        if pct < _SMALL_INNER_PCT:
+            small_inner_wedges.append(wedge)
+            small_inner_labels.append(f"{name} ({count}, {pct:.0f}%)")
+            continue
+        # Small (but not tiny) wedges sit further out toward the ring's
+        # outer edge, where the arc is wider — near the hole all wedges
+        # converge tightly, so a smaller wedge benefits more from the extra
+        # room a larger radius gives than a big wedge does. Threshold is 20
+        # (not 15): confirmed real case, classification's pest/damage wedge
+        # at 16% was just over the old 15% cutoff, grouping it with the
+        # genuinely huge disease(42%)/species(35%) wedges at the
+        # close-to-hole radius where the arc is narrowest — its label had
+        # noticeably less room than its "16%" might suggest and looked
+        # off-center as a result. 20 keeps it (and anything else in the
+        # 15-20% band) in the more spacious outer-biased group instead;
+        # checked against every other nested-donut chart in this pipeline
+        # (detection's crop-category/target-type charts) and nothing else
+        # currently falls in the 15-20% band, so this is a no-op for them.
+        frac = 0.58 if pct < 20 else 0.38
+        label_r = ring_inner_r + (ring_outer_r - ring_inner_r) * frac
         ax.text(np.cos(rad) * label_r, np.sin(rad) * label_r,
                  f"{name}\n({count}\n{pct:.0f}%",
-                 ha="center", va="center", fontsize=9, linespacing=1.3)
+                 ha="center", va="center", fontsize=9, linespacing=1.3, fontweight="bold")
 
-    _add_leader_labels(ax, outer_wedges, outer_labels, radius=1,
-                        xoff=1.25, yoff=1.15, fontsize=9)
+    combined_wedges = list(outer_wedges) + small_inner_wedges
+    combined_labels = list(outer_labels) + small_inner_labels
+    combined_radii = [1] * len(outer_wedges) + [ring_outer_r] * len(small_inner_wedges)
+    _add_leader_labels(ax, combined_wedges, combined_labels, radius=combined_radii,
+                        xoff=1.25, yoff=1.15, fontsize=outer_label_fontsize)
 
     plt.tight_layout()
     path = chart_dir / chart_filename
@@ -567,10 +818,48 @@ def _render_task_continent_grouped_bar(
     print(f"  Saved: {path}")
 
 
-def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) -> None:
+def make_charts(
+    datasets: list[DatasetConfig], manifest: dict, chart_dir: Path,
+    digital_green_manifest: Path | None = None,
+    species_manifest: Path | None = None,
+    outer_label_fontsize: int = 9,
+) -> None:
     """Summary figures for a download_and_sample run: how many datasets/classes/images
-    ended up in the selection, and how it breaks down by task type."""
+    ended up in the selection, and how it breaks down by task type.
+
+    digital_green_manifest: optional path to Digital Green's own held-out
+    manifest (dataset/heldout_selected_images.json by default — see main()).
+    When given and present on disk, its classes are folded into the
+    "classes by task type" charts (1b, 5, 6) via
+    _digital_green_class_task_crop_counts — see that function's docstring
+    for the task-type mapping. None/missing is a no-op, not an error.
+
+    species_manifest: same idea, for iNatAg-mini's held-out species manifest
+    (dataset/heldout_species_selected_images.json by default) via
+    _species_class_task_crop_counts — always folds into
+    species_identification. None/missing is a no-op, not an error.
+
+    outer_label_fontsize: forwarded to both nested-donut charts' (6, 6b)
+    own _add_leader_labels calls — default 9 matches every other call site
+    in this pipeline; bump it for a larger-text variant without touching
+    the default."""
     import matplotlib.pyplot as plt
+
+    dg_class_task_counts, dg_crop_by_task = (
+        _digital_green_class_task_crop_counts(digital_green_manifest)
+        if digital_green_manifest else (Counter(), {})
+    )
+    if dg_class_task_counts:
+        print(f"  Digital Green: +{sum(dg_class_task_counts.values())} classes folded in "
+              f"({dict(dg_class_task_counts)})")
+
+    sp_class_task_counts, sp_crop_by_task = (
+        _species_class_task_crop_counts(species_manifest)
+        if species_manifest else (Counter(), {})
+    )
+    if sp_class_task_counts:
+        print(f"  iNatAg-mini: +{sum(sp_class_task_counts.values())} classes folded in "
+              f"({dict(sp_class_task_counts)})")
 
     chart_dir.mkdir(parents=True, exist_ok=True)
     ds_by_name = {d.agml_name: d for d in datasets}
@@ -649,6 +938,8 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
         for cls in entry["classes"]:
             eff = cfg.effective_task_type(cls) if cfg else task_type_by_name.get(name, "unknown")
             class_task_counts[eff] += 1
+    class_task_counts.update(dg_class_task_counts)  # fold in Digital Green — see make_charts' docstring
+    class_task_counts.update(sp_class_task_counts)  # fold in iNatAg-mini — see make_charts' docstring
 
     class_task_types = sorted(class_task_counts, key=lambda t: -class_task_counts[t])
     class_colors = [TASK_COLOR.get(t, "#888888") for t in class_task_types]
@@ -785,7 +1076,7 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
     # "mixed" — see DatasetConfig.crop / crop_display() — so they're
     # unaffected by this bucket and appear under their own real crop name(s).
     _AMBIGUOUS_CROP_LABEL = {"species_identification": "weed / non-crop species"}
-    _AMBIGUOUS_CROP_DEFAULT = "multi-crop / unspecified"
+    _AMBIGUOUS_CROP_DEFAULT = "multi-crop"
 
     TOP_N_CROPS = 8
     crop_by_task: dict[str, Counter] = defaultdict(Counter)
@@ -803,6 +1094,10 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
             else:
                 crop_label = crop_val
             crop_by_task[eff][crop_label] += 1
+    for task, counter in dg_crop_by_task.items():  # fold in Digital Green — see make_charts' docstring
+        crop_by_task[task].update(counter)
+    for task, counter in sp_crop_by_task.items():  # fold in iNatAg-mini — see make_charts' docstring
+        crop_by_task[task].update(counter)
 
     _render_task_nested_donut(
         chart_dir, class_task_types, class_task_counts, crop_by_task,
@@ -816,6 +1111,7 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
                                       # whole category is one combined wedge
                                       # (e.g. "fruit crops"). See
                                       # _task_outer_entries.
+        outer_label_fontsize=outer_label_fontsize,
     )
 
     # ── 6b. Same nested donut, outer ring by LOCATION (country) instead of
@@ -847,6 +1143,7 @@ def make_charts(datasets: list[DatasetConfig], manifest: dict, chart_dir: Path) 
         top_n=8, unit_name="countries", breakdown_key="country",
         breakdown_filename="classes_by_task_type_location_breakdown.csv",
         chart_filename="classes_by_task_type_location_nested_pie.png",
+        outer_label_fontsize=outer_label_fontsize,
     )
 
     # ── 6c. Bar-chart companion to 6b — grouped (not stacked) by continent
@@ -908,6 +1205,18 @@ def main() -> None:
                           "doesn't match the existing manifest's recorded value.")
     ap.add_argument("--chart_dir", default="outputs/agml_hf/",
                      help="where to write summary figures (datasets/classes/images counts)")
+    ap.add_argument("--digital_green_manifest", default="dataset/heldout_selected_images.json",
+                     help="Digital Green's own held-out manifest (download_heldout_digitalgreen.py's "
+                          "output) — its classes are folded into the 'classes by task type' charts "
+                          "alongside the AgML catalog. Pass '' to skip (missing file is also a no-op).")
+    ap.add_argument("--species_manifest", default="dataset/heldout_species_selected_images.json",
+                     help="iNatAg-mini's own held-out species manifest (download_heldout_species.py's "
+                          "output) — its classes are folded into the 'classes by task type' charts as "
+                          "species_identification, alongside the AgML catalog. Pass '' to skip (missing "
+                          "file is also a no-op).")
+    ap.add_argument("--outer_label_fontsize", type=int, default=9,
+                     help="Font size for the outer leader-line labels on both nested-donut charts "
+                          "(crop, location) — default 9 matches every other chart in this pipeline.")
     ap.add_argument("--no_charts", action="store_true", help="skip chart generation")
     ap.add_argument("--plot_only", action="store_true",
                      help="skip download/sampling entirely; just regenerate charts from the "
@@ -935,7 +1244,10 @@ def main() -> None:
             print(f"ERROR: --plot_only given but {out_path} does not exist.")
             sys.exit(1)
         manifest = json.loads(out_path.read_text())
-        make_charts(datasets, manifest, Path(args.chart_dir))
+        make_charts(datasets, manifest, Path(args.chart_dir), \
+                    digital_green_manifest=Path(args.digital_green_manifest) if args.digital_green_manifest else None,
+                    species_manifest=Path(args.species_manifest) if args.species_manifest else None,
+                    outer_label_fontsize=args.outer_label_fontsize)
         return
 
     prior_manifest = json.loads(Path(args.from_manifest).read_text()) if args.from_manifest else None
@@ -1017,7 +1329,10 @@ def main() -> None:
 
     if not args.no_charts:
         print(f"\n=== Generating summary charts -> {args.chart_dir} ===")
-        make_charts(datasets, manifest, Path(args.chart_dir))
+        make_charts(datasets, manifest, Path(args.chart_dir), \
+                    digital_green_manifest=Path(args.digital_green_manifest) if args.digital_green_manifest else None,
+                    species_manifest=Path(args.species_manifest) if args.species_manifest else None,
+                    outer_label_fontsize=args.outer_label_fontsize)
 
 
 if __name__ == "__main__":

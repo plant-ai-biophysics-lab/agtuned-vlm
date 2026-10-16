@@ -10,6 +10,34 @@ DISEASE_TASK_TYPES = {"disease", "pest_damage"}
 IDENTIFICATION_TASK_TYPES = {"species_identification", "quality_identification"}
 
 
+def _load_dataset_safe(repo_id: str, cfg_name: str | None, split: str):
+    """load_dataset(repo_id, cfg_name, split=split), with a fallback for a
+    confirmed real repo-side data bug: some AgML repos (confirmed on
+    Project-AgML/synthetic_cowpea_{flower,pod}_detection) declare a config
+    in their own README whose data_files glob pattern matches ZERO real
+    files — load_dataset raises EmptyDatasetError for ANY config name
+    passed, not just the broken one. On that specific error, bypass the
+    repo's own module/config resolution entirely and load via the generic
+    "parquet" builder pointed at explicit hf:// URIs for the real files
+    (found via huggingface_hub.list_repo_files) — never consults the
+    repo's own README/configs metadata at all. General, not hardcoded to
+    these two repo names, in case another AgML repo has the same bug.
+    Same fix pattern as scripts/agml_hf/download_and_sample.py's own
+    load_dataset_safe — duplicated here rather than imported, since
+    src/common shouldn't depend on scripts/ (wrong layering direction)."""
+    from datasets import load_dataset
+    from datasets.data_files import EmptyDatasetError
+    try:
+        return load_dataset(repo_id, cfg_name, split=split)
+    except EmptyDatasetError:
+        from huggingface_hub import list_repo_files
+        parquet_files = [f for f in list_repo_files(repo_id, repo_type="dataset") if f.endswith(".parquet")]
+        if not parquet_files:
+            raise
+        data_files = [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
+        return load_dataset("parquet", data_files=data_files, split=split)
+
+
 @dataclass
 class DatasetConfig:
     agml_name: str
@@ -148,6 +176,35 @@ def excluded_class_pairs(config_path: Path) -> set[tuple[str, str]]:
 
 def datasets_by_name(config_path: Path) -> dict[str, DatasetConfig]:
     return {d.agml_name: d for d in load_datasets(config_path)}
+
+
+def add_class_list_field(rows: list[dict], dataset_classes: dict[str, list[str]]) -> None:
+    """In place: row["class_list_text"] = a newline-bulleted rendering of
+    dataset_classes[row["agml_dataset"]], joined for a judge template's
+    {class_list} placeholder (filled via apply_judge's extra_keys) —
+    datasets.yaml's own class order, unmodified. Moved here (from
+    src.common.judge_template_sensitivity, which still re-exports it for
+    existing importers) so any judge-calling script can build a class_list
+    value, not just the Phase 1-4 template-sensitivity ablation — needed
+    now that the pipeline's default judge template
+    (src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY) has a {class_list}
+    placeholder."""
+    for r in rows:
+        classes = dataset_classes.get(r.get("agml_dataset", ""), [])
+        r["class_list_text"] = "\n".join(f"- {c}" for c in classes)
+
+
+def class_list_extra_keys(rows: list[dict], config_path: Path) -> dict[str, str]:
+    """Convenience wrapper: builds dataset_classes from config_path via
+    datasets_by_name, calls add_class_list_field(rows, ...) in place, and
+    returns the extra_keys dict apply_judge expects for a template with a
+    {class_list} placeholder. Every judge call site defaulting to
+    src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY needs this, since that
+    template requires {class_list} — see its module-level comment in
+    metrics.py."""
+    dataset_classes = {name: cfg.clean_classes for name, cfg in datasets_by_name(config_path).items()}
+    add_class_list_field(rows, dataset_classes)
+    return {"class_list": "class_list_text"}
 
 
 def prefetch_agml_datasets(datasets: list[DatasetConfig]) -> None:
@@ -359,8 +416,7 @@ def load_hf_samples(
             path = label_dir / f"{idx}.jpg"
             if not path.exists():
                 if ds is None:
-                    from datasets import load_dataset
-                    ds = load_dataset(repo_id, config, split="train")
+                    ds = _load_dataset_safe(repo_id, config, split="train")
                     image_col = find_image_column(ds.features)
                 label_dir.mkdir(parents=True, exist_ok=True)
                 ds[idx][image_col].convert("RGB").save(path, format="JPEG")
@@ -457,8 +513,7 @@ def load_hf_detection_samples(
                 boxes = _json.loads(ann_path.read_text())
             else:
                 if ds is None:
-                    from datasets import load_dataset
-                    ds = load_dataset(repo_id, config, split="train")
+                    ds = _load_dataset_safe(repo_id, config, split="train")
                     image_col = find_image_column(ds.features)
                 out_dir.mkdir(parents=True, exist_ok=True)
                 row = ds[idx]
@@ -470,10 +525,23 @@ def load_hf_detection_samples(
                 # CBDA_Cotton_Ball_Detection_Augmented uses "category") — check
                 # both rather than assuming either.
                 cat_list = objs.get("category") if objs.get("category") is not None else objs.get("categories", [])
+                bbox_list = objs.get("bbox", [])
+                # Some repos store a SINGLE summary category_id per row even
+                # when multiple box instances are present (confirmed on
+                # GEMINI_cowpea_flower_detection: bbox count=4, categories
+                # count=1) — zip() was silently stopping at the shorter
+                # list, dropping every box past the first. Broadcast the
+                # single category across every box instead of truncating.
+                if len(cat_list) == 1 and len(bbox_list) > 1:
+                    cat_list = list(cat_list) * len(bbox_list)
+                elif cat_list and len(cat_list) != len(bbox_list):
+                    print(f"  [warn] {agml_name} row {idx}: bbox count ({len(bbox_list)}) != "
+                          f"categories count ({len(cat_list)}) and not a 1-vs-many case — "
+                          f"truncating to the shorter list via zip, some boxes may be dropped.")
                 boxes = [
                     {"bbox": _to_pixel_xyxy(list(bbox), image.width, image.height),
                      "category_id": int(cat_id), "category_name": _category_name(int(cat_id))}
-                    for bbox, cat_id in zip(objs.get("bbox", []), cat_list)
+                    for bbox, cat_id in zip(bbox_list, cat_list)
                 ]
                 ann_path.write_text(_json.dumps(boxes))
             samples.append({"path": str(img_path), "boxes": boxes})

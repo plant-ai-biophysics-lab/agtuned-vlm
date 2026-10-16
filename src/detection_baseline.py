@@ -16,8 +16,26 @@ job can resume exactly where it left off:
   <output_dir>/<safe_model_name>/ckpt_<safe_model_name>.csv
   <output_dir>/<safe_model_name>/metrics.json
 
+--rubric (Paper 2 Stage 2, docs/stage2_object_detection.md): same single-shot
+script, wraps the question through detection_verifier.py's own
+fill-in-the-blank localization checklist (object/class, location,
+occlusion, size) before the model prints boxes — no tournament/verifier
+machinery. Spatial-task analog of vision_baseline.py's --rubric.
+Compared against the plain run at an equal image budget via
+src/detection_rubric_summary.py.
+
+--enable_thinking is ON by default (matching vision_baseline.py's own
+standard thinking-enabled workflow) — pass --no-enable_thinking to opt
+out. --chat_template_path defaults to the vendored Gemma-4 template
+alongside it; pass --chat_template_path "" too if overriding --model to a
+non-Gemma checkpoint.
+
 Usage:
-    uv run python main.py detection-baseline --model google/gemma-4-E4B-it
+    uv run python main.py detection-baseline \\
+        --model RedHatAI/gemma-4-31B-it-FP8-dynamic \\
+        --output_dir outputs_final/detection_baseline_thinking/
+    uv run python main.py detection-baseline --model RedHatAI/gemma-4-31B-it-FP8-dynamic \\
+        --rubric --output_dir outputs_final/detection_baseline_rubric/
 """
 from __future__ import annotations
 
@@ -40,16 +58,16 @@ from src.common.bbox_parse import (
 from src.common.chat_prompt import build_multimodal_prompt
 from src.common.dataset_config import active_datasets, crop_display, load_hf_detection_samples, load_manifest
 from src.common.io import load_prompts
+from src.common.metrics import extract_channel_thought
 from src.common.progress import ProgressBar
 from src.common.vision_eval import append_ckpt_row, archive_ckpt_if_rerun, load_ckpt, safe_model_name
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
+from src.common.heldout_skill import build_detection_skill_system_prompt
 
 try:
     from vllm import SamplingParams
-    _DET_PARAMS = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
-    _DET_PARAMS = None
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 
@@ -57,22 +75,58 @@ _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL 
 # CKPT_FIELDS, but "class_label" here is the PRIMARY category the manifest
 # balanced on (see download_and_sample_detection.py), not the only label —
 # gt_boxes_json/pred_boxes_json carry the FULL per-image box list.
+# "reasoning" mirrors vision_baseline.py's own column: blank unless
+# --enable_thinking actually produced a Gemma-4 <|channel>thought...<channel|>
+# block (extracted before box parsing, see run_batch).
 DET_CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "image_name",
-    "raw_prediction", "pred_boxes_json", "gt_boxes_json",
+    "raw_prediction", "reasoning", "pred_boxes_json", "gt_boxes_json",
     "n_pred", "n_gt", "n_matched", "precision_at_iou50", "recall_at_iou50",
     "f1_at_iou50", "mean_iou_matched",
 ]
+
+
+
+# --smoketest: a single small, known-good dataset for validating the whole
+# pipeline (manifest -> config -> generation -> box parsing -> scoring) end
+# to end before committing to a full multi-dataset run. 990 real images,
+# genuinely detection-type — see src/config/hf_catalog_excluded.json's own
+# entry for it.
+SMOKETEST_DATASET = "GEMINI_cowpea_flower_detection"
 
 
 def _clean(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = "") -> list[str]:
-    prompts = [build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt) for img in images]
-    outputs = llm.generate(prompts, sampling_params=_DET_PARAMS)
-    return [_clean(o.outputs[0].text) for o in outputs]
+def run_batch(
+    llm, tokenizer, images: list, question: str, system_prompt: str = "",
+    enable_thinking: bool = False, chat_template: str | None = None, gen_max_tokens: int = 256,
+) -> list[dict]:
+    """Returns one {"prediction": cleaned_text, "reasoning": thinking_text}
+    dict per image. `reasoning` is "" unless enable_thinking is set AND it
+    actually produces a Gemma-4 <|channel>thought...<channel|> block —
+    extracted BEFORE box parsing (extract_boxes/extract_boxes_json), same
+    as vision_baseline.py's own run_batch, so a leftover channel block
+    never pollutes the text those functions try to parse boxes out of.
+    skip_special_tokens=not enable_thinking — Gemma-4's <|channel>/
+    <channel|> markers are real special tokens vLLM strips by default."""
+    prompts = [
+        build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt,
+                                 enable_thinking=enable_thinking, chat_template=chat_template)
+        for img in images
+    ]
+    params = SamplingParams(
+        temperature=0.0, max_tokens=gen_max_tokens, repetition_penalty=1.1,
+        skip_special_tokens=not enable_thinking,
+    )
+    outputs = llm.generate(prompts, sampling_params=params)
+    results = []
+    for o in outputs:
+        raw = o.outputs[0].text
+        thinking, cleaned = extract_channel_thought(raw) if enable_thinking else ("", raw)
+        results.append({"prediction": _clean(cleaned), "reasoning": thinking})
+    return results
 
 
 def det_question(ds, prompts: dict, use_json: bool = False) -> str:
@@ -89,6 +143,29 @@ def det_question(ds, prompts: dict, use_json: bool = False) -> str:
     return prompts[key].format(class_names=names, crop=crop_display(ds.crop))
 
 
+_VERIFIER_PROMPTS_DETECTION_PATH = Path(__file__).parent / "config" / "verifier_prompts_detection.yaml"
+
+
+def load_rubric_templates_detection(path: Path = _VERIFIER_PROMPTS_DETECTION_PATH) -> dict:
+    """Stage 2.5 — "Baseline with rubric" for detection: reuses
+    detection_verifier.py's own model-facing fill-in-the-blank localization
+    criteria chain (src/config/verifier_prompts_detection.yaml's
+    structured_templates/structured_templates_json, object_detection key)
+    as a --rubric flag on the plain single-shot baseline, with no
+    tournament/verifier machinery at all — exact spatial-task analog of
+    vision_baseline.py's own load_rubric_templates/--rubric (Stage 2).
+    Returns the raw yaml dict; apply_rubric_detection reads the right key
+    off it directly."""
+    import yaml as _yaml
+    with open(path) as f:
+        return _yaml.safe_load(f)
+
+
+def apply_rubric_detection(question: str, use_json: bool, vprompts: dict) -> str:
+    key = "structured_templates_json" if use_json else "structured_templates"
+    return vprompts[key]["object_detection"].format(question=question)
+
+
 def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float = 0.5) -> dict:
     matches, unmatched_pred, unmatched_gt = match_boxes(pred_boxes, gt_boxes, iou_threshold)
     return precision_recall_f1(matches, unmatched_pred, unmatched_gt)
@@ -97,9 +174,24 @@ def score_row(pred_boxes: list[dict], gt_boxes: list[dict], iou_threshold: float
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    # Same skill-injection pattern as detection_multiclass.py's own
+    # run_model — plain reference-material framing only
+    # (build_detection_skill_system_prompt), deliberately WITHOUT
+    # classification's own "two firm rules" wrapper, see that function's
+    # own docstring for why. detection_baseline.py had no skill-memory
+    # support at all until this was added.
+    skill_system_prompt = (
+        build_detection_skill_system_prompt(system_prompt, args.skill_memory_path)
+        if args.skill_memory_path else system_prompt
+    )
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
     manifest = load_manifest(Path(args.manifest))
     rescale_1000 = needs_1000_scale_boxes(model_id)
     use_json = uses_json_box_format(model_id)
+    vprompts = load_rubric_templates_detection() if args.rubric else None
+    if args.rubric:
+        print(f"  [rubric] wrapping every question through the fill-in-the-blank "
+              f"localization checklist before box output (see load_rubric_templates_detection)")
     if rescale_1000:
         print(f"  [bbox] {model_id}: rescaling predicted boxes from Gemma's native 0-1000 "
               f"normalized scale to real pixel coordinates (see bbox_parse.needs_1000_scale_boxes)")
@@ -120,14 +212,27 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
     # per-(dataset,class) grouping (class_names here means EVERY class in
     # the dataset, not one — a detection prompt asks about the whole
     # vocabulary at once, not one class at a time).
+    all_active = list(active_datasets(Path(args.config)))
+    if args.smoketest:
+        all_active = [ds for ds in all_active if ds.agml_name == SMOKETEST_DATASET]
+        if not all_active:
+            raise SystemExit(
+                f"--smoketest: {SMOKETEST_DATASET!r} not found (or not active) in --config "
+                f"{args.config} — catalog/migrate it first (see docs/stage2_object_detection.md's "
+                f"smoke test section)."
+            )
+        print(f"  [smoketest] restricting to {SMOKETEST_DATASET} only")
+
     groups = []
-    for ds in active_datasets(Path(args.config)):
+    for ds in all_active:
         if ds.skip:
             continue
         try:
             samples = load_hf_detection_samples(ds.agml_name, manifest, Path(args.images_root))
         except KeyError:
-            print(f"  [skip] {ds.agml_name} — not in manifest")
+            print(f"  [skip] {ds.agml_name} — not in manifest"
+                  + (f" — run download-detection-datasets --only '^{SMOKETEST_DATASET}$' "
+                     f"--skip_existing first" if args.smoketest else ""))
             continue
         # "seen" keys are (agml_dataset, class_label, image_name) — but
         # class_label here would require re-deriving the primary category
@@ -159,15 +264,27 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         )
 
         t_start = time.perf_counter()
-        pbar = ProgressBar(total=len(groups), desc="Datasets")
+        # total=n_pending (images), not len(groups) (datasets) — datasets
+        # vary wildly in image count/generation cost, so a per-dataset unit
+        # makes the ETA's rolling-window rate swing wildly between updates
+        # instead of converging; per-image units average over much more
+        # uniform work and give a stable estimate.
+        pbar = ProgressBar(total=n_pending, desc="Datasets")
         for ds, samples in groups:
             pbar.desc = f"Datasets ({ds.agml_name})"
             images = [PILImage.open(s["path"]).convert("RGB") for s in samples]
             question = det_question(ds, prompts, use_json=use_json)
+            if args.rubric:
+                question = apply_rubric_detection(question, use_json, vprompts)
 
-            preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
+            results = run_batch(
+                llm, tokenizer, images, question, system_prompt=skill_system_prompt,
+                enable_thinking=args.enable_thinking, chat_template=chat_template,
+                gen_max_tokens=args.gen_max_tokens,
+            )
 
-            for s, img, pred in zip(samples, images, preds):
+            for s, img, result in zip(samples, images, results):
+                pred = result["prediction"]
                 gt_boxes = s["boxes"]
                 pred_boxes_raw = extract_boxes_json(pred) if use_json else extract_boxes(pred)
                 pred_boxes = []
@@ -180,6 +297,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                     "agml_dataset": ds.agml_name, "class_label": primary_label,
                     "task_type": ds.task_type, "image_name": Path(s["path"]).name,
                     "raw_prediction": pred,
+                    "reasoning": result["reasoning"],
                     "pred_boxes_json": json.dumps(pred_boxes),
                     "gt_boxes_json": json.dumps(gt_boxes),
                     "n_pred": metrics["n_pred"], "n_gt": metrics["n_gt"], "n_matched": metrics["n_matched"],
@@ -188,7 +306,7 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
                 }
                 append_ckpt_row(ckpt_path, row, fields=DET_CKPT_FIELDS)
                 rows.append(row)
-            pbar.update()
+            pbar.update(len(samples))
         pbar.finish()
 
         elapsed = time.perf_counter() - t_start
@@ -223,9 +341,60 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", default="outputs_final/detection_baseline/")
     parser.add_argument("--iou_threshold", type=float, default=0.5,
                          help="IoU threshold for counting a prediction as a true-positive match.")
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+                         help="Let the model use its own extended thinking for the box-localization "
+                              "step, same mechanism as vision_baseline.py's own --enable_thinking. "
+                              "On by default — the pipeline's standard workflow, matching "
+                              "vision_baseline_config.yaml's own default for classification. Pass "
+                              "--no-enable_thinking to opt out. The default --chat_template_path "
+                              "(below) assumes a Gemma-4-family model; if you override --model to a "
+                              "non-Gemma checkpoint (e.g. Qwen), ALSO pass --chat_template_path \"\" "
+                              "to unset it — Qwen's own bundled template already supports "
+                              "enable_thinking directly, and forcing the vendored Gemma-4 template "
+                              "onto it would render the wrong prompt format entirely. Captured into "
+                              "the checkpoint's `reasoning` column, same convention as "
+                              "vision_baseline.py.")
+    parser.add_argument("--chat_template_path", default="src/config/tool_chat_template_gemma4.jinja",
+                         help="Override the tokenizer's own bundled chat template with a Jinja file "
+                              "at this path — needed for --enable_thinking to do anything on Gemma-4 "
+                              "(its stock template has no enable_thinking support at all, so this is "
+                              "on by default alongside --enable_thinking). Pass \"\" to unset for a "
+                              "non-Gemma model (e.g. Qwen, whose own bundled template already "
+                              "supports enable_thinking directly).")
+    parser.add_argument("--gen_max_tokens", type=int, default=4096,
+                         help="max_tokens for the box-localization generation step. A plain "
+                              "(non-thinking) direct box answer needs nowhere near this — the "
+                              "default is high specifically for --enable_thinking, which needs real "
+                              "headroom (confirmed empirically: at 1024, 4/10 rows on a real smoketest "
+                              "never even finished the thinking block before truncating, let alone "
+                              "reached box output — see docs/stage1_baseline_classification.md's own "
+                              "note on the same failure mode for classification). vLLM only generates "
+                              "until the model naturally stops, so this high a ceiling costs nothing "
+                              "extra for a plain run that finishes early on its own.")
+    parser.add_argument("--rubric", action="store_true",
+                         help="Stage 2.5 — wrap the question through the fill-in-the-blank "
+                              "localization checklist (object/class, location, occlusion, size; "
+                              "see verifier_prompts_detection.yaml's structured_templates) before "
+                              "the model prints boxes, instead of asking for boxes directly with "
+                              "no reasoning. No tournament/verifier machinery — same single-shot "
+                              "generation, just a different prompt. Pass a different --output_dir "
+                              "so this doesn't overwrite the plain baseline's checkpoint.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Paper 2 Stage 4's detection skill-memory file "
+                              "(docs/stage4_detection_context_memory.md, heldout-detection-summarize's "
+                              "own output) — injected into the system prompt for every active dataset "
+                              "this run touches (no per-row task_type gate — detection has only one "
+                              "task_type, unlike classification's disease/pest-only gate). Same pattern "
+                              "as detection_multiclass.py's own flag of the same name.")
     parser.add_argument("--rerun", action="store_true",
                          help="Move any existing checkpoint aside, timestamped, and regenerate "
                               "every row from scratch. Old files are archived, never deleted.")
+    parser.add_argument("--smoketest", action="store_true",
+                         help=f"Restrict the run to just {SMOKETEST_DATASET!r} (10 images), for "
+                              "validating the whole pipeline (manifest -> generation -> box parsing "
+                              "-> scoring) before committing to a full multi-dataset run. Needs that "
+                              "dataset present in both --config and --manifest — see "
+                              "docs/stage2_object_detection.md's smoke test section for how to add it.")
     parser.add_argument("--quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--max_model_len", type=int, default=24576)

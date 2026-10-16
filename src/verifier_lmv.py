@@ -664,15 +664,17 @@ def run_argmax_and_judge(
     tokenizer,
     n_max: int = N_MAX_DEFAULT,
     ckpt_path: Path | None = None,
+    config_path: str = "src/config/datasets.yaml",
 ) -> list[dict]:
     """Pick best candidate per (image, gen_mode, n_slice) by ppt_reward, then judge."""
-    from src.common.metrics import apply_judge
+    from src.common.dataset_config import class_list_extra_keys
+    from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY, apply_judge
     import yaml
     _p = yaml.safe_load(
         (Path(__file__).parent / "config" / "prompts.yaml").read_text()
     )
     judge_system   = _p["judge_system_vision"]
-    judge_template = _p["judge_classification_template"]
+    judge_template = _p[DEFAULT_JUDGE_TEMPLATE_KEY]
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for row in scored:
@@ -703,12 +705,14 @@ def run_argmax_and_judge(
             })
 
     print(f"\n[judge] {len(to_judge)} rows")
+    extra_keys = class_list_extra_keys(to_judge, Path(config_path))
     judged = apply_judge(
         to_judge, llm, tokenizer,
         system_prompt=judge_system,
         judge_template=judge_template,
         gt_key="ground_truth",
         pred_key="final_prediction",
+        extra_keys=extra_keys,
     )
 
     if ckpt_path:
@@ -1191,7 +1195,7 @@ def main() -> None:
         print("\n=== Phase 3: argmax + judge ===")
         judged = run_argmax_and_judge(
             scored, llm, tokenizer,
-            n_max=args.n_max, ckpt_path=ckpt_judged,
+            n_max=args.n_max, ckpt_path=ckpt_judged, config_path=args.config,
         )
 
     if need_model and llm is not None:

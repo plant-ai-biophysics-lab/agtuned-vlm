@@ -503,17 +503,21 @@ def run_judge(
     llm,
     tokenizer,
     ckpt_path: Path | None = None,
+    config_path: str = "src/config/datasets.yaml",
 ) -> list[dict]:
     from src.cot_vision import _PROMPTS
-    from src.common.metrics import apply_judge
+    from src.common.dataset_config import class_list_extra_keys
+    from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY, apply_judge
+    extra_keys = class_list_extra_keys(rows, Path(config_path))
     rows = apply_judge(
         rows=rows,
         llm=llm,
         tokenizer=tokenizer,
         system_prompt=_PROMPTS.get("judge_system_vision", ""),
-        judge_template=_PROMPTS["judge_classification_template"],
+        judge_template=_PROMPTS[DEFAULT_JUDGE_TEMPLATE_KEY],
         gt_key="ground_truth",
         pred_key="prediction",
+        extra_keys=extra_keys,
     )
     if ckpt_path:
         _write_csv(rows, ckpt_path)
@@ -1547,7 +1551,7 @@ def run_swap_order_pipeline(
                           prompt_batch_size=batch_size, ckpt_path=ckpt_raw)
 
     print(f"\n=== Judging {len(rows):,} rows ===")
-    rows = run_judge(rows, llm, tokenizer, ckpt_path=ckpt_judged)
+    rows = run_judge(rows, llm, tokenizer, ckpt_path=ckpt_judged, config_path=args.config)
 
     destroy_llm(llm)
     del tokenizer, llm
@@ -1772,7 +1776,7 @@ def main() -> None:
         else:
             all_rows = cum_rows + ind_rows
             print(f"\n=== Phase 3: judge ({len(all_rows)} rows) ===")
-            all_rows = run_judge(all_rows, llm, tokenizer, ckpt_path=ckpt_judged)
+            all_rows = run_judge(all_rows, llm, tokenizer, ckpt_path=ckpt_judged, config_path=args.config)
 
         destroy_llm(llm)
         del tokenizer, llm
@@ -1791,7 +1795,7 @@ def main() -> None:
             llm, tokenizer = load_llm(args.model)
             all_rows = cum_rows + ind_rows
             print(f"\n=== Phase 3: judge ({len(all_rows)} rows) ===")
-            all_rows = run_judge(all_rows, llm, tokenizer, ckpt_path=ckpt_judged)
+            all_rows = run_judge(all_rows, llm, tokenizer, ckpt_path=ckpt_judged, config_path=args.config)
             destroy_llm(llm)
             del tokenizer, llm
             gc.collect()

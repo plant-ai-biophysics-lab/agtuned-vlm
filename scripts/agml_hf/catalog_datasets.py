@@ -113,6 +113,7 @@ def find_label_feature(features):
 
 def introspect_repo(repo_id: str) -> dict:
     from datasets import get_dataset_config_names, load_dataset_builder
+    from datasets.data_files import EmptyDatasetError
 
     name = repo_id.split("/", 1)[1]
     # trust_remote_code intentionally omitted: datasets>=4.0 no longer accepts
@@ -128,11 +129,44 @@ def introspect_repo(repo_id: str) -> dict:
     # ever get to list its configs. This works uniformly for single-config
     # repos too — they report back ['default'], which load_dataset_builder
     # accepts explicitly just like any named config.
-    config_names = get_dataset_config_names(repo_id)
+    #
+    # KNOWN REPO-SIDE BUG, confirmed on Project-AgML/synthetic_cowpea_
+    # {flower,pod}_detection: the repo's own README YAML declares a config
+    # (e.g. "synthetic") whose data_files glob pattern matches ZERO real
+    # files — get_dataset_config_names() raises EmptyDatasetError before we
+    # ever see a config name, even though the repo's actual data
+    # (confirmed via huggingface_hub.list_repo_files: augmented/train-*.parquet
+    # for these two) is perfectly loadable. Not something to fix upstream from
+    # here — fall back to bypassing config-name/module resolution ENTIRELY.
+    #
+    # load_dataset_builder(repo_id, data_files=...) is NOT enough on its own
+    # (confirmed — still raises the SAME EmptyDatasetError): passing a
+    # data_files= override alongside the REPO PATH still routes through
+    # dataset_module_factory's README-metadata-driven module resolution
+    # first, which is exactly what's broken here. The actual bypass: load
+    # via the GENERIC "parquet" builder (not the repo's own module) pointed
+    # at full hf:// URIs for the real files — this never consults the
+    # repo's own README/configs metadata at all. General (not hardcoded to
+    # these two repo names), in case another AgML repo has the same bug.
+    try:
+        config_names = get_dataset_config_names(repo_id)
+        fallback_data_files = None
+    except EmptyDatasetError:
+        from huggingface_hub import list_repo_files
+        parquet_files = [f for f in list_repo_files(repo_id, repo_type="dataset") if f.endswith(".parquet")]
+        if not parquet_files:
+            raise
+        print(f"[config-name resolution failed, falling back to {len(parquet_files)} real "
+              f"*.parquet file(s) via the generic parquet builder] ", end="")
+        config_names = [None]
+        fallback_data_files = [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
 
     config_entries = {}
     for cfg_name in config_names:
-        b = load_dataset_builder(repo_id, cfg_name)
+        if fallback_data_files is not None:
+            b = load_dataset_builder("parquet", data_files=fallback_data_files)
+        else:
+            b = load_dataset_builder(repo_id, cfg_name)
         splits = {s: b.info.splits[s].num_examples for s in (b.info.splits or {})}
         features = b.info.features or {}
         label_feature = find_label_feature(features)

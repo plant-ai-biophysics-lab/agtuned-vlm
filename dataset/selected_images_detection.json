@@ -1,0 +1,3169 @@
+{
+  "datasets": {
+    "CocoaMFDB_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 25,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "Cacao"
+      ],
+      "classes": {
+        "Cacao": [
+          107,
+          111,
+          118,
+          252,
+          540,
+          547,
+          816,
+          873,
+          964,
+          1073
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/CocoaMFDB_detection"
+    },
+    "ERWIAM_blight_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 30,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "Flower",
+        "Shoot",
+        "Maybe",
+        "Leaf"
+      ],
+      "classes": {
+        "Flower": [
+          55,
+          56,
+          60,
+          194,
+          607,
+          617,
+          969,
+          1059,
+          1193,
+          1303
+        ],
+        "Leaf": [
+          216,
+          369,
+          478,
+          689,
+          825,
+          1139,
+          1281,
+          1344,
+          1460,
+          1566
+        ],
+        "Maybe": [
+          354,
+          606,
+          672,
+          725,
+          1096,
+          1164,
+          1169,
+          1483,
+          1496,
+          1553
+        ],
+        "Shoot": [
+          172,
+          371,
+          395,
+          440,
+          487,
+          627,
+          757,
+          942,
+          1237,
+          1368
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ERWIAM_blight_detection"
+    },
+    "ImageWeeds_aerial_weed_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 67,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "ragweed",
+        "waterhemp",
+        "horseweed",
+        "redrootpigweed",
+        "kochia"
+      ],
+      "classes": {
+        "horseweed": [
+          66,
+          136,
+          151,
+          157,
+          173,
+          203,
+          238,
+          334,
+          396,
+          461
+        ],
+        "kochia": [
+          88,
+          115,
+          175,
+          241,
+          295,
+          335,
+          346,
+          374,
+          451,
+          494
+        ],
+        "ragweed": [
+          39,
+          47,
+          105,
+          211,
+          329,
+          360,
+          379,
+          443,
+          527,
+          534
+        ],
+        "redrootpigweed": [
+          77,
+          125,
+          284,
+          323,
+          355,
+          391,
+          421,
+          426,
+          485,
+          510
+        ],
+        "waterhemp": [
+          266,
+          316,
+          318,
+          353,
+          434,
+          449,
+          460,
+          504,
+          522,
+          524
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ImageWeeds_aerial_weed_detection"
+    },
+    "ImageWeeds_weed_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 94,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.064
+      },
+      "class_names": [
+        "horseweed",
+        "kochia",
+        "corn",
+        "ragweed",
+        "redrootpigweed"
+      ],
+      "classes": {
+        "horseweed": [
+          88,
+          91,
+          97,
+          207,
+          444,
+          450,
+          670,
+          718,
+          792,
+          882
+        ],
+        "kochia": [
+          1240,
+          1455,
+          1493,
+          1545,
+          1603,
+          1659,
+          1770,
+          1927,
+          1977,
+          2093
+        ],
+        "ragweed": [
+          2241,
+          2325,
+          2421,
+          2491,
+          2571,
+          2730,
+          2792,
+          2841,
+          2964,
+          3030
+        ],
+        "redrootpigweed": [
+          3079,
+          3106,
+          3111,
+          3118,
+          3155,
+          3163,
+          3165,
+          3190,
+          3193,
+          3200
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ImageWeeds_weed_detection"
+    },
+    "MH_Weed16_weed_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 130,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.192
+      },
+      "class_names": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14"
+      ],
+      "classes": {
+        "0": [
+          97,
+          1229,
+          1667,
+          1970,
+          2197,
+          4587,
+          4818,
+          5376,
+          5405,
+          5496
+        ],
+        "1": [
+          327,
+          812,
+          1639,
+          2227,
+          2881,
+          4215,
+          4673,
+          5051,
+          5924,
+          6386
+        ],
+        "10": [
+          1158,
+          1860,
+          2568,
+          2827,
+          3186,
+          3772,
+          4175,
+          4562,
+          4604,
+          6411
+        ],
+        "11": [
+          90,
+          1053,
+          1155,
+          2200,
+          2254,
+          4211,
+          4526,
+          5110,
+          5623
+        ],
+        "12": [
+          1511,
+          1847,
+          2024,
+          2624,
+          3174,
+          3581,
+          3829,
+          4270,
+          5284,
+          5702
+        ],
+        "13": [
+          4409,
+          4533,
+          4803,
+          4938,
+          5238,
+          5240
+        ],
+        "14": [
+          1012,
+          1671,
+          3322,
+          3391,
+          3648,
+          4135,
+          4494,
+          4521,
+          5022,
+          6376
+        ],
+        "2": [
+          1191,
+          2445,
+          2702,
+          3010,
+          3298,
+          3568,
+          4277,
+          5354,
+          5626,
+          6246
+        ],
+        "3": [
+          963,
+          979,
+          1561,
+          2686,
+          2693,
+          3864,
+          4093,
+          4471,
+          5411,
+          6417
+        ],
+        "4": [
+          401,
+          1541,
+          1663,
+          1996,
+          2234,
+          2591,
+          3375,
+          3573,
+          4853,
+          6355
+        ],
+        "5": [
+          587,
+          1835,
+          2188,
+          2519,
+          4482,
+          4796,
+          4833,
+          6089,
+          6121,
+          6562
+        ],
+        "6": [
+          1150,
+          1228,
+          2225,
+          2405,
+          3158,
+          4090,
+          4497,
+          5038,
+          5272,
+          5499
+        ],
+        "7": [
+          1004,
+          1162,
+          1300,
+          1771,
+          1962,
+          2390,
+          2946,
+          3576,
+          5297,
+          6418
+        ],
+        "8": [
+          870,
+          1082,
+          1230,
+          1762,
+          2634,
+          2787,
+          3089,
+          3363,
+          3474,
+          6013
+        ],
+        "9": [
+          1415,
+          1870,
+          3653,
+          3940,
+          4725,
+          4764,
+          4784,
+          4864,
+          5487,
+          5670
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/MH_Weed16_weed_detection"
+    },
+    "Medjool_date_ripeness_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 31,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.065
+      },
+      "class_names": [
+        "Ripe_DateFruit",
+        "Unripe_DateFruit"
+      ],
+      "classes": {
+        "Ripe_DateFruit": [
+          159,
+          161,
+          166,
+          246,
+          442,
+          446,
+          603,
+          637,
+          689,
+          754
+        ],
+        "Unripe_DateFruit": [
+          309,
+          985,
+          1008,
+          1037,
+          1071,
+          1106,
+          1171,
+          1263,
+          1293,
+          1360
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/Medjool_date_ripeness_detection"
+    },
+    "QuinceSet_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 210,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.019
+      },
+      "class_names": [
+        "Ripe quince",
+        "Unripe quince"
+      ],
+      "classes": {
+        "Ripe quince": [
+          985,
+          1105,
+          1128,
+          1155,
+          1188,
+          1221,
+          1283,
+          1370,
+          1399,
+          1463
+        ],
+        "Unripe quince": [
+          74,
+          76,
+          81,
+          174,
+          374,
+          378,
+          564,
+          604,
+          666,
+          742
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/QuinceSet_detection"
+    },
+    "RoCoLe_disease_detection": {
+      "bbox_convention": {
+        "format": "xyxy",
+        "n_probed": 20,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 1.0
+      },
+      "class_names": [
+        "healthy",
+        "red_spider_mite",
+        "rust_level_1",
+        "rust_level_2",
+        "rust_level_3",
+        "rust_level_4"
+      ],
+      "classes": {
+        "healthy": [
+          136,
+          141,
+          147,
+          315,
+          664,
+          672,
+          997,
+          1069,
+          1192,
+          1337
+        ],
+        "red_spider_mite": [
+          61,
+          193,
+          278,
+          298,
+          336,
+          1198,
+          1239,
+          1356,
+          1360,
+          1367
+        ],
+        "rust_level_1": [
+          169,
+          449,
+          595,
+          696,
+          789,
+          994,
+          1071,
+          1135,
+          1330,
+          1497
+        ],
+        "rust_level_2": [
+          204,
+          240,
+          355,
+          484,
+          645,
+          820,
+          856,
+          985,
+          1181,
+          1503
+        ],
+        "rust_level_3": [
+          65,
+          217,
+          322,
+          327,
+          391,
+          466,
+          703,
+          1041,
+          1127,
+          1132
+        ],
+        "rust_level_4": [
+          75,
+          213,
+          325,
+          410,
+          445,
+          477,
+          1068,
+          1365,
+          1463,
+          1470
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/RoCoLe_disease_detection"
+    },
+    "Strawberry-DS_strawberry_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 81,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.025
+      },
+      "class_names": [
+        "Early-Turning",
+        "Green",
+        "Late-Turning",
+        "Red",
+        "Turning",
+        "White"
+      ],
+      "classes": {
+        "Early-Turning": [
+          33,
+          34,
+          75,
+          103,
+          133,
+          232,
+          241
+        ],
+        "Green": [
+          5,
+          13,
+          26,
+          49,
+          82,
+          92,
+          98,
+          100,
+          214,
+          215
+        ],
+        "Late-Turning": [
+          40,
+          102,
+          120,
+          129,
+          146,
+          150,
+          178,
+          200,
+          233,
+          236
+        ],
+        "Red": [
+          24,
+          25,
+          60,
+          114,
+          116,
+          157,
+          169,
+          177,
+          208,
+          239
+        ],
+        "Turning": [
+          35,
+          36,
+          52,
+          182,
+          183,
+          184,
+          199,
+          230,
+          234
+        ],
+        "White": [
+          27,
+          65,
+          79,
+          87,
+          123,
+          127,
+          172,
+          188,
+          203,
+          231
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/Strawberry-DS_strawberry_detection"
+    },
+    "TealeafAgeQuality_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 22,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.182
+      },
+      "class_names": [
+        "T1",
+        "T2",
+        "T3",
+        "T4"
+      ],
+      "classes": {
+        "T1": [
+          48,
+          49,
+          52,
+          111,
+          237,
+          240,
+          357,
+          383,
+          421,
+          470
+        ],
+        "T2": [
+          702,
+          973,
+          995,
+          1021,
+          1052,
+          1083,
+          1746,
+          1830,
+          1857,
+          1918
+        ],
+        "T3": [
+          1309,
+          1398,
+          1417,
+          1440,
+          1575,
+          1604,
+          1607,
+          1693,
+          1696,
+          1721
+        ],
+        "T4": [
+          587,
+          787,
+          844,
+          885,
+          1152,
+          1979,
+          2016,
+          2045,
+          2120,
+          2158
+        ]
+      },
+      "hf_config": "raw",
+      "hf_repo_id": "Project-AgML/TealeafAgeQuality_detection"
+    },
+    "almond_bloom_2023": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 1626,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.008
+      },
+      "class_names": [
+        "Visible Fruit/Flower"
+      ],
+      "classes": {
+        "Visible Fruit/Flower": [
+          8,
+          9,
+          19,
+          40,
+          60,
+          67,
+          70,
+          81,
+          93,
+          95
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/almond_bloom_2023"
+    },
+    "almond_harvest_2021": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 629,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.002
+      },
+      "class_names": [
+        "Visible Fruit/Flower",
+        "Partially Visible Fruit/Flower",
+        "Visible Occluded Fruit/Flower",
+        "Partially Visible Occluded Fruit/Flower"
+      ],
+      "classes": {
+        "Partially Visible Fruit/Flower": [
+          0,
+          11,
+          13,
+          16,
+          19,
+          24,
+          27,
+          29,
+          32,
+          35
+        ],
+        "Partially Visible Occluded Fruit/Flower": [
+          9,
+          18,
+          23,
+          31,
+          37,
+          38,
+          39,
+          43,
+          46,
+          49
+        ],
+        "Visible Fruit/Flower": [
+          2,
+          7,
+          8,
+          10,
+          21,
+          33,
+          48
+        ],
+        "Visible Occluded Fruit/Flower": [
+          3,
+          4,
+          14,
+          40,
+          42
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/almond_harvest_2021"
+    },
+    "apple_detection_drone_brazil": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 149,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.007
+      },
+      "class_names": [
+        "apple"
+      ],
+      "classes": {
+        "apple": [
+          58,
+          60,
+          64,
+          138,
+          296,
+          299,
+          446,
+          479,
+          527,
+          588
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/apple_detection_drone_brazil"
+    },
+    "apple_detection_spain": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 268,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.03
+      },
+      "class_names": [
+        "apple"
+      ],
+      "classes": {
+        "apple": [
+          82,
+          85,
+          91,
+          194,
+          416,
+          421,
+          628,
+          672,
+          742,
+          826
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/apple_detection_spain"
+    },
+    "apple_detection_usa": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 93,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.011
+      },
+      "class_names": [
+        "apple"
+      ],
+      "classes": {
+        "apple": [
+          196,
+          203,
+          215,
+          461,
+          989,
+          1002,
+          1494,
+          1595,
+          1766,
+          1962
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/apple_detection_usa"
+    },
+    "banana_bunch_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 34,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.294
+      },
+      "class_names": [
+        "0"
+      ],
+      "classes": {
+        "0": [
+          187,
+          193,
+          205,
+          438,
+          941,
+          953,
+          1421,
+          1518,
+          1680,
+          1867
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/banana_bunch_detection"
+    },
+    "cashew_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 629,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.032
+      },
+      "class_names": [
+        "tree",
+        "flower",
+        "premature",
+        "unripe",
+        "ripe",
+        "spoiled"
+      ],
+      "classes": {
+        "flower": [
+          225,
+          1274,
+          1382,
+          1510,
+          2375,
+          2465,
+          2475,
+          2693,
+          2703,
+          3026
+        ],
+        "premature": [
+          851,
+          974,
+          1125,
+          1285,
+          1517,
+          1657,
+          1729,
+          1800,
+          2054,
+          2269
+        ],
+        "ripe": [
+          65,
+          1209,
+          1426,
+          1514,
+          1647,
+          2233,
+          2274,
+          2618,
+          2623,
+          2997
+        ],
+        "spoiled": [
+          125,
+          127,
+          131,
+          218,
+          1365,
+          1398,
+          2395,
+          2449,
+          2517,
+          2655
+        ],
+        "tree": [
+          455,
+          613,
+          643,
+          828,
+          967,
+          1463,
+          1978,
+          2836,
+          2873,
+          2957
+        ],
+        "unripe": [
+          651,
+          988,
+          1433,
+          1826,
+          2328,
+          2625,
+          2650,
+          2667,
+          2808,
+          3041
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/cashew_detection"
+    },
+    "coffee_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 147,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.129
+      },
+      "class_names": [
+        "unripe",
+        "ripening",
+        "ripe",
+        "spoiled",
+        "coffee_tree"
+      ],
+      "classes": {
+        "coffee_tree": [
+          453,
+          1064,
+          1137,
+          1270,
+          1410,
+          1561,
+          1791,
+          2200,
+          2339,
+          2946
+        ],
+        "ripe": [
+          259,
+          375,
+          386,
+          446,
+          636,
+          639,
+          918,
+          953,
+          984,
+          2815
+        ],
+        "ripening": [
+          103,
+          175,
+          603,
+          631,
+          632,
+          633,
+          640,
+          642,
+          660,
+          2560
+        ],
+        "unripe": [
+          434,
+          445,
+          457,
+          688,
+          1598,
+          1626,
+          2368,
+          2449,
+          2567,
+          2714
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/coffee_detection"
+    },
+    "crop_weed_detection_latvia": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 40,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "weed",
+        "crop"
+      ],
+      "classes": {
+        "crop": [
+          941,
+          961,
+          980,
+          981,
+          1008,
+          1094,
+          1106,
+          1147,
+          1155,
+          1157
+        ],
+        "weed": [
+          95,
+          98,
+          105,
+          224,
+          481,
+          487,
+          725,
+          776,
+          857,
+          976
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/crop_weed_detection_latvia"
+    },
+    "date_cluster_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 135,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.015
+      },
+      "class_names": [
+        "0"
+      ],
+      "classes": {
+        "0": [
+          474,
+          492,
+          520,
+          1112,
+          2388,
+          2420,
+          3609,
+          3849,
+          4267,
+          4737
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/date_cluster_detection"
+    },
+    "date_fruit_maturity_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 65,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "classes": {
+        "0": [
+          124,
+          128,
+          136,
+          291,
+          624,
+          632,
+          4320,
+          4385,
+          4491,
+          6926
+        ],
+        "1": [
+          1216,
+          4653,
+          4708,
+          4785,
+          4869,
+          4949,
+          5112,
+          7441,
+          7512,
+          7683
+        ],
+        "2": [
+          3202,
+          3828,
+          3976,
+          4138,
+          6001,
+          6220,
+          6227,
+          8105,
+          8162,
+          8328
+        ],
+        "3": [
+          1619,
+          1836,
+          2084,
+          2258,
+          2463,
+          6711,
+          6867,
+          8461,
+          8768,
+          8939
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/date_fruit_maturity_detection"
+    },
+    "embrapa_wgisd_grape_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 401,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "grape"
+      ],
+      "classes": {
+        "grape": [
+          21,
+          23,
+          49,
+          105,
+          106,
+          158,
+          172,
+          186,
+          210,
+          245
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/embrapa_wgisd_grape_detection"
+    },
+    "fortunella_margarita_growth_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 105,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "Immature",
+        "Growing",
+        "Mature",
+        "cavity"
+      ],
+      "classes": {
+        "Growing": [
+          372,
+          1066,
+          1348,
+          1549,
+          1806,
+          4967,
+          5060,
+          5136,
+          5618,
+          6570
+        ],
+        "Immature": [
+          449,
+          455,
+          474,
+          825,
+          2321,
+          2330,
+          2683,
+          2757,
+          2878,
+          5724
+        ],
+        "Mature": [
+          1617,
+          3350,
+          3467,
+          3638,
+          3820,
+          3988,
+          4343,
+          4843,
+          5549,
+          6249
+        ],
+        "cavity": [
+          379
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/fortunella_margarita_growth_detection"
+    },
+    "fruit_detection_worldwide": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 83,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.072
+      },
+      "class_names": [
+        "avocado",
+        "rockmelon",
+        "apple",
+        "orange",
+        "strawberry",
+        "mango",
+        "capsicum"
+      ],
+      "classes": {
+        "apple": [
+          65,
+          80,
+          85,
+          166,
+          225,
+          230,
+          240,
+          249,
+          255,
+          561
+        ],
+        "avocado": [
+          272,
+          274,
+          278,
+          285,
+          290,
+          296,
+          297,
+          301,
+          307,
+          310
+        ],
+        "capsicum": [
+          103,
+          125,
+          129,
+          135,
+          176,
+          182,
+          185,
+          205,
+          208,
+          213
+        ],
+        "mango": [
+          381,
+          394,
+          397,
+          415,
+          448,
+          455,
+          456,
+          467,
+          485,
+          487
+        ],
+        "orange": [
+          318,
+          325,
+          328,
+          329,
+          331,
+          350,
+          352,
+          362,
+          363,
+          372
+        ],
+        "rockmelon": [
+          11,
+          16,
+          21,
+          26,
+          32,
+          38,
+          43,
+          45,
+          259,
+          261
+        ],
+        "strawberry": [
+          4,
+          5,
+          66,
+          167,
+          168,
+          233,
+          247,
+          250,
+          545,
+          564
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/fruit_detection_worldwide"
+    },
+    "fruits_detection_australia": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 71,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.028
+      },
+      "class_names": [
+        "apple",
+        "mango",
+        "almond"
+      ],
+      "classes": {
+        "almond": [
+          2523,
+          2578,
+          2640,
+          2686,
+          2739,
+          2841,
+          2882,
+          2914,
+          2995,
+          3038
+        ],
+        "apple": [
+          93,
+          96,
+          102,
+          218,
+          468,
+          473,
+          706,
+          755,
+          834,
+          929
+        ],
+        "mango": [
+          1340,
+          1602,
+          1648,
+          1712,
+          1781,
+          1849,
+          1984,
+          2176,
+          2236,
+          2377
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/fruits_detection_australia"
+    },
+    "gemini_flower_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 201,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "object"
+      ],
+      "classes": {
+        "object": [
+          11,
+          12,
+          26,
+          55,
+          56,
+          83,
+          92,
+          97,
+          111,
+          130
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/gemini_flower_detection"
+    },
+    "gemini_leaf_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 791,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "object"
+      ],
+      "classes": {
+        "object": [
+          1,
+          2,
+          4,
+          8,
+          11,
+          13,
+          16,
+          18,
+          19,
+          21
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/gemini_leaf_detection"
+    },
+    "gemini_plant_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 21,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "plant",
+        "weed"
+      ],
+      "classes": {
+        "plant": [
+          91,
+          163,
+          176,
+          190,
+          208,
+          229,
+          267,
+          315,
+          332,
+          366
+        ],
+        "weed": [
+          3,
+          4,
+          8,
+          16,
+          64,
+          112,
+          113,
+          210,
+          264,
+          382
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/gemini_plant_detection"
+    },
+    "gemini_pod_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 122,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "object"
+      ],
+      "classes": {
+        "object": [
+          7,
+          8,
+          17,
+          35,
+          53,
+          59,
+          61,
+          72,
+          82,
+          84
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/gemini_pod_detection"
+    },
+    "ghai_broccoli_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 412,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.238
+      },
+      "class_names": [
+        "Canopy",
+        "Crown",
+        "crop"
+      ],
+      "classes": {
+        "Canopy": [
+          42,
+          43,
+          47,
+          100,
+          214,
+          216,
+          322,
+          347,
+          380,
+          425
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ghai_broccoli_detection"
+    },
+    "ghai_green_cabbage_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 85,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.776
+      },
+      "class_names": [
+        "Crop"
+      ],
+      "classes": {
+        "Crop": [
+          42,
+          43,
+          47,
+          100,
+          214,
+          216,
+          322,
+          347,
+          380,
+          425
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ghai_green_cabbage_detection"
+    },
+    "ghai_iceberg_lettuce_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 105,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.676
+      },
+      "class_names": [
+        "Crop"
+      ],
+      "classes": {
+        "Crop": [
+          42,
+          43,
+          47,
+          100,
+          214,
+          216,
+          322,
+          347,
+          380,
+          425
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ghai_iceberg_lettuce_detection"
+    },
+    "ghai_romaine_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 85,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.565
+      },
+      "class_names": [
+        "Crop"
+      ],
+      "classes": {
+        "Crop": [
+          42,
+          43,
+          47,
+          100,
+          214,
+          216,
+          322,
+          347,
+          380,
+          425
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ghai_romaine_detection"
+    },
+    "ghai_strawberry_fruit_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 133,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.571
+      },
+      "class_names": [
+        "Bud",
+        "Calyx",
+        "Detached Fruit",
+        "Flower",
+        "Large green",
+        "Leaf",
+        "Ripe fruit",
+        "Small Green",
+        "Stem",
+        "Unripe fruit"
+      ],
+      "classes": {
+        "Bud": [
+          136,
+          206,
+          223,
+          234,
+          264,
+          275
+        ],
+        "Calyx": [
+          42,
+          44,
+          47,
+          99,
+          213,
+          215,
+          323,
+          348,
+          381,
+          426
+        ],
+        "Detached Fruit": [
+          427
+        ],
+        "Leaf": [
+          12,
+          363
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/ghai_strawberry_fruit_detection"
+    },
+    "grape_detection_californiaday": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 239,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "grape"
+      ],
+      "classes": {
+        "grape": [
+          10,
+          11,
+          25,
+          52,
+          77,
+          86,
+          91,
+          104,
+          120,
+          122
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/grape_detection_californiaday"
+    },
+    "grape_detection_californianight": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 384,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "grape"
+      ],
+      "classes": {
+        "grape": [
+          12,
+          14,
+          30,
+          62,
+          63,
+          93,
+          103,
+          109,
+          125,
+          146
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/grape_detection_californianight"
+    },
+    "grape_detection_syntheticday": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 212,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "grape",
+        "1"
+      ],
+      "classes": {
+        "1": [
+          38,
+          39,
+          42,
+          90,
+          191,
+          193,
+          288,
+          311,
+          340,
+          381
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/grape_detection_syntheticday"
+    },
+    "maize_weed_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 302,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.156
+      },
+      "class_names": [
+        "maize",
+        "weed"
+      ],
+      "classes": {
+        "maize": [
+          42,
+          43,
+          47,
+          100,
+          214,
+          216,
+          322,
+          347,
+          380,
+          425
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/maize_weed_detection"
+    },
+    "mango_detection_australia": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 179,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.017
+      },
+      "class_names": [
+        "mango"
+      ],
+      "classes": {
+        "mango": [
+          106,
+          110,
+          116,
+          250,
+          535,
+          542,
+          808,
+          864,
+          955,
+          1062
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/mango_detection_australia"
+    },
+    "mango_growth_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 34,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.206
+      },
+      "class_names": [
+        "Early-Fruit",
+        "Mature",
+        "Premature",
+        "Ripe"
+      ],
+      "classes": {
+        "Early-Fruit": [
+          39,
+          40,
+          44,
+          94,
+          200,
+          202,
+          301,
+          324,
+          356,
+          398
+        ],
+        "Mature": [
+          560,
+          655,
+          673,
+          694,
+          720,
+          747,
+          795,
+          865,
+          888,
+          937
+        ],
+        "Premature": [
+          1015,
+          1065,
+          1122,
+          1164,
+          1213,
+          1305,
+          1343,
+          1372,
+          1447,
+          1486
+        ],
+        "Ripe": [
+          1579,
+          1665,
+          1684,
+          1706,
+          1838,
+          1866,
+          1869,
+          1953,
+          1956,
+          1980
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/mango_growth_detection"
+    },
+    "onionfoliageset_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 278,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.086
+      },
+      "class_names": [
+        "onion",
+        "no_crop",
+        "foliage"
+      ],
+      "classes": {
+        "foliage": [
+          21,
+          44,
+          66,
+          76,
+          97,
+          129,
+          149,
+          153,
+          229,
+          236
+        ],
+        "no_crop": [
+          18,
+          23,
+          49,
+          113,
+          144,
+          165,
+          171,
+          201,
+          228,
+          232
+        ],
+        "onion": [
+          32,
+          81,
+          89,
+          91,
+          108,
+          137,
+          162,
+          183,
+          192,
+          203
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/onionfoliageset_detection"
+    },
+    "plant_doc_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 86,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.163
+      },
+      "class_names": [
+        "Corn leaf blight",
+        "Tomato Early blight leaf",
+        "Potato leaf early blight",
+        "Potato leaf late blight",
+        "Blueberry leaf",
+        "grape leaf black rot",
+        "Bell_pepper leaf spot",
+        "Cherry leaf",
+        "Peach leaf",
+        "Soyabean leaf",
+        "Strawberry leaf",
+        "Apple Scab Leaf",
+        "Corn rust leaf",
+        "Apple leaf",
+        "Corn Gray leaf spot",
+        "Tomato leaf mosaic virus",
+        "Tomato mold leaf",
+        "Tomato leaf yellow virus",
+        "Tomato leaf bacterial spot",
+        "Tomato leaf late blight",
+        "Squash Powdery mildew leaf",
+        "Bell_pepper leaf",
+        "grape leaf",
+        "Apple rust leaf",
+        "Tomato Septoria leaf spot",
+        "Tomato leaf",
+        "Raspberry leaf",
+        "Potato leaf",
+        "Tomato two spotted spider mites leaf"
+      ],
+      "classes": {
+        "Apple Scab Leaf": [
+          378,
+          385,
+          1073,
+          1086,
+          1105,
+          1106,
+          1108,
+          1109,
+          1954,
+          1959
+        ],
+        "Apple leaf": [
+          150,
+          490,
+          573,
+          1479,
+          1570,
+          1938,
+          2033,
+          2037,
+          2098,
+          2116
+        ],
+        "Apple rust leaf": [
+          50,
+          477,
+          503,
+          604,
+          880,
+          932,
+          1064,
+          1096,
+          1097,
+          1905
+        ],
+        "Bell_pepper leaf": [
+          11,
+          206,
+          238,
+          485,
+          940,
+          1050,
+          1158,
+          1163,
+          1624,
+          2327
+        ],
+        "Bell_pepper leaf spot": [
+          27,
+          32,
+          428,
+          891,
+          1401,
+          1531,
+          1733,
+          1816,
+          1819,
+          2151
+        ],
+        "Blueberry leaf": [
+          368,
+          373,
+          374,
+          666,
+          733,
+          1193,
+          1196,
+          1209,
+          1210,
+          2318
+        ],
+        "Cherry leaf": [
+          88,
+          134,
+          483,
+          484,
+          805,
+          920,
+          1901,
+          1902,
+          2332,
+          2333
+        ],
+        "Corn Gray leaf spot": [
+          72,
+          180,
+          213,
+          344,
+          615,
+          635,
+          649,
+          1287,
+          1318,
+          1485
+        ],
+        "Corn leaf blight": [
+          175,
+          595,
+          842,
+          928,
+          1137,
+          1280,
+          1290,
+          1451,
+          1752,
+          2139
+        ],
+        "Corn rust leaf": [
+          232,
+          524,
+          619,
+          642,
+          968,
+          1302,
+          1373,
+          1731,
+          1896,
+          2289
+        ],
+        "Peach leaf": [
+          46,
+          564,
+          886,
+          1340,
+          1477,
+          1785,
+          1790,
+          1807,
+          2100,
+          2282
+        ],
+        "Potato leaf early blight": [
+          226,
+          588,
+          756,
+          879,
+          906,
+          1185,
+          1422,
+          1777,
+          1846,
+          1860
+        ],
+        "Potato leaf late blight": [
+          231,
+          258,
+          779,
+          785,
+          795,
+          984,
+          1120,
+          1651,
+          1854,
+          1869
+        ],
+        "Raspberry leaf": [
+          306,
+          632,
+          866,
+          1217,
+          1454,
+          1491,
+          1555,
+          1914,
+          1923,
+          1944
+        ],
+        "Soyabean leaf": [
+          475,
+          548,
+          767,
+          973,
+          974,
+          1042,
+          2009,
+          2053,
+          2054,
+          2062
+        ],
+        "Squash Powdery mildew leaf": [
+          100,
+          251,
+          353,
+          355,
+          639,
+          702,
+          915,
+          1888,
+          2023,
+          2314
+        ],
+        "Strawberry leaf": [
+          126,
+          568,
+          738,
+          1324,
+          1364,
+          1612,
+          2064,
+          2105,
+          2130,
+          2135
+        ],
+        "Tomato Early blight leaf": [
+          67,
+          220,
+          576,
+          706,
+          857,
+          1025,
+          1186,
+          1439,
+          1443,
+          1573
+        ],
+        "Tomato Septoria leaf spot": [
+          288,
+          726,
+          828,
+          956,
+          1122,
+          1123,
+          1984,
+          2261,
+          2262,
+          2275
+        ],
+        "Tomato leaf": [
+          6,
+          118,
+          158,
+          160,
+          372,
+          1472,
+          1574,
+          2111,
+          2117,
+          2201
+        ],
+        "Tomato leaf bacterial spot": [
+          197,
+          222,
+          421,
+          425,
+          808,
+          817,
+          1134,
+          1144,
+          1147,
+          2211
+        ],
+        "Tomato leaf late blight": [
+          70,
+          298,
+          370,
+          688,
+          736,
+          783,
+          2160,
+          2177,
+          2179,
+          2253
+        ],
+        "Tomato leaf mosaic virus": [
+          1010,
+          1023,
+          1587,
+          1588,
+          1742,
+          2158,
+          2200,
+          2207,
+          2208,
+          2210
+        ],
+        "Tomato leaf yellow virus": [
+          86,
+          348,
+          997,
+          998,
+          1112,
+          2155,
+          2215,
+          2226,
+          2230,
+          2286
+        ],
+        "Tomato mold leaf": [
+          184,
+          398,
+          403,
+          634,
+          1035,
+          1396,
+          1565,
+          2185,
+          2242,
+          2256
+        ],
+        "Tomato two spotted spider mites leaf": [
+          976,
+          1265
+        ],
+        "grape leaf": [
+          652,
+          1502,
+          1503,
+          1506,
+          1518,
+          1520,
+          1522,
+          1623,
+          1749,
+          1766
+        ],
+        "grape leaf black rot": [
+          143,
+          225,
+          360,
+          454,
+          513,
+          674,
+          881,
+          1177,
+          1215,
+          1482
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/plant_doc_detection"
+    },
+    "pomegranate_growth_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 55,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "bud",
+        "flower",
+        "early-fruit",
+        "mid-growth",
+        "mature"
+      ],
+      "classes": {
+        "bud": [
+          245,
+          253,
+          259,
+          655,
+          1294,
+          1301,
+          1743,
+          1814,
+          1971,
+          2212
+        ],
+        "early-fruit": [
+          2476,
+          2578,
+          2669,
+          2739,
+          2825,
+          3010,
+          3089,
+          3187,
+          4042,
+          4632
+        ],
+        "flower": [
+          394,
+          798,
+          875,
+          992,
+          1118,
+          1217,
+          1471,
+          2002,
+          2130,
+          2473
+        ],
+        "mature": [
+          4928,
+          4997,
+          5114,
+          5231,
+          5366,
+          5441,
+          5482,
+          5521,
+          5661,
+          5780
+        ],
+        "mid-growth": [
+          3436,
+          3689,
+          3747,
+          3814,
+          4214,
+          4301,
+          4305,
+          4547,
+          4584,
+          4710
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/pomegranate_growth_detection"
+    },
+    "rice_panicle_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 387,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.016
+      },
+      "class_names": [
+        "Rice-Panicle"
+      ],
+      "classes": {
+        "Rice-Panicle": [
+          188,
+          194,
+          206,
+          441,
+          947,
+          959,
+          1430,
+          1527,
+          1691,
+          1879
+        ]
+      },
+      "hf_config": "raw",
+      "hf_repo_id": "Project-AgML/rice_panicle_detection"
+    },
+    "strawberry_detection_2022": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 270,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.007
+      },
+      "class_names": [
+        "strawberry",
+        "flower",
+        "green",
+        "large_white",
+        "pink",
+        "red",
+        "small_white"
+      ],
+      "classes": {
+        "flower": [
+          6,
+          27,
+          89,
+          94,
+          102,
+          104,
+          114,
+          150,
+          157
+        ],
+        "green": [
+          25,
+          36,
+          44,
+          53,
+          74,
+          81,
+          97,
+          106,
+          140,
+          144
+        ],
+        "large_white": [
+          28,
+          88,
+          99,
+          100,
+          103,
+          152,
+          153,
+          155,
+          160,
+          172
+        ],
+        "pink": [
+          46,
+          52,
+          70,
+          98,
+          105,
+          113,
+          132,
+          137,
+          142,
+          167
+        ],
+        "red": [
+          5,
+          7,
+          14,
+          57,
+          82,
+          112,
+          138,
+          161,
+          166,
+          168
+        ],
+        "small_white": [
+          37,
+          56,
+          68,
+          73,
+          93,
+          107,
+          121,
+          128,
+          162,
+          163
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/strawberry_detection_2022"
+    },
+    "strawberry_detection_2023": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 1106,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.001
+      },
+      "class_names": [
+        "strawberry",
+        "flower",
+        "green",
+        "lw",
+        "pink",
+        "red",
+        "sw"
+      ],
+      "classes": {
+        "flower": [
+          71,
+          95,
+          98,
+          113,
+          119,
+          128,
+          135,
+          157,
+          169,
+          181
+        ],
+        "green": [
+          52,
+          56,
+          62,
+          93,
+          108,
+          149,
+          154,
+          165,
+          182,
+          190
+        ],
+        "lw": [
+          3,
+          5,
+          6,
+          30,
+          65,
+          67,
+          77,
+          147,
+          183,
+          202
+        ],
+        "pink": [
+          7,
+          34,
+          35,
+          41,
+          45,
+          49,
+          90,
+          107,
+          122
+        ],
+        "red": [
+          17,
+          20,
+          28,
+          50,
+          80,
+          101,
+          109,
+          112,
+          160,
+          186
+        ],
+        "sw": [
+          16,
+          46,
+          66,
+          125,
+          151,
+          155,
+          158,
+          194,
+          201,
+          203
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/strawberry_detection_2023"
+    },
+    "sunflower_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 3430,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "Sunflower",
+        "Backside-Sunflower"
+      ],
+      "classes": {
+        "Backside-Sunflower": [
+          52
+        ],
+        "Sunflower": [
+          142,
+          147,
+          156,
+          332,
+          712,
+          721,
+          1075,
+          1148,
+          1270,
+          1412
+        ]
+      },
+      "hf_config": "raw",
+      "hf_repo_id": "Project-AgML/sunflower_detection"
+    },
+    "tomato_factory_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 310,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.016
+      },
+      "class_names": [
+        "green",
+        "red"
+      ],
+      "classes": {
+        "green": [
+          45,
+          47,
+          50,
+          100,
+          213,
+          215,
+          327,
+          353,
+          388,
+          434
+        ],
+        "red": [
+          101,
+          193,
+          228,
+          246,
+          272,
+          294,
+          349,
+          403,
+          438,
+          479
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/tomato_factory_detection"
+    },
+    "tomato_ripeness_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 73,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.041
+      },
+      "class_names": [
+        "b_fully_ripened",
+        "b_half_ripened",
+        "b_green",
+        "l_fully_ripened",
+        "l_half_ripened",
+        "l_green"
+      ],
+      "classes": {
+        "b_fully_ripened": [
+          85,
+          117,
+          327,
+          328,
+          345,
+          365,
+          375,
+          413,
+          480,
+          551
+        ],
+        "b_green": [
+          32,
+          33,
+          41,
+          92,
+          405,
+          406,
+          485,
+          505,
+          524,
+          560
+        ],
+        "b_half_ripened": [
+          34,
+          60,
+          96,
+          311,
+          350,
+          426,
+          461,
+          490,
+          574,
+          600
+        ],
+        "l_fully_ripened": [
+          140,
+          177,
+          209,
+          218,
+          229,
+          664,
+          693,
+          735,
+          739,
+          803
+        ],
+        "l_green": [
+          190,
+          198,
+          228,
+          264,
+          632,
+          668,
+          674,
+          687,
+          723,
+          757
+        ],
+        "l_half_ripened": [
+          158,
+          247,
+          250,
+          273,
+          659,
+          673,
+          685,
+          763,
+          772,
+          787
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/tomato_ripeness_detection"
+    },
+    "vegetable_crop_early_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 197,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.0
+      },
+      "class_names": [
+        "bean",
+        "leek",
+        "maize",
+        "stem_bean",
+        "stem_leek",
+        "stem_maize"
+      ],
+      "classes": {
+        "bean": [
+          67,
+          69,
+          74,
+          762,
+          1044,
+          1048,
+          1239,
+          2021,
+          2077,
+          2148
+        ],
+        "leek": [
+          380,
+          400,
+          433,
+          470,
+          510,
+          535,
+          545,
+          1834,
+          1945,
+          1977
+        ],
+        "maize": [
+          170,
+          279,
+          701,
+          824,
+          1276,
+          1473,
+          2216,
+          2279,
+          2437,
+          2589
+        ],
+        "stem_bean": [
+          1486,
+          1501,
+          1506,
+          1507,
+          1511,
+          1519,
+          1526,
+          1536,
+          1542,
+          1547
+        ],
+        "stem_leek": [
+          1628,
+          1668,
+          1684,
+          1694,
+          1706,
+          1800,
+          1811,
+          1865,
+          1866,
+          1872
+        ],
+        "stem_maize": [
+          159,
+          1561,
+          1565,
+          1570,
+          1597,
+          1602,
+          1604,
+          1622,
+          1626,
+          2314
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/vegetable_crop_early_detection"
+    },
+    "weed_crop_detection": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 152,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.132
+      },
+      "class_names": [
+        "Blackbean",
+        "Canola",
+        "Corn",
+        "Field Pea",
+        "Flax",
+        "Horseweed",
+        "Kochia",
+        "Lentil",
+        "Ragweed",
+        "Redroot Pigweed",
+        "Soybean",
+        "Sugar beet",
+        "Waterhemp"
+      ],
+      "classes": {
+        "Blackbean": [
+          20,
+          41,
+          46,
+          48,
+          54,
+          64,
+          73,
+          115,
+          122,
+          128
+        ],
+        "Canola": [
+          143,
+          165,
+          173,
+          174,
+          181,
+          192,
+          203,
+          210,
+          252,
+          276
+        ],
+        "Corn": [
+          289,
+          298,
+          332,
+          338,
+          367,
+          385,
+          387,
+          389,
+          407,
+          413
+        ],
+        "Field Pea": [
+          430,
+          454,
+          469,
+          479,
+          484,
+          493,
+          524,
+          535,
+          542,
+          558
+        ],
+        "Flax": [
+          568,
+          571,
+          602,
+          603,
+          628,
+          629,
+          634,
+          694,
+          699,
+          1026
+        ],
+        "Horseweed": [
+          86,
+          188,
+          201,
+          222,
+          518,
+          522,
+          595,
+          601,
+          746,
+          1079
+        ],
+        "Kochia": [
+          79,
+          233,
+          358,
+          366,
+          373,
+          756,
+          763,
+          933,
+          935,
+          1083
+        ],
+        "Lentil": [
+          706,
+          708,
+          722,
+          725,
+          745,
+          749,
+          784,
+          787,
+          790,
+          836
+        ],
+        "Ragweed": [
+          93,
+          95,
+          360,
+          673,
+          818,
+          903,
+          937,
+          1027,
+          1068,
+          1078
+        ],
+        "Redroot Pigweed": [
+          82,
+          103,
+          226,
+          364,
+          497,
+          585,
+          681,
+          731,
+          940,
+          1015
+        ],
+        "Soybean": [
+          858,
+          863,
+          874,
+          887,
+          899,
+          916,
+          950,
+          962,
+          969,
+          978
+        ],
+        "Sugar beet": [
+          981,
+          994,
+          1023,
+          1024,
+          1030,
+          1032,
+          1092,
+          1096,
+          1097,
+          1103
+        ],
+        "Waterhemp": [
+          96,
+          359,
+          361,
+          378,
+          686,
+          794,
+          803,
+          924,
+          1064,
+          1067
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/weed_crop_detection"
+    },
+    "wheat_head_counting": {
+      "bbox_convention": {
+        "format": "xywh",
+        "n_probed": 982,
+        "scale": "pixel",
+        "xyxy_consistent_frac": 0.02
+      },
+      "class_names": [
+        "Wheat Head"
+      ],
+      "classes": {
+        "Wheat Head": [
+          548,
+          569,
+          601,
+          1286,
+          2763,
+          2800,
+          4176,
+          4452,
+          4937,
+          5480
+        ]
+      },
+      "hf_config": "default",
+      "hf_repo_id": "Project-AgML/wheat_head_counting"
+    }
+  },
+  "failed": {},
+  "generated_at": "2026-08-22T23:49:22.287199+00:00",
+  "n_per_class": 10,
+  "reproduced_from": null,
+  "seed": 42
+}

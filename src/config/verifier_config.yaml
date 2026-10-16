@@ -1,8 +1,12 @@
-# Stage 4 (verifier_cot.py) defaults — edit these directly instead of
-# remembering CLI flags. Loaded automatically (default --verifier_config
-# path is this file). Any flag you DO pass on the command line still
-# overrides whatever is set here — see docs/stage4_verifier.md for what
-# each of these actually controls.
+# verifier_cot.py defaults — edit these directly instead of remembering CLI
+# flags. Loaded automatically (default --verifier_config path is this
+# file). Any flag you DO pass on the command line still overrides whatever
+# is set here. Shared by both --verifier_type simple (Paper 2 Stage 3,
+# docs/stage3_verifier_grade.md, the default) and --verifier_type ppt
+# (Paper 1 Stage 4, docs/stage4_verifier.md) — the "Single-round K-candidate
+# + PPT-tournament hyperparameters" section below (k_candidates/k_pivots)
+# only takes effect in ppt mode; simple mode always generates one
+# trajectory and ignores them.
 #
 # You run this per model (--model overrides "model" below).
 
@@ -13,26 +17,57 @@ model: google/gemma-4-26B-A4B-it
 config: src/config/datasets.yaml
 prompts: src/config/prompts.yaml
 verifier_prompts: src/config/verifier_prompts.yaml
-manifest: dataset/selected_images_10.json  # reproducible 10/class prefix of the original 50/class
-                                            # manifest (scripts/agml_hf/truncate_manifest.py) — n=10
-                                            # vs n=25 gave nearly identical bound/CoT numbers
-                                            # (within ~0.002-0.004 judge_f1_macro), so this is the
-                                            # cheaper option for the full run
+manifest: dataset/selected_images_10.json  # 10/class — REVERTED from the full 50/class
+                                          # dataset/selected_images.json: a verifier-cot run over the
+                                          # full manifest was projected at 1+ week to finish, so this
+                                          # switched back to 10/class, and vision_baseline_config.yaml's
+                                          # own manifest was switched back to match (both
+                                          # vision_baseline_thinking and vision_baseline_rubric_thinking
+                                          # now default to 10/class too — see its own comment). The
+                                          # existing full-50 vision_baseline_thinking/
+                                          # vision_baseline_rubric_thinking checkpoints are NOT being
+                                          # regenerated at 10/class — filter their own rows down to
+                                          # whatever image_names this 10/class manifest selected when
+                                          # comparing against this verifier-cot run, rather than
+                                          # rerunning them. Must still match vision-baseline's own
+                                          # manifest for --match_images_from to find every reference
+                                          # image name in path_by_name (load_hf_samples scopes strictly
+                                          # to what the manifest lists).
 images_root: dataset/images
 output_dir: outputs_final/verifier_cot/
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-n_samples: 10  # images/class to evaluate — dropped back from 25 after confirming 10/class gives
-                # nearly identical bound/CoT numbers (n=25 vs n=10 differed by ~0.002-0.004
-                # judge_f1_macro across Lower/Self-CoT/Manual-CoT/Upper Bound), so the cheaper
-                # option is worth it for the paper-deadline full run (2026-08-27 target).
-                # --match_images_from (default: auto-detected per --model, see run_model) makes
-                # this a guaranteed subset of vision_baseline's own 50/class sample.
+n_samples: null  # null = use every image the manifest has for that class (matches
+                  # vision_baseline_config.yaml's own convention/comment) — NOT a literal count, so
+                  # this can't silently drift out of sync with whatever vision-baseline's own runs
+                  # actually used. --match_images_from (default: auto-detected per --model, see
+                  # run_model) still governs WHICH images per class; this just stops capping how many
+                  # of them get used once matched.
 seed: 42       # seeds the k-candidate sampling AND the pairwise duel's A/B-slot randomization/
                # analysis sampling, so runs over the same images/config are reproducible rather
                # than drawing fresh randomness each time.
 
-# ── Single-round K-candidate + PPT-tournament hyperparameters ────────────────
+# ── --verifier_type top3 ─────────────────────────────────────────────────────
+top3_mode: explicit     # "explicit" (default): ONE generation call, model states its
+                         # observations once then gives N EXPLICITLY DIFFERENT ranked
+                         # possibilities itself (<answer_1>/<answer_2>/<answer_3> tags). A
+                         # near-identical approach was tried and reverted for the legacy ppt
+                         # mode (forcing diversity competed against the model's own best guess
+                         # there) — being retried here since each candidate is graded
+                         # independently and argmax-selected, not tournament-ranked. Run the
+                         # smoke test (docs/stage3_classification_verifier.md) and check
+                         # metrics.json's top3_pool_analysis before trusting this at scale.
+                         # "resample": independent trajectories via temperature sampling
+                         # instead (no explicit-diversity instruction) — see
+                         # run_group_top3's docstring for the full comparison.
+top3_n_candidates: 3    # pool size. "explicit": how many <answer_N> tags are read back (fewer
+                         # found is not an error, just a smaller pool). "resample": independent
+                         # trajectories generated per image in ONE generation call — temperature
+                         # (below) must be > 0 for these to actually differ.
+
+# ── Single-round K-candidate + PPT-tournament hyperparameters (--verifier_type
+# ppt only — LEGACY as of 2026-10-01, no longer actively tested/extended for
+# Paper 2, kept for Paper 1 reproducibility only) ────────────────────────────
 k_candidates: 4        # K -- candidates generated per image via temperature sampling; the
                          # tournament pool size.
 k_pivots: 2             # k -- pivot-set size for the full PPT tournament (arXiv:2607.05391
@@ -40,14 +75,23 @@ k_pivots: 2             # k -- pivot-set size for the full PPT tournament (arXiv
                          # matches llm_verifier.pivot_tournament.DEFAULT_PIVOTS, repeated here as a
                          # literal rather than imported so this file has no Python-side dependency
 temperature: 0.8        # sampling temperature for the K candidates; needs to be > 0 for
-                         # k_candidates > 1 to actually differ (greedy decoding repeats itself)
-enable_thinking: false  # model-being-tested's own extended thinking for the k_candidates
-                         # generation step only (not the verifier's own pairwise calls) — off by
-                         # default, matching every other generation script in this repo
-                         # (src/common/chat_prompt.py). Raise gen_max_tokens well above its
-                         # default when this is true, or thinking traces get truncated before the
-                         # model reaches its actual answer.
-gen_max_tokens: 180      # max_tokens for the k_candidates generation step
+                         # k_candidates > 1 (ppt) / top3_n_candidates > 1 (top3) to actually differ
+                         # (greedy decoding repeats itself)
+# On by default (2026-10-01) — matches vision_baseline_config.yaml's own
+# standard thinking-enabled workflow (Stage 1). Pass --no-enable_thinking
+# on the command line to opt out (argparse.BooleanOptionalAction — plain
+# --enable_thinking can only ever turn a False default on, never override
+# a True one back off). chat_template_path/gen_max_tokens below assume
+# this is on; see their own comments if you override model to non-Gemma.
+enable_thinking: true
+gen_max_tokens: 4096    # a real thinking trace routinely truncates before <answer> at the
+                         # non-thinking default (180) — see --gen_max_tokens's own --help text
+chat_template_path: src/config/tool_chat_template_gemma4.jinja  # Gemma-4 only — its own bundled
+                         # template has no enable_thinking support at all, so this is on by
+                         # default alongside enable_thinking above. Override model to a Qwen
+                         # checkpoint? ALSO pass --chat_template_path "" on the command line to
+                         # unset this (Qwen's own bundled template already supports
+                         # enable_thinking directly).
 
 # Candidate generation prompt is ALWAYS the fill-in-the-blank
 # structured_templates entry for the group's task type (verifier_prompts.yaml)
@@ -69,7 +113,11 @@ max_num_seqs: 64
 enforce_eager: false
 
 # ── Judge phase ──────────────────────────────────────────────────────────────
-judge_model: google/gemma-4-26B-A4B-it
+# RedHatAI/gemma-4-31B-it-FP8-dynamic, not the unquantized google/gemma-4-26B-A4B-it
+# — the latter needs ~52GB of weights alone in bf16 and OOM'd on real hardware
+# (48GB GPU). Matches vision_baseline.py/judge_leniency.py/judge_consistency.py/
+# judge_template_sensitivity.py's own --judge_model default.
+judge_model: RedHatAI/gemma-4-31B-it-FP8-dynamic
 judge_quantize: null
 judge_confidence_threshold: 1
 judge_chunk_size: 200

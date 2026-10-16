@@ -9,22 +9,53 @@
 
 # ── Model ────────────────────────────────────────────────────────────────────
 # Set here for convenience, or pass --model on the command line per run —
-# whichever you pass on the CLI wins.
-model: google/gemma-4-26B-A4B-it
+# whichever you pass on the CLI wins. RedHatAI/gemma-4-31B-it-FP8-dynamic
+# (FP8-quantized) — the unquantized google/gemma-4-26B-A4B-it (~52GB of
+# bf16 weights alone) OOM'd on real hardware; this is what every other
+# stage in this repo already standardizes on.
+model: RedHatAI/gemma-4-31B-it-FP8-dynamic
 
 # ── Data sources ─────────────────────────────────────────────────────────────
 config: src/config/datasets.yaml
 prompts: src/config/prompts.yaml
 classification_jsonl: dataset/agml_classification.jsonl  # ground truth + reference
                                                             # descriptions (desc-aug only)
-manifest: dataset/selected_images.json
+manifest: dataset/selected_images_10.json  # 10/class, not the full 50/class
+                # dataset/selected_images.json — verifier-cot over the full 50/class
+                # manifest was projected at 1+ week to finish, so vision_baseline_thinking/
+                # vision_baseline_rubric_thinking are being switched back to 10/class too, to
+                # stay apples-to-apples with that verifier-cot rerun. The existing full-50
+                # vision_baseline_thinking/vision_baseline_rubric_thinking checkpoints are
+                # NOT being regenerated — filter their own rows down to whatever image_names
+                # this 10/class manifest selected when comparing against the new verifier-cot
+                # run, rather than rerunning them.
 images_root: dataset/images
 
 # ── Sampling ─────────────────────────────────────────────────────────────────
-# null = use every image the manifest has for that class (it was built with
-# an n_per_class=50 cap, so this means "all ~50/class", not literally
-# unbounded). Set an int here to sub-cap further for a faster/cheaper run.
+# null = use every image the manifest has for that class. With the 10/class
+# manifest above, that means "all ~10/class" (not literally unbounded — the
+# manifest itself is what caps this). Set an int here to sub-cap further for
+# an even faster/cheaper run.
 n_samples: null
+
+# ── Thinking (Paper 2's standard workflow) ──────────────────────────────────
+# On by default — Stage 1's own doc (docs/stage1_baseline_classification.md)
+# treats the thinking-enabled run as the standard checkpoint every later
+# stage builds on. Pass --no-enable_thinking on the command line to opt out
+# (argparse.BooleanOptionalAction — plain --enable_thinking can only ever
+# turn a False default on, never override a True one back off).
+#
+# chat_template_path assumes a Gemma-4-family `model` (its own bundled
+# template has NO enable_thinking support at all — see --enable_thinking's
+# own --help text) — if you override `model` to a Qwen checkpoint, ALSO pass
+# --chat_template_path "" on the command line to unset this (Qwen's bundled
+# template already supports enable_thinking directly; forcing the vendored
+# Gemma-4 template onto a Qwen model would render the wrong prompt format
+# entirely, not just fail to enable thinking).
+enable_thinking: true
+gen_max_tokens: 4096  # a real thinking trace routinely truncates before <answer> at the
+                       # non-thinking default (256) — see --gen_max_tokens's own --help text
+chat_template_path: src/config/tool_chat_template_gemma4.jinja  # Gemma-4 only, see note above
 
 # ── vLLM ─────────────────────────────────────────────────────────────────────
 quantize: null  # "4bit", "8bit", "awq", "gptq"
@@ -54,10 +85,17 @@ enforce_eager: false
 # one, regardless of which model is being judged, so judge_accuracy is
 # comparable across all four. Runs as a separate phase after the
 # classification model for a given run is unloaded.
-# google/gemma-4-31B-it 404'd (gated/unavailable in this environment) —
-# defaulting to the 26B variant already used elsewhere in this pipeline.
-judge_model: google/gemma-4-26B-A4B-it
-judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
+# RedHatAI/gemma-4-31B-it-FP8-dynamic — matches vision_baseline.py's own
+# argparse default AND judge_leniency.py/judge_consistency.py/
+# judge_template_sensitivity.py's --judge_model default; this file used to
+# override it to the unquantized google/gemma-4-26B-A4B-it (26B params in
+# bf16 needs ~52GB of weights alone), which OOM'd on real hardware — the
+# quantized checkpoint is what every other judge call in this repo already
+# uses successfully.
+judge_model: RedHatAI/gemma-4-31B-it-FP8-dynamic
+judge_quantize: null  # "4bit", "8bit", "awq", "gptq" — not needed, judge_model is already
+                        # FP8-quantized via its own checkpoint (RedHatAI's own dynamic FP8
+                        # export), this is for an ADDITIONAL bitsandbytes/AWQ/GPTQ pass on top
 judge_confidence_threshold: 1
 judge_chunk_size: 200  # rows per judge call — drives the judge progress bar
                         # and caps how much work a kill mid-judging can lose

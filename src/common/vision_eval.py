@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import gc
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,9 @@ import numpy as np
 from sklearn.metrics import f1_score
 
 from src.common.dataset_config import excluded_class_pairs
-from src.common.metrics import apply_judge, aggregate_rouge, compute_classification_metrics, judged_summary
+from src.common.metrics import (
+    DEFAULT_JUDGE_TEMPLATE_KEY, apply_judge, aggregate_rouge, compute_classification_metrics, judged_summary,
+)
 from src.common.progress import ProgressBar
 
 try:
@@ -42,7 +45,20 @@ def _cached_excluded_class_pairs() -> set[tuple[str, str]]:
 
 CKPT_FIELDS = [
     "agml_dataset", "class_label", "task_type", "crop", "image_name",
-    "prediction", "resolved_class", "ground_truth",
+    "prediction", "resolved_class",
+    "extracted_answer",  # raw text between the model's own <answer></answer>
+                         # tags (extract_answer_tag, src/common/metrics.py) —
+                         # NOT resolve_class-matched (that's resolved_class,
+                         # above); populated by vision_baseline.py / self_cot.py
+                         # / cot_yaml.py (all three use the tagged
+                         # assessment_classification_tagged prompt); empty for
+                         # desc_augmented_vision_v2.py, whose prompt doesn't
+                         # request a tag. Exists so future full-response-vs-
+                         # extracted-answer judge comparisons (leniency-style,
+                         # see src/judge_leniency.py) can read this column
+                         # directly instead of re-deriving it from `prediction`
+                         # every time.
+    "ground_truth",
     "correct", "contains_match", "resolvable",
     "rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim",
     "reasoning",  # self_cot's own generated description / cot_yaml's step-by-step
@@ -366,9 +382,17 @@ def _destroy_judge_llm(llm) -> None:
 
 def run_judge_phase(
     rows: list[dict], ckpt_path: Path, args, prompts: dict, fields: list[str] = CKPT_FIELDS,
-    judge_filter=None,
+    judge_filter=None, extra_keys: dict | None = None,
 ) -> list[dict]:
     """Shared judge phase — see module-level note above.
+
+    extra_keys (default None): forwarded straight to apply_judge, taking
+    PRECEDENCE over the args.config-derived AgML class_list_extra_keys
+    below — for a caller whose rows aren't AgML datasets at all (no
+    `row["agml_dataset"]` to key a per-dataset class list off), e.g. a
+    held-out dataset building its own {"class_list": "class_list_text"}
+    with every row pointing at the same precomputed column. Every
+    existing caller passes nothing here, so this is purely additive.
 
     judge_filter: passed straight through to rows_needing_judge — an
     additional predicate restricting which rows get judged this call
@@ -384,8 +408,24 @@ def run_judge_phase(
       judge_chunk_size, rejudge, skip_judge, gpu_memory_utilization,
       max_model_len, max_num_seqs, enforce_eager
 
-    `prompts` must carry judge_classification_template (and optionally
-    judge_system_vision) from prompts.yaml.
+    args.judge_enable_thinking/args.judge_max_tokens/args.judge_chat_template_path
+    (all optional, read via getattr with False/None defaults so older
+    callers without these flags still work unchanged): forwarded to
+    apply_judge — same enable_thinking/max_tokens/chat_template knobs
+    src/judge_leniency.py etc. expose for the Phase 1-3 re-judge calls, now
+    also available for this, the ORIGINAL judge pass that runs whenever
+    --skip_judge isn't set. judge_chat_template_path is a file path (read
+    once here, not the raw Jinja text) — needed for a Gemma-4 judge model
+    alongside judge_enable_thinking.
+
+    `prompts` must carry src.common.metrics.DEFAULT_JUDGE_TEMPLATE_KEY's
+    template (and optionally judge_system_vision) from prompts.yaml. That
+    default template (judge_classification_hybrid_template) has a
+    {class_list} placeholder, filled from args.config via
+    src.common.dataset_config.class_list_extra_keys whenever args.config is
+    present — every existing caller (vision_baseline.py,
+    desc_augmented_vision_v2.py, self_cot.py, cot_yaml.py) already has this
+    flag.
 
     `fields` is the row schema to checkpoint with — defaults to CKPT_FIELDS,
     override for a differently-shaped checkpoint (e.g. cot_yaml.py's
@@ -410,7 +450,22 @@ def run_judge_phase(
         print("  [judge] --skip_judge set — skipping judge phase entirely")
         return rows
 
-    log_path = ckpt_path.parent / "judge_log.jsonl"
+    # Shard-aware log filename: ckpt_path.parent is the SAME model_dir for
+    # every shard of a --num_shards run (only the checkpoint filename
+    # differs), so a fixed "judge_log.jsonl" would have every shard's
+    # judge phase — each its own process, its own GPU, running
+    # concurrently — appending to ONE shared file at the same time.
+    # append_jsonl's plain open(path, "a") + one write() per record is only
+    # safe against interleaving up to the OS's atomic-write threshold
+    # (~4KB on Linux); a judge's raw response (especially with
+    # --judge_enable_thinking) routinely exceeds that, so concurrent
+    # shards really could corrupt/interleave lines in a shared log. Suffix
+    # the log filename with the checkpoint's own "_shard<i>of<n>" suffix
+    # when present (each shard's log stays fully separate); every
+    # non-sharded caller is completely unaffected (empty suffix ->
+    # unchanged "judge_log.jsonl").
+    _shard_m = re.search(r"(_shard\d+of\d+)$", ckpt_path.stem)
+    log_path = ckpt_path.parent / f"judge_log{_shard_m.group(1) if _shard_m else ''}.jsonl"
 
     if args.rejudge:
         for r in rows:
@@ -431,6 +486,18 @@ def run_judge_phase(
     print(f"  [judge] {len(todo)} row(s) to judge ({len(rows) - len(todo)} already judged) "
           f"— loading {args.judge_model}")
     print(f"  [judge] logging full conversations to {log_path}")
+
+    # DEFAULT_JUDGE_TEMPLATE_KEY's template (hybrid) has a {class_list}
+    # placeholder — build it unconditionally from args.config whenever
+    # available; a template without that placeholder just ignores the
+    # unused format() kwarg, so this is safe regardless of which template
+    # ends up active.
+    if extra_keys is None:
+        config_path = getattr(args, "config", None)
+        if config_path:
+            from src.common.dataset_config import class_list_extra_keys
+            extra_keys = class_list_extra_keys(todo, Path(config_path))
+
     judge_llm, judge_tok = _load_judge_llm(
         args.judge_model, quantization=args.judge_quantize,
         gpu_memory_utilization=args.gpu_memory_utilization,
@@ -446,10 +513,17 @@ def run_judge_phase(
         judged_chunk = apply_judge(
             rows=chunk, llm=judge_llm, tokenizer=judge_tok,
             system_prompt=prompts.get("judge_system_vision", ""),
-            judge_template=prompts["judge_classification_template"],
+            judge_template=prompts[DEFAULT_JUDGE_TEMPLATE_KEY],
             gt_key="judge_gt_hint", pred_key="prediction",
             confidence_threshold=args.judge_confidence_threshold,
             log_path=log_path,
+            enable_thinking=getattr(args, "judge_enable_thinking", False),
+            max_tokens=getattr(args, "judge_max_tokens", None),
+            chat_template=(
+                Path(args.judge_chat_template_path).read_text(encoding="utf-8")
+                if getattr(args, "judge_chat_template_path", None) else None
+            ),
+            extra_keys=extra_keys,
         )
         rows = merge_judged(rows, judged_chunk)
         rewrite_ckpt(ckpt_path, rows, fields=fields)
@@ -515,15 +589,25 @@ def write_model_metrics(model_dir: Path, metrics: dict) -> None:
     (model_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
 
-def collate_models(output_dir: Path) -> dict[str, dict]:
+def collate_models(output_dir: Path, fields: list[str] = CKPT_FIELDS) -> dict[str, dict]:
     """Scan output_dir/<model>/ckpt_<model>.csv (one subfolder per model
-    already run), recompute metrics per model, return {model_dir_name: metrics}."""
+    already run), recompute metrics per model, return {model_dir_name: metrics}.
+
+    fields defaults to CKPT_FIELDS but must be passed through explicitly by
+    a caller whose own checkpoints use a different schema (e.g.
+    vision_baseline.py's VISION_BASELINE_CKPT_FIELDS, which drops rouge1/
+    rouge2/rougeL/rouge_ss/sem_sim) — load_ckpt()'s schema-drift healing
+    treats any mismatch against `fields` as an OLDER file missing newly-added
+    columns and rewrites the file to match `fields`, so leaving this at the
+    full CKPT_FIELDS default here would silently re-add those columns back
+    into a checkpoint that deliberately dropped them, the next time
+    --collate runs."""
     if not output_dir.exists():
         return {}
     result = {}
     for model_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
         ckpt_path = model_dir / f"ckpt_{model_dir.name}.csv"
-        rows, _ = load_ckpt(ckpt_path)
+        rows, _ = load_ckpt(ckpt_path, fields=fields)
         if not rows:
             continue
         result[model_dir.name] = compute_model_metrics(rows)
@@ -757,6 +841,216 @@ def compute_condition_stats(rows: list[dict], n_boot: int = 2000, seed: int = 42
     for tt, trows in by_task.items():
         stats[tt] = _both(trows)
     return stats
+
+
+_TASK_TYPE_ORDER = ["overall", "disease", "species_identification", "pest_damage", "quality_identification"]
+_TASK_TYPE_LABELS = {
+    "overall": "Overall", "disease": "Disease", "species_identification": "Species",
+    "pest_damage": "Pest/Damage", "quality_identification": "Quality",
+}
+
+
+def plot_task_f1_summary(
+    rows: list[dict], model_label: str, out_path: Path, n_boot: int = 2000, seed: int = 42,
+) -> None:
+    """Single-condition Paper-1-style bar chart (Figure 2/4 layout): judged
+    F1 macro vs. strict exact-match F1 macro, per task_type + overall, with
+    95% CI bootstrapped over classes (compute_condition_stats — same
+    machinery vision_baseline_collate.py's two-condition charts use, just
+    one condition's own bars side by side instead of a Lower/Upper Bound
+    pair). Any task_type present in `rows` but not in _TASK_TYPE_ORDER is
+    appended after the known ones, so this doesn't silently drop a new
+    task_type added later.
+
+    No title (kept out deliberately — the model/run identity lives in the
+    legend instead, via `model_label`, so the figure is caption-driven
+    rather than baking a run description into the image itself). Each
+    task's n is folded into its own x-tick label (two lines) rather than a
+    separate text object below the axis, so it can never visually collide
+    with the tick label above it."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    stats = compute_condition_stats(rows, n_boot, seed)
+    labels = [t for t in _TASK_TYPE_ORDER if t in stats]
+    labels += [t for t in stats if t not in labels]
+    if not labels:
+        return
+
+    judge_f1 = [stats[t]["judge_f1_macro"] for t in labels]
+    judge_lo = [stats[t]["judge_f1_macro"] - stats[t]["judge_ci_low"] for t in labels]
+    judge_hi = [stats[t]["judge_ci_high"] - stats[t]["judge_f1_macro"] for t in labels]
+    strict_f1 = [stats[t]["f1_macro"] for t in labels]
+    strict_lo = [stats[t]["f1_macro"] - stats[t]["ci_low"] for t in labels]
+    strict_hi = [stats[t]["ci_high"] - stats[t]["f1_macro"] for t in labels]
+    ns = [stats[t]["n"] for t in labels]
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    b1 = ax.bar(x - width / 2, judge_f1, width, yerr=[judge_lo, judge_hi], capsize=4,
+                color="#9467bd", label=f"{model_label} — Judged F1 macro")
+    b2 = ax.bar(x + width / 2, strict_f1, width, yerr=[strict_lo, strict_hi], capsize=4,
+                color="#c5b0d5", label=f"{model_label} — Strict (exact-match) F1 macro")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{_TASK_TYPE_LABELS.get(l, l)}\n(n={n})" for l, n in zip(labels, ns)])
+    ax.set_ylabel("F1 macro (95% CI across classes)")
+    ax.set_ylim(0, max(judge_f1 + strict_f1 + [0.01]) * 1.35)
+    ax.legend(loc="upper right", fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _load_rechecked_rows(path: Path) -> list[dict]:
+    """Load a judge_leniency.py/judge_template_sensitivity.py
+    rechecked_T<temp>.csv, deduplicated on (agml_dataset, class_label,
+    image_name) — keeps the LAST occurrence of each key. These files have
+    been observed to contain exact-key duplicates (every row judged twice)
+    when a Phase 1-4 run's own `ckpt_*.csv` glob matched both a checkpoint's
+    canonical merged file AND its still-present shard files at the same
+    time (see vision_baseline.py's merge_shards docstring for the exact
+    mechanism) — silently double-judging the whole dataset. Deduping here
+    means a stale duplicate can't inflate n or skew stats in a comparison,
+    regardless of why a given file has them."""
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    by_key: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
+        by_key[key] = r
+    return list(by_key.values())
+
+
+def plot_template_comparison(
+    template_csvs: dict[str, Path], model_label: str, out_path: Path, n_boot: int = 2000, seed: int = 42,
+) -> None:
+    """Grouped bar chart comparing judge-TEMPLATE variants (e.g. "current"
+    vs. "hybrid") on their FULL-RESPONSE verdict
+    (judged_correct_full_trajectory — the same column backfill_judge_results
+    reads) across task_type + overall, one color per template.
+
+    Built directly from each template's own judge_leniency.py/
+    judge_template_sensitivity.py rechecked_T<temp>.csv (via
+    `template_csvs`, {template_name: path}) rather than from whichever
+    single template happens to currently be backfilled into a checkpoint's
+    judged_correct column — a checkpoint can only hold one template's
+    verdict at a time, but this can compare any number of templates whose
+    results were never simultaneously present in the same checkpoint."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    per_template_stats: dict[str, dict] = {}
+    for name, path in template_csvs.items():
+        raw_rows = _load_rechecked_rows(path)
+        rows = [{
+            "task_type": r.get("task_type", ""),
+            "class_label": r.get("class_label", ""),
+            "ground_truth": r.get("ground_truth", ""),
+            "resolved_class": r.get("resolved_class", ""),
+            "judged_correct": r.get("judged_correct_full_trajectory", ""),
+        } for r in raw_rows]
+        per_template_stats[name] = compute_condition_stats(rows, n_boot, seed)
+
+    labels: list[str] = [t for t in _TASK_TYPE_ORDER if any(t in s for s in per_template_stats.values())]
+    for s in per_template_stats.values():
+        labels += [t for t in s if t not in labels]
+    if not labels:
+        return
+
+    template_names = list(template_csvs.keys())
+    n_templates = len(template_names)
+    x = np.arange(len(labels))
+    width = 0.8 / max(n_templates, 1)
+    palette = ["#9467bd", "#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for i, name in enumerate(template_names):
+        stats = per_template_stats[name]
+        vals = [stats.get(t, {}).get("judge_f1_macro", 0.0) for t in labels]
+        lo = [stats.get(t, {}).get("judge_f1_macro", 0.0) - stats.get(t, {}).get("judge_ci_low", 0.0)
+              for t in labels]
+        hi = [stats.get(t, {}).get("judge_ci_high", 0.0) - stats.get(t, {}).get("judge_f1_macro", 0.0)
+              for t in labels]
+        offset = (i - (n_templates - 1) / 2) * width
+        ax.bar(x + offset, vals, width, yerr=[lo, hi], capsize=3,
+               color=palette[i % len(palette)], label=f"{model_label} — {name}")
+
+    first_stats = per_template_stats[template_names[0]]
+    ns = [first_stats.get(t, {}).get("n", 0) for t in labels]
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{_TASK_TYPE_LABELS.get(l, l)}\n(n={n})" for l, n in zip(labels, ns)])
+    ax.set_ylabel("Judged F1 macro (95% CI across classes)")
+    ax.legend(loc="upper right", fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_checkpoint_comparison(
+    named_ckpt_paths: dict[str, Path], out_path: Path, n_boot: int = 2000, seed: int = 42,
+) -> None:
+    """Grouped bar chart comparing DIFFERENT CHECKPOINTS (e.g. plain
+    thinking baseline vs. rubric+thinking baseline) on their own already-
+    judged `judged_correct` column, across task_type + overall — judged F1
+    macro only (95% CI), one color per named checkpoint.
+
+    Unlike plot_template_comparison (which compares judge TEMPLATES on the
+    SAME underlying predictions, via each template's own
+    rechecked_T<temp>.csv `_full_trajectory` columns), this compares
+    different PREDICTIONS entirely — two independent vision-baseline runs,
+    each already carrying its own single judged_correct verdict directly
+    in its checkpoint CSV, no rechecked_T<temp>.csv needed."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    per_run_stats: dict[str, dict] = {}
+    for name, path in named_ckpt_paths.items():
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        per_run_stats[name] = compute_condition_stats(rows, n_boot, seed)
+
+    labels: list[str] = [t for t in _TASK_TYPE_ORDER if any(t in s for s in per_run_stats.values())]
+    for s in per_run_stats.values():
+        labels += [t for t in s if t not in labels]
+    if not labels:
+        return
+
+    run_names = list(named_ckpt_paths.keys())
+    n_runs = len(run_names)
+    x = np.arange(len(labels))
+    width = 0.8 / max(n_runs, 1)
+    palette = ["#9467bd", "#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for i, name in enumerate(run_names):
+        stats = per_run_stats[name]
+        vals = [stats.get(t, {}).get("judge_f1_macro", 0.0) for t in labels]
+        lo = [stats.get(t, {}).get("judge_f1_macro", 0.0) - stats.get(t, {}).get("judge_ci_low", 0.0)
+              for t in labels]
+        hi = [stats.get(t, {}).get("judge_ci_high", 0.0) - stats.get(t, {}).get("judge_f1_macro", 0.0)
+              for t in labels]
+        offset = (i - (n_runs - 1) / 2) * width
+        ax.bar(x + offset, vals, width, yerr=[lo, hi], capsize=3,
+               color=palette[i % len(palette)], label=name)
+
+    first_stats = per_run_stats[run_names[0]]
+    ns = [first_stats.get(t, {}).get("n", 0) for t in labels]
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{_TASK_TYPE_LABELS.get(l, l)}\n(n={n})" for l, n in zip(labels, ns)])
+    ax.set_ylabel("Judged F1 macro (95% CI across classes)")
+    ax.legend(loc="upper right", fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 def write_collated(output_dir: Path, collated: dict[str, dict]) -> None:

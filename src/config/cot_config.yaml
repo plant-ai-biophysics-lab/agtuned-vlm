@@ -53,7 +53,10 @@ enforce_eager: false
 # comparable across all four (and across self_cot/cot_yaml/vision_baseline/
 # desc_augmented_vision_v2). Runs as a separate phase after the
 # classification model for a given run is unloaded.
-judge_model: google/gemma-4-26B-A4B-it
+# RedHatAI/gemma-4-31B-it-FP8-dynamic, not the unquantized google/gemma-4-26B-A4B-it
+# — the latter needs ~52GB of weights alone in bf16 and OOM'd on real hardware
+# (48GB GPU). Matches vision_baseline.py's own --judge_model default.
+judge_model: RedHatAI/gemma-4-31B-it-FP8-dynamic
 judge_quantize: null  # "4bit", "8bit", "awq", "gptq"
 judge_confidence_threshold: 1
 judge_chunk_size: 200  # rows per judge call — drives the judge progress bar

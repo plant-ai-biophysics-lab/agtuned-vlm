@@ -46,6 +46,11 @@ dependencies = [
     "unsloth; sys_platform == 'linux'",
     "unsloth-zoo; sys_platform == 'linux'",
     "trl>=0.12.0; sys_platform == 'linux'",
+    # OpenAI-compatible client — used by stage4_grpo_unified.py to call the
+    # standalone vLLM judge server over HTTP (not bundled with vllm/trl
+    # itself; already resolved transitively via one of them, declared
+    # explicitly here since the training script imports it directly).
+    "openai>=1.0.0",
     # Training loss/metrics dashboard (report_to="trackio" in the fine-tuning
     # scripts above) — local-first, no account needed, cross-platform
     "trackio>=0.1.0",
@@ -57,6 +62,13 @@ dependencies = [
     "tqdm>=4.66",
     "ddgs>=9.14.4",
     "trafilatura>=2.2.0",
+    # ReAct baseline (src/baselines/) — agml-agent's grounding/catalog-search
+    # tools, imported directly as a Python package rather than over MCP (no
+    # client/server round trip needed for a batch eval harness — see
+    # src/baselines/tools.py). The agent itself runs on the same local vLLM
+    # models as every other script here (src/common/vlm_load.py), no
+    # separate hosted-API dependency needed.
+    "agml-agent",
 ]
 
 [tool.uv]
@@ -77,3 +89,4 @@ override-dependencies = [
 [tool.uv.sources]
 unsloth = { git = "https://github.com/unslothai/unsloth.git" }
 unsloth-zoo = { git = "https://github.com/unslothai/unsloth-zoo.git" }
+agml-agent = { git = "https://github.com/Project-AgML/agml-agent" }

@@ -51,6 +51,97 @@ for _corpus in ("wordnet", "omw-1.4"):
 THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
 _THINK_RE_JUDGE = THINK_RE  # alias kept for internal use
 
+# Gemma-4's OWN thinking format (confirmed via its tokenizer_config.json's
+# response_schema and vLLM's vendored tool_chat_template_gemma4.jinja —
+# src/config/tool_chat_template_gemma4.jinja) — completely different from
+# Qwen's <think>/<thought> tags THINK_RE handles. Only emitted when BOTH
+# enable_thinking AND a matching chat_template override are given — the
+# model's own bundled template has no thinking support at all, confirmed
+# empirically on the generation side (0/40978 real rows ever produced this
+# with the stock template). Shared here (not just vision_baseline.py) since
+# apply_judge needs the identical extraction for the judge's own thinking.
+_CHANNEL_THOUGHT_RE = re.compile(r"<\|channel>thought\n(.*?)<channel\|>", re.DOTALL)
+
+
+def extract_channel_thought(text: str) -> tuple[str, str]:
+    """(thinking_text, remainder) — thinking_text is "" if no
+    <|channel>thought...<channel|> block is present (the normal case unless
+    thinking was both requested and actually produced). remainder is `text`
+    with the block (and one adjacent newline, if present) removed, so
+    downstream parsing (extract_answer_tag, _parse_judge_response's JSON
+    brace-matching) never sees leftover channel markers or thinking prose
+    that could contain stray {}/other characters."""
+    m = _CHANNEL_THOUGHT_RE.search(text)
+    if not m:
+        return "", text
+    thinking = m.group(1).strip()
+    remainder = (text[: m.start()] + text[m.end() :]).lstrip("\n")
+    return thinking, remainder
+
+
+# Capturing variant of THINK_RE (above) — THINK_RE itself has no group,
+# it's only ever used with .sub() to strip the whole tag; this one is for
+# extract_thinking() below, which needs the INNER text, not just removal.
+_THINK_CAPTURE_RE = re.compile(r"<(?:think|thought)>(.*?)</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
+# Qwen's own bundled chat template pre-seeds the opening <think> tag into
+# the PROMPT itself (not the generated text) whenever its native thinking
+# support is used — so a Qwen completion only ever contains the CLOSING
+# tag. _THINK_CAPTURE_RE/THINK_RE above require a matched pair and are a
+# silent no-op for that shape (confirmed real bug: a Qwen3.8-27B-FP8
+# vision-baseline run had judge_accuracy collapse to 0.0379 because the
+# entire unstripped chain-of-thought was landing in "prediction"). This
+# fallback treats everything up to the FIRST closing tag as the
+# (unseeded) thinking block when no opening tag is found.
+_THINK_CLOSE_ONLY_CAPTURE_RE = re.compile(r"^(.*?)</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_thinking(text: str) -> tuple[str, str]:
+    """Model-agnostic thinking-trace extraction — tries Gemma-4's own
+    <|channel>thought...<channel|> format first (extract_channel_thought,
+    a no-op for every other model family), then strips any <think>/
+    <thought>...</think|thought> tags (Qwen's own convention) from
+    whatever's left, capturing their inner text too. Returns
+    (thinking_text, cleaned) — thinking_text prefers the channel-format
+    text when both somehow appear (shouldn't happen in practice, no model
+    emits both conventions).
+
+    Exists so heldout_zeroshot.py/heldout_explain_traces.py/
+    heldout_summarize.py/heldout_skill_optimize.py (Paper 2 Stage 3) can
+    run against EITHER Gemma-4 or a Qwen model without a raw, unstripped
+    thinking block leaking into a checkpointed prediction/explanation/the
+    skill-memory .md itself — those 4 scripts previously called
+    extract_channel_thought() alone, which silently left Qwen's <think>
+    tags completely unhandled. Safe to call unconditionally (regardless of
+    --enable_thinking) — a cheap no-op parse when no thinking block of
+    either kind is present, same convention vision_baseline.py's own
+    run_batch already uses for its two-step channel+think handling."""
+    channel_thinking, after_channel = extract_channel_thought(text)
+    m = _THINK_CAPTURE_RE.search(after_channel)
+    if m:
+        tag_thinking = m.group(1).strip()
+        cleaned = THINK_RE.sub("", after_channel).strip()
+    else:
+        m2 = _THINK_CLOSE_ONLY_CAPTURE_RE.match(after_channel)
+        tag_thinking = m2.group(1).strip() if m2 else ""
+        cleaned = _THINK_CLOSE_ONLY_CAPTURE_RE.sub("", after_channel, count=1).strip() if m2 else after_channel.strip()
+    return (channel_thinking or tag_thinking), cleaned
+
+# Single point of control for which prompts.yaml judge template new judge
+# calls default to, pipeline-wide — every active caller (vision_baseline.py's
+# run_judge_phase, majority_vote.py, cot_vision.py, cot_step_analysis.py,
+# verifier_lmv.py, judge_leniency.py/judge_consistency.py's --template_key
+# defaults) reads this constant rather than hardcoding a literal template
+# name, so changing the pipeline's default judge template is a one-line
+# change here instead of finding every call site. "judge_classification_template"
+# (the original/"current" template) is completely unchanged and still fully
+# selectable by name — this only changes what's used when nothing else is
+# specified. src/common/judge_template_sensitivity.py's TEMPLATE_VARIANTS
+# intentionally does NOT read this constant for its "current" entry, since
+# that entry's whole point is the literal original template regardless of
+# whatever the pipeline default is.
+DEFAULT_JUDGE_TEMPLATE_KEY = "judge_classification_hybrid_template"
+
 
 @lru_cache(maxsize=16384)
 def _synonyms(word: str) -> frozenset[str]:
@@ -152,6 +243,37 @@ def resolve_class(response: str, classes: list[str]) -> str | None:
             return cls
     matches = [cls for cls in classes if cls.lower() in resp]
     return matches[0] if len(matches) == 1 else None
+
+
+_ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_answer_tag(text: str) -> tuple[str, bool]:
+    """Pull the free-form <answer>...</answer> content out of a generated
+    response — open-ended, no closed-set vocabulary (real-world answers
+    aren't a fixed label set). Falls back to the full cleaned text if the
+    tag is missing, so every response stays comparable rather than empty;
+    `found` records which case happened. Moved here from verifier_cot.py
+    (originally written for its rubric templates) so plain-classification
+    stages (vision_baseline.py, self_cot.py, cot_yaml.py,
+    desc_augmented_vision_v2.py) can reuse the exact same convention —
+    call resolve_class on the extracted tag content instead of the raw
+    free-text prediction, which is what actually determines
+    resolved_class/correct in each of those scripts.
+
+    Uses the LAST <answer> occurrence (preferring a non-empty one), not the
+    first — confirmed real bug (2026-10, Qwen3.8-27B-FP8 vision-baseline
+    run, judge_accuracy=0.0379): a long free-reasoning model routinely
+    discusses the prompt's own instructions mid-thought (e.g. "...wrapped
+    in <answer></answer> tags..."), producing an earlier, spurious, often-
+    empty match that .search() (first-match) would grab instead of the
+    real final answer near the end of the response."""
+    matches = list(_ANSWER_TAG_RE.finditer(text))
+    if matches:
+        non_empty = [m for m in matches if m.group(1).strip()]
+        chosen = non_empty[-1] if non_empty else matches[-1]
+        return chosen.group(1).strip(), True
+    return text.strip(), False
 
 
 def compute_classification_metrics(refs: list[str], preds: list[str]) -> dict:
@@ -292,6 +414,12 @@ def apply_judge(
     pred_key: str,
     confidence_threshold: int = 1,
     log_path=None,
+    temperature: float | None = None,
+    seed: int | None = None,
+    extra_keys: dict[str, str] | None = None,
+    enable_thinking: bool = False,
+    max_tokens: int | None = None,
+    chat_template: str | None = None,
 ) -> list[dict]:
     """Apply LLM judge to rows; adds judged_correct (0/1) and judge_reasoning to each row.
 
@@ -303,10 +431,94 @@ def apply_judge(
     truncated to 600 chars and doesn't include the prompt at all. Default
     None (every pre-existing caller) skips logging — purely additive, no
     behavior change for callers that don't pass it.
+
+    temperature/seed (both default None): override _JUDGE_PARAMS' fixed
+    temperature=0.0 for THIS call only — every existing caller leaves these
+    None and keeps the exact original deterministic behavior. Added for
+    src/common/judge_consistency.py's self-consistency sweep (Phase 2 of the
+    judge-improvements evaluation plan), which needs repeat judge calls over
+    the SAME rows to actually produce different verdicts sometimes — at
+    temperature=0.0 (greedy) every repeat call is bit-for-bit identical, so
+    there's nothing to measure a flip rate over.
+
+    extra_keys (default None): {template_placeholder_name: row_field_name}
+    — judge_template.format() only ever filled {gt}/{pred} before this; some
+    Phase 3 template variants (src/common/judge_template_sensitivity.py)
+    need a third placeholder, e.g. {class_list}, whose value varies per row
+    (each dataset's own class list) rather than being a fixed string bakeable
+    into the template itself. Every existing caller leaves this None and
+    gets the exact original gt/pred-only formatting.
+
+    enable_thinking (default False): every existing caller leaves this False
+    and gets the EXACT original prompt-rendering behavior — plain
+    tokenizer.apply_chat_template(msgs, tokenize=False,
+    add_generation_prompt=True), no enable_thinking kwarg passed at all. Only
+    when explicitly True does _fmt attempt
+    apply_chat_template(..., enable_thinking=True), falling back to the
+    plain call (via TypeError) if the tokenizer's chat template doesn't
+    accept that kwarg (e.g. non-Qwen3 tokenizers) — a no-op for Gemma-4,
+    whose bundled template has NO enable_thinking support at all, confirmed
+    empirically on the generation side (0/40978 real rows ever produced a
+    thinking trace with the stock template). Pass `chat_template` too for
+    a judge model in that situation (see below).
+
+    max_tokens (default None): override _JUDGE_PARAMS' fixed max_tokens=1024
+    for THIS call only — every existing caller leaves this None and keeps
+    the original budget. Added alongside enable_thinking since a thinking
+    trace can consume (or exceed) the judge's normal 1024-token budget
+    before it ever reaches its final JSON verdict, truncating the response
+    mid-thought.
+
+    chat_template (default None — use the tokenizer's own bundled
+    template): raw Jinja text passed straight through as
+    apply_chat_template's own `chat_template` override kwarg, same
+    src.common.chat_prompt.render_chat_template pattern used on the
+    generation side. Needed for a Gemma-4 judge model, whose stock template
+    can't express enable_thinking at all — pass the vendored
+    src/config/tool_chat_template_gemma4.jinja's text here alongside
+    enable_thinking=True. When given, skips straight to the override render
+    rather than the Qwen-oriented TypeError/plain-call fallback chain,
+    which doesn't apply once a custom template is already in play. Also
+    flips SamplingParams(skip_special_tokens=False) whenever enable_thinking
+    is True — Gemma-4's <|channel>/<channel|> markers are real special
+    tokens vLLM strips from decoded output by default, so without this
+    they'd vanish from the judge's raw response before ever being visible
+    (same documented vLLM gotcha as the generation side —
+    https://github.com/vllm-project/vllm/issues/38855). The raw response is
+    also run through src.common.metrics.extract_channel_thought before
+    _parse_judge_response ever sees it, so a thinking judge's free-form
+    reasoning prose (which can contain stray {}/other characters) never
+    confuses the JSON-verdict brace-matching.
     """
+    if temperature is None and seed is None and max_tokens is None and not enable_thinking:
+        judge_params = _JUDGE_PARAMS
+    else:
+        judge_params = SamplingParams(
+            temperature=_JUDGE_PARAMS.temperature if temperature is None else temperature,
+            max_tokens=_JUDGE_PARAMS.max_tokens if max_tokens is None else max_tokens,
+            seed=seed,
+            skip_special_tokens=not enable_thinking,
+        )
 
     def _fmt(text: str) -> str:
         msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
+        if chat_template is not None:
+            try:
+                return tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=True,
+                    chat_template=chat_template, enable_thinking=enable_thinking,
+                )
+            except Exception:
+                pass  # fall through to the plain/Qwen-oriented paths below
+        if enable_thinking:
+            try:
+                return tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=True, enable_thinking=True,
+                )
+            except TypeError:
+                pass  # tokenizer's chat template doesn't accept enable_thinking — fall through
+            except Exception:
+                pass
         try:
             return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         except Exception:
@@ -316,23 +528,48 @@ def apply_judge(
             except Exception:
                 return text
 
+    def _extra_fmt_kwargs(r: dict) -> dict:
+        if not extra_keys:
+            return {}
+        return {placeholder: str(r.get(row_field, "")) for placeholder, row_field in extra_keys.items()}
+
     raw_prompts = [
-        judge_template.format(gt=str(r.get(gt_key, ""))[:400], pred=str(r.get(pred_key, ""))[:400])
+        judge_template.format(
+            gt=str(r.get(gt_key, ""))[:400], pred=str(r.get(pred_key, ""))[:400],
+            **_extra_fmt_kwargs(r),
+        )
         for r in rows
     ]
     formatted_prompts = [_fmt(p) for p in raw_prompts]
-    outputs = llm.generate(formatted_prompts, sampling_params=_JUDGE_PARAMS)
+    outputs = llm.generate(formatted_prompts, sampling_params=judge_params)
 
     updated = []
     log_records = []
     for row, raw_prompt, formatted_prompt, out in zip(rows, raw_prompts, formatted_prompts, outputs):
         raw = out.outputs[0].text
-        cleaned = _THINK_RE_JUDGE.sub("", raw).strip()
-        judged_correct = _parse_judge_response(raw, threshold=confidence_threshold)
+        # Strip a Gemma-4-style <|channel>thought block BEFORE JSON parsing —
+        # the free-form thinking prose can itself contain stray {}/other
+        # characters that would otherwise confuse _parse_judge_response's
+        # brace-matching. No-op (returns raw unchanged) when no channel
+        # block is present, which is every call unless enable_thinking +
+        # chat_template were both given and the judge actually used it.
+        _thinking, de_channeled = extract_channel_thought(raw)
+        cleaned = _THINK_RE_JUDGE.sub("", de_channeled).strip()
+        judged_correct = _parse_judge_response(de_channeled, threshold=confidence_threshold)
         updated.append({
             **row,
             "judged_correct": judged_correct,
             "judge_reasoning": cleaned[:600],
+            # Completely untouched judge output, no <think>-stripping and no
+            # 600-char truncation — added alongside enable_thinking for the
+            # same reason vision_baseline.py's raw_response column was: a
+            # thinking model's reasoning isn't guaranteed to show up as a
+            # tag _THINK_RE_JUDGE would ever match, so judge_reasoning alone
+            # can silently still contain it (or drop it) with no way to
+            # tell. Additive key — every existing caller/row shape is
+            # unaffected, this just rides along in **row for whatever
+            # downstream code chooses to keep it.
+            "judge_raw_response": raw,
         })
         if log_path is not None:
             log_records.append({

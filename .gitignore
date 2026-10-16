@@ -35,11 +35,15 @@ farm_outputs/*
 experiments/**/**/*.log
 **/*.lock
 experiments/text_qa/uv.lock
-<<<<<<< Updated upstream
 /.DS_Store
-=======
 experiments/**/**/*.npy
->>>>>>> Stashed changes
 /legacy/outputs/verifier_lmv
 /experiments/ag_finetune/.DS_Store
 /dataset/images
+/dataset/.DS_Store
+/dataset/images_detection
+/dataset/images_heldout
+/dataset/images_heldout_quality
+/dataset/images_heldout_species
+/legacy
+/scripts

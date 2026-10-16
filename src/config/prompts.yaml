@@ -44,9 +44,49 @@ desc_augmented_classification: "A reference description of the condition to iden
 classification_suffix: "Answer in one to two sentences. Clearly state your answer (general or scientific name) in your response."
 assessment_descriptive: "Answer the following question in exactly one to two concise sentences describing only the visual appearance. Do not include greetings, headers, bullet points and unnecessary analysis. Output only the sentences.\n\nQuestion: {question}\n\nAnswer:"
 assessment_classification: "Answer the following question in one to two sentences. Clearly state your answer (general or scientific name) in your response. Do not include greetings, headers, or bullet points.\n\nQuestion: {question}\n\nAnswer:"
+# Same as assessment_classification, plus a trailing <answer></answer> tag so
+# resolve_class can match against a short, isolated class name instead of a
+# full sentence — used by vision_baseline.py / self_cot.py / cot_yaml.py.
+# NOT used by verifier_cot.py's _cls_question: that question text gets
+# embedded inside structured_templates' own rubric prompt (verifier_prompts.yaml),
+# which already appends its own separate <answer></answer> instruction after
+# the rubric fields — adding a second, earlier <answer> instruction here would
+# make extract_answer_tag's first-match regex grab the wrong (premature) tag.
+#
+# The leading "briefly state the visual evidence" sentence (added 2026-09)
+# is the fix for a real gap: assessment_system (above) tells every model to
+# ground its conclusion in visual evidence, but for vision_baseline.py this
+# IS the only generation call the model ever makes (self_cot.py/cot_yaml.py
+# have an earlier description/reasoning turn too, but the JUDGE never sees
+# it — apply_judge always reads pred_key="prediction", this turn's own
+# output, never the separate `reasoning` column) — so a system-prompt
+# instruction alone did nothing here: "clearly state your answer" is fully
+# satisfied by one word, and real checkpoints showed exactly that. This
+# line makes the evidence a required part of THIS turn's own response, not
+# just an unenforced system-prompt hint.
+assessment_classification_tagged: "Answer the following question. First, in one to two sentences, state the specific visual evidence supporting your answer (symptom pattern, color, shape, texture, pest signs, growth habit, etc. — whichever apply). Then clearly state your answer (general or scientific name). Do not include greetings, headers, or bullet points. Finally, on a new line, restate just the class name on its own wrapped in <answer></answer> tags — as briefly and precisely as you can state it, not a full sentence.\n\nQuestion: {question}\n\nAnswer:"
 
-# System prompt applied to all models during assessment
-assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, and plant pathology."
+# System prompt applied to all models during assessment — shared across
+# every classification/detection stage in this repo (vision_baseline.py,
+# desc_augmented_vision_v2.py, self_cot.py, cot_yaml.py, cot_vision.py,
+# verifier_cot.py's own generation AND grading/pairwise-duel calls,
+# detection_baseline.py, detection_verifier.py — see any of their own
+# `prompts.get("assessment_system", "")` call sites). The second sentence
+# (added 2026-09, generalized from an earlier verifier_cot.py-only version)
+# asks every model, across every stage, to state the specific visual
+# evidence behind its answer rather than a bare conclusion — the point is
+# giving the judge (judge_classification_hybrid_template,
+# DEFAULT_JUDGE_TEMPLATE_KEY, src/common/metrics.py) more to work with:
+# that template already refuses to credit "a plausible CAUSE offered for a
+# generically-described reference class" as a match (e.g. naming a
+# specific pest like "stem borer" for a reference class that's actually
+# the symptom it causes, "dead heart") — but it can only apply that logic
+# to whatever detail is actually IN the response. A model that states both
+# the symptom and its probable cause (e.g. "Dead heart, likely caused by
+# stem borer") gives the judge enough to match whichever convention the
+# reference class actually uses, instead of a bare single-word guess that
+# only matches one of the two.
+assessment_system: "You are an expert agricultural scientist with deep knowledge of crop diseases, pests, weeds, and produce quality. When you answer, briefly ground your conclusion in the specific visual evidence you observed — connect it to what you actually saw (symptom pattern, color, shape, texture, pest signs, growth habit, etc., whichever apply), rather than stating a conclusion on its own. If there's a similar-looking alternative your answer could be confused with, briefly note what rules it out."
 
 # LLM judge prompts
 judge_system_language: "You are an expert agricultural scientist evaluating model answers on agricultural knowledge questions."
@@ -68,3 +108,38 @@ judge_classification_template: "Evaluate whether the predicted label correctly i
 # many unrelated pathogens/pests produce leaf-spot-shaped symptoms).
 judge_classification_strict_template: "You will be shown a full model response that may include an observational narrative (crop, symptom description, damage pattern, etc.) followed by a final stated diagnosis. Your job is to judge ONLY the model's explicitly stated final diagnosis/conclusion against the reference class — NOT whether the surrounding narrative sounds plausible or descriptively consistent with the reference class. If the narrative is detailed and accurate but the model's own final diagnosis is generic, vague, non-committal, or names a different condition, mark it as NOT a match — credit is based on what the model actually concluded, never on the narrative alone. A generic symptom-shape label (e.g. \"leaf spot disease\", \"nutrient deficiency\", \"viral infection\", \"fungal infection\") does NOT match a specifically-named reference class unless it is that exact condition's own recognized common name — many different, unrelated pathogens, pests, and abiotic causes can all produce similar generic symptom shapes, so a generic label must not be credited just because it is broadly consistent with the reference class's typical presentation.\n\nReference class: {gt}\nFull model response: {pred}\n\nRespond with JSON only:\n{{ \"stated_diagnosis\": \"the model's own final diagnosis, quoted or paraphrased\", \"is_match\": true/false, \"reasoning\": \"brief explanation referencing the stated diagnosis specifically\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
 judge_description_template: "Evaluate whether the predicted visual description captures the same key visual features as the reference description of a plant condition.\n\nReference: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+
+# Phase 3 (judge-improvements evaluation plan, "template sensitivity sweep")
+# — two more variants for PLAIN classification predictions (vision_baseline.py
+# / self_cot.py / cot_yaml.py / desc_augmented_vision_v2.py's short 1-2
+# sentence answers), distinct from judge_classification_strict_template
+# above (which is verifier_cot-specific — its wording assumes a rubric
+# narrative to isolate a final diagnosis line from, which a plain 1-2
+# sentence classification answer doesn't have).
+#
+# judge_classification_specificity_template — same "don't credit a generic
+# symptom-shape label" lever as the strict template above, rewritten without
+# any narrative-isolation language since there's no narrative here to
+# isolate from; the prediction IS already close to just the answer.
+judge_classification_specificity_template: "Evaluate whether the predicted label correctly and SPECIFICALLY identifies the plant condition in the reference. The prediction must name the reference class itself or one of its recognized common/scientific synonyms. A generic symptom-shape label (e.g. \"leaf spot disease\", \"nutrient deficiency\", \"viral infection\", \"fungal infection\", \"pest damage\") does NOT count as a match just because it is broadly consistent with the reference class's typical presentation, since many different, unrelated pathogens, pests, and abiotic causes can all produce similar generic symptom shapes. Only mark is_match true if the prediction is specific enough that it could not equally apply to a different, unrelated condition with a similar generic presentation.\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+# judge_classification_class_list_template — same base instruction as
+# judge_classification_template, plus the full list of possible classes for
+# this dataset, testing whether seeing the other possible (often similarly-
+# generic-sounding) classes alone makes the judge more specificity-demanding
+# without being told to be. {class_list} is filled via apply_judge's
+# extra_keys mechanism (src/common/metrics.py), not gt/pred — callers must
+# pass extra_keys={"class_list": "<row field holding the joined class list>"}.
+judge_classification_class_list_template: "Evaluate whether the predicted label correctly identifies the plant condition in the reference. For context, here is the full list of possible classes for this dataset — use it to judge whether the prediction is specific enough to distinguish the reference class from the other listed classes, not just broadly consistent with it:\n{class_list}\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"
+
+# Phase 4 hybrid template — combines class_list's context (full class list,
+# judge specificity against it) with specificity's generic-label guardrail,
+# plus a new distinction the earlier two templates couldn't draw: the
+# prediction doesn't need exact wording, but crediting it requires a NECESSARY
+# category-membership relationship (e.g. "moldy" is always a case of the
+# broad class "Bad"), never a plausible-cause guess for a generically-named
+# reference class (e.g. "Yellow Mosaic Virus" is only ONE of many possible
+# causes of the generic symptom "leaf crinckle" — naming one specific cause
+# is a guess, not a necessary membership relationship, and must not be
+# credited). Same {gt}/{pred}/{class_list} placeholders and extra_keys
+# mechanism as judge_classification_class_list_template above.
+judge_classification_hybrid_template: "Evaluate whether the predicted label correctly and SPECIFICALLY identifies the plant condition in the reference. For context, here is the full list of possible classes for this dataset — use it to judge whether the prediction is specific enough to distinguish the reference class from the other listed classes, not just broadly consistent with it:\n{class_list}\n\nThe prediction does NOT need to use the reference class's exact wording. Mark is_match true if the prediction names a specific instance or subtype that NECESSARILY belongs to the reference class and no other class in the list — for example, a specific named defect is a valid match for a broad catch-all class like 'Bad', since any such defect is always a case of that class. Do NOT mark is_match true if the prediction is instead a plausible CAUSE or commonly-associated diagnosis offered for a generically-described reference class (e.g. a specific pathogen name given as an explanation for a reference class that is itself only a symptom description) — many different, unrelated specific causes can produce the same generic symptom, so naming one specific cause is a guess, not a necessary membership relationship, and must not be credited. A generic symptom-shape label (e.g. \"leaf spot disease\", \"nutrient deficiency\", \"viral infection\", \"fungal infection\") also does NOT count as a match for a specifically-named reference class just because it is broadly consistent with it.\n\nReference class: {gt}\nPrediction: {pred}\n\nRespond with JSON only:\n{{ \"is_match\": true/false, \"reasoning\": \"brief explanation — if crediting a non-exact match, state why the prediction necessarily belongs to the reference class rather than merely being a plausible cause or generic description\", \"confidence\": 0-2 }}\nconfidence: 0=not confident, 1=somewhat confident, 2=very confident"

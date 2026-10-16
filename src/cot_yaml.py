@@ -77,7 +77,9 @@ from src.common.dataset_config import (
     load_manifest, parse_class_label,
 )
 from src.common.io import load_prompts
-from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
+from src.common.metrics import (
+    contains_match, extract_answer_tag, resolve_class, rouge_scores_per_sample, sample_class_images,
+)
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
     CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
@@ -103,7 +105,7 @@ STEP_CKPT_FIELDS = (
 try:
     from vllm import SamplingParams
     _COT_PARAMS = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
-    _CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
+    _CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=256, repetition_penalty=1.1)
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
     _COT_PARAMS = _CLS_PARAMS = None
@@ -135,7 +137,7 @@ def cls_question(task_type: str, crop_val, prompts: dict) -> str:
         inner = prompts["visual_classification_quality"].format(crop=crop)
     else:
         inner = prompts["visual_classification_weed"]
-    return prompts["assessment_classification"].format(question=inner)
+    return prompts["assessment_classification_tagged"].format(question=inner)
 
 
 # ── vLLM helpers ─────────────────────────────────────────────────────────────
@@ -281,7 +283,8 @@ def _step_row(
     entry: dict, ds, clean_label: str, crop_val, task_type: str, name: str, gt_hint: str,
     mode: str, rotation: str = "",
 ) -> dict:
-    resolved = resolve_class(entry["prediction"], ds.clean_classes)
+    answer, _ = extract_answer_tag(entry["prediction"])
+    resolved = resolve_class(answer, ds.clean_classes)
     correct = resolved is not None and resolved.lower() == clean_label.lower()
     c_match = contains_match(resolved or entry["prediction"], clean_label)
     scores = rouge_scores_per_sample(entry["prediction"], clean_label, include_rouge=False)
@@ -291,6 +294,7 @@ def _step_row(
         "image_name": name, "mode": mode, "step_idx": entry["step_idx"],
         "rotation": rotation, "question_id": entry["question_id"],
         "prediction": entry["prediction"], "resolved_class": resolved or "",
+        "extracted_answer": answer,
         "ground_truth": clean_label, "correct": int(correct), "contains_match": int(c_match),
         "resolvable": int(resolved is not None), "reasoning": entry["reasoning"],
         "judge_gt_hint": gt_hint, **scores,

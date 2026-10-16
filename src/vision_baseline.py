@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
+import csv
 import re
 import time
 
@@ -46,23 +47,68 @@ from src.common.dataset_config import (
     DISEASE_TASK_TYPES, active_datasets, crop_display, load_hf_samples,
     load_manifest, parse_class_label,
 )
+from src.common.heldout_skill import build_skill_system_prompt
 from src.common.io import load_prompts
-from src.common.metrics import contains_match, resolve_class, rouge_scores_per_sample, sample_class_images
+from src.common.metrics import (
+    contains_match, extract_answer_tag, extract_channel_thought, resolve_class, sample_class_images,
+)
 from src.common.progress import ProgressBar
 from src.common.vision_eval import (
-    append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics, judge_gt_hint,
-    load_ckpt, run_judge_phase, safe_model_name, write_collated, write_model_metrics,
+    CKPT_FIELDS, append_ckpt_row, archive_ckpt_if_rerun, collate_models, compute_model_metrics,
+    judge_gt_hint, load_ckpt, plot_checkpoint_comparison, plot_task_f1_summary, plot_template_comparison,
+    rewrite_ckpt, run_judge_phase,
+    safe_model_name, write_collated, write_model_metrics,
 )
 from src.common.vlm_load import DEFAULT_VISION_TOKEN_BUDGET, destroy_llm, load_llm
 
+# No ROUGE/sem_sim here — this stage is classification-only (correct/
+# contains_match/resolvable already the real signal), and rouge1/rouge2/
+# rougeL/rouge_ss were already always blank via include_rouge=False;
+# sem_sim was the only one actually computed (a real per-row cost, loading
+# sentence-transformers) despite not being used anywhere downstream
+# (vision_baseline_collate.py's stage2_summary.csv is F1-only). Dropping
+# all five from this script's own checkpoint schema — desc_augmented_vision_v2.py
+# / self_cot.py / cot_yaml.py are unaffected, they still use CKPT_FIELDS
+# as-is. compute_model_metrics's aggregate_rouge() already skips missing
+# keys gracefully, so metrics.json needs no changes either.
+_DROPPED_FIELDS = {"rouge1", "rouge2", "rougeL", "rouge_ss", "sem_sim"}
+_kept_fields = [f for f in CKPT_FIELDS if f not in _DROPPED_FIELDS]
+# raw_response: the model's completely untouched generation output, before
+# _clean() strips <think>/<thought> tags — added so a thinking-mode run
+# (--enable_thinking) has somewhere to keep the reasoning text even when it
+# isn't wrapped in a tag _clean's regex would catch (see run_batch's
+# docstring — Gemma-4 has been observed emitting unwrapped reasoning prose
+# directly before its <answer> tag). Inserted right after "prediction" so
+# the two sit next to each other in the CSV. Blank for any pre-existing
+# checkpoint row (backfilled as "" by load_ckpt's schema-drift healing, same
+# as extracted_answer was before it).
+_prediction_idx = _kept_fields.index("prediction")
+VISION_BASELINE_CKPT_FIELDS = (
+    _kept_fields[: _prediction_idx + 1] + ["raw_response"] + _kept_fields[_prediction_idx + 1 :]
+)
+
 try:
     from vllm import SamplingParams
-    _CLS_PARAMS = SamplingParams(temperature=0.0, max_tokens=64, repetition_penalty=1.1)
 except ImportError:
     SamplingParams = None  # type: ignore[assignment,misc]
-    _CLS_PARAMS = None
 
 _THINK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+# Qwen's own bundled chat template (used whenever --chat_template_path "" is
+# passed to run with Qwen's native thinking support) pre-seeds the opening
+# <think> tag into the PROMPT itself, not the generated text — so a Qwen
+# completion only ever contains the CLOSING tag. _THINK_RE above requires a
+# matched pair and is a silent no-op for that shape, which was a real,
+# confirmed bug: a Qwen3.8-27B-FP8 vision-baseline run had judge_accuracy
+# collapse to 0.0379 because the entire 10-18K char chain-of-thought was
+# landing in "prediction" unstripped (reasoning="" on 100% of rows, even the
+# 80.7% that had a real closing </think>). This fallback treats everything
+# up to the FIRST closing tag as the (unseeded) thinking block when no
+# opening tag is found.
+_THINK_CLOSE_ONLY_RE = re.compile(r"^.*?</(?:think|thought)>", re.DOTALL | re.IGNORECASE)
+
+# extract_channel_thought (Gemma-4's <|channel>thought...<channel|> format)
+# now lives in src/common/metrics.py — shared with apply_judge, which needs
+# the identical extraction for the judge's own thinking output.
 
 
 # ── Prompt building ─────────────────────────────────────────────────────────
@@ -75,19 +121,96 @@ def cls_question(task_type: str, crop_val, prompts: dict) -> str:
         inner = prompts["visual_classification_quality"].format(crop=crop)
     else:
         inner = prompts["visual_classification_weed"]
-    return prompts["assessment_classification"].format(question=inner)
+    return prompts["assessment_classification_tagged"].format(question=inner)
+
+
+_VERIFIER_PROMPTS_PATH = Path(__file__).parent / "config" / "verifier_prompts.yaml"
+
+
+def load_rubric_templates(path: Path = _VERIFIER_PROMPTS_PATH) -> tuple[dict, dict]:
+    """(structured_templates, task_type_to_rubric) — "Baseline with rubric"
+    stage: reuses verifier_cot.py's own model-facing fill-in-the-blank
+    criteria chain (src/config/verifier_prompts.yaml's structured_templates,
+    NOT the `rubrics` dict — that one is verifier-only wording, see the
+    YAML's own header comment) as a --rubric flag on the plain
+    single-shot baseline, with no tournament/verifier machinery at all.
+    This is the same prompt shape as Paper 1's "Manual CoT" condition
+    (Appendix A: each rubric criterion answered in sequence before the
+    final label) — that paper found only a modest, inconsistent gain on
+    its own (overall Δ=0.008 vs. the lower bound); this reruns the same
+    idea on the current thinking-enabled pipeline/model to see if it
+    still holds."""
+    import yaml as _yaml
+    with open(path) as f:
+        vprompts = _yaml.safe_load(f)
+    return vprompts["structured_templates"], vprompts["task_type_to_rubric"]
+
+
+def apply_rubric(question: str, task_type: str, structured_templates: dict, task_type_to_rubric: dict) -> str:
+    rubric_key = task_type_to_rubric.get(task_type, "disease_pest")
+    return structured_templates[rubric_key].format(question=question)
 
 
 # ── vLLM helpers ─────────────────────────────────────────────────────────────
 
 def _clean(text: str) -> str:
-    return _THINK_RE.sub("", text).strip()
+    stripped = _THINK_RE.sub("", text)
+    if stripped == text:
+        # No matched <think>...</think> pair — try the opening-tag-was-in-
+        # the-prompt case (see _THINK_CLOSE_ONLY_RE above) before giving up.
+        stripped = _THINK_CLOSE_ONLY_RE.sub("", text, count=1)
+    return stripped.strip()
 
 
-def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = "") -> list[str]:
-    prompts = [build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt) for img in images]
-    outputs = llm.generate(prompts, sampling_params=_CLS_PARAMS)
-    return [_clean(o.outputs[0].text) for o in outputs]
+def run_batch(
+    llm, tokenizer, images: list, question: str, system_prompt: str = "",
+    enable_thinking: bool = False, max_tokens: int = 256, chat_template: str | None = None,
+) -> list[tuple[str, str]]:
+    """Returns (raw, cleaned) pairs, one per image — raw is the model's
+    completely untouched output text, cleaned is raw with any
+    <think>/<thought>...</think|thought> block stripped (_clean), same as
+    this function returned alone before raw was added.
+
+    raw is kept around (see run_model's "raw_response" checkpoint column)
+    because <think>/<thought> tags are not the only shape a model's
+    reasoning can take — e.g. Gemma-4 has been observed emitting an
+    unwrapped reasoning paragraph directly before its <answer> tag, with no
+    tags _THINK_RE would ever match, so "cleaned" alone can silently still
+    contain (or, for a differently-tagged future model, silently drop) the
+    actual thinking text. Keeping raw preserves exactly what the model said
+    regardless of what tagging convention (if any) it used, so this doesn't
+    need to be re-litigated per model.
+
+    enable_thinking (default False, unchanged behavior): forwarded to
+    build_multimodal_prompt — set True to let the model's own extended
+    thinking (<think>/<thought> tags, OR Gemma-4's <|channel>thought
+    channel if chat_template is also given) through instead of suppressing
+    it. Raise max_tokens substantially (e.g. 1024+) when enabling it, or
+    thinking traces will routinely get truncated before the model reaches
+    its <answer> tag.
+
+    chat_template (default None): forwarded to build_multimodal_prompt —
+    Gemma-4's own bundled template has no thinking support at all, so
+    enable_thinking alone is a no-op for it; pass the vendored
+    src/config/tool_chat_template_gemma4.jinja's text here too. Also flips
+    SamplingParams(skip_special_tokens=not enable_thinking) — Gemma-4's
+    <|channel>/<channel|> markers are real special tokens (vLLM strips
+    special tokens from decoded output by default), so without
+    skip_special_tokens=False they'd vanish from the output text before
+    extract_channel_thought ever saw them, even with the right template.
+    Harmless when enable_thinking is False, or for models whose thinking
+    tags (e.g. Qwen's <think>) aren't special tokens either way."""
+    prompts = [
+        build_multimodal_prompt(tokenizer, img, question, system_prompt=system_prompt,
+                                 enable_thinking=enable_thinking, chat_template=chat_template)
+        for img in images
+    ]
+    sampling_params = SamplingParams(
+        temperature=0.0, max_tokens=max_tokens, repetition_penalty=1.1,
+        skip_special_tokens=not enable_thinking,
+    )
+    outputs = llm.generate(prompts, sampling_params=sampling_params)
+    return [(o.outputs[0].text, _clean(o.outputs[0].text)) for o in outputs]
 
 
 # run_judge_phase() lives in src/common/vision_eval.py — shared verbatim with
@@ -101,17 +224,82 @@ def run_batch(llm, tokenizer, images: list, question: str, system_prompt: str = 
 def run_model(model_id: str, args: argparse.Namespace) -> None:
     prompts = load_prompts(Path(args.prompts))
     system_prompt = prompts.get("assessment_system", "")
+    # Paper 2 Stage 3's skill-memory file (docs/stage3_context_memory.md,
+    # heldout-summarize's own output) — a real held-out ablation (n=199)
+    # found +0.0603 judge_accuracy when this is injected, but ONLY has
+    # real content for disease/pest diagnosis (DigiGreen's dataset has no
+    # quality/species/weed content at all) — so it's gated to
+    # DISEASE_TASK_TYPES ({"disease", "pest_damage"}) per-row below, never
+    # applied to quality_identification/species_identification/
+    # weed_identification rows, where it would be irrelevant context.
+    # Built via the SAME wrapper src/common/heldout_skill.py's own
+    # ablation validated — see that module's docstring for the exact
+    # wording/why, never re-derive this wrapper text independently.
+    skill_system_prompt = (
+        build_skill_system_prompt(system_prompt, args.skill_memory_path) if args.skill_memory_path else None
+    )
+    # Quality's own skill-memory file (same Stage 3 pipeline, --domain
+    # quality — docs/stage3_context_memory.md) — a SEPARATE flag/file from
+    # the disease/pest one above, gated independently to
+    # task_type == "quality_identification" only, never mixed with the
+    # disease/pest file (quality has no disease/pest content and vice
+    # versa). Both flags can be set in the same run — each only ever
+    # applies to its own task_type's rows.
+    quality_skill_system_prompt = (
+        build_skill_system_prompt(system_prompt, args.quality_skill_memory_path)
+        if args.quality_skill_memory_path else None
+    )
+    # Species' own skill-memory file (same Stage 3 pipeline, --domain
+    # species — docs/stage3_context_memory.md) — a THIRD independent flag/
+    # file, gated to task_type == "species_identification" only, same
+    # pattern as quality's own flag above (never mixed with disease/pest or
+    # quality's file). All three flags can be set in the same run — each
+    # only ever applies to its own task_type's rows.
+    species_skill_system_prompt = (
+        build_skill_system_prompt(system_prompt, args.species_skill_memory_path)
+        if args.species_skill_memory_path else None
+    )
     manifest = load_manifest(Path(args.manifest))
+    chat_template = Path(args.chat_template_path).read_text(encoding="utf-8") if args.chat_template_path else None
+    if args.rubric:
+        structured_templates, task_type_to_rubric = load_rubric_templates()
+        if args.gen_max_tokens <= 256:
+            print(f"  [rubric] --gen_max_tokens={args.gen_max_tokens} — the rubric prompt asks for "
+                  f"several fill-in-the-blank fields before the final answer"
+                  f"{' plus a thinking trace' if args.enable_thinking else ''}; consider raising this "
+                  f"(e.g. {'1024+' if args.enable_thinking else '512+'}) or responses may get truncated "
+                  f"before reaching <answer>.")
 
     model_dir = Path(args.output_dir) / safe_model_name(model_id)
-    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
-    archive_ckpt_if_rerun(ckpt_path, args.rerun)
-    rows, seen = load_ckpt(ckpt_path)
+    # --num_shards > 1: each shard gets its own checkpoint filename (never
+    # the canonical ckpt_<model>.csv) so N independent single-GPU processes
+    # can run concurrently against the SAME model_dir with zero write
+    # contention. The un-sharded case (num_shards=1, the default) is
+    # byte-for-byte the original filename — zero behavior change for every
+    # existing single-GPU run/script. Phase 1-4 (judge_leniency.py etc.)
+    # already glob ckpt_*.csv inside a directory, so shard files work there
+    # with NO further changes; --merge_shards (below) combines them back
+    # into the canonical filename for --collate and anything else that
+    # expects exactly one file.
+    ckpt_stem = f"ckpt_{safe_model_name(model_id)}"
+    if args.num_shards > 1:
+        ckpt_stem += f"_shard{args.shard_index}of{args.num_shards}"
+    ckpt_path = model_dir / f"{ckpt_stem}.csv"
+    # judge_log.jsonl's own name is shard-aware too (run_judge_phase,
+    # src/common/vision_eval.py) — archive the SAME filename this run will
+    # actually write to, not the unsharded default, or --rerun on a
+    # sharded run would archive nothing (or the wrong shared file).
+    _judge_log_name = f"judge_log_shard{args.shard_index}of{args.num_shards}.jsonl" if args.num_shards > 1 else "judge_log.jsonl"
+    archive_ckpt_if_rerun(ckpt_path, args.rerun, extra_logs=(_judge_log_name,))
+    rows, seen = load_ckpt(ckpt_path, fields=VISION_BASELINE_CKPT_FIELDS)
     if rows:
         print(f"  [resume] {len(rows)} samples already scored in {ckpt_path.name}")
 
-    # Collect (dataset, raw_label, clean_label, crop, task_type, [(name, path)]) groups
-    groups = []
+    # Collect (dataset, raw_label, clean_label, crop, task_type, [(name, path)]) groups.
+    # Deliberately NOT filtered against `seen`/checkpoint state yet — see the
+    # shard-assignment comment below for why this full, unfiltered
+    # enumeration has to come first.
+    all_groups = []
     for ds in active_datasets(Path(args.config)):
         if ds.skip or not ds.task_type:
             continue
@@ -130,12 +318,35 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             names = sample_class_images(list(path_by_name.keys()), args.n_samples)
             crop_val, clean_label = parse_class_label(raw_label, ds.crop)
             task_type = ds.effective_task_type(raw_label)
+            if args.task_types and task_type not in args.task_types:
+                continue
             aliases = ds.effective_search_terms(raw_label)[1:]  # [1:] drops raw_label itself
             gt_hint = judge_gt_hint(clean_label, aliases)
-            pending = [n for n in names if (ds.agml_name, clean_label, n) not in seen]
-            if not pending:
-                continue
-            groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
+            all_groups.append((ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name))
+
+    # --num_shards slices the FULL, unfiltered group list — BEFORE any
+    # checkpoint-based "pending" filtering below — so the group->shard
+    # assignment only ever depends on active_datasets()/manifest order
+    # (deterministic, identical across every run), never on how much any
+    # shard has already completed. Confirmed bug (2026-10-01): filtering out
+    # a shard's own already-finished groups before this slice shifts every
+    # later group's list index, silently reassigning it to a DIFFERENT
+    # shard on the next resume — a shard could end up redoing another
+    # shard's work, or worse, a group could fall through both shards'
+    # shifted slices and never get processed by either. Slicing first makes
+    # the assignment stable no matter which groups any shard has finished.
+    if args.num_shards > 1:
+        n_before = len(all_groups)
+        all_groups = all_groups[args.shard_index :: args.num_shards]
+        print(f"  [shard {args.shard_index}/{args.num_shards}] {len(all_groups)}/{n_before} (dataset, class) "
+              f"group(s) assigned to this shard")
+
+    groups = []
+    for ds, clean_label, crop_val, task_type, gt_hint, names, path_by_name in all_groups:
+        pending = [n for n in names if (ds.agml_name, clean_label, n) not in seen]
+        if not pending:
+            continue
+        groups.append((ds, clean_label, crop_val, task_type, gt_hint, pending, path_by_name))
 
     if not groups:
         print("  Nothing to do — all samples already checkpointed.")
@@ -159,25 +370,45 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
             pbar.desc = f"Classes ({ds.agml_name} / {clean_label})"
             images = [PILImage.open(path_by_name[n]).convert("RGB") for n in names]
             question = cls_question(task_type, crop_val, prompts)
+            if args.rubric:
+                question = apply_rubric(question, task_type, structured_templates, task_type_to_rubric)
 
-            preds = run_batch(llm, tokenizer, images, question, system_prompt=system_prompt)
+            if skill_system_prompt and task_type in DISEASE_TASK_TYPES:
+                row_system_prompt = skill_system_prompt
+            elif quality_skill_system_prompt and task_type == "quality_identification":
+                row_system_prompt = quality_skill_system_prompt
+            elif species_skill_system_prompt and task_type == "species_identification":
+                row_system_prompt = species_skill_system_prompt
+            else:
+                row_system_prompt = system_prompt
+            preds = run_batch(llm, tokenizer, images, question, system_prompt=row_system_prompt,
+                               enable_thinking=args.enable_thinking, max_tokens=args.gen_max_tokens,
+                               chat_template=chat_template)
 
-            for name, pred in zip(names, preds):
-                resolved = resolve_class(pred, ds.clean_classes)
+            for name, (raw, cleaned) in zip(names, preds):
+                # Extract Gemma-4's <|channel>thought block (if any) BEFORE
+                # answer-tag extraction, so a leftover channel marker never
+                # confuses extract_answer_tag/resolve_class — a no-op
+                # (thinking="", pred=cleaned) whenever no channel block is
+                # present, which is every row unless --enable_thinking +
+                # --chat_template_path were both used.
+                thinking, pred = extract_channel_thought(cleaned)
+                answer, _ = extract_answer_tag(pred)
+                resolved = resolve_class(answer, ds.clean_classes)
                 correct = resolved is not None and resolved.lower() == clean_label.lower()
                 c_match = contains_match(resolved or pred, clean_label)
-                scores = rouge_scores_per_sample(pred, clean_label, include_rouge=False)
                 row = {
                     "agml_dataset": ds.agml_name, "class_label": clean_label,
                     "task_type": task_type, "crop": crop_display(crop_val),
-                    "image_name": name, "prediction": pred,
-                    "resolved_class": resolved or "", "ground_truth": clean_label,
+                    "image_name": name, "prediction": pred, "raw_response": raw,
+                    "resolved_class": resolved or "", "extracted_answer": answer,
+                    "ground_truth": clean_label,
                     "correct": int(correct), "contains_match": int(c_match),
                     "resolvable": int(resolved is not None),
+                    "reasoning": thinking,
                     "judge_gt_hint": gt_hint,
-                    **scores,
                 }
-                append_ckpt_row(ckpt_path, row)
+                append_ckpt_row(ckpt_path, row, fields=VISION_BASELINE_CKPT_FIELDS)
                 rows.append(row)
             pbar.update()
         pbar.finish()
@@ -187,25 +418,217 @@ def run_model(model_id: str, args: argparse.Namespace) -> None:
         destroy_llm(llm)
         del tokenizer
 
-    rows = run_judge_phase(rows, ckpt_path, args, prompts)
+    rows = run_judge_phase(rows, ckpt_path, args, prompts, fields=VISION_BASELINE_CKPT_FIELDS)
 
-    metrics = compute_model_metrics(rows)
+    if args.num_shards > 1:
+        # Skip metrics.json here — computed from only THIS shard's rows, and
+        # model_dir/metrics.json is a single fixed filename every shard would
+        # otherwise overwrite with its own partial (and therefore misleading)
+        # numbers. Run --merge_shards once all shards finish to get the real,
+        # complete metrics.json from the merged full row set.
+        print(f"  [shard {args.shard_index}/{args.num_shards}] done — {len(rows)} row(s) in {ckpt_path.name}. "
+              f"Run --merge_shards once every shard has finished for a combined ckpt + metrics.json.")
+    else:
+        metrics = compute_model_metrics(rows)
+        write_model_metrics(model_dir, metrics)
+        print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
+              f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
+
+
+def merge_shards(output_dir: Path, model_id: str, fields: list[str] = VISION_BASELINE_CKPT_FIELDS) -> None:
+    """Combine every ckpt_<model>_shard<i>of<n>.csv in output_dir/<model>/
+    into the canonical ckpt_<model>.csv (rewritten fresh, not appended —
+    safe to re-run), so --collate/anything else expecting exactly one file
+    per model works after a sharded run. Rows are joined on
+    (agml_dataset, class_label, image_name); a duplicate key across shards
+    (shouldn't happen — shards partition disjoint groups — but checked
+    rather than assumed) keeps the first-seen row and prints a warning.
+
+    IMPORTANT: leaves the shard files in place (never deletes them). Phase
+    1-4 scripts (judge_leniency.py etc.) already glob ckpt_*.csv inside a
+    directory and don't need this merge step at all — they work directly
+    off shard files. If you run THIS merge in the same directory Phase 1-4
+    already reads from, that glob will now match BOTH the shard files AND
+    the new canonical ckpt_<model>.csv, double-counting every row. Either
+    run this in a model_dir Phase 1-4 hasn't looked at yet, or delete/move
+    the shard files after merging if Phase 1-4 needs to re-read that dir."""
+    model_dir = output_dir / safe_model_name(model_id)
+    shard_paths = sorted(model_dir.glob(f"ckpt_{safe_model_name(model_id)}_shard*of*.csv"))
+    if not shard_paths:
+        print(f"  No shard checkpoints found under {model_dir} (expected "
+              f"ckpt_{safe_model_name(model_id)}_shard<i>of<n>.csv).")
+        return
+
+    merged: list[dict] = []
+    seen_keys: set[tuple] = set()
+    n_dupes = 0
+    for shard_path in shard_paths:
+        shard_rows, _ = load_ckpt(shard_path, fields=fields)
+        for r in shard_rows:
+            key = (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", ""))
+            if key in seen_keys:
+                n_dupes += 1
+                continue
+            seen_keys.add(key)
+            merged.append(r)
+        print(f"  {shard_path.name}: {len(shard_rows)} row(s)")
+
+    if n_dupes:
+        print(f"  WARNING: {n_dupes} duplicate (agml_dataset, class_label, image_name) key(s) across "
+              f"shards — kept the first-seen row for each. Shards should partition disjoint groups; "
+              f"this suggests shards were run with different --config/--manifest/--n_samples, or "
+              f"--num_shards/--shard_index don't match across the shard jobs.")
+
+    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    rewrite_ckpt(ckpt_path, merged, fields=fields)
+    metrics = compute_model_metrics(merged)
     write_model_metrics(model_dir, metrics)
+    print(f"  Merged {len(merged)} row(s) from {len(shard_paths)} shard(s) into {ckpt_path.name}")
     print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
-          f"rouge_ss={metrics['overall'].get('rouge_ss')} (n={metrics['overall'].get('n_total')})")
+          f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
+
+
+def backfill_judge_results(
+    output_dir: Path, model_id: str, rechecked_csv: Path, fields: list[str] = VISION_BASELINE_CKPT_FIELDS,
+) -> None:
+    """Backfill judged_correct/judge_reasoning in this checkpoint from a
+    Phase 1/judge-template-sensitivity rechecked_T<temp>.csv's FULL-RESPONSE
+    condition (judged_correct_full_trajectory/judge_reasoning_full_trajectory
+    — see src/judge_leniency.py) — for a checkpoint whose own judge phase was
+    skipped (--skip_judge), once you've compared templates via Phase 1-4 and
+    decided which one's full-response verdict to trust as this checkpoint's
+    real judged result.
+
+    Joined on (agml_dataset, class_label, image_name); a checkpoint row with
+    no match in rechecked_csv (e.g. if that Phase 1-4 run used --limit and
+    only covers a subsample) is left completely unchanged — still blank if
+    it was blank before, never partially overwritten. Rewrites the
+    checkpoint in place; every other column is preserved untouched."""
+    model_dir = output_dir / safe_model_name(model_id)
+    ckpt_path = model_dir / f"ckpt_{safe_model_name(model_id)}.csv"
+    ckpt_rows, _ = load_ckpt(ckpt_path, fields=fields)
+    if not ckpt_rows:
+        print(f"  No rows found in {ckpt_path}.")
+        return
+
+    with open(rechecked_csv, encoding="utf-8") as f:
+        rechecked_rows = list(csv.DictReader(f))
+    if not rechecked_rows:
+        print(f"  {rechecked_csv} has no rows — nothing to backfill.")
+        return
+    missing = [c for c in ("judged_correct_full_trajectory", "judge_reasoning_full_trajectory")
+               if c not in rechecked_rows[0]]
+    if missing:
+        raise ValueError(
+            f"{rechecked_csv} is missing expected column(s) {missing} — expected a "
+            f"judge_leniency.py / judge_template_sensitivity.py rechecked_T<temp>.csv, which carries "
+            f"the full-response condition under these _full_trajectory column names."
+        )
+
+    by_key = {
+        (r.get("agml_dataset", ""), r.get("class_label", ""), r.get("image_name", "")): r
+        for r in rechecked_rows
+    }
+    n_updated = 0
+    for row in ckpt_rows:
+        key = (row.get("agml_dataset", ""), row.get("class_label", ""), row.get("image_name", ""))
+        match = by_key.get(key)
+        if match is None:
+            continue
+        row["judged_correct"] = match.get("judged_correct_full_trajectory", "")
+        row["judge_reasoning"] = match.get("judge_reasoning_full_trajectory", "")
+        n_updated += 1
+
+    rewrite_ckpt(ckpt_path, ckpt_rows, fields=fields)
+    metrics = compute_model_metrics(ckpt_rows)
+    write_model_metrics(model_dir, metrics)
+    print(f"  Backfilled judged_correct/judge_reasoning for {n_updated}/{len(ckpt_rows)} row(s) "
+          f"in {ckpt_path.name} from {rechecked_csv}")
+    if n_updated < len(ckpt_rows):
+        print(f"  {len(ckpt_rows) - n_updated} row(s) had no match in {rechecked_csv.name} "
+              f"(e.g. that run used --limit) — left unchanged.")
+    print(f"  Overall: f1_macro={metrics['overall'].get('f1_macro')} "
+          f"judge_accuracy={metrics['overall'].get('judge_accuracy')} (n={metrics['overall'].get('n_total')})")
+
+    plot_path = model_dir / "task_f1_summary.png"
+    plot_task_f1_summary(ckpt_rows, model_label=model_id, out_path=plot_path)
+    print(f"  Saved: {plot_path}")
 
 
 def main(args: argparse.Namespace) -> None:
     if args.collate:
-        collated = collate_models(Path(args.output_dir))
+        collated = collate_models(Path(args.output_dir), fields=VISION_BASELINE_CKPT_FIELDS)
         if not collated:
             print(f"No per-model output folders with checkpoints found under {args.output_dir}")
             return
         write_collated(Path(args.output_dir), collated)
         return
 
+    if args.merge_shards:
+        if not args.model:
+            print("ERROR: --model is required with --merge_shards.")
+            sys.exit(1)
+        merge_shards(Path(args.output_dir), args.model, fields=VISION_BASELINE_CKPT_FIELDS)
+        return
+
+    if args.backfill_judge_results:
+        if not args.model:
+            print("ERROR: --model is required with --backfill_judge_results.")
+            sys.exit(1)
+        if not args.rechecked_csv:
+            print("ERROR: --rechecked_csv is required with --backfill_judge_results.")
+            sys.exit(1)
+        backfill_judge_results(
+            Path(args.output_dir), args.model, Path(args.rechecked_csv), fields=VISION_BASELINE_CKPT_FIELDS,
+        )
+        return
+
+    if args.compare_templates:
+        if not args.model:
+            print("ERROR: --model is required with --compare_templates.")
+            sys.exit(1)
+        if not args.template_rechecked_csv:
+            print("ERROR: --template_rechecked_csv (one or more name=path pairs) is required "
+                  "with --compare_templates.")
+            sys.exit(1)
+        template_csvs: dict[str, Path] = {}
+        for item in args.template_rechecked_csv:
+            name, sep, path = item.partition("=")
+            if not sep:
+                print(f"ERROR: --template_rechecked_csv entries must be name=path — got {item!r}.")
+                sys.exit(1)
+            template_csvs[name] = Path(path)
+        model_dir = Path(args.output_dir) / safe_model_name(args.model)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = model_dir / "template_comparison.png"
+        plot_template_comparison(template_csvs, model_label=args.model, out_path=plot_path)
+        print(f"  Saved: {plot_path}")
+        return
+
+    if args.compare_checkpoints:
+        if not args.named_ckpt:
+            print("ERROR: --named_ckpt (one or more name=path pairs) is required "
+                  "with --compare_checkpoints.")
+            sys.exit(1)
+        named_ckpt_paths: dict[str, Path] = {}
+        for item in args.named_ckpt:
+            name, sep, path = item.partition("=")
+            if not sep:
+                print(f"ERROR: --named_ckpt entries must be name=path — got {item!r}.")
+                sys.exit(1)
+            named_ckpt_paths[name] = Path(path)
+        out_path = Path(args.compare_checkpoints_output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        plot_checkpoint_comparison(named_ckpt_paths, out_path=out_path)
+        print(f"  Saved: {out_path}")
+        return
+
     if not args.model:
         print("ERROR: --model is required (or pass --collate to combine finished runs).")
+        sys.exit(1)
+
+    if args.num_shards > 1 and not (0 <= args.shard_index < args.num_shards):
+        print(f"ERROR: --shard_index must be in [0, {args.num_shards}) — got {args.shard_index}.")
         sys.exit(1)
 
     run_model(args.model, args)
@@ -253,13 +676,100 @@ if __name__ == "__main__":
                              "to 0 (falls back to each model's own default).")
     parser.add_argument("--max_num_seqs", type=int, default=64)
     parser.add_argument("--enforce_eager", action="store_true")
-    parser.add_argument("--judge_model", default="google/gemma-4-26B-A4B-it",
+    parser.add_argument("--enable_thinking", action=argparse.BooleanOptionalAction, default=False,
+                         help="Let the model being evaluated use its own extended thinking "
+                              "(<think>/<thought> tags) for the classification generation step, instead "
+                              "of suppressing it (every other generation script in the repo still "
+                              "suppresses by default — see src/common/chat_prompt.py's module docstring). "
+                              "vision_baseline_config.yaml's own default is True (the pipeline's standard "
+                              "thinking-enabled workflow) — pass --no-enable_thinking to opt out. Does NOT "
+                              "affect the judge phase's own calls (see judge-leniency's "
+                              "--judge_enable_thinking for that, a separate flag on a separate call). "
+                              "Raise --gen_max_tokens when using this, or thinking traces will routinely "
+                              "get truncated before the model reaches its <answer> tag.")
+    parser.add_argument("--gen_max_tokens", type=int, default=256,
+                         help="max_tokens for the classification generation step. 256 fits the tagged "
+                              "prompt's direct answer with no thinking; raise substantially (e.g. "
+                              "1024+) when --enable_thinking is set.")
+    parser.add_argument("--rubric", action="store_true",
+                         help="\"Baseline with rubric\" stage — wrap the classification question through "
+                              "verifier_prompts.yaml's structured_templates (the same model-facing, "
+                              "fill-in-the-blank criteria chain verifier_cot.py uses for its own "
+                              "k-candidate generation, keyed by task_type via task_type_to_rubric), asking "
+                              "the model to state each rubric field before its final <answer> — no "
+                              "tournament/verifier machinery, just this one extra prompt structure on the "
+                              "plain single-shot baseline. Same prompt shape as Paper 1's Appendix A "
+                              "\"Manual CoT\" condition. Combine with --enable_thinking freely — they're "
+                              "independent (this changes what's asked, --enable_thinking changes whether "
+                              "the model can reason before answering). Raise --gen_max_tokens (e.g. 512+) "
+                              "when using this — the rubric prompt asks for several fields before the "
+                              "final answer, on top of any thinking trace.")
+    parser.add_argument("--skill_memory_path", default=None,
+                         help="Paper 2 Stage 3's skill-memory file (docs/stage3_context_memory.md, "
+                              "heldout-summarize's own output) — injected into the system prompt, gated "
+                              "per-row to task_type in DISEASE_TASK_TYPES ({\"disease\", \"pest_damage\"}) "
+                              "only (the skill file has zero real content for quality/species/weed "
+                              "identification, so it's never applied to those rows). A real held-out "
+                              "ablation (n=199) found +0.0603 judge_accuracy with this injected — see "
+                              "src/common/heldout_skill.py's own docstring for the full validation "
+                              "history and exact wrapper wording used (not reconfigurable here, by "
+                              "design — the wording itself was what was validated).")
+    parser.add_argument("--quality_skill_memory_path", default=None,
+                         help="Quality's own skill-memory file (docs/stage3_context_memory.md, "
+                              "--domain quality's own heldout-summarize output) — a SEPARATE flag/file "
+                              "from --skill_memory_path above, gated per-row to "
+                              "task_type == \"quality_identification\" only. Both flags can be set in "
+                              "the same run; each only ever applies to its own task_type's rows.")
+    parser.add_argument("--species_skill_memory_path", default=None,
+                         help="Species' own skill-memory file (docs/stage3_context_memory.md, "
+                              "--domain species's own heldout-summarize output) — a THIRD independent "
+                              "flag/file, gated per-row to task_type == \"species_identification\" only. "
+                              "All three skill-memory flags can be set in the same run; each only ever "
+                              "applies to its own task_type's rows.")
+    parser.add_argument("--task_types", nargs="+", default=None,
+                         choices=["disease", "pest_damage", "quality_identification", "species_identification"],
+                         help="Restrict this run to only these task_type(s) — e.g. "
+                              "--task_types disease pest_damage to test the disease/pest skill file "
+                              "alone without also running quality/species rows. Filtered per-CLASS via "
+                              "DatasetConfig.effective_task_type (class_overrides can route individual "
+                              "classes to a different task_type than their dataset's own default), not "
+                              "per-dataset. Default: no filter, every active task_type runs.")
+    parser.add_argument("--chat_template_path", default=None,
+                         help="Override the tokenizer's own bundled chat template with a Jinja file at "
+                              "this path — needed for --enable_thinking to actually do anything on some "
+                              "models. Gemma-4's own bundled template has NO enable_thinking support at "
+                              "all (confirmed empirically: 0/40978 real rows ever produced a thinking "
+                              "block with the stock template) — pass "
+                              "src/config/tool_chat_template_gemma4.jinja (vendored from vLLM) alongside "
+                              "--enable_thinking to get real <|channel>thought...<channel|> output from "
+                              "it, captured into the checkpoint's `reasoning` column. Not needed for "
+                              "Qwen models, whose own bundled template already supports enable_thinking.")
+    parser.add_argument("--judge_model", default="RedHatAI/gemma-4-31B-it-FP8-dynamic",
                          help="Fixed judge model used for every baseline/model being evaluated.")
     parser.add_argument("--judge_quantize", choices=["4bit", "8bit", "awq", "gptq"], default=None)
     parser.add_argument("--judge_confidence_threshold", type=int, default=1)
     parser.add_argument("--judge_chunk_size", type=int, default=200,
                          help="Rows per apply_judge() call — drives the judge progress bar "
                               "and how much work a kill mid-judging can lose.")
+    parser.add_argument("--judge_enable_thinking", action="store_true",
+                         help="Attempt tokenizer.apply_chat_template(..., enable_thinking=True) for "
+                              "the judge's own prompt during this run's judge phase (ignored if "
+                              "--skip_judge is set). Off by default, exact original prompt rendering. "
+                              "A no-op if the judge tokenizer's chat template doesn't accept this "
+                              "kwarg. Same flag/behavior as judge-leniency's --judge_enable_thinking, "
+                              "now also available for this script's own built-in judge pass.")
+    parser.add_argument("--judge_max_tokens", type=int, default=None,
+                         help="Override the judge's default max_tokens=1024 for this run's judge "
+                              "phase — a thinking trace (--judge_enable_thinking) can consume the "
+                              "normal budget before reaching the final JSON verdict, truncating the "
+                              "response.")
+    parser.add_argument("--judge_chat_template_path", default=None,
+                         help="Override the judge tokenizer's own bundled chat template with a Jinja "
+                              "file at this path — needed for --judge_enable_thinking to do anything "
+                              "on a Gemma-4 judge model, whose stock template has no enable_thinking "
+                              "support at all. Pass src/config/tool_chat_template_gemma4.jinja "
+                              "alongside --judge_enable_thinking for a Gemma-4 judge. Not needed for "
+                              "a Qwen judge model.")
     parser.add_argument("--rejudge", action="store_true",
                          help="Clear judged_correct/judge_reasoning on every row and re-judge "
                               "from scratch — use after a judge bug (e.g. a blank judge_gt_hint "
@@ -271,6 +781,60 @@ if __name__ == "__main__":
     parser.add_argument("--collate", action="store_true",
                          help="Skip inference — combine every <output_dir>/<model>/ folder "
                               "into collated_summary.csv / collated_metrics.json.")
+    parser.add_argument("--num_shards", type=int, default=1,
+                         help="Split this model's (dataset, class) groups across N independent "
+                              "processes (e.g. N separate single-GPU SLURM jobs/array tasks) for "
+                              "N-way data-parallel throughput — each shard writes its own "
+                              "ckpt_<model>_shard<i>of<N>.csv (never the canonical ckpt_<model>.csv, "
+                              "so concurrent shards never write-contend), and Phase 1-4 scripts "
+                              "(judge_leniency.py etc.) already glob ckpt_*.csv inside a directory, so "
+                              "shard files work there with no further changes. Default 1 = today's "
+                              "exact single-file behavior, zero change. Run --merge_shards once every "
+                              "shard finishes to get a combined ckpt_<model>.csv + metrics.json for "
+                              "--collate or anything else expecting exactly one file.")
+    parser.add_argument("--shard_index", type=int, default=0,
+                         help="Which shard this process is, in [0, --num_shards). Pass "
+                              "$SLURM_ARRAY_TASK_ID for a SLURM job array.")
+    parser.add_argument("--merge_shards", action="store_true",
+                         help="Skip inference — combine ckpt_<model>_shard*of*.csv (written by "
+                              "--num_shards > 1 runs) into the canonical ckpt_<model>.csv + "
+                              "metrics.json for --model's output dir.")
+    parser.add_argument("--backfill_judge_results", action="store_true",
+                         help="Skip inference — backfill judged_correct/judge_reasoning in --model's "
+                              "checkpoint from a judge-leniency/judge-template-sensitivity "
+                              "rechecked_T<temp>.csv's full-response condition (see --rechecked_csv). "
+                              "For a checkpoint whose own judge phase was skipped (--skip_judge), once "
+                              "you've compared judge templates via Phase 1-4 and decided which one's "
+                              "full-response verdict to trust. Rows with no match in --rechecked_csv "
+                              "(e.g. a --limit subsample) are left unchanged.")
+    parser.add_argument("--rechecked_csv", default=None,
+                         help="Path to a rechecked_T<temp>.csv (from judge-leniency directly, or from "
+                              "judge-template-sensitivity's <output_dir>/<variant>/leniency/ subfolder) "
+                              "— required with --backfill_judge_results.")
+    parser.add_argument("--compare_templates", action="store_true",
+                         help="Skip inference — plot a grouped bar chart comparing two or more judge "
+                              "templates' FULL-RESPONSE judged F1 macro (per task_type + overall, 95%% "
+                              "CI) directly from their own rechecked_T<temp>.csv files (see "
+                              "--template_rechecked_csv), without needing all of them backfilled into "
+                              "the same checkpoint at once. Saved to --output_dir/<model>/"
+                              "template_comparison.png.")
+    parser.add_argument("--template_rechecked_csv", nargs="+", default=None,
+                         help="One or more name=path pairs, e.g. "
+                              "current=outputs_final/judge_template_sensitivity/<run>/current/leniency/"
+                              "rechecked_T0.7.csv hybrid=outputs_final/judge_template_sensitivity/<run>/"
+                              "hybrid/leniency/rechecked_T0.7.csv — required with --compare_templates.")
+    parser.add_argument("--compare_checkpoints", action="store_true",
+                         help="Skip inference — plot a grouped bar chart comparing two or more DIFFERENT "
+                              "vision-baseline checkpoints (e.g. plain thinking vs. rubric+thinking) on "
+                              "their own already-judged judged_correct column, judged F1 macro only (per "
+                              "task_type + overall, 95%% CI). See --named_ckpt and --compare_checkpoints_output.")
+    parser.add_argument("--named_ckpt", nargs="+", default=None,
+                         help="One or more name=path pairs pointing at each run's own ckpt_<model>.csv, "
+                              "e.g. thinking=outputs_final/vision_baseline_thinking/<model>/ckpt_<model>.csv "
+                              "rubric+thinking=outputs_final/vision_baseline_rubric_thinking/<model>/"
+                              "ckpt_<model>.csv — required with --compare_checkpoints.")
+    parser.add_argument("--compare_checkpoints_output", default="outputs_final/checkpoint_comparison.png",
+                         help="Where to save --compare_checkpoints' chart.")
 
     # Keys this script doesn't use but the shared config file also carries
     # for desc_augmented_vision_v2.py / vision_baseline_collate.py.
@@ -288,4 +852,7 @@ if __name__ == "__main__":
             print(f"[warn] {_pre_args.vision_baseline_config}: unrecognized key(s) ignored: {sorted(_unknown)}")
         parser.set_defaults(**{k: v for k, v in _cfg.items() if k in _valid_dests})
 
-    main(parser.parse_args())
+    _args = parser.parse_args()
+    if not _args.judge_chat_template_path:
+        _args.judge_chat_template_path = None
+    main(_args)

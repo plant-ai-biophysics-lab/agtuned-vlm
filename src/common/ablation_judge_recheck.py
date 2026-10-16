@@ -27,9 +27,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from src.common.metrics import apply_judge, judged_summary
+from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY, apply_judge, extract_answer_tag, judged_summary
 from src.common.vision_eval import _destroy_judge_llm, _load_judge_llm
-from src.verifier_cot import extract_answer_tag
 
 
 def load_ckpt_rows(ckpt_path: Path) -> list[dict]:
@@ -57,11 +56,24 @@ def rejudge_condition(
     chunk_size: int,
     log_path: Path | None,
     pred_key: str = "answer_only",
-    template_key: str = "judge_classification_template",
+    template_key: str = DEFAULT_JUDGE_TEMPLATE_KEY,
     progress_desc: str = "Re-judging",
+    temperature: float | None = None,
+    seed: int | None = None,
+    extra_keys: dict[str, str] | None = None,
+    enable_thinking: bool = False,
+    judge_max_tokens: int | None = None,
+    judge_chat_template: str | None = None,
 ) -> list[dict]:
     """Re-judges `rows` against `pred_key` using `prompts[template_key]`
     instead of the original "prediction"/judge_classification_template pair.
+    template_key defaults to DEFAULT_JUDGE_TEMPLATE_KEY (hybrid), which has
+    a {class_list} placeholder — every current caller passes template_key
+    explicitly (never relies on this default), but a future caller relying
+    on it must also pass extra_keys={"class_list": "class_list_text"} (see
+    src.common.dataset_config.class_list_extra_keys) or apply_judge's
+    .format() call will raise a KeyError.
+
     Preserves the ORIGINAL full-trajectory verdict under
     judged_correct_full_trajectory/judge_reasoning_full_trajectory before
     calling apply_judge, since apply_judge's return dict overwrites
@@ -77,6 +89,31 @@ def rejudge_condition(
         only the model's own stated final diagnosis, not the narrative
         around it, and to require taxonomic/common-name specificity rather
         than crediting a generic symptom-shape label.
+
+    temperature/seed: forwarded to apply_judge (both default None, the
+    pipeline's normal greedy behavior). src/judge_leniency.py's
+    --temperatures sweep passes these so leniency_gap can be computed AT
+    each swept temperature (both the full-response and resolved_class
+    passes need a fresh, same-temperature call — reusing a checkpoint's
+    already-computed judged_correct only gives the T=0 case) instead of
+    only at the judge's fixed default.
+
+    extra_keys: forwarded to apply_judge — {template_placeholder: row_field}
+    for template variants needing a third placeholder beyond {gt}/{pred},
+    e.g. judge_classification_class_list_template's {class_list}
+    (src/common/judge_template_sensitivity.py, Phase 3).
+
+    enable_thinking/judge_max_tokens: forwarded to apply_judge (both default
+    False/None, unchanged behavior) — lets a caller test whether the judge
+    model exposes a controllable reasoning mode, and raise the token budget
+    to accommodate a thinking trace if so.
+
+    judge_chat_template (default None): forwarded to apply_judge — raw
+    Jinja text overriding the judge tokenizer's own bundled template.
+    Needed for a Gemma-4 judge model alongside enable_thinking=True, whose
+    stock template can't express thinking at all (see apply_judge's own
+    docstring for the full explanation and the vLLM skip_special_tokens
+    gotcha it also handles).
     """
     from src.common.progress import ProgressBar
 
@@ -95,6 +132,9 @@ def rejudge_condition(
             gt_key="judge_gt_hint", pred_key=pred_key,
             confidence_threshold=confidence_threshold,
             log_path=log_path,
+            temperature=temperature, seed=seed, extra_keys=extra_keys,
+            enable_thinking=enable_thinking, max_tokens=judge_max_tokens,
+            chat_template=judge_chat_template,
         )
         out.extend(judged_chunk)
         pbar.update(len(chunk))

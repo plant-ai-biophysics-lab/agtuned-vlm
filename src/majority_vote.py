@@ -528,6 +528,10 @@ def main() -> None:
         description="Majority Vote Vision Assessment — test-time compute scaling baseline"
     )
     parser.add_argument("--model",       default="google/gemma-4-26B-A4B-it")
+    parser.add_argument("--config",      default="src/config/datasets.yaml",
+                         help="datasets.yaml, for each row's class list — needed since the pipeline's "
+                              "default judge template (DEFAULT_JUDGE_TEMPLATE_KEY, src/common/metrics.py) "
+                              "has a {class_list} placeholder.")
     parser.add_argument("--output_dir",  default="outputs/majority_vote/")
     parser.add_argument("--n_samples",   type=int, default=None,
                         help="Max images per class (uses test_split when available)")
@@ -636,14 +640,18 @@ def main() -> None:
 
         # Judge all rows together
         print(f"\n=== Judging ({len(all_rows)} rows) ===")
+        from src.common.dataset_config import class_list_extra_keys
+        from src.common.metrics import DEFAULT_JUDGE_TEMPLATE_KEY
+        extra_keys = class_list_extra_keys(all_rows, Path(args.config))
         all_rows = apply_judge(
             rows=all_rows,
             llm=llm,
             tokenizer=tokenizer,
             system_prompt=_PROMPTS.get("judge_system_vision", ""),
-            judge_template=_PROMPTS["judge_classification_template"],
+            judge_template=_PROMPTS[DEFAULT_JUDGE_TEMPLATE_KEY],
             gt_key="ground_truth",
             pred_key="prediction",
+            extra_keys=extra_keys,
         )
 
         elapsed = time.perf_counter() - t0

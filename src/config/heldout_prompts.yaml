@@ -1,0 +1,676 @@
+# Paper 2, Stage 3 (docs/stage3_context_memory.md) — prompts for building
+# the held-out Digital Green skill-memory .md file. Kept separate from
+# prompts.yaml/verifier_prompts.yaml since these are specific to this
+# one held-out dataset's own lesson-writing pipeline, not reused anywhere
+# else.
+
+# System prompt for every lesson-writing call (both "what didn't work"
+# misses and "what worked" corrects — ALL of Step 1's rows get a trace,
+# not just misses) — operationalizes the general
+# trends found in heldout-zeroshot's real Step 1 results (n=827,
+# judge_accuracy=0.3881), NOT hard-coded per-crop/per-diagnosis facts:
+#   - 149/827 rows were a false "Healthy" (the single largest error
+#     bucket, bigger than any specific category confusion) — the model
+#     over-predicts "Healthy" as a safe default when actually unsure.
+#   - Pest/insect damage is the hardest category to recognize at all
+#     (32.7% bucket accuracy vs. 60.4% disease, 71.0% healthy) — the
+#     model defaults to a disease explanation rather than considering
+#     insect damage as a hypothesis.
+#   - Nutrient deficiency is frequently confused with disease or missed
+#     entirely (19.4% bucket accuracy, n=36 — suggestive, not solid).
+# These are deliberately stated as GENERAL reminders here, not facts
+# about any specific image — the lesson-writing calls below ground their
+# OWN explanations in each image's own visible evidence + the expert's
+# own observations, not in these trend stats directly.
+heldout_lesson_system: |
+  You are an expert agricultural scientist writing short training notes
+  for another vision-language model that frequently makes these general
+  mistakes when diagnosing crop photos — keep them in mind to decide
+  which details are worth emphasizing, but never restate them as facts
+  about the specific image in front of you:
+  - It over-predicts "Healthy" as a safe default when it's actually
+    unsure, missing real problems more than any other single error.
+  - It is much worse at recognizing PEST/insect damage than disease — it
+    tends to default to a disease explanation (fungal/bacterial/viral
+    symptom pattern) rather than seriously considering insect damage as
+    a hypothesis.
+  - It frequently confuses nutrient deficiency with disease, or misses
+    deficiency symptoms entirely.
+  Write concrete, visually-grounded notes — actual colors, shapes,
+  patterns, insect signs visible in THIS image — never vague
+  generalities like "look more carefully."
+
+# "what didn't work" — Params: {crop} {model_reasoning} {wrong_prediction} {ground_truth} {expert_details}
+heldout_explain_miss_prompt: |
+  A vision-language model was shown this image of a {crop} plant and
+  asked to diagnose any disease, pest, or nutrient deficiency affecting
+  it (or state that it's healthy). It answered INCORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer (WRONG): "{wrong_prediction}"
+  The ACTUAL correct answer: "{ground_truth}"
+  An expert agronomist's own observations of this image: "{expert_details}"
+
+  In 2-4 sentences, explain what specific visual evidence (visible in
+  THIS image) should have led to the correct answer instead — point out
+  specifically where the model's own stated reasoning went wrong
+  (misread evidence, missed a sign entirely, jumped to a conclusion,
+  etc.), grounded in the expert's own observations above wherever
+  possible, not speculation. If the mistake was confusing two
+  similar-looking categories (e.g. a pest sign mistaken for a disease
+  symptom, or vice versa, or a deficiency mistaken for a disease), say
+  specifically what distinguishes them in this case.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# "what worked" — Params: {crop} {model_reasoning} {correct_prediction} {ground_truth} {expert_details}
+heldout_explain_correct_prompt: |
+  A vision-language model was shown this image of a {crop} plant and
+  asked to diagnose any disease, pest, or nutrient deficiency affecting
+  it (or state that it's healthy). It answered CORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer: "{correct_prediction}" (matches the correct answer:
+  "{ground_truth}")
+  An expert agronomist's own observations of this image: "{expert_details}"
+
+  In 2-4 sentences, confirm and articulate the specific visual evidence
+  (visible in THIS image) that correctly supports this diagnosis —
+  ground your explanation in the expert's own observations above
+  wherever possible. IMPORTANT: if the model's own stated reasoning
+  actually cited the WRONG evidence or reasoned unsoundly despite
+  landing on the correct final answer (a lucky guess, not real
+  diagnostic skill), say so explicitly instead of crediting reasoning
+  that wasn't actually sound — do not manufacture a justification for
+  reasoning that doesn't deserve it.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# heldout_dpo_reword.py — rewrites a `chosen` DPO completion's reasoning
+# preamble from third-person evaluator voice (how heldout_explain_traces.py's
+# own explanation/analysis is naturally written, since it's consumed by
+# heldout_summarize.py for a DIFFERENT purpose — advisory skill-memory
+# bullets — which genuinely wants that register) into first-person
+# diagnostic voice matching the policy's own natural completion style.
+# Text-only (no image — paraphrasing already-written text, not re-examining
+# the image) and deliberately a REWRITE task, not a fresh explanation task —
+# preserves the existing evidence/conclusion rather than re-deriving it, to
+# avoid introducing new factual drift during a purely stylistic rewrite.
+# Params: {analysis}
+heldout_dpo_chosen_rewrite_prompt: |
+  Below is an analysis written from an outside observer's perspective,
+  explaining the visual evidence behind a conclusion about an image.
+  Rewrite it as a direct, first-person response — as if YOU are the one
+  looking at the image for the first time and answering the original
+  question yourself, not commenting on someone else's answer.
+
+  Rules:
+  - Use first person ("I can see...", "This shows...", "Looking closely
+    at..."), never third person wording like "the model", "the
+    diagnosis", or "the expert".
+  - Preserve every piece of visual evidence and reasoning in the
+    analysis below exactly — do not add new claims, drop evidence, or
+    change the conclusion.
+  - Keep it to 2-4 sentences.
+  - Do not add any closing tag, label, or coordinates of your own —
+    whatever follows this text is appended separately, after your
+    response.
+
+  Analysis to rewrite:
+  "{analysis}"
+
+  Respond with ONLY the rewritten first-person text.
+
+# Step 3 (heldout_summarize.py) — map phase. Summarizes ONE chunk of
+# Step 2 explanations (all from the same heuristic category + trace_type
+# bucket — see bucket_category() in heldout_zeroshot.py — split further
+# into word-count-bounded chunks when a bucket is too large for one
+# context window) into a short bullet list of RECURRING, GENERALIZABLE
+# patterns, text-only (no image — these are already-written explanations
+# about images, not the images themselves).
+# Params: {category} {trace_type_label} {n} {explanations_block}
+heldout_map_summarize_prompt: |
+  Below are {n} short explanations written about {trace_type_label} when
+  a vision-language model diagnosed crop images in the "{category}"
+  category. Each explanation describes ONE specific image's visual
+  evidence.
+
+  {explanations_block}
+
+  Summarize the RECURRING, GENERALIZABLE patterns across these
+  explanations — not a list restating each one individually, and not
+  facts about any single image. Write 4-8 bullet points covering: common
+  visual cues that correctly identify this category, common mistakes or
+  confusions to watch for, and anything distinctive about this category
+  worth remembering. Be concrete (colors, shapes, patterns, insect
+  signs) — never vague advice like "look more carefully."
+
+  IMPORTANT: this reader will eventually use these notes to NAME a
+  diagnosis. Every bullet must point toward a SPECIFIC diagnosis name
+  (e.g. "Fall armyworm", "Downy Mildew", "Nitrogen Deficiency"), never a
+  bare category label on its own ("Pest", "Disease", "Chewing pests",
+  "Sucking pests", "Viral infection"). It is fine to mention a category
+  word as part of a sentence describing what to look for, but never
+  write a bullet whose ENTIRE content IS just the category name — a
+  reader skimming for an answer must never be able to lift a bare
+  category word as if it were a valid diagnosis.
+
+  Respond with ONLY the bullet list (plain "- " bullets, no headers, no
+  preamble).
+
+# Step 3 — reduce phase. Merges every chunk-level bullet summary from
+# the map phase into ONE final skill-memory .md file — the artifact
+# Step 4 ablates and, if it helps, injects into vision-baseline/
+# verifier-cot.
+# Params: {chunk_summaries_block}
+heldout_reduce_summarize_prompt: |
+  Below are bullet-point summaries gathered from reviewing a vision-
+  language model's crop diagnosis attempts, grouped by category and by
+  whether the model got it right ("what worked") or wrong ("what didn't
+  work"):
+
+  {chunk_summaries_block}
+
+  Write a single, well-organized reference document (Markdown) for
+  another instance of this same model to read BEFORE attempting crop
+  diagnosis — its job is to help that model avoid the same mistakes and
+  reuse what already works. Structure:
+
+  # Crop Diagnosis — Lessons Learned
+
+  ## What Worked
+  (organized by category — disease, pest, nutrient deficiency, healthy —
+  only include categories with real content above)
+
+  ## What Didn't Work
+  (same categories — concrete, actionable guidance, not vague warnings)
+
+  Do NOT add a "Common Diseases/Pests/Conditions to Know" style
+  reference list, or any other section whose bullets are just bare
+  category/condition names restated as standalone entries (e.g. a
+  bullet that says only "Chewing Pests:" or "Sucking Pests:") — a reader
+  of this document will eventually need to output a SPECIFIC diagnosis
+  name, and a section like that reads as a menu of valid short answers,
+  which it is not. Every bullet anywhere in this document must point
+  toward a specific diagnosis name, never a bare category label on its
+  own.
+
+  Keep it concrete and skimmable — short bullets, not paragraphs. Do not
+  invent facts not supported by the summaries above.
+
+# Step 3b (heldout_skill_optimize.py) — self-optimization loop. Takes
+# the CURRENT skill.md text directly and EDITS it (not a re-summarize
+# from traces — this call never sees the original explanation traces,
+# only the skill file's own current wording plus this round's own
+# eval-split failures), steered by per-task-bucket accuracy and a sample
+# of the mistakes the model made WHILE using this exact skill file.
+# Params: {current_skill_md} {task_scores_block} {miss_examples_block}
+heldout_skill_edit_prompt: |
+  Below is the CURRENT version of a reference document another
+  vision-language model reads before diagnosing crop disease/pest/
+  nutrient-deficiency images. It was just evaluated on a held-out set of
+  images WHILE using this exact document, broken down by category:
+  {prior_round_feedback_block}
+  {task_scores_block}
+
+  Here are specific cases where the model, using this exact document,
+  still got the answer wrong:
+
+  {miss_examples_block}
+
+  Here are specific cases where the model, using this exact document,
+  got the answer RIGHT — the document is already doing its job for
+  these, do not disturb whatever's working for them:
+
+  {worked_examples_block}
+
+  CURRENT DOCUMENT:
+  {current_skill_md}
+
+  Revise this document to address the weaker categories above and the
+  specific mistakes shown — add, remove, or reword guidance as needed.
+  Rules that must still hold in your revision:
+  1. Every bullet must point toward a SPECIFIC diagnosis name (e.g.
+     "Fall armyworm", "Downy Mildew", "Nitrogen Deficiency") — never a
+     bare category word like "Pest", "Disease", "Deficiency", "Chewing
+     pests", "Sucking pests", or "Viral infection" standing alone as a
+     bullet's entire content.
+  2. Write GENERALIZABLE, INSTRUCTIONAL guidance — a visual pattern,
+     symptom, or distinguishing cue that would help identify this
+     condition across DIFFERENT images of it, not a fact tied to one
+     specific example image. The mistakes shown above are EVIDENCE to
+     diagnose what kind of guidance is missing, not source text to copy
+     from: do NOT lift an "Expert's observations" sentence from a single
+     miss example verbatim into a bullet — extract the underlying visual
+     principle behind it instead. If a mistake is genuinely a one-off
+     with nothing generalizable about it, it is fine to leave it out
+     rather than force a bullet out of it. This document's whole purpose
+     is to teach a DIFFERENT model to reason about images it has NOT
+     seen — a bullet that only makes sense next to the one image that
+     prompted it has no value there.
+  3. Do NOT add a "Common Diseases/Pests/Conditions to Know" style
+     reference list, or any section whose bullets are just bare
+     category names restated as standalone entries.
+  4. Keep the same overall structure (`# Crop Diagnosis — Lessons
+     Learned`, `## What Worked` / `## What Didn't Work`, organized by
+     category) unless a category genuinely has nothing useful to say.
+  5. Keep it concrete and skimmable — short bullets, not paragraphs. Do
+     not invent facts not supported by the mistakes shown or the
+     current document's own existing content.
+  6. PROTECT what's already working. Before editing a bullet or section
+     that plausibly helped produce one of the correct cases shown above,
+     check whether your change would still support that case — if a
+     category has both correct and wrong cases shown, prefer ADDING a
+     new, narrowly-scoped distinction over REWRITING the existing
+     wording, so you don't fix one failure by breaking what already
+     works. Do not rewrite or remove a bullet just to make room for new
+     content when there's no evidence that bullet itself is the
+     problem.
+
+  Respond with the full revised document (Markdown), starting with the
+  `# Crop Diagnosis — Lessons Learned` heading, no preamble — then, on a
+  new line by itself, write exactly:
+  ---CHANGELOG---
+  followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
+  you made and WHY, each bullet naming the category/bucket it addresses
+  and referencing the score or mistake that motivated it (e.g. "Added a
+  note distinguishing X from Y under Pest/What Didn't Work — pest
+  accuracy was the weakest bucket at N%, and 2 of the shown mistakes
+  confused X for Y specifically"). Do not skip this section.
+
+# ─────────────────────────────────────────────────────────────────────────
+# Quality-identification domain (docs/stage3_context_memory.md, quality
+# extension) — same Step 1-3b pipeline, same param names as the
+# heldout_* templates above, applied to AgML's own 5 held-out
+# quality_identification datasets (VegNet_quality_classification,
+# banana_bunch_maturity_classification, coffee_bean_quality_classification,
+# pomegranate_quality_classification, riseholme_strawberry_classification_2021
+# — see datasets.yaml's skip:true notes on each) instead of Digital
+# Green. No external expert `details` text exists for these rows (always
+# ""), so these templates never reference {expert_details}. Only one
+# bucket ("quality" — see bucket_category_quality's docstring for why),
+# so no "organized by category" structure is needed the way disease/
+# pest/deficiency/healthy's 4-way split needs it.
+
+heldout_quality_lesson_system: |
+  You are an expert in post-harvest produce quality assessment, writing
+  short training notes for another vision-language model that grades
+  fruit/vegetable quality, ripeness, or maturity from photos. Write
+  concrete, visually-grounded notes — actual colors, textures, shapes,
+  blemishes, size cues visible in THIS image — never vague generalities
+  like "look more carefully."
+
+# "what didn't work" — Params: {crop} {model_reasoning} {wrong_prediction} {ground_truth} {expert_details}
+heldout_quality_explain_miss_prompt: |
+  A vision-language model was shown this image of {crop} produce and
+  asked to assess its quality, ripeness, or grade. It answered
+  INCORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer (WRONG): "{wrong_prediction}"
+  The ACTUAL correct answer: "{ground_truth}"
+
+  In 2-4 sentences, explain what specific visual evidence (visible in
+  THIS image — color, texture, size, blemishes, shape) should have led
+  to the correct answer instead — point out specifically where the
+  model's own stated reasoning went wrong. If the mistake was confusing
+  two similar-looking grades/stages, say specifically what distinguishes
+  them in this case.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# "what worked" — Params: {crop} {model_reasoning} {correct_prediction} {ground_truth} {expert_details}
+heldout_quality_explain_correct_prompt: |
+  A vision-language model was shown this image of {crop} produce and
+  asked to assess its quality, ripeness, or grade. It answered
+  CORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer: "{correct_prediction}" (matches the correct answer:
+  "{ground_truth}")
+
+  In 2-4 sentences, confirm and articulate the specific visual evidence
+  (visible in THIS image) that correctly supports this grade/stage.
+  IMPORTANT: if the model's own stated reasoning actually cited the
+  WRONG evidence or reasoned unsoundly despite landing on the correct
+  final answer (a lucky guess, not real assessment skill), say so
+  explicitly instead of crediting reasoning that wasn't actually sound.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# Params: {category} {trace_type_label} {n} {explanations_block} — category is always "quality" here.
+heldout_quality_map_summarize_prompt: |
+  Below are {n} short explanations written about {trace_type_label} when
+  a vision-language model assessed produce quality/ripeness/grade in
+  images. Each explanation describes ONE specific image's visual
+  evidence.
+
+  {explanations_block}
+
+  Summarize the RECURRING, GENERALIZABLE patterns across these
+  explanations — not a list restating each one individually, and not
+  facts about any single image. Write 4-8 bullet points covering: common
+  visual cues that correctly identify a grade/ripeness stage, common
+  mistakes or confusions to watch for, and anything distinctive worth
+  remembering. Be concrete (color, texture, size, blemishes, shape) —
+  never vague advice like "look more carefully."
+
+  IMPORTANT: this reader will eventually use these notes to NAME a
+  specific grade/stage label. Every bullet must point toward a SPECIFIC
+  label (e.g. "grade-1", "ripe", "AA"), never a bare generic word like
+  "Good" or "Bad" standing alone as a bullet's entire content.
+
+  Respond with ONLY the bullet list (plain "- " bullets, no headers, no
+  preamble).
+
+# Params: {chunk_summaries_block}
+heldout_quality_reduce_summarize_prompt: |
+  Below are bullet-point summaries gathered from reviewing a vision-
+  language model's produce quality/ripeness/grade assessments, grouped
+  by whether the model got it right ("what worked") or wrong ("what
+  didn't work"):
+
+  {chunk_summaries_block}
+
+  Write a single, well-organized reference document (Markdown) for
+  another instance of this same model to read BEFORE attempting quality
+  assessment — its job is to help that model avoid the same mistakes and
+  reuse what already works. Structure:
+
+  # Produce Quality Grading — Lessons Learned
+
+  ## What Worked
+  ## What Didn't Work
+
+  Keep it concrete and skimmable — short bullets, not paragraphs. Do not
+  invent facts not supported by the summaries above. Do not add a
+  "Common Grades/Conditions to Know" style reference list whose bullets
+  are just bare labels restated as standalone entries.
+
+# Params: {current_skill_md} {task_scores_block} {miss_examples_block} {worked_examples_block} {prior_round_feedback_block}
+heldout_quality_skill_edit_prompt: |
+  Below is the CURRENT version of a reference document another
+  vision-language model reads before assessing produce quality/ripeness/
+  grade from images. It was just evaluated on a held-out set of images
+  WHILE using this exact document:
+  {prior_round_feedback_block}
+  {task_scores_block}
+
+  Here are specific cases where the model, using this exact document,
+  still got the answer wrong:
+
+  {miss_examples_block}
+
+  Here are specific cases where the model, using this exact document,
+  got the answer RIGHT — the document is already doing its job for
+  these, do not disturb whatever's working for them:
+
+  {worked_examples_block}
+
+  CURRENT DOCUMENT:
+  {current_skill_md}
+
+  Revise this document to address the mistakes shown above. Rules that
+  must still hold in your revision:
+  1. Every bullet must point toward a SPECIFIC grade/ripeness/stage
+     label, never a bare generic word like "Good"/"Bad" standing alone.
+  2. Write GENERALIZABLE, INSTRUCTIONAL guidance — a visual pattern that
+     would help identify a grade/stage across DIFFERENT images of it,
+     not a fact tied to one specific example image. Do NOT lift text
+     from a single miss example verbatim — extract the underlying visual
+     principle instead.
+  3. Do NOT add a "Common Grades/Conditions to Know" style reference
+     list.
+  4. Keep the same overall structure (`# Produce Quality Grading —
+     Lessons Learned`, `## What Worked` / `## What Didn't Work`) unless
+     it genuinely has nothing useful to say.
+  5. Keep it concrete and skimmable — short bullets, not paragraphs.
+  6. PROTECT what's already working — before editing a bullet that
+     plausibly helped produce one of the correct cases shown above,
+     check whether your change would still support that case; prefer
+     ADDING a new, narrowly-scoped distinction over REWRITING existing
+     wording.
+  7. VOCABULARY DISCIPLINE — this document is read across MANY datasets
+     that each use their own label scheme (generic ripeness/condition
+     terms like Ripe/Unripe/Dried/Damaged/Old on some datasets; a grade
+     scale like grade-1/grade-2/grade-3, AA/AAA/Grade A, or a task-
+     specific label like Keep/Cut on others). A real, confirmed failure
+     mode: the model answers with a ripeness/condition word (e.g.
+     "Dried") on a dataset whose actual classes are a grade scale,
+     producing an unparseable, always-wrong answer — not a close miss,
+     a total vocabulary mismatch. Every bullet or indicator you write
+     must be framed as "this VISUAL pattern indicates X" where X maps
+     onto whichever label scheme the image's OWN question is actually
+     asking for, never stated as a bare ripeness/condition word as if
+     that vocabulary applies universally. If `## Grade-Specific Logic`
+     (or an equivalent section) already documents a non-ripeness scale,
+     strengthen/expand it rather than letting the ripeness vocabulary
+     above it read as the default — a reader skimming top-to-bottom
+     should reach the dataset-specific scale before defaulting to a
+     generic ripeness word.
+
+  Respond with the full revised document (Markdown), starting with the
+  `# Produce Quality Grading — Lessons Learned` heading, no preamble —
+  then, on a new line by itself, write exactly:
+  ---CHANGELOG---
+  followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
+  you made and WHY, referencing the score or mistake that motivated each
+  one. Do not skip this section.
+
+# ─────────────────────────────────────────────────────────────────────────
+# Species-identification domain (docs/stage3_context_memory.md, species
+# extension) — same Step 1-3b pipeline, same param names as the heldout_*
+# templates above, applied to iNatAg-mini's held-out plant/weed species
+# slice (scripts/download_heldout_species.py — 20 crop-labeled + 20
+# weed-labeled species, external to AgML's own 25 species_identification
+# datasets, same held-out separation Digital Green/quality use) instead
+# of Digital Green. No expert `details` text exists for these rows
+# (always ""), so these templates never reference {expert_details}.
+# Two real buckets ("plant"/"weed" — see bucket_category_species's own
+# docstring for why this split IS meaningful here, unlike quality's flat
+# single bucket), so structure mirrors disease/pest's multi-section
+# design more than quality's single-section one.
+
+heldout_species_lesson_system: |
+  You are an expert botanist/agronomist writing short training notes for
+  another vision-language model that identifies plant and weed species
+  from photos. Write concrete, visually-grounded notes — actual leaf
+  shape/margin/venation, flower structure, growth habit, stem/bark
+  features, fruit or seed-pod shape visible in THIS image — never vague
+  generalities like "look more carefully."
+
+# "what didn't work" — Params: {crop} {model_reasoning} {wrong_prediction} {ground_truth} {expert_details}
+heldout_species_explain_miss_prompt: |
+  A vision-language model was shown this image of a plant and asked to
+  identify its species. It answered INCORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer (WRONG): "{wrong_prediction}"
+  The ACTUAL correct answer: "{ground_truth}"
+
+  In 2-4 sentences, explain what specific visual evidence (visible in
+  THIS image — leaf shape/margin/venation, flower structure, growth
+  habit, stem/bark features, fruit or seed-pod shape) should have led to
+  the correct species instead — point out specifically where the model's
+  own stated reasoning went wrong. If the mistake was confusing two
+  similar-looking species, say specifically what distinguishes them in
+  this case.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# "what worked" — Params: {crop} {model_reasoning} {correct_prediction} {ground_truth} {expert_details}
+heldout_species_explain_correct_prompt: |
+  A vision-language model was shown this image of a plant and asked to
+  identify its species. It answered CORRECTLY.
+
+  The model's own stated reasoning: "{model_reasoning}"
+  Its final answer: "{correct_prediction}" (matches the correct answer:
+  "{ground_truth}")
+
+  In 2-4 sentences, confirm and articulate the specific visual evidence
+  (visible in THIS image) that correctly supports this species
+  identification. IMPORTANT: if the model's own stated reasoning actually
+  cited the WRONG evidence or reasoned unsoundly despite landing on the
+  correct final answer (a lucky guess, not real identification skill),
+  say so explicitly instead of crediting reasoning that wasn't actually
+  sound.
+
+  Respond with ONLY the explanation text — no headers, no restating the
+  question.
+
+# Params: {category} {trace_type_label} {n} {explanations_block} — category is "plant" or "weed" here.
+heldout_species_map_summarize_prompt: |
+  Below are {n} short explanations written about {trace_type_label} when
+  a vision-language model identified "{category}" species in images.
+  Each explanation describes ONE specific image's visual evidence.
+
+  {explanations_block}
+
+  Summarize the RECURRING, GENERALIZABLE patterns across these
+  explanations — not a list restating each one individually, and not
+  facts about any single image. Write 4-8 bullet points covering: common
+  visual cues that correctly identify a species or genus, common
+  mistakes or confusions between similar-looking species to watch for,
+  and anything distinctive worth remembering. Be concrete (leaf shape,
+  flower structure, growth habit, bark, fruit/seed shape) — never vague
+  advice like "look more carefully."
+
+  IMPORTANT: this reader will eventually use these notes to NAME a
+  specific species. Every bullet must point toward a SPECIFIC species or
+  a narrow, genuinely distinguishing feature, never a bare generic word
+  like "Plant" or "Weed" standing alone as a bullet's entire content.
+
+  Respond with ONLY the bullet list (plain "- " bullets, no headers, no
+  preamble).
+
+# Params: {chunk_summaries_block}
+heldout_species_reduce_summarize_prompt: |
+  Below are bullet-point summaries gathered from reviewing a vision-
+  language model's plant/weed species identification attempts, grouped
+  by category ("plant" or "weed") and by whether the model got it right
+  ("what worked") or wrong ("what didn't work"):
+
+  {chunk_summaries_block}
+
+  Write a single, well-organized reference document (Markdown) for
+  another instance of this same model to read BEFORE attempting species
+  identification — its job is to help that model avoid the same mistakes
+  and reuse what already works. Structure:
+
+  # Plant & Weed Species Identification — Lessons Learned
+
+  ## General Identification Checklist
+  A SPECIES-AGNOSTIC list of the visual feature CATEGORIES worth
+  examining on ANY plant or weed, even one not covered anywhere else in
+  this document — e.g. "leaf margin shape (entire/toothed/lobed) and
+  venation pattern", "flower symmetry (radial vs. bilateral) and petal
+  count", "fruit/seed-pod shape and arrangement", "growth habit (erect/
+  climbing/rosette/tussock)", "bark/stem surface texture". Derive this
+  FROM the recurring feature types actually mentioned across the
+  per-species summaries above — don't invent a generic botany checklist
+  from nothing. This section is what lets the reader apply SOMETHING
+  useful to a species it has never seen named anywhere in this document;
+  the sections below are useful only for species that happen to match.
+
+  ## What Worked
+  (organized by category — plant, weed — only include categories with
+  real content above; per-species entries naming a specific species and
+  its distinguishing features, same as before)
+
+  ## What Didn't Work
+  (same categories — concrete, actionable guidance, not vague warnings)
+
+  Keep it concrete and skimmable — short bullets, not paragraphs. Do not
+  invent facts not supported by the summaries above. Do not add a
+  "Common Species to Know" style reference list whose bullets are just
+  bare species names restated as standalone entries — the per-species
+  bullets under What Worked/Didn't Work are fine (they carry real
+  distinguishing content, not bare names), that warning is specifically
+  about a bullet with no content beyond the name itself.
+
+# Params: {current_skill_md} {task_scores_block} {miss_examples_block} {worked_examples_block} {prior_round_feedback_block}
+heldout_species_skill_edit_prompt: |
+  Below is the CURRENT version of a reference document another
+  vision-language model reads before identifying plant/weed species from
+  images. It was just evaluated on a held-out set of images WHILE using
+  this exact document, broken down by category:
+  {prior_round_feedback_block}
+  {task_scores_block}
+
+  Here are specific cases where the model, using this exact document,
+  still got the answer wrong:
+
+  {miss_examples_block}
+
+  Here are specific cases where the model, using this exact document,
+  got the answer RIGHT — the document is already doing its job for
+  these, do not disturb whatever's working for them:
+
+  {worked_examples_block}
+
+  CURRENT DOCUMENT:
+  {current_skill_md}
+
+  Revise this document to address the weaker categories above and the
+  specific mistakes shown. Rules that must still hold in your revision:
+  1. In the `## What Worked`/`## What Didn't Work` sections, every
+     bullet must point toward a SPECIFIC species or a narrow, genuinely
+     distinguishing feature, never a bare generic word like "Plant"/
+     "Weed" standing alone as a bullet's entire content.
+  2. Write GENERALIZABLE, INSTRUCTIONAL guidance — a visual pattern that
+     would help identify a species across DIFFERENT images of it, not a
+     fact tied to one specific example image. Do NOT lift text from a
+     single miss example verbatim — extract the underlying visual
+     principle instead.
+  3. Do NOT add a "Common Species to Know" style reference list separate
+     from the sections below (the per-species bullets already in `##
+     What Worked`/`## What Didn't Work` are fine — they carry real
+     distinguishing content, not bare names).
+  4. Keep the same overall structure (`# Plant & Weed Species
+     Identification — Lessons Learned`, `## General Identification
+     Checklist`, `## What Worked` / `## What Didn't Work`, organized by
+     category) unless a section genuinely has nothing useful to say.
+  5. Keep it concrete and skimmable — short bullets, not paragraphs.
+  6. PROTECT what's already working — before editing a bullet that
+     plausibly helped produce one of the correct cases shown above,
+     check whether your change would still support that case; prefer
+     ADDING a new, narrowly-scoped distinction over REWRITING existing
+     wording.
+  7. `## General Identification Checklist` is SPECIES-AGNOSTIC — it must
+     stay useful for a species not named anywhere else in this document.
+     If a new miss case reveals a visual feature category (e.g.
+     venation, bark texture, fruit arrangement) not yet on the
+     checklist, add it there — but check first whether an existing
+     checklist item already covers the same feature category before
+     adding a near-duplicate; strengthen/reword the existing one
+     instead. This section should stay short (a handful of feature
+     categories, not a growing list of species-specific facts) — a
+     species-specific detail belongs in What Worked/Didn't Work, not
+     here.
+  8. Per-species entries in `## What Worked`/`## What Didn't Work` must
+     not accumulate duplicates. BEFORE adding a new bullet for a
+     species, check whether that species already has an entry anywhere
+     in the document (either section) — if it does, UPDATE/MERGE into
+     that existing bullet (e.g. add a new distinguishing detail or a new
+     look-alike comparison to it) rather than appending a second,
+     separate bullet for the same species. Likewise, if two existing
+     bullets both describe distinguishing the same pair of species,
+     merge them into one. A bullet for a species that hasn't produced a
+     new miss or worked case in several rounds and adds little beyond
+     what a near-identical bullet already covers is a candidate for
+     trimming — favor a smaller set of well-maintained entries over an
+     ever-growing list.
+
+  Respond with the full revised document (Markdown), starting with the
+  `# Plant & Weed Species Identification — Lessons Learned` heading, no
+  preamble — then, on a new line by itself, write exactly:
+  ---CHANGELOG---
+  followed by a short bullet list (3-8 bullets) of the SPECIFIC changes
+  you made and WHY, each bullet naming the category/bucket it addresses
+  and referencing the score or mistake that motivated it. Do not skip
+  this section.
